@@ -120,6 +120,7 @@ class MyProductsFeedTest(unittest.TestCase):
         self.db.session.commit()
 
         self.seller_id = seller.id
+        self.other_seller_id = other_seller.id
         self.published_id = published.id
         self.draft_id = draft_row.id
         self.user = SimpleNamespace(
@@ -158,6 +159,196 @@ class MyProductsFeedTest(unittest.TestCase):
         # Непубликованная строка не выдумывает канальных фактов
         self.assertIsNone(items[self.draft_id]['wb'])
 
+    def test_ozon_listing_facts_are_exact_and_same_owner_marketplace_scoped(self):
+        from models import (
+            Marketplace, MarketplaceListing, MarketplaceProductDraft,
+            SellerMarketplaceAccount,
+        )
+
+        ozon = Marketplace(name='Ozon', code='ozon')
+        wb = Marketplace(name='WB', code='wb')
+        self.db.session.add_all([ozon, wb])
+        self.db.session.flush()
+
+        owned_ozon = SellerMarketplaceAccount(
+            seller_id=self.seller_id,
+            marketplace_id=ozon.id,
+            external_account_id='ozon-owned',
+            label='Мой Ozon',
+            is_active=True,
+        )
+        inactive_ozon = SellerMarketplaceAccount(
+            seller_id=self.seller_id,
+            marketplace_id=ozon.id,
+            external_account_id='ozon-inactive',
+            label='Неактивный Ozon',
+            is_active=False,
+        )
+        owned_wb = SellerMarketplaceAccount(
+            seller_id=self.seller_id,
+            marketplace_id=wb.id,
+            external_account_id='wb-owned',
+            label='Мой WB',
+            is_active=True,
+        )
+        foreign_ozon = SellerMarketplaceAccount(
+            seller_id=self.other_seller_id,
+            marketplace_id=ozon.id,
+            external_account_id='ozon-foreign',
+            label='Чужой Ozon',
+            is_active=True,
+        )
+        foreign_seller_ozon = SellerMarketplaceAccount(
+            seller_id=self.other_seller_id,
+            marketplace_id=ozon.id,
+            external_account_id='ozon-foreign-seller',
+            label='Чужой Ozon 2',
+            is_active=True,
+        )
+        self.db.session.add_all([
+            owned_ozon, inactive_ozon, owned_wb, foreign_ozon,
+            foreign_seller_ozon,
+        ])
+        self.db.session.flush()
+
+        common = dict(
+            seller_id=self.seller_id,
+            imported_product_id=self.published_id,
+            normalized_status='active',
+            link_status='linked',
+            sync_fingerprint='synthetic',
+        )
+        self.db.session.add_all([
+            MarketplaceListing(
+                **common,
+                marketplace_id=ozon.id,
+                account_id=owned_ozon.id,
+                offer_id='owned-ozon-offer',
+                external_product_id='owned-ozon-product',
+                is_available=True,
+                is_archived=False,
+            ),
+            MarketplaceListing(
+                **common,
+                marketplace_id=ozon.id,
+                account_id=inactive_ozon.id,
+                offer_id='inactive-ozon-offer',
+                external_product_id='inactive-ozon-product',
+                is_available=False,
+                is_archived=True,
+            ),
+            # A linked WB projection must not be mislabeled as an Ozon row.
+            MarketplaceListing(
+                **common,
+                marketplace_id=wb.id,
+                account_id=owned_wb.id,
+                offer_id='owned-wb-offer',
+                external_product_id='owned-wb-product',
+            ),
+            # Even a seller_id-matching projection is excluded if its account
+            # belongs to another seller.
+            MarketplaceListing(
+                **common,
+                marketplace_id=ozon.id,
+                account_id=foreign_ozon.id,
+                offer_id='foreign-account-offer',
+                external_product_id='foreign-account-product',
+            ),
+            # Unlinked ambiguity cannot be assigned to this ImportedProduct.
+            MarketplaceListing(
+                seller_id=self.seller_id,
+                marketplace_id=ozon.id,
+                account_id=owned_ozon.id,
+                offer_id='ambiguous-offer',
+                external_product_id='ambiguous-product',
+                normalized_status='unknown',
+                link_status='ambiguous',
+                sync_fingerprint='synthetic',
+            ),
+            # Rows owned by another seller cannot enter this seller's feed.
+            MarketplaceListing(
+                seller_id=self.other_seller_id,
+                marketplace_id=ozon.id,
+                account_id=foreign_seller_ozon.id,
+                imported_product_id=self.published_id,
+                offer_id='foreign-seller-offer',
+                external_product_id='foreign-seller-product',
+                sync_fingerprint='synthetic',
+            ),
+        ])
+        self.db.session.add_all([
+            MarketplaceProductDraft(
+                seller_id=self.seller_id,
+                marketplace_id=ozon.id,
+                account_id=owned_ozon.id,
+                imported_product_id=self.draft_id,
+                offer_id='owned-ozon-draft',
+                status='draft',
+                source_fact_hash='synthetic',
+            ),
+            MarketplaceProductDraft(
+                seller_id=self.seller_id,
+                marketplace_id=ozon.id,
+                account_id=foreign_ozon.id,
+                imported_product_id=self.draft_id,
+                offer_id='foreign-account-draft',
+                status='draft',
+                source_fact_hash='synthetic',
+            ),
+            MarketplaceProductDraft(
+                seller_id=self.seller_id,
+                marketplace_id=wb.id,
+                account_id=owned_wb.id,
+                imported_product_id=self.draft_id,
+                offer_id='cross-store-draft',
+                status='draft',
+                source_fact_hash='synthetic',
+            ),
+        ])
+        self.db.session.commit()
+
+        with self._auth():
+            response = self.client.get('/api/my-products')
+        self.assertEqual(response.status_code, 200)
+        items = {
+            row['id']: row for row in response.get_json()['items']
+        }
+        item = items[self.published_id]
+        self.assertEqual(item['wb']['price'], 1290.0)
+        self.assertEqual(
+            [
+                draft['account_id']
+                for draft in items[self.draft_id]['ozon']['drafts']
+            ],
+            [owned_ozon.id],
+        )
+        listings = item['ozon']['listings']
+        self.assertEqual(
+            {listing['account_id'] for listing in listings},
+            {owned_ozon.id, inactive_ozon.id},
+        )
+        self.assertTrue(all(
+            listing['marketplace_code'] == 'ozon'
+            and listing['link_status'] == 'linked'
+            for listing in listings
+        ))
+        active_row = next(
+            listing for listing in listings
+            if listing['account_id'] == owned_ozon.id
+        )
+        self.assertEqual(active_row['account_label'], 'Мой Ozon')
+        self.assertTrue(active_row['account_is_active'])
+        self.assertTrue(active_row['is_available'])
+        self.assertFalse(active_row['is_archived'])
+        inactive_row = next(
+            listing for listing in listings
+            if listing['account_id'] == inactive_ozon.id
+        )
+        self.assertFalse(inactive_row['account_is_active'])
+        self.assertFalse(inactive_row['is_available'])
+        self.assertTrue(inactive_row['is_archived'])
+        self.assertNotIn('Чужой Ozon', json.dumps(item, ensure_ascii=False))
+
     def test_feed_is_tenant_scoped(self):
         with self._auth():
             response = self.client.get(
@@ -195,6 +386,44 @@ if __name__ == '__main__':
 
 class MyProductsBetaPageTest(MyProductsFeedTest):
     """Страница массовых операций рендерится и знает про каналы продавца."""
+
+    def test_beta_bootstrap_keeps_disconnected_ozon_account_for_existing_flow(self):
+        from models import Marketplace, SellerMarketplaceAccount
+
+        marketplace = Marketplace(name='Ozon', code='ozon')
+        self.db.session.add(marketplace)
+        self.db.session.flush()
+        account = SellerMarketplaceAccount(
+            seller_id=self.seller_id,
+            marketplace_id=marketplace.id,
+            external_account_id='ozon-disconnected',
+            label='Отключённый магазин',
+            connection_status='disconnected',
+        )
+        self.db.session.add(account)
+        self.db.session.commit()
+
+        previous = self.app.config.get('MARKETPLACE_OZON_ENABLED')
+        self.app.config['MARKETPLACE_OZON_ENABLED'] = True
+        try:
+            with self._auth():
+                response = self.client.get('/my-products/beta')
+        finally:
+            if previous is None:
+                self.app.config.pop('MARKETPLACE_OZON_ENABLED', None)
+            else:
+                self.app.config['MARKETPLACE_OZON_ENABLED'] = previous
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        payload = json.loads(
+            body.split('id="mp-bootstrap">', 1)[1].split('</script>', 1)[0]
+        )
+        self.assertEqual(payload['ozonAccounts'], [{
+            'id': account.id,
+            'label': 'Отключённый магазин',
+            'connection_status': 'disconnected',
+        }])
 
     def test_beta_page_renders_with_bootstrap(self):
         with self._auth():

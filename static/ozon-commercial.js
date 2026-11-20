@@ -25,6 +25,13 @@
       warehouseRefreshes:{}, stockRefresh:null, stockRefreshListing:null,
       refreshError:'', formRefreshError:'', refreshTimer:null, refreshRevisions:{}, refreshLoaded:new Set(),
       batchReview:[], batchConfirmed:false, batchError:'', batchBlocked:false, batchErrorQuarantine:null,
+      bulkOpen:false, bulkStage:'select', bulkAccount:'', bulkQuery:'', bulkProducts:[], bulkSelected:[],
+      bulkSearched:false, bulkSearching:false, bulkProductPage:1, bulkProductPages:0,
+      bulkMode:'set', bulkAmount:'', bulkAllowDecrease:false, bulkAllowLarge:false, bulkGuardrailNote:'',
+      bulkPreview:null, bulkPreviewBody:null, bulkPreviewError:'', bulkConfirmError:'', bulkConfirmUnknown:false,
+      _allowBulkUnknownExit:false,
+      bulkSavedUrl:'', bulkSavedCount:0, bulkSavedItems:[], bulkSavedReplay:false, bulkBlocked:false, bulkSelectionError:'',
+      bulkSearchRevision:0, bulkActionRevision:0, pendingBulkSelection:null, bulkHandoffUsed:false, bulkHandoffError:'',
     }),
     computed: {
       contextListing() { return this.context ? {price_summary:{values:this.context.price,currency:this.context.currency},prices_synced_at:this.context.prices_synced_at} : null; },
@@ -42,17 +49,44 @@
         const rounded = rubles + (cents >= 50 ? 1 : 0);
         return {price:String(rounded), changed:cents !== 0, valid:rounded >= 1 && rounded <= 999999999};
       },
+      bulkNormalizedValue() {
+        const raw = this.bulkAmount.trim().replace(/[\s\u00a0]/g,'').replace(',','.');
+        const pattern = this.bulkMode === 'set' ? /^\d+(?:\.\d{1,2})?$/ : /^[+-]?\d+(?:\.\d{1,2})?$/;
+        if (!pattern.test(raw)) return '';
+        const normalized = raw.startsWith('+') ? raw.slice(1) : raw;
+        const value = Number(normalized);
+        if (!Number.isFinite(value)) return '';
+        if (this.bulkMode === 'set' && (value <= 0 || value > 999999999)) return '';
+        if (this.bulkMode === 'percent' && (value < -99.99 || value > 500)) return '';
+        return normalized;
+      },
+      bulkCanPreview() {
+        return this.bulkSelected.length > 0 && this.bulkSelected.length <= 100 &&
+          Number.isSafeInteger(Number(this.bulkAccount)) && Number(this.bulkAccount) > 0 &&
+          this.bulkNormalizedValue !== '' &&
+          (this.bulkMode !== 'percent' || Number(this.bulkNormalizedValue) >= 0 || this.bulkAllowDecrease) &&
+          (!(this.bulkAllowDecrease || this.bulkAllowLarge) || this.bulkGuardrailNote.trim().length >= 8);
+      },
     },
     mounted() {
       document.getElementById('oc-fallback')?.remove();
       this._visible = () => { clearTimeout(this.timer); clearTimeout(this.refreshTimer); if (!document.hidden) { this.schedule(); this.pollRefreshes(); } };
       this._pop = () => { if (this.mode === 'list' && !this.busy) { const q = new URLSearchParams(location.search); this.filters = {account_id:q.get('account_id') || '',proposal_kind:q.get('proposal_kind') || '',status:q.get('status') || ''}; this.loadList(Number(q.get('page')) || 1); } };
-      this._leave = event => { if (this.busy || (this.createOpen && this.amount && !this.formBlocked)) { event.preventDefault(); event.returnValue = ''; } };
+      this._leave = event => { if (!this._allowBulkUnknownExit && (this.busy || this.bulkConfirmUnknown || (this.createOpen && this.amount && !this.formBlocked))) { event.preventDefault(); event.returnValue = ''; } };
       document.addEventListener('visibilitychange', this._visible);
       window.addEventListener('popstate', this._pop);
       window.addEventListener('beforeunload', this._leave);
       if (this.mode === 'detail') this.loadDetail();
       else this.loadList(Number(new URLSearchParams(location.search).get('page')) || 1).then(() => {
+        const handoffRequested = new URLSearchParams(location.search).has('bulk_listing_ids');
+        if (this.error) return;
+        if (config.bulkSelection) {
+          const handoff = this.validateBulkHandoff(config.bulkSelection);
+          if (handoff) { this.pendingBulkSelection = handoff; this.openBulkPrice(); return; }
+          this.bulkHandoffError = 'Не удалось проверить выбранный набор товаров. Он не был перенесён; выберите товары заново.';
+        } else if (handoffRequested) {
+          this.bulkHandoffError = 'Не удалось проверить переданный набор товаров. Выберите товары заново.';
+        }
         const id = initialListingId;
         if (id && /^[1-9]\d*$/.test(id) && !this.error) { this.openCreate(); this.chooseProduct(Number(id)); }
       });
@@ -78,6 +112,16 @@
       },
       held(p) { return Boolean(p?.write_quarantine?.status === 'active'); },
       statusClass(status) { return status === 'applied' ? 'is-ok' : ['failed','conflict'].includes(status) ? 'is-error' : ['pending_review','uncertain'].includes(status) ? 'is-pending' : ''; },
+      bulkStatusLabel(status) { return ({eligible:'Можно сохранить',noop:'Цена не изменится',blocked:'Нельзя сохранить'})[status] || 'Неизвестный результат'; },
+      bulkStatusClass(status) { return status === 'eligible' ? 'is-ok' : status === 'blocked' ? 'is-error' : 'is-pending'; },
+      proposalWord(count) { const lastTwo = count % 100, last = count % 10; return lastTwo >= 11 && lastTwo <= 14 ? 'заявок' : last === 1 ? 'заявку' : last >= 2 && last <= 4 ? 'заявки' : 'заявок'; },
+      productWord(count) { const lastTwo = count % 100, last = count % 10; return lastTwo >= 11 && lastTwo <= 14 ? 'товаров' : last === 1 ? 'товар' : last >= 2 && last <= 4 ? 'товара' : 'товаров'; },
+      bulkRuleLabel(body) {
+        if (!body) return '';
+        if (body.mode === 'set') return 'Одинаковая цена продавца: ' + this.money(body.value,'RUB');
+        const value = String(body.value || '0');
+        return 'Изменение от текущей цены продавца: ' + (Number(value) > 0 ? '+' : '') + value + '%';
+      },
       active(p) { return ['approved','applying','uncertain'].includes(p?.status); },
       statusDescription(p) {
         if (p.error_code === 'commercial_live_state_conflict') return 'После отправки Ozon вернул другое значение. Изменение могло примениться частично. Проверьте текущее состояние и подготовьте новое сравнение; повторной отправки не было.';
@@ -126,7 +170,11 @@
         if (this.loading || this.busy || this.sessionEnded || this.stopped) return;
         const revision = ++this.listRevision;
         const filters = clone(this.filters); const target = Math.max(1,page || this.pagination.page || 1);
-        const query = new URLSearchParams({page:String(target),per_page:'50'});
+        const exactProposalIds = new URLSearchParams(location.search).get('proposal_ids');
+        const exactProposalCount = exactProposalIds ? exactProposalIds.split(',').length : 0;
+        const exactProposalPageSize = exactProposalCount >= 1 && exactProposalCount <= 100 ? String(exactProposalCount) : '50';
+        const query = new URLSearchParams({page:String(target),per_page:exactProposalIds ? exactProposalPageSize : '50'});
+        if (exactProposalIds) query.set('proposal_ids',exactProposalIds);
         Object.entries(filters).forEach(([key,val]) => { if (val) query.set(key,val); });
         this.loading = true; this.error = ''; this.selected = [];
         try {
@@ -143,8 +191,14 @@
         } catch (error) { this.error = error.message; if (this.observedFilters.account_id !== undefined) this.filters = clone(this.observedFilters); }
         finally { this.loading = false; }
       },
-      applyFilters() { this.notice = ''; this.loadList(1); },
-      resetFilters() { this.filters = {...this.filters,proposal_kind:'',status:''}; this.loadList(1); },
+      clearExactProposalFilter() {
+        const query = new URLSearchParams(location.search);
+        if (!query.has('proposal_ids')) return;
+        query.delete('proposal_ids'); query.delete('page'); query.delete('per_page');
+        history.replaceState({},'',this.base + (query.size ? '?' + query : ''));
+      },
+      applyFilters() { this.notice = ''; this.clearExactProposalFilter(); this.loadList(1); },
+      resetFilters() { this.filters = {...this.filters,proposal_kind:'',status:''}; this.clearExactProposalFilter(); this.loadList(1); },
       schedule() {
         clearTimeout(this.timer);
         if (this.mode !== 'detail' || this.stopped || this.sessionEnded || document.hidden || this.busy || !this.active(this.proposal) || this.polls >= 120) return;
@@ -196,6 +250,277 @@
         const query = new URLSearchParams(location.search);
         if (query.has('listing_id')) { query.delete('listing_id'); history.replaceState({},'',this.base + '?' + query); }
         this.$refs.createDialog.close(); this._createTrigger?.focus();
+      },
+      openBulkPrice() {
+        if (this.busy || this.loading || this.mode !== 'list') return;
+        if (this.bulkConfirmUnknown) {
+          this._allowBulkUnknownExit = false;
+          if (!this.bulkOpen) {
+            this._bulkTrigger = document.activeElement;
+            this.bulkOpen = true; this.$refs.bulkPriceDialog.showModal();
+          }
+          this.$nextTick(()=>this.$refs.bulkConfirmRetry?.focus());
+          return;
+        }
+        const handoff = this.pendingBulkSelection;
+        this._bulkTrigger = handoff ? this.$refs.bulkLaunchButton : document.activeElement;
+        this.bulkStage = 'select'; this.bulkQuery = ''; this.bulkProducts = []; this.bulkSelected = [];
+        this.bulkSearched = false; this.bulkSearching = false; this.bulkProductPage = 1; this.bulkProductPages = 0;
+        this.bulkMode = 'set'; this.bulkAmount = ''; this.bulkAllowDecrease = false; this.bulkAllowLarge = false; this.bulkGuardrailNote = '';
+        this.bulkPreview = null; this.bulkPreviewBody = null; this.bulkPreviewError = ''; this.bulkConfirmError = '';
+        this.bulkConfirmUnknown = false; this.bulkSavedUrl = ''; this.bulkSavedCount = 0; this.bulkSavedItems = []; this.bulkSavedReplay = false; this.bulkBlocked = false;
+        this.bulkSelectionError = ''; this.bulkHandoffUsed = Boolean(handoff);
+        const preferred = handoff ? String(handoff.account_id) : this.observedFilters.account_id || (this.accounts.filter(a=>a.is_active).length === 1 ? String(this.accounts.find(a=>a.is_active).id) : '');
+        this.bulkAccount = this.accounts.some(a=>a.id === Number(preferred) && a.is_active) ? String(preferred) : '';
+        if (handoff && this.bulkAccount) this.bulkSelected = clone(handoff.items);
+        this.pendingBulkSelection = null;
+        this._bulkAccountBeforeChange = this.bulkAccount;
+        this.bulkOpen = true; this.$refs.bulkPriceDialog.showModal();
+        if (this.bulkAccount && !handoff) this.searchBulkProducts(1);
+        if (handoff) this.$nextTick(()=>this.$refs.bulkSelectedSummary?.focus());
+      },
+      validateBulkHandoff(raw) {
+        if (!raw || typeof raw !== 'object' || !Number.isSafeInteger(raw.account_id) ||
+            Object.keys(raw).sort().join(',') !== 'account_id,items' ||
+            !Array.isArray(raw.items) || raw.items.length < 1 || raw.items.length > 100 ||
+            !this.accounts.some(account=>account.id === raw.account_id && account.is_active)) return null;
+        const seen = new Set(), items = [];
+        for (const item of raw.items) {
+          if (!item || !Number.isSafeInteger(item.id) || item.id <= 0 || item.account_id !== raw.account_id ||
+              item.is_available !== true || item.is_archived !== false || seen.has(item.id) ||
+              Object.keys(item).sort().join(',') !== 'account_id,id,is_archived,is_available,offer_id,title' ||
+              typeof item.offer_id !== 'string' || !item.offer_id || typeof item.title !== 'string') return null;
+          seen.add(item.id);
+          items.push({id:item.id,account_id:item.account_id,offer_id:item.offer_id,title:item.title,primary_image:''});
+        }
+        return {account_id:raw.account_id,items};
+      },
+      closeBulkPrice() {
+        if (this.busy) return;
+        if (this.bulkConfirmUnknown) {
+          if (!window.confirm('Ответ на сохранение неизвестен: заявки могли сохраниться. Закрыть окно? Пока эта страница открыта, можно повторить только то же защищённое подтверждение или снова открыть проверку.')) return;
+          this._allowBulkUnknownExit = true;
+        } else if (this.bulkStage !== 'saved' && (this.bulkSelected.length || this.bulkAmount || this.bulkPreview) &&
+            !window.confirm('Закрыть массовую подготовку? Выбранный набор и введённые условия будут сброшены.')) return;
+        ++this.bulkSearchRevision; ++this.bulkActionRevision;
+        this.bulkOpen = false; this.$refs.bulkPriceDialog.close(); this._bulkTrigger?.focus();
+      },
+      bulkUnknownProposalsUrl() {
+        if (!this.bulkConfirmUnknown || !this.bulkAccount) return '';
+        const accountId = Number(this.bulkAccount);
+        if (!Number.isSafeInteger(accountId) || accountId <= 0 ||
+            !this.accounts.some(account=>account.id === accountId && account.is_active)) return '';
+        try {
+          const target = new URL(this.base,location.origin);
+          if (target.origin !== location.origin) return '';
+          target.search = '';
+          target.searchParams.set('account_id',String(accountId));
+          target.searchParams.set('proposal_kind','price');
+          return target.pathname + target.search;
+        } catch (_) { return ''; }
+      },
+      checkBulkUnknownProposals() {
+        if (this.busy || !this.bulkConfirmUnknown) return;
+        const url = this.bulkUnknownProposalsUrl();
+        if (!url) {
+          this.bulkConfirmError = 'Не удалось проверить магазин. Закройте окно после подтверждения неизвестного результата или обновите страницу после входа.';
+          return;
+        }
+        if (!window.confirm('Сохранение не подтверждено; заявки могли появиться. Открыть список ценовых заявок этого магазина для проверки? Новая отправка не начнётся.')) return;
+        this._allowBulkUnknownExit = true;
+        try {
+          window.location.assign(url);
+          window.setTimeout(()=>{ this._allowBulkUnknownExit = false; },1000);
+        } catch (_) {
+          this._allowBulkUnknownExit = false;
+          this.bulkConfirmError = 'Не удалось открыть список заявок. Сохранение остаётся неизвестным; повторите только то же подтверждение.';
+        }
+      },
+      bulkAccountChanged() {
+        if (this.bulkSelected.length && !window.confirm('Сменить магазин? Выбранные товары будут удалены из набора.')) {
+          this.bulkAccount = this._bulkAccountBeforeChange || '';
+          return;
+        }
+        this._bulkAccountBeforeChange = this.bulkAccount;
+        this.bulkSelected = []; this.bulkProducts = []; this.bulkSearched = false;
+        this.bulkSelectionError = ''; this.searchBulkProducts(1);
+      },
+      async searchBulkProducts(page) {
+        if (this.busy || this.sessionEnded) return;
+        const revision = ++this.bulkSearchRevision;
+        this.bulkProducts = []; this.bulkSearched = false; this.bulkProductPages = 0; this.bulkSelectionError = '';
+        const accountId = Number(this.bulkAccount);
+        if (!Number.isSafeInteger(accountId) || accountId <= 0 || !this.accounts.some(a=>a.id === accountId && a.is_active)) {
+          this.bulkSearching = false; return;
+        }
+        this.bulkSearching = true;
+        try {
+          const query = new URLSearchParams({marketplace:'ozon',account_id:String(accountId),search:this.bulkQuery.trim(),per_page:'20',page:String(page)});
+          const data = await this.request(this.catalog + 'api?' + query);
+          if (revision !== this.bulkSearchRevision || !this.bulkOpen) return;
+          if (!Array.isArray(data.items) || !data.pagination || !Number.isSafeInteger(data.pagination.pages)) throw new Error('Неполный список товаров. Обновите поиск.');
+          this.bulkProducts = data.items.filter(p=>Number.isSafeInteger(p.id) && p.id > 0 && p.account_id === accountId && !p.is_archived);
+          this.bulkProductPage = page; this.bulkProductPages = data.pagination.pages; this.bulkSearched = true;
+        } catch (error) { if (revision === this.bulkSearchRevision) this.bulkSelectionError = error.message; }
+        finally { if (revision === this.bulkSearchRevision) this.bulkSearching = false; }
+      },
+      toggleBulkProduct(product) {
+        if (this.busy || this.bulkStage !== 'select' || !product || product.account_id !== Number(this.bulkAccount) ||
+            !Number.isSafeInteger(product.id) || product.id <= 0 || product.is_archived) return;
+        const index = this.bulkSelected.findIndex(item=>item.id === product.id);
+        if (index >= 0) { this.bulkSelected.splice(index,1); this.bulkSelectionError = ''; return; }
+        if (product.is_available !== true) return;
+        if (this.bulkSelected.length >= 100) { this.bulkSelectionError = 'Можно выбрать не более 100 товаров за один раз.'; return; }
+        this.bulkSelected.push({id:product.id,account_id:product.account_id,offer_id:product.offer_id,title:product.title || product.offer_id,primary_image:product.primary_image || ''});
+        this.bulkSelectionError = '';
+      },
+      bulkPreviewShape(data, expectedIds) {
+        const validPrice = value => typeof value === 'string' &&
+          /^(?:0|[1-9]\d{0,8})(?:\.\d{1,2})?$/.test(value) && Number(value) > 0;
+        const validPriceReview = (review, target) => review && typeof review === 'object' &&
+          !Array.isArray(review) && validPrice(review.requested_price) &&
+          validPrice(review.price) && review.price === target &&
+          review.rounding_rule === 'seller_hub_whole_rub_half_up_v1' &&
+          typeof review.rounded === 'boolean';
+        if (!Array.isArray(expectedIds) || !expectedIds.length || expectedIds.length > 100 ||
+            expectedIds.some(id=>!Number.isSafeInteger(id) || id <= 0) ||
+            new Set(expectedIds).size !== expectedIds.length ||
+            !data || !Array.isArray(data.items) || !Number.isSafeInteger(data.selected_count) ||
+            !Number.isSafeInteger(data.eligible_count) || !Number.isSafeInteger(data.noop_count) ||
+            !Number.isSafeInteger(data.blocked_count) || data.selected_count !== expectedIds.length ||
+            data.items.length !== expectedIds.length) return false;
+        const statuses = {eligible:0,noop:0,blocked:0};
+        const seen = new Set();
+        for (const item of data.items) {
+          if (!item || typeof item !== 'object' || !Number.isSafeInteger(item.listing_id) || !expectedIds.includes(item.listing_id) || seen.has(item.listing_id) || !Object.prototype.hasOwnProperty.call(statuses,item.status) ||
+              typeof item.offer_id !== 'string' || !item.offer_id ||
+              typeof item.product_id !== 'string' || !item.product_id ||
+              typeof item.title !== 'string' ||
+              typeof item.currency_code !== 'string' || !/^[A-Z]{3}$/.test(item.currency_code) ||
+              !validPrice(item.current_price) ||
+              (item.reason_code !== null && typeof item.reason_code !== 'string') ||
+              (item.reason !== null && typeof item.reason !== 'string') ||
+              !item.guardrails || typeof item.guardrails !== 'object' || Array.isArray(item.guardrails)) return false;
+          if (item.status === 'eligible' || item.status === 'noop') {
+            if (!validPrice(item.proposed_price) ||
+                !validPriceReview(item.price_review,item.proposed_price)) return false;
+            if (item.status === 'eligible' && item.currency_code !== 'RUB') return false;
+            if (item.status === 'noop' && item.proposed_price !== item.current_price) return false;
+          } else if (item.proposed_price === null) {
+            if (item.reason_code !== 'price_out_of_range' || item.price_review !== null) return false;
+          } else if (!validPrice(item.proposed_price) ||
+              !validPriceReview(item.price_review,item.proposed_price)) return false;
+          seen.add(item.listing_id); statuses[item.status] += 1;
+        }
+        return seen.size === expectedIds.length && statuses.eligible === data.eligible_count &&
+          statuses.noop === data.noop_count && statuses.blocked === data.blocked_count &&
+          statuses.eligible + statuses.noop + statuses.blocked === data.selected_count &&
+          (data.eligible_count === 0 || (typeof data.preview_token === 'string' && data.preview_token.length >= 16));
+      },
+      async previewBulkPrices() {
+        if (this.busy || this.bulkStage !== 'select' || !this.bulkCanPreview || this.sessionEnded) return;
+        const listingIds = this.bulkSelected.map(item=>item.id);
+        if (new Set(listingIds).size !== listingIds.length || this.bulkSelected.some(item=>item.account_id !== Number(this.bulkAccount))) {
+          this.bulkSelectionError = 'Набор товаров изменился. Проверьте выбранный магазин и товары.'; return;
+        }
+        const body = {account_id:Number(this.bulkAccount),listing_ids:listingIds,mode:this.bulkMode,value:this.bulkNormalizedValue,
+          allow_price_decrease:this.bulkAllowDecrease,allow_large_change:this.bulkAllowLarge,
+          guardrail_note:(this.bulkAllowDecrease || this.bulkAllowLarge) ? this.bulkGuardrailNote.trim() : null};
+        const revision = ++this.bulkActionRevision;
+        this.bulkPreviewError = ''; this.bulkConfirmError = ''; this.bulkPreview = null; this.bulkPreviewBody = clone(body); this.bulkBlocked = false;
+        this.busy = 'bulk-preview';
+        try {
+          const data = await this.request(this.base + 'price-proposals/bulk-preview',body);
+          if (revision !== this.bulkActionRevision || !this.bulkOpen) return;
+          if (!this.bulkPreviewShape(data,listingIds)) throw new Error('Ответ на сравнение неполный или содержит другой набор товаров. Ничего не сохранено. Проверьте поиск и запустите сравнение ещё раз.');
+          this.bulkPreview = clone(data); this.bulkStage = 'preview';
+          this.$nextTick(()=>this.$refs.bulkPreviewHeading?.focus());
+        } catch (error) {
+          if (revision === this.bulkActionRevision) this.bulkPreviewError = error.message;
+        } finally { if (revision === this.bulkActionRevision) this.busy = false; }
+      },
+      editBulkPrices() {
+        if (this.busy || this.bulkConfirmUnknown) return;
+        this.bulkStage = 'select'; this.bulkPreview = null; this.bulkPreviewBody = null;
+        this.bulkPreviewError = ''; this.bulkConfirmError = ''; this.bulkBlocked = false;
+        this.$nextTick(()=>this.$refs.bulkAmount?.focus());
+      },
+      bulkReviewUrl(accountId, proposalIds, supplied) {
+        if (!Number.isSafeInteger(accountId) || accountId <= 0 || !proposalIds.length || proposalIds.length > 100 ||
+            proposalIds.some(id=>!Number.isSafeInteger(id) || id <= 0) || new Set(proposalIds).size !== proposalIds.length) return '';
+        const expected = [...proposalIds].sort((a,b)=>a-b).join(',');
+        if (typeof supplied === 'string') {
+          try {
+            const candidate = new URL(supplied,location.origin), base = new URL(this.base,location.origin);
+            const params = candidate.searchParams;
+            const ids = (params.get('proposal_ids') || '').split(',').map(value=>Number(value));
+            if (candidate.origin === location.origin && candidate.pathname === base.pathname &&
+                params.get('account_id') === String(accountId) && params.get('proposal_kind') === 'price' &&
+                params.get('status') === 'pending_review' && ids.every(Number.isSafeInteger) &&
+                [...ids].sort((a,b)=>a-b).join(',') === expected && params.size === 4 &&
+                ['account_id','proposal_kind','status','proposal_ids'].every(key=>params.getAll(key).length === 1)) {
+              return candidate.pathname + candidate.search;
+            }
+          } catch (_) { /* Build the same-site URL from the verified IDs below. */ }
+        }
+        const safe = new URL(this.base,location.origin);
+        safe.search = '';
+        safe.searchParams.set('account_id',String(accountId));
+        safe.searchParams.set('proposal_kind','price');
+        safe.searchParams.set('status','pending_review');
+        safe.searchParams.set('proposal_ids',proposalIds.join(','));
+        return safe.pathname + safe.search;
+      },
+      bulkConfirmShape(data, preview) {
+        if (!data || data.selected_count !== preview.selected_count || data.saved_count !== preview.eligible_count ||
+            typeof data.replayed !== 'boolean' || data.created_count !== (data.replayed ? 0 : preview.eligible_count) ||
+            data.replayed_count !== (data.replayed ? preview.eligible_count : 0) ||
+            data.noop_count !== preview.noop_count || data.blocked_count !== preview.blocked_count ||
+            !Array.isArray(data.items) || data.items.length !== preview.eligible_count) return null;
+        const eligibleIds = preview.items.filter(item=>item.status === 'eligible').map(item=>item.listing_id);
+        const seenListings = new Set(), proposalIds = [], suppliedUrls = [], savedItems = [];
+        for (const result of data.items) {
+          const proposal = result?.proposal;
+          if (!Number.isSafeInteger(result?.listing_id) || !eligibleIds.includes(result.listing_id) || seenListings.has(result.listing_id) ||
+              !proposal || result.status !== proposal.status || !Object.prototype.hasOwnProperty.call(statuses,proposal.status) ||
+              !Number.isSafeInteger(proposal.id) || proposal.id <= 0 ||
+              !Number.isSafeInteger(proposal.version) || proposal.version < 1 || proposal.listing_id !== result.listing_id ||
+              proposal.account_id !== Number(this.bulkAccount) || proposal.proposal_kind !== 'price') return null;
+          seenListings.add(result.listing_id); proposalIds.push(proposal.id);
+          savedItems.push({listing_id:result.listing_id,proposal:clone(proposal),review_url:result.review_url || ''});
+          if (typeof result.review_url === 'string') suppliedUrls.push(result.review_url);
+        }
+        if (seenListings.size !== eligibleIds.length || new Set(proposalIds).size !== proposalIds.length ||
+            (!data.replayed && savedItems.some(item=>item.proposal.status !== 'pending_review'))) return null;
+        const allPending = savedItems.every(item=>item.proposal.status === 'pending_review');
+        return {url:allPending ? this.bulkReviewUrl(Number(this.bulkAccount),proposalIds,suppliedUrls[0] || data.review_url) : '', items:savedItems};
+      },
+      async confirmBulkPrices(replay) {
+        if (this.busy || this.bulkStage !== 'preview' || !this.bulkPreview?.eligible_count || this.bulkBlocked ||
+            (this.bulkConfirmUnknown && !replay) ||
+            (this.sessionEnded && !(this.bulkConfirmUnknown && replay))) return;
+        const wasUnknown = this.bulkConfirmUnknown;
+        const revision = ++this.bulkActionRevision;
+        this.bulkConfirmError = ''; this.busy = 'bulk-save';
+        try {
+          const data = await this.request(this.base + 'price-proposals/bulk-confirm',{preview_token:this.bulkPreview.preview_token,confirm_save:true});
+          if (revision !== this.bulkActionRevision || !this.bulkOpen) return;
+          const saved = this.bulkConfirmShape(data,this.bulkPreview);
+          if (!saved) throw new Error('Ответ о сохранении неполный. Проверьте итог тем же подтверждением; новая заявка не будет отправлена в Ozon автоматически.');
+          this.bulkSavedUrl = saved.url; this.bulkSavedItems = saved.items; this.bulkSavedCount = data.saved_count;
+          this.bulkSavedReplay = data.replayed; this.bulkStage = 'saved';
+          this.bulkConfirmUnknown = false; this.bulkBlocked = false; this.sessionEnded = false;
+          this.$nextTick(()=>this.$refs.bulkSavedHeading?.focus());
+        } catch (error) {
+          if (revision !== this.bulkActionRevision) return;
+          // A failed same-token replay does not resolve the earlier unknown
+          // physical result, even if this replay now receives a 4xx/session
+          // response. Only a complete same-token receipt clears the state.
+          this.bulkConfirmUnknown = wasUnknown || !error.status || error.status >= 500;
+          this.bulkBlocked = !this.bulkConfirmUnknown;
+          this.bulkConfirmError = this.bulkConfirmUnknown ?
+            error.message + ' Сохранение могло завершиться; для проверки доступен повтор того же защищённого подтверждения.' : error.message;
+        } finally { if (revision === this.bulkActionRevision) this.busy = false; }
       },
       changeProduct() { if (this.amount && !window.confirm('Выбрать другой товар? Введённое значение будет сброшено.')) return; this.context = null; this.stockRefresh = null; this.stockRefreshListing = null; this.formRefreshError = ''; this.resetInput(); this.formError = ''; this.searchProducts(1); },
       resetInput() { this.amount = ''; this.warehouseId = ''; this.allowDecrease = false; this.allowLarge = false; this.guardrailNote = ''; },
@@ -362,7 +687,10 @@
           const counts = {};
           data.items.forEach(p=>{ const label = statuses[p.status] || p.status; counts[label] = (counts[label] || 0) + 1; });
           this.notice = Object.entries(counts).map(([key,count])=>key + ': ' + count).join('. ') + '.';
-          this.selected = []; this.$refs.batchDialog.close(); this.busy = false; await this.loadList(); this._batchTrigger?.focus();
+          this.selected = []; this.$refs.batchDialog.close(); this.busy = false;
+          const query = new URLSearchParams(location.search);
+          if (query.has('proposal_ids')) { query.delete('proposal_ids'); history.replaceState({},'',this.base + (query.size ? '?' + query : '')); }
+          await this.loadList(); this._batchTrigger?.focus();
         } catch (error) { this.batchError = error.message; this.batchErrorQuarantine = error.writeQuarantine || null; this.batchBlocked = true; }
         finally { this.busy = false; }
       },

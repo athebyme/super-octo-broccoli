@@ -18,6 +18,7 @@ from flask_wtf.csrf import generate_csrf
 from models import db
 from services.marketplace_accounts import MarketplaceAccountService
 from services.marketplace_commercial import (
+    MarketplaceCommercialConflict,
     MarketplaceCommercialError,
     MarketplaceCommercialService,
     MarketplaceCommercialValidationError,
@@ -187,6 +188,62 @@ def _batch_approval_items() -> list:
     return items
 
 
+def _proposal_ids_query() -> Optional[list[int]]:
+    values = request.args.getlist("proposal_ids")
+    if not values:
+        return None
+    if len(values) != 1:
+        raise MarketplaceCommercialValidationError(
+            "proposal_ids должен быть передан один раз"
+        )
+    raw = values[0]
+    if not isinstance(raw, str) or not 1 <= len(raw) <= 1200:
+        raise MarketplaceCommercialValidationError(
+            "proposal_ids должен содержать точный список заявок"
+        )
+    parts = raw.split(",")
+    if not 1 <= len(parts) <= 100 or any(
+        not part.isascii() or not part.isdigit() for part in parts
+    ):
+        raise MarketplaceCommercialValidationError(
+            "proposal_ids должен содержать 1..100 положительных ID"
+        )
+    parsed = [int(part) for part in parts]
+    if any(value <= 0 for value in parsed) or len(set(parsed)) != len(parsed):
+        raise MarketplaceCommercialValidationError(
+            "proposal_ids содержит неверные или повторяющиеся ID"
+        )
+    return parsed
+
+
+def _bulk_listing_ids_query() -> Optional[list[int]]:
+    values = request.args.getlist("bulk_listing_ids")
+    if not values:
+        return None
+    if len(values) != 1:
+        raise MarketplaceCommercialValidationError(
+            "bulk_listing_ids должен быть передан один раз"
+        )
+    raw = values[0]
+    if not isinstance(raw, str) or not 1 <= len(raw) <= 1200:
+        raise MarketplaceCommercialValidationError(
+            "bulk_listing_ids должен содержать точный список товаров"
+        )
+    parts = raw.split(",")
+    if not 1 <= len(parts) <= 100 or any(
+        not part.isascii() or not part.isdigit() for part in parts
+    ):
+        raise MarketplaceCommercialValidationError(
+            "bulk_listing_ids должен содержать 1..100 положительных ID"
+        )
+    parsed = [int(part) for part in parts]
+    if any(value <= 0 for value in parsed) or len(set(parsed)) != len(parsed):
+        raise MarketplaceCommercialValidationError(
+            "bulk_listing_ids содержит неверные или повторяющиеся ID"
+        )
+    return parsed
+
+
 def _feature_enabled() -> bool:
     return bool(current_app.config.get("MARKETPLACE_OZON_ENABLED", False))
 
@@ -303,6 +360,60 @@ def index():
         status = request.args.get("status") or None
         page = _integer(request.args.get("page"), "page", default=1)
         per_page = _integer(request.args.get("per_page"), "per_page", default=50)
+        proposal_ids = _proposal_ids_query()
+        bulk_listing_ids = _bulk_listing_ids_query()
+        bulk_selection = None
+        if bulk_listing_ids is not None:
+            if (
+                proposal_ids is not None
+                or len(request.args.getlist("account_id")) != 1
+                or set(request.args.keys()) != {"account_id", "bulk_listing_ids"}
+                or request.endpoint.endswith(".classic")
+            ):
+                raise MarketplaceCommercialValidationError(
+                    "Точный набор товаров принимает только account_id и bulk_listing_ids"
+                )
+            account, listings = MarketplaceCommercialService._bulk_price_scope(
+                seller_id=seller_id,
+                account_id=account_id,
+                listing_ids=bulk_listing_ids,
+                require_available=True,
+                include_imported=False,
+            )
+            if not account.is_active:
+                raise MarketplaceCommercialConflict(
+                    "Для массовой подготовки выберите активный кабинет Ozon"
+                )
+            bulk_selection = {
+                "account_id": account_id,
+                "items": [
+                    {
+                        "id": item.id,
+                        "offer_id": item.offer_id,
+                        "title": MarketplaceCommercialService._safe_text(
+                            item.title, maximum=500
+                        ),
+                        "account_id": item.account_id,
+                        "is_available": bool(item.is_available),
+                        "is_archived": bool(item.is_archived),
+                    }
+                    for item in listings
+                ],
+            }
+            if _wants_json():
+                return jsonify(bulk_selection)
+        if proposal_ids is not None:
+            if (
+                account_id is None
+                or proposal_kind != "price"
+                or status != "pending_review"
+                or page != 1
+                or per_page not in {50, len(proposal_ids)}
+            ):
+                raise MarketplaceCommercialValidationError(
+                    "Точный набор заявок требует магазин, тип price и статус pending_review"
+                )
+            per_page = len(proposal_ids)
         pagination = MarketplaceCommercialService.list_proposals(
             seller_id=seller_id,
             account_id=account_id,
@@ -310,6 +421,7 @@ def index():
             status=status,
             page=page,
             per_page=per_page,
+            proposal_ids=proposal_ids,
         )
         accounts = MarketplaceAccountService.list_accounts(
             seller_id=seller_id,
@@ -344,6 +456,7 @@ def index():
                 "pages": pagination.pages,
                 "total": pagination.total,
             },
+            "exact_selection": proposal_ids is not None,
         })
     return render_template(
         "marketplace_commercial_classic.html" if request.endpoint.endswith(".classic") else "marketplace_commercial.html",
@@ -357,7 +470,9 @@ def index():
             "account_id": account_id,
             "proposal_kind": proposal_kind,
             "status": status,
+            "proposal_ids": proposal_ids,
         },
+        bulk_selection=bulk_selection,
         write_enabled=_write_enabled(),
     )
 
@@ -583,6 +698,108 @@ def create_price_proposal(listing_id: int):
         "marketplace_commercial.detail",
         proposal_id=proposal.id,
     ))
+
+
+@marketplace_commercial_bp.route(
+    "/price-proposals/bulk-preview",
+    methods=["POST"],
+)
+@login_required
+def preview_bulk_price_proposals():
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    try:
+        _require_feature()
+        if not request.is_json:
+            raise MarketplaceCommercialValidationError(
+                "Массовое сравнение принимает JSON"
+            )
+        data = _payload()
+        allowed = {
+            "account_id", "listing_ids", "mode", "value",
+            "allow_price_decrease", "allow_large_change", "guardrail_note",
+        }
+        if set(data) != allowed:
+            raise MarketplaceCommercialValidationError(
+                "Массовое сравнение содержит неподдерживаемые или отсутствующие поля"
+            )
+        result = MarketplaceCommercialService.preview_bulk_price_proposals(
+            seller_id=seller_id,
+            account_id=_integer(data.get("account_id"), "account_id"),
+            listing_ids=data.get("listing_ids"),
+            mode=data.get("mode"),
+            value=data.get("value"),
+            created_by_user_id=getattr(current_user, "id", None),
+            allow_price_decrease=_boolean(
+                data.get("allow_price_decrease"),
+                "allow_price_decrease",
+            ),
+            allow_large_change=_boolean(
+                data.get("allow_large_change"),
+                "allow_large_change",
+            ),
+            guardrail_note=data.get("guardrail_note"),
+        )
+    except Exception as exc:
+        return _write_failure(exc, seller_id=seller_id, action="bulk_price_preview")
+    return jsonify(result)
+
+
+@marketplace_commercial_bp.route(
+    "/price-proposals/bulk-confirm",
+    methods=["POST"],
+)
+@login_required
+def confirm_bulk_price_proposals():
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    try:
+        _require_feature()
+        if not request.is_json:
+            raise MarketplaceCommercialValidationError(
+                "Сохранение массовых заявок принимает JSON"
+            )
+        data = _payload()
+        if set(data) != {"preview_token", "confirm_save"}:
+            raise MarketplaceCommercialValidationError(
+                "Подтверждение принимает preview_token и confirm_save"
+            )
+        if not _boolean(data.get("confirm_save"), "confirm_save"):
+            raise MarketplaceCommercialValidationError(
+                "Сохранение требует явного подтверждения"
+            )
+        result = MarketplaceCommercialService.confirm_bulk_price_proposals(
+            seller_id=seller_id,
+            created_by_user_id=getattr(current_user, "id", None),
+            preview_token=data.get("preview_token"),
+        )
+        proposal_ids = [item["proposal"].id for item in result["items"]]
+        pending_review = bool(proposal_ids) and all(
+            item["status"] == "pending_review" for item in result["items"]
+        )
+        review_url = url_for(
+            "marketplace_commercial.index",
+            account_id=(result["items"][0]["proposal"].account_id if proposal_ids else None),
+            proposal_kind="price" if proposal_ids else None,
+            status="pending_review" if proposal_ids else None,
+            proposal_ids=",".join(str(value) for value in proposal_ids) if proposal_ids else None,
+        ) if pending_review else None
+        result["review_url"] = review_url
+        result["proposal_ids"] = proposal_ids
+        result["items"] = [
+            {
+                "listing_id": item["listing_id"],
+                "status": item["status"],
+                "review_url": review_url,
+                "proposal": _document(item["proposal"]),
+            }
+            for item in result["items"]
+        ]
+    except Exception as exc:
+        return _write_failure(exc, seller_id=seller_id, action="bulk_price_confirm")
+    return jsonify({"success": True, **result}), (200 if result["replayed"] else 201)
 
 
 @marketplace_commercial_bp.route(

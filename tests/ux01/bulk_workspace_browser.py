@@ -220,7 +220,7 @@ def run():
         open_products(page)
         page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
         pick_action(page, "Подготовить для Ozon")
-        dialog = page.locator("dialog.mp-ozon-dialog")
+        dialog = page.locator('dialog[aria-labelledby="mp-ozon-dialog-title"]')
         dialog.wait_for()
         assert dialog.get_by_label("Магазин Ozon").input_value() == str(fixture.FIXTURE["account_id"])
         prepare = dialog.get_by_role("button", name="Подготовить черновики")

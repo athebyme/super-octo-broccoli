@@ -1,13 +1,16 @@
 """Reviewed, durable Ozon price and FBS stock mutation workflow."""
 
 from datetime import datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import hashlib
 import json
 import re
+import secrets
 from typing import Any, Dict, Mapping, Optional, Tuple
 import uuid
 
+from flask import current_app
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.exc import StaleDataError
@@ -23,6 +26,7 @@ from models import (
     MarketplaceWarehouseStock,
     PricingSettings,
     Seller,
+    SellerMarketplaceAccount,
     db,
 )
 from services.marketplace_adapters import MarketplaceCredentials
@@ -100,6 +104,9 @@ class MarketplaceCommercialService:
     MAX_PRICE_READ_PAGES = 10
     MAX_PRICE_CHANGE_PCT = Decimal("50")
     MAX_BATCH_APPROVAL = 100
+    BULK_PRICE_PREVIEW_MAX_AGE = 600
+    BULK_PRICE_PREVIEW_MAX_TOKEN_BYTES = 131_072
+    BULK_PRICE_PREVIEW_SALT = "marketplace-commercial-bulk-price-preview-v1"
 
     @staticmethod
     def target_unavailable_reason(proposal) -> Optional[str]:
@@ -184,6 +191,1083 @@ class MarketplaceCommercialService:
                 f"{field_name} должен быть положительным целым числом"
             )
         return value
+
+    @classmethod
+    def _bulk_price_listing_ids(cls, value: Any) -> list[int]:
+        if not isinstance(value, list) or not 1 <= len(value) <= cls.MAX_BATCH_APPROVAL:
+            raise MarketplaceCommercialValidationError(
+                f"listing_ids должен содержать 1..{cls.MAX_BATCH_APPROVAL} листингов"
+            )
+        ids = [
+            cls._positive_integer(item, f"listing_ids[{index}]")
+            for index, item in enumerate(value)
+        ]
+        if len(set(ids)) != len(ids):
+            raise MarketplaceCommercialValidationError(
+                "listing_ids содержит повторяющиеся листинги"
+            )
+        return ids
+
+    @classmethod
+    def _bulk_price_mode_value(cls, mode: Any, value: Any) -> tuple[str, str]:
+        if not isinstance(mode, str) or mode not in {"set", "percent"}:
+            raise MarketplaceCommercialValidationError(
+                "mode должен быть set или percent"
+            )
+        if isinstance(value, bool) or isinstance(value, float) or not isinstance(
+            value, (str, int)
+        ):
+            raise MarketplaceCommercialValidationError(
+                "value передавайте decimal-строкой или целым числом"
+            )
+        rendered = str(value)
+        pattern = r"\d+(?:\.\d{1,2})?" if mode == "set" else r"[+-]?\d+(?:\.\d{1,2})?"
+        if len(rendered) > 32 or not re.fullmatch(pattern, rendered):
+            raise MarketplaceCommercialValidationError(
+                "value должен быть decimal-числом с точностью до сотых"
+            )
+        if mode == "set":
+            try:
+                return mode, OzonPriceContract.money(rendered, "value")
+            except OzonCommercialContractError as exc:
+                raise MarketplaceCommercialValidationError(str(exc)) from None
+
+        try:
+            percent = Decimal(rendered)
+        except (InvalidOperation, TypeError, ValueError):
+            raise MarketplaceCommercialValidationError(
+                "Процент должен быть decimal-строкой"
+            ) from None
+        if (
+            not percent.is_finite()
+            or percent.as_tuple().exponent < -2
+            or percent < Decimal("-99.99")
+            or percent > Decimal("500")
+        ):
+            raise MarketplaceCommercialValidationError(
+                "Процент должен быть от -99.99 до 500 с точностью до сотых"
+            )
+        return mode, format(percent, "f")
+
+    @classmethod
+    def _bulk_price_review(
+        cls,
+        *,
+        mode: str,
+        value: str,
+        baseline_price: str,
+    ) -> dict:
+        try:
+            if mode == "set":
+                return OzonPriceContract.prepare_price(value)
+            percentage = Decimal(value)
+            calculated = Decimal(baseline_price) * (
+                Decimal("1") + percentage / Decimal("100")
+            )
+            requested = calculated.quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            review = OzonPriceContract.prepare_price(format(requested, "f"))
+            review["calculation"] = {
+                "mode": "percent",
+                "change_pct": value,
+            }
+            return review
+        except OzonCommercialContractError as exc:
+            raise MarketplaceCommercialValidationError(str(exc)) from None
+
+    @classmethod
+    def _price_proposal_details(
+        cls,
+        *,
+        listing: MarketplaceListing,
+        baseline: dict,
+        price_review: dict,
+        source: str,
+        allow_price_decrease: bool,
+        allow_large_change: bool,
+        guardrail_note: Optional[Any],
+        pricing_min_profit: Optional[Decimal] = None,
+    ) -> tuple[dict, dict]:
+        item = OzonPriceContract.build_item(
+            offer_id=listing.offer_id,
+            product_id=listing.external_product_id,
+            price=price_review["price"],
+            currency_code=baseline["currency_code"],
+            old_price=baseline.get("old_price", "0"),
+        )
+        guardrails = cls._guard_price_change(
+            listing=listing,
+            baseline=baseline,
+            proposed_price=item["price"],
+            source=source,
+            allow_price_decrease=allow_price_decrease,
+            allow_large_change=allow_large_change,
+            guardrail_note=guardrail_note,
+            pricing_min_profit=pricing_min_profit,
+        )
+        guardrails["price_review"] = dict(price_review)
+        proposed = {
+            "kind": "price",
+            "offer_id": listing.offer_id,
+            "product_id": listing.external_product_id,
+            "price": item["price"],
+            "old_price": item.get("old_price", "0"),
+            "min_price": baseline.get("min_price", "0"),
+            "currency_code": item["currency_code"],
+            "auto_action_enabled": baseline.get("auto_action_enabled"),
+            "auto_add_to_ozon_actions_list_enabled": baseline.get(
+                "auto_add_to_ozon_actions_list_enabled"
+            ),
+        }
+        return proposed, guardrails
+
+    @classmethod
+    def _bulk_price_scope(
+        cls,
+        *,
+        seller_id: int,
+        account_id: int,
+        listing_ids: list[int],
+        require_available: bool,
+        include_imported: bool = True,
+    ) -> tuple[SellerMarketplaceAccount, list[MarketplaceListing]]:
+        account = cls._bulk_price_account(
+            seller_id=seller_id,
+            account_id=account_id,
+        )
+        query = MarketplaceListing.query
+        if include_imported:
+            query = query.options(joinedload(MarketplaceListing.imported_product))
+        rows = query.join(Marketplace).filter(
+            MarketplaceListing.id.in_(listing_ids),
+            MarketplaceListing.seller_id == seller_id,
+            MarketplaceListing.account_id == account_id,
+            MarketplaceListing.marketplace_id == account.marketplace_id,
+            Marketplace.code == "ozon",
+        ).populate_existing().all()
+        by_id = {row.id: row for row in rows}
+        if len(by_id) != len(listing_ids):
+            raise MarketplaceCommercialNotFound(
+                "Один или несколько листингов Ozon не найдены в выбранном магазине"
+            )
+        listings = [by_id[listing_id] for listing_id in listing_ids]
+        if require_available and any(
+            row.is_archived or not row.is_available for row in listings
+        ):
+            raise MarketplaceCommercialConflict(
+                "Массовая подготовка доступна только для доступных неархивных листингов"
+            )
+        return account, listings
+
+    @staticmethod
+    def _bulk_price_account(
+        *,
+        seller_id: int,
+        account_id: int,
+    ) -> SellerMarketplaceAccount:
+        account = SellerMarketplaceAccount.query.join(Marketplace).filter(
+            SellerMarketplaceAccount.id == account_id,
+            SellerMarketplaceAccount.seller_id == seller_id,
+            SellerMarketplaceAccount.marketplace_id == Marketplace.id,
+            Marketplace.code == "ozon",
+        ).populate_existing().first()
+        if account is None:
+            raise MarketplaceCommercialNotFound("Магазин Ozon не найден")
+        return account
+
+    @staticmethod
+    def _begin_bulk_price_validation_transaction() -> None:
+        """Lock SQLite writers before the final local revalidation/save."""
+        if db.engine.dialect.name != "sqlite":
+            raise MarketplaceCommercialConfigurationError(
+                "Атомарное сохранение массовых цен поддерживается только на SQLite"
+            )
+        session = db.session()
+        if session.in_transaction():
+            session.rollback()
+        try:
+            connection = session.connection()
+            raw_connection = connection.connection.driver_connection
+            if getattr(raw_connection, "in_transaction", False):
+                raise RuntimeError("bulk_price_transaction_not_fresh")
+            previous_timeout = raw_connection.execute(
+                "PRAGMA busy_timeout"
+            ).fetchone()[0]
+            raw_connection.execute("PRAGMA busy_timeout = 200")
+            try:
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+            finally:
+                raw_connection.execute(
+                    f"PRAGMA busy_timeout = {int(previous_timeout)}"
+                )
+        except Exception:
+            session.rollback()
+            raise MarketplaceCommercialBusy(
+                "База занята. Повторите сохранение после завершения другой операции."
+            ) from None
+
+    @staticmethod
+    def _timestamp(value) -> Optional[str]:
+        return value.isoformat() if value is not None else None
+
+    @classmethod
+    def _bulk_listing_version(cls, listing: MarketplaceListing) -> dict:
+        return {
+            "listing_id": listing.id,
+            "offer_id": listing.offer_id,
+            "product_id": listing.external_product_id,
+            "sync_fingerprint": listing.sync_fingerprint,
+            "title": cls._safe_text(listing.title, maximum=500),
+            "updated_at": cls._timestamp(listing.updated_at),
+            "prices_synced_at": cls._timestamp(listing.prices_synced_at),
+            "is_available": bool(listing.is_available),
+            "is_archived": bool(listing.is_archived),
+            "imported_product_id": listing.imported_product_id,
+            "link_version": listing.link_version,
+        }
+
+    @classmethod
+    def _bulk_price_policy(
+        cls,
+        listing: MarketplaceListing,
+        *,
+        pricing_min_profit: Decimal,
+    ) -> dict:
+        imported = listing.imported_product
+        return {
+            "imported_product_id": imported.id if imported is not None else None,
+            "supplier_price": (
+                str(imported.supplier_price)
+                if imported is not None and imported.supplier_price is not None
+                else None
+            ),
+            "pricing_min_profit": format(pricing_min_profit, "f"),
+        }
+
+    @classmethod
+    def _bulk_pricing_min_profit(cls, seller_id: int) -> Decimal:
+        pricing = PricingSettings.query.filter_by(seller_id=seller_id).first()
+        raw = pricing.min_profit if pricing is not None else None
+        try:
+            result = Decimal(str(raw if raw is not None else 0))
+        except (InvalidOperation, TypeError, ValueError):
+            raise MarketplaceCommercialConflict(
+                "Настройки минимальной прибыли требуют проверки"
+            ) from None
+        if not result.is_finite():
+            raise MarketplaceCommercialConflict(
+                "Настройки минимальной прибыли требуют проверки"
+            )
+        return result
+
+    @classmethod
+    def _bulk_price_row(
+        cls,
+        *,
+        listing: MarketplaceListing,
+        baseline: dict,
+        mode: str,
+        value: str,
+        active_proposal: bool,
+        allow_price_decrease: bool,
+        allow_large_change: bool,
+        guardrail_note: Optional[str],
+        pricing_min_profit: Decimal,
+    ) -> dict:
+        current_price = baseline["price"]
+        try:
+            price_review = cls._bulk_price_review(
+                mode=mode, value=value, baseline_price=current_price
+            )
+        except MarketplaceCommercialValidationError as exc:
+            return {
+                "status": "blocked",
+                "reason_code": "price_out_of_range",
+                "reason": str(exc),
+                "price_review": None,
+                "proposed": None,
+                "guardrails": {},
+            }
+
+        proposed_price = price_review["price"]
+        if active_proposal:
+            return {
+                "status": "blocked",
+                "reason_code": "active_price_proposal",
+                "reason": "Для товара уже есть незавершённая заявка на изменение цены.",
+                "price_review": price_review,
+                "proposed": None,
+                "guardrails": {},
+            }
+        if Decimal(proposed_price) == Decimal(current_price):
+            return {
+                "status": "noop",
+                "reason_code": "price_unchanged",
+                "reason": "Цена после округления совпадает с текущей.",
+                "price_review": price_review,
+                "proposed": None,
+                "guardrails": {},
+            }
+
+        try:
+            proposed, guardrails = cls._price_proposal_details(
+                listing=listing,
+                baseline=baseline,
+                price_review=price_review,
+                source="user",
+                allow_price_decrease=allow_price_decrease,
+                allow_large_change=allow_large_change,
+                guardrail_note=guardrail_note,
+                pricing_min_profit=pricing_min_profit,
+            )
+        except MarketplaceCommercialValidationError as exc:
+            message = str(exc)
+            reason_code = (
+                "price_decrease_requires_review"
+                if message.startswith("Снижение цены требует")
+                else "large_change_requires_review"
+                if message.startswith("Изменение цены больше 50%")
+                else "override_note_required"
+                if message.startswith("Для price override")
+                else "old_price_limit"
+                if message.startswith("Новая цена должна оставаться ниже")
+                else "min_price_limit"
+                if message.startswith("Новая цена ниже текущей min_price")
+                else "supplier_floor"
+                if message.startswith("Новая цена ниже закупочной")
+                else "guardrail_blocked"
+            )
+            return {
+                "status": "blocked",
+                "reason_code": reason_code,
+                "reason": message,
+                "price_review": price_review,
+                "proposed": None,
+                "guardrails": {},
+            }
+        except OzonCommercialContractError:
+            return {
+                "status": "blocked",
+                "reason_code": "unsupported_currency_or_price",
+                "reason": "Эту цену нельзя подготовить для текущей валюты или значения.",
+                "price_review": price_review,
+                "proposed": None,
+                "guardrails": {},
+            }
+        return {
+            "status": "eligible",
+            "reason_code": None,
+            "reason": None,
+            "price_review": price_review,
+            "proposed": proposed,
+            "guardrails": guardrails,
+        }
+
+    @classmethod
+    def _bulk_price_serializer(cls):
+        secret = current_app.config.get("SECRET_KEY")
+        if not secret:
+            raise MarketplaceCommercialConfigurationError(
+                "Не настроена подпись временного сравнения цены"
+            )
+        return URLSafeTimedSerializer(
+            secret,
+            salt=cls.BULK_PRICE_PREVIEW_SALT,
+        )
+
+    @classmethod
+    def _bulk_account_version(cls, account: SellerMarketplaceAccount) -> dict:
+        return {
+            "id": account.id,
+            "seller_id": account.seller_id,
+            "marketplace_id": account.marketplace_id,
+            "version": account.version,
+            "credential_version": account.credential_version,
+            "external_account_fingerprint": hashlib.sha256(
+                str(account.external_account_id or "").encode("utf-8")
+            ).hexdigest(),
+            "credentials_updated_at": cls._timestamp(account.credentials_updated_at),
+            "credential_expires_at": cls._timestamp(account.credential_expires_at),
+            "is_active": bool(account.is_active),
+            "connection_status": account.connection_status,
+        }
+
+    @classmethod
+    def _bulk_claims(cls, token: Any, *, seller_id: int, user_id: int) -> dict:
+        if not isinstance(token, str) or not token:
+            raise MarketplaceCommercialValidationError(
+                "preview_token обязателен"
+            )
+        try:
+            token_size = len(token.encode("utf-8"))
+        except UnicodeEncodeError:
+            raise MarketplaceCommercialValidationError(
+                "preview_token имеет неверный формат"
+            ) from None
+        if token_size > cls.BULK_PRICE_PREVIEW_MAX_TOKEN_BYTES:
+            raise MarketplaceCommercialValidationError(
+                "preview_token превышает безопасный размер"
+            )
+        try:
+            claims = cls._bulk_price_serializer().loads(
+                token,
+                max_age=cls.BULK_PRICE_PREVIEW_MAX_AGE,
+            )
+        except SignatureExpired:
+            raise MarketplaceCommercialConflict(
+                "Срок сравнения истёк. Проведите новое сравнение цен."
+            ) from None
+        except BadSignature:
+            raise MarketplaceCommercialValidationError(
+                "Подпись сравнения недействительна"
+            ) from None
+        expected_keys = {
+            "version", "seller_id", "user_id", "account_id", "account",
+            "listing_ids", "mode", "value", "allow_price_decrease",
+            "allow_large_change", "guardrail_note", "nonce", "items",
+        }
+        if not isinstance(claims, dict) or set(claims) != expected_keys:
+            raise MarketplaceCommercialValidationError(
+                "Формат сравнения не распознан"
+            )
+        if (
+            type(claims.get("version")) is not int
+            or claims["version"] != 1
+            or type(claims.get("seller_id")) is not int
+            or claims["seller_id"] != seller_id
+            or type(claims.get("user_id")) is not int
+            or claims["user_id"] != user_id
+        ):
+            raise MarketplaceCommercialNotFound(
+                "Сравнение цены не принадлежит текущему продавцу и пользователю"
+            )
+        account_id = cls._positive_integer(claims.get("account_id"), "account_id")
+        listing_ids = cls._bulk_price_listing_ids(claims.get("listing_ids"))
+        account = claims.get("account")
+        if (
+            not isinstance(account, dict)
+            or set(account) != {
+                "id", "seller_id", "marketplace_id", "version",
+                "credential_version", "external_account_fingerprint",
+                "credentials_updated_at", "credential_expires_at",
+                "is_active", "connection_status",
+            }
+            or type(account.get("id")) is not int
+            or account["id"] != account_id
+            or type(account.get("seller_id")) is not int
+            or account["seller_id"] != seller_id
+            or type(account.get("marketplace_id")) is not int
+            or type(account.get("version")) is not int
+            or type(account.get("credential_version")) is not int
+            or not isinstance(account.get("external_account_fingerprint"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", account["external_account_fingerprint"])
+            or (
+                account.get("credentials_updated_at") is not None
+                and not isinstance(account.get("credentials_updated_at"), str)
+            )
+            or (
+                account.get("credential_expires_at") is not None
+                and not isinstance(account.get("credential_expires_at"), str)
+            )
+            or not isinstance(account.get("is_active"), bool)
+            or not isinstance(account.get("connection_status"), str)
+        ):
+            raise MarketplaceCommercialValidationError("Сравнение повреждено")
+        mode, value = cls._bulk_price_mode_value(
+            claims.get("mode"), claims.get("value")
+        )
+        if value != claims.get("value"):
+            raise MarketplaceCommercialValidationError("Сравнение повреждено")
+        if not isinstance(claims.get("allow_price_decrease"), bool) or not isinstance(
+            claims.get("allow_large_change"), bool
+        ):
+            raise MarketplaceCommercialValidationError("Сравнение повреждено")
+        note = claims.get("guardrail_note")
+        if note is not None and not isinstance(note, str):
+            raise MarketplaceCommercialValidationError("Сравнение повреждено")
+        if not isinstance(claims.get("nonce"), str) or not re.fullmatch(
+            r"[0-9a-f]{32}", claims["nonce"]
+        ):
+            raise MarketplaceCommercialValidationError("Сравнение повреждено")
+        items = claims.get("items")
+        if not isinstance(items, list) or len(items) != len(listing_ids):
+            raise MarketplaceCommercialValidationError("Сравнение повреждено")
+        expected_item_keys = {
+            "listing_id", "listing_version", "policy", "baseline",
+            "active_proposal", "status", "reason_code", "reason",
+            "price_review", "proposed", "guardrails",
+        }
+        expected_listing_version_keys = {
+            "listing_id", "offer_id", "product_id", "sync_fingerprint",
+            "title", "updated_at", "prices_synced_at", "is_available",
+            "is_archived", "imported_product_id", "link_version",
+        }
+        expected_policy_keys = {
+            "imported_product_id", "supplier_price", "pricing_min_profit",
+        }
+        for index, item in enumerate(items):
+            if (
+                not isinstance(item, dict)
+                or set(item) != expected_item_keys
+                or item.get("listing_id") != listing_ids[index]
+                or not isinstance(item.get("active_proposal"), bool)
+                or item.get("status") not in ("eligible", "noop", "blocked")
+                or not isinstance(item.get("listing_version"), dict)
+                or set(item["listing_version"]) != expected_listing_version_keys
+                or item["listing_version"].get("listing_id") != listing_ids[index]
+                or not isinstance(item.get("policy"), dict)
+                or set(item["policy"]) != expected_policy_keys
+                or not isinstance(item.get("baseline"), dict)
+                or (
+                    item.get("price_review") is not None
+                    and not isinstance(item.get("price_review"), dict)
+                )
+                or not isinstance(item.get("guardrails"), dict)
+                or (item.get("proposed") is not None and not isinstance(item.get("proposed"), dict))
+                or (item.get("reason_code") is not None and not isinstance(item.get("reason_code"), str))
+                or (item.get("reason") is not None and not isinstance(item.get("reason"), str))
+                or (
+                    item.get("status") == "eligible"
+                    and (item.get("proposed") is None or item.get("price_review") is None)
+                )
+                or (
+                    item.get("status") != "eligible"
+                    and item.get("proposed") is not None
+                )
+                or (
+                    item.get("price_review") is None
+                    and item.get("reason_code") != "price_out_of_range"
+                )
+            ):
+                raise MarketplaceCommercialValidationError("Сравнение повреждено")
+        if account_id <= 0:
+            raise MarketplaceCommercialValidationError("Сравнение повреждено")
+        return claims
+
+    @classmethod
+    def _bulk_expected_proposals(
+        cls,
+        *,
+        claims: dict,
+        seller_id: int,
+        user_id: int,
+    ) -> tuple[list[dict], dict[str, str]]:
+        eligible = [item for item in claims["items"] if item["status"] == "eligible"]
+        keys = {
+            f"bulk-price:{claims['nonce']}:{item['listing_id']}": cls._proposal_request_fingerprint(
+                proposal_kind="price",
+                listing_id=item["listing_id"],
+                warehouse_id=None,
+                baseline=item["baseline"],
+                proposed=item["proposed"],
+                source="user",
+            )
+            for item in eligible
+        }
+        if len(keys) != len(eligible) or any(len(key) > 128 for key in keys):
+            raise MarketplaceCommercialValidationError("Сравнение повреждено")
+        return eligible, keys
+
+    @classmethod
+    def _bulk_replay_items(
+        cls,
+        *,
+        claims: dict,
+        seller_id: int,
+        user_id: int,
+        eligible: list[dict],
+        fingerprints: dict[str, str],
+    ) -> Optional[list[dict]]:
+        if not eligible:
+            return None
+        found = MarketplaceCommercialProposal.query.filter(
+            MarketplaceCommercialProposal.seller_id == seller_id,
+            MarketplaceCommercialProposal.account_id == claims["account_id"],
+            MarketplaceCommercialProposal.proposal_kind == "price",
+            MarketplaceCommercialProposal.idempotency_key.in_(list(fingerprints)),
+        ).options(
+            joinedload(MarketplaceCommercialProposal.listing),
+        ).all()
+        if not found:
+            return None
+        by_key = {proposal.idempotency_key: proposal for proposal in found}
+        if len(by_key) != len(eligible) or set(by_key) != set(fingerprints):
+            raise MarketplaceCommercialConflict(
+                "Сохранён только неполный набор массовых заявок. Проверьте список заявок перед новым сравнением."
+            )
+        proposals = []
+        for item in eligible:
+            key = f"bulk-price:{claims['nonce']}:{item['listing_id']}"
+            proposal = by_key.get(key)
+            if (
+                proposal is None
+                or proposal.listing_id != item["listing_id"]
+                or proposal.warehouse_id is not None
+                or proposal.created_by_user_id != user_id
+                or proposal.source != "user"
+                or proposal.contract_version != OzonPriceContract.CONTRACT_VERSION
+                or proposal.request_fingerprint != fingerprints[key]
+                or proposal.marketplace_id != claims["account"].get("marketplace_id")
+                or proposal.listing is None
+                or proposal.listing.seller_id != seller_id
+            ):
+                raise MarketplaceCommercialConflict(
+                    "Подтверждение уже использовано для другого набора заявок"
+                )
+            proposals.append({
+                "listing_id": item["listing_id"],
+                "status": proposal.status,
+                "proposal": proposal,
+            })
+        return proposals
+
+    @classmethod
+    def preview_bulk_price_proposals(
+        cls,
+        *,
+        seller_id: int,
+        account_id: int,
+        listing_ids: Any,
+        mode: Any,
+        value: Any,
+        created_by_user_id: Optional[Any],
+        allow_price_decrease: bool = False,
+        allow_large_change: bool = False,
+        guardrail_note: Optional[Any] = None,
+        adapter=None,
+        credentials: Optional[MarketplaceCredentials] = None,
+        now: Optional[datetime] = None,
+    ) -> dict:
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        account_id = cls._positive_integer(account_id, "account_id")
+        user_id = cls._validate_user(
+            seller_id=seller_id,
+            user_id=created_by_user_id,
+        )
+        if user_id is None:
+            raise MarketplaceCommercialValidationError(
+                "Массовое сравнение требует авторизованного пользователя"
+            )
+        listing_ids = cls._bulk_price_listing_ids(listing_ids)
+        mode, value = cls._bulk_price_mode_value(mode, value)
+        if not isinstance(allow_price_decrease, bool) or not isinstance(
+            allow_large_change, bool
+        ):
+            raise MarketplaceCommercialValidationError(
+                "Price override flags должны быть boolean"
+            )
+        if guardrail_note is not None and not isinstance(guardrail_note, str):
+            raise MarketplaceCommercialValidationError(
+                "guardrail_note должен быть строкой"
+            )
+        guardrail_note = (
+            cls._safe_text(guardrail_note, maximum=1000)
+            if guardrail_note is not None else None
+        )
+
+        # The ownership/account/availability gate precedes credentials and every
+        # provider read, so a mixed or archived set cannot touch Ozon.
+        cls._bulk_price_scope(
+            seller_id=seller_id,
+            account_id=account_id,
+            listing_ids=listing_ids,
+            require_available=True,
+        )
+        resolved_account, adapter, credentials = cls._resolve_account(
+            seller_id=seller_id,
+            account_id=account_id,
+            proposal_kind="price",
+            adapter=adapter,
+            credentials=credentials,
+            now=now,
+        )
+        resolved_account_version = cls._bulk_account_version(resolved_account)
+        db.session.rollback()
+        lock_file = try_account_operation_lock(account_id)
+        if lock_file is None:
+            raise MarketplaceCommercialBusy("Кабинет Ozon занят другой операцией")
+        try:
+            account, listings = cls._bulk_price_scope(
+                seller_id=seller_id,
+                account_id=account_id,
+                listing_ids=listing_ids,
+                require_available=True,
+            )
+            if cls._bulk_account_version(account) != resolved_account_version:
+                raise MarketplaceCommercialConflict(
+                    "Настройки кабинета изменились. Повторите сравнение."
+                )
+            pricing_min_profit = cls._bulk_pricing_min_profit(seller_id)
+            active_ids = {
+                row[0]
+                for row in db.session.query(
+                    MarketplaceCommercialProposal.listing_id
+                ).filter(
+                    MarketplaceCommercialProposal.seller_id == seller_id,
+                    MarketplaceCommercialProposal.account_id == account_id,
+                    MarketplaceCommercialProposal.proposal_kind == "price",
+                    MarketplaceCommercialProposal.listing_id.in_(listing_ids),
+                    MarketplaceCommercialProposal.status.in_(
+                        cls.ACTIVE_PROPOSAL_STATUSES
+                    ),
+                ).all()
+            }
+            baselines = cls._read_price_states(
+                listings=listings,
+                adapter=adapter,
+                credentials=credentials,
+            )
+            claim_items = []
+            response_items = []
+            for listing in listings:
+                baseline = baselines[listing.id]
+                row = cls._bulk_price_row(
+                    listing=listing,
+                    baseline=baseline,
+                    mode=mode,
+                    value=value,
+                    active_proposal=listing.id in active_ids,
+                    allow_price_decrease=allow_price_decrease,
+                    allow_large_change=allow_large_change,
+                    guardrail_note=guardrail_note,
+                    pricing_min_profit=pricing_min_profit,
+                )
+                claim_items.append({
+                    "listing_id": listing.id,
+                    "listing_version": cls._bulk_listing_version(listing),
+                    "policy": cls._bulk_price_policy(
+                        listing, pricing_min_profit=pricing_min_profit
+                    ),
+                    "baseline": baseline,
+                    "active_proposal": listing.id in active_ids,
+                    **row,
+                })
+                response_items.append({
+                    "listing_id": listing.id,
+                    "offer_id": listing.offer_id,
+                    "product_id": listing.external_product_id,
+                    "title": cls._safe_text(listing.title, maximum=500),
+                    "status": row["status"],
+                    "reason_code": row["reason_code"],
+                    "reason": row["reason"],
+                    "current_price": baseline["price"],
+                    "proposed_price": (
+                        row["price_review"]["price"]
+                        if row["price_review"] is not None else None
+                    ),
+                    "currency_code": baseline["currency_code"],
+                    "price_review": row["price_review"],
+                    "guardrails": row["guardrails"],
+                })
+            counts = {
+                "selected_count": len(response_items),
+                "eligible_count": sum(
+                    item["status"] == "eligible" for item in response_items
+                ),
+                "noop_count": sum(
+                    item["status"] == "noop" for item in response_items
+                ),
+                "blocked_count": sum(
+                    item["status"] == "blocked" for item in response_items
+                ),
+            }
+            claims = {
+                "version": 1,
+                "seller_id": seller_id,
+                "user_id": user_id,
+                "account_id": account_id,
+                "account": cls._bulk_account_version(account),
+                "listing_ids": listing_ids,
+                "mode": mode,
+                "value": value,
+                "allow_price_decrease": allow_price_decrease,
+                "allow_large_change": allow_large_change,
+                "guardrail_note": guardrail_note,
+                "nonce": secrets.token_hex(16),
+                "items": claim_items,
+            }
+            token = cls._bulk_price_serializer().dumps(claims)
+            if len(token.encode("utf-8")) > cls.BULK_PRICE_PREVIEW_MAX_TOKEN_BYTES:
+                raise MarketplaceCommercialValidationError(
+                    "Слишком большой набор сравнения. Выберите меньше товаров."
+                )
+            return {
+                "success": True,
+                **counts,
+                "preview_token": token,
+                "expires_in_seconds": cls.BULK_PRICE_PREVIEW_MAX_AGE,
+                "items": response_items,
+            }
+        finally:
+            try:
+                db.session.rollback()
+            finally:
+                release_account_operation_lock(lock_file)
+
+    @classmethod
+    def confirm_bulk_price_proposals(
+        cls,
+        *,
+        seller_id: int,
+        created_by_user_id: Optional[Any],
+        preview_token: Any,
+    ) -> dict:
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        user_id = cls._validate_user(
+            seller_id=seller_id,
+            user_id=created_by_user_id,
+        )
+        if user_id is None:
+            raise MarketplaceCommercialValidationError(
+                "Сохранение требует авторизованного пользователя"
+            )
+        claims = cls._bulk_claims(
+            preview_token,
+            seller_id=seller_id,
+            user_id=user_id,
+        )
+        eligible, fingerprints = cls._bulk_expected_proposals(
+            claims=claims,
+            seller_id=seller_id,
+            user_id=user_id,
+        )
+        if not eligible:
+            raise MarketplaceCommercialConflict(
+                "В сравнении нет заявок, готовых к сохранению"
+            )
+
+        account_id = claims["account_id"]
+        listing_ids = claims["listing_ids"]
+        cls._bulk_price_account(
+            seller_id=seller_id,
+            account_id=account_id,
+        )
+
+        # A retry after a lost response is resolved from durable exact keys
+        # before consulting mutable account/listing/policy state.
+        replay = cls._bulk_replay_items(
+            claims=claims,
+            seller_id=seller_id,
+            user_id=user_id,
+            eligible=eligible,
+            fingerprints=fingerprints,
+        )
+        if replay is not None:
+            return {
+                "selected_count": len(listing_ids),
+                "created_count": 0,
+                "saved_count": len(eligible),
+                "replayed_count": len(eligible),
+                "replayed": True,
+                "noop_count": sum(item["status"] == "noop" for item in claims["items"]),
+                "blocked_count": sum(item["status"] == "blocked" for item in claims["items"]),
+                "items": replay,
+            }
+        db.session.rollback()
+
+        lock_file = try_account_operation_lock(account_id)
+        if lock_file is None:
+            raise MarketplaceCommercialBusy("Кабинет Ozon занят другой операцией")
+        try:
+            cls._bulk_price_account(
+                seller_id=seller_id,
+                account_id=account_id,
+            )
+            replay = cls._bulk_replay_items(
+                claims=claims,
+                seller_id=seller_id,
+                user_id=user_id,
+                eligible=eligible,
+                fingerprints=fingerprints,
+            )
+            if replay is not None:
+                return {
+                    "selected_count": len(listing_ids),
+                    "created_count": 0,
+                    "saved_count": len(eligible),
+                    "replayed_count": len(eligible),
+                    "replayed": True,
+                    "noop_count": sum(item["status"] == "noop" for item in claims["items"]),
+                    "blocked_count": sum(item["status"] == "blocked" for item in claims["items"]),
+                    "items": replay,
+                }
+            db.session.rollback()
+            cls._begin_bulk_price_validation_transaction()
+            # The account file lock may have waited while the signed preview
+            # approached expiry. Recheck its timed signature before using the
+            # claims for the now-locked local validation and insert.
+            if cls._bulk_claims(
+                preview_token,
+                seller_id=seller_id,
+                user_id=user_id,
+            ) != claims:
+                raise MarketplaceCommercialValidationError(
+                    "Сравнение цены истекло или изменилось. Проведите его снова."
+                )
+            account, listings = cls._bulk_price_scope(
+                seller_id=seller_id,
+                account_id=account_id,
+                listing_ids=listing_ids,
+                require_available=False,
+            )
+            by_id = {listing.id: listing for listing in listings}
+            if any(not listing.is_available or listing.is_archived for listing in listings):
+                raise MarketplaceCommercialConflict(
+                    "Один из выбранных товаров больше недоступен. Проведите новое сравнение."
+                )
+            if cls._bulk_account_version(account) != claims["account"]:
+                raise MarketplaceCommercialConflict(
+                    "Настройки кабинета изменились. Проведите новое сравнение."
+                )
+            pricing_min_profit = cls._bulk_pricing_min_profit(seller_id)
+            active_ids = {
+                row[0]
+                for row in db.session.query(
+                    MarketplaceCommercialProposal.listing_id
+                ).filter(
+                    MarketplaceCommercialProposal.seller_id == seller_id,
+                    MarketplaceCommercialProposal.account_id == account_id,
+                    MarketplaceCommercialProposal.proposal_kind == "price",
+                    MarketplaceCommercialProposal.listing_id.in_(listing_ids),
+                    MarketplaceCommercialProposal.status.in_(
+                        cls.ACTIVE_PROPOSAL_STATUSES
+                    ),
+                ).all()
+            }
+            expected_active_ids = {
+                item["listing_id"]
+                for item in claims["items"]
+                if item["active_proposal"]
+            }
+            if active_ids != expected_active_ids:
+                raise MarketplaceCommercialConflict(
+                    "Незавершённые заявки по выбранным товарам изменились. Проведите новое сравнение."
+                )
+            verified_rows = {}
+            for item in claims["items"]:
+                listing = by_id[item["listing_id"]]
+                current_version = cls._bulk_listing_version(listing)
+                current_policy = cls._bulk_price_policy(
+                    listing, pricing_min_profit=pricing_min_profit
+                )
+                if (
+                    current_version != item["listing_version"]
+                    or current_policy != item["policy"]
+                ):
+                    raise MarketplaceCommercialConflict(
+                        "Данные товара или правило цены изменились. Проведите новое сравнение."
+                    )
+                row = cls._bulk_price_row(
+                    listing=listing,
+                    baseline=item["baseline"],
+                    mode=claims["mode"],
+                    value=claims["value"],
+                    active_proposal=item["active_proposal"],
+                    allow_price_decrease=claims["allow_price_decrease"],
+                    allow_large_change=claims["allow_large_change"],
+                    guardrail_note=claims["guardrail_note"],
+                    pricing_min_profit=pricing_min_profit,
+                )
+                comparable = {
+                    key: row[key]
+                    for key in (
+                        "status", "reason_code", "reason", "price_review",
+                        "proposed", "guardrails",
+                    )
+                }
+                original = {key: item[key] for key in comparable}
+                if comparable != original:
+                    raise MarketplaceCommercialConflict(
+                        "Правило или предложение изменилось. Проведите новое сравнение."
+                    )
+                verified_rows[item["listing_id"]] = row
+
+            created = []
+            try:
+                for item in eligible:
+                    listing = by_id[item["listing_id"]]
+                    row = verified_rows[listing.id]
+                    created.append(cls._persist_proposal(
+                        listing=listing,
+                        warehouse=None,
+                        proposal_kind="price",
+                        baseline=item["baseline"],
+                        proposed=row["proposed"],
+                        guardrails=row["guardrails"],
+                        source="user",
+                        idempotency_key=f"bulk-price:{claims['nonce']}:{listing.id}",
+                        created_by_user_id=user_id,
+                        agent_task_id=None,
+                        commit=False,
+                    ))
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
+                replay = cls._bulk_replay_items(
+                    claims=claims,
+                    seller_id=seller_id,
+                    user_id=user_id,
+                    eligible=eligible,
+                    fingerprints=fingerprints,
+                )
+                if replay is not None:
+                    return {
+                        "selected_count": len(listing_ids),
+                        "created_count": 0,
+                        "saved_count": len(eligible),
+                        "replayed_count": len(eligible),
+                        "replayed": True,
+                        "noop_count": sum(item["status"] == "noop" for item in claims["items"]),
+                        "blocked_count": sum(item["status"] == "blocked" for item in claims["items"]),
+                        "items": replay,
+                    }
+                raise MarketplaceCommercialConflict(
+                    "Набор заявок изменился при сохранении. Проведите новое сравнение."
+                ) from None
+            except Exception:
+                db.session.rollback()
+                replay = cls._bulk_replay_items(
+                    claims=claims,
+                    seller_id=seller_id,
+                    user_id=user_id,
+                    eligible=eligible,
+                    fingerprints=fingerprints,
+                )
+                if replay is not None:
+                    return {
+                        "selected_count": len(listing_ids),
+                        "created_count": 0,
+                        "saved_count": len(eligible),
+                        "replayed_count": len(eligible),
+                        "replayed": True,
+                        "noop_count": sum(item["status"] == "noop" for item in claims["items"]),
+                        "blocked_count": sum(item["status"] == "blocked" for item in claims["items"]),
+                        "items": replay,
+                    }
+                raise
+            return {
+                "selected_count": len(listing_ids),
+                "created_count": len(created),
+                "saved_count": len(created),
+                "replayed_count": 0,
+                "replayed": False,
+                "noop_count": sum(item["status"] == "noop" for item in claims["items"]),
+                "blocked_count": sum(item["status"] == "blocked" for item in claims["items"]),
+                "items": [
+                    {
+                        "listing_id": proposal.listing_id,
+                        "status": proposal.status,
+                        "proposal": proposal,
+                    }
+                    for proposal in created
+                ],
+            }
+        finally:
+            try:
+                db.session.rollback()
+            finally:
+                release_account_operation_lock(lock_file)
 
     @classmethod
     def _approval_items(cls, value: Any) -> list:
@@ -743,6 +1827,7 @@ class MarketplaceCommercialService:
         allow_price_decrease: bool,
         allow_large_change: bool,
         guardrail_note: Optional[Any],
+        pricing_min_profit: Optional[Decimal] = None,
     ) -> dict:
         if not isinstance(allow_price_decrease, bool) or not isinstance(
             allow_large_change, bool
@@ -801,14 +1886,17 @@ class MarketplaceCommercialService:
                 supplier_price = Decimal(str(imported.supplier_price))
             except (InvalidOperation, ValueError):
                 supplier_price = Decimal("0")
-            pricing = PricingSettings.query.filter_by(
-                seller_id=listing.seller_id
-            ).first()
-            min_profit = Decimal(str(
-                pricing.min_profit
-                if pricing is not None and pricing.min_profit is not None
-                else 0
-            ))
+            if pricing_min_profit is None:
+                pricing = PricingSettings.query.filter_by(
+                    seller_id=listing.seller_id
+                ).first()
+                min_profit = Decimal(str(
+                    pricing.min_profit
+                    if pricing is not None and pricing.min_profit is not None
+                    else 0
+                ))
+            else:
+                min_profit = pricing_min_profit
             if supplier_price > 0 and min_profit >= 0:
                 floor = supplier_price * (Decimal("1") + min_profit / Decimal("100"))
                 supplier_floor = format(floor.quantize(Decimal("0.01")), "f")
@@ -843,18 +1931,19 @@ class MarketplaceCommercialService:
         created_by_user_id: Optional[int],
         agent_task_id: Optional[str],
         rollback_of_operation_id: Optional[int] = None,
+        commit: bool = True,
     ) -> MarketplaceCommercialProposal:
         baseline_fingerprint = cls._fingerprint(baseline)
         proposed_fingerprint = cls._fingerprint(proposed)
-        request_fingerprint = cls._fingerprint({
-            "proposal_kind": proposal_kind,
-            "listing_id": listing.id,
-            "warehouse_id": warehouse.id if warehouse else None,
-            "baseline": baseline,
-            "proposed": proposed,
-            "source": source,
-            "rollback_of_operation_id": rollback_of_operation_id,
-        })
+        request_fingerprint = cls._proposal_request_fingerprint(
+            proposal_kind=proposal_kind,
+            listing_id=listing.id,
+            warehouse_id=warehouse.id if warehouse else None,
+            baseline=baseline,
+            proposed=proposed,
+            source=source,
+            rollback_of_operation_id=rollback_of_operation_id,
+        )
         existing = MarketplaceCommercialProposal.query.filter_by(
             account_id=listing.account_id,
             proposal_kind=proposal_kind,
@@ -898,6 +1987,8 @@ class MarketplaceCommercialService:
             guardrails_json=cls._json(guardrails, dict),
         )
         db.session.add(proposal)
+        if not commit:
+            return proposal
         try:
             db.session.commit()
         except IntegrityError:
@@ -913,6 +2004,28 @@ class MarketplaceCommercialService:
                 "Для листинга уже есть активный commercial proposal"
             ) from None
         return proposal
+
+    @classmethod
+    def _proposal_request_fingerprint(
+        cls,
+        *,
+        proposal_kind: str,
+        listing_id: int,
+        warehouse_id: Optional[int],
+        baseline: dict,
+        proposed: dict,
+        source: str,
+        rollback_of_operation_id: Optional[int] = None,
+    ) -> str:
+        return cls._fingerprint({
+            "proposal_kind": proposal_kind,
+            "listing_id": listing_id,
+            "warehouse_id": warehouse_id,
+            "baseline": baseline,
+            "proposed": proposed,
+            "source": source,
+            "rollback_of_operation_id": rollback_of_operation_id,
+        })
 
     @classmethod
     def create_price_proposal(
@@ -968,36 +2081,15 @@ class MarketplaceCommercialService:
                 adapter=resolved_adapter,
                 credentials=resolved_credentials,
             )
-            item = OzonPriceContract.build_item(
-                offer_id=listing.offer_id,
-                product_id=listing.external_product_id,
-                price=price_review["price"],
-                currency_code=baseline["currency_code"],
-                old_price=baseline.get("old_price", "0"),
-            )
-            guardrails = cls._guard_price_change(
+            proposed, guardrails = cls._price_proposal_details(
                 listing=listing,
                 baseline=baseline,
-                proposed_price=item["price"],
+                price_review=price_review,
                 source=source,
                 allow_price_decrease=allow_price_decrease,
                 allow_large_change=allow_large_change,
                 guardrail_note=guardrail_note,
             )
-            guardrails["price_review"] = price_review
-            proposed = {
-                "kind": "price",
-                "offer_id": listing.offer_id,
-                "product_id": listing.external_product_id,
-                "price": item["price"],
-                "old_price": item.get("old_price", "0"),
-                "min_price": baseline.get("min_price", "0"),
-                "currency_code": item["currency_code"],
-                "auto_action_enabled": baseline.get("auto_action_enabled"),
-                "auto_add_to_ozon_actions_list_enabled": baseline.get(
-                    "auto_add_to_ozon_actions_list_enabled"
-                ),
-            }
             return cls._persist_proposal(
                 listing=listing,
                 warehouse=None,
@@ -2409,6 +3501,7 @@ class MarketplaceCommercialService:
         status: Optional[str] = None,
         page: int = 1,
         per_page: int = 50,
+        proposal_ids: Optional[Any] = None,
     ):
         seller_id = cls._positive_integer(seller_id, "seller_id")
         page = cls._positive_integer(page, "page")
@@ -2417,6 +3510,39 @@ class MarketplaceCommercialService:
             raise MarketplaceCommercialValidationError(
                 "per_page не может быть больше 100"
             )
+        exact_ids = None
+        if proposal_ids is not None:
+            if (
+                account_id is None
+                or proposal_kind != "price"
+                or status != "pending_review"
+                or page != 1
+                or not isinstance(proposal_ids, list)
+                or not 1 <= len(proposal_ids) <= cls.MAX_BATCH_APPROVAL
+            ):
+                raise MarketplaceCommercialValidationError(
+                    "Точный набор требует магазин, price, pending_review и первую страницу"
+                )
+            exact_ids = [
+                cls._positive_integer(value, f"proposal_ids[{index}]")
+                for index, value in enumerate(proposal_ids)
+            ]
+            if len(set(exact_ids)) != len(exact_ids):
+                raise MarketplaceCommercialValidationError(
+                    "proposal_ids содержит повторяющиеся заявки"
+                )
+            account = SellerMarketplaceAccount.query.join(Marketplace).filter(
+                SellerMarketplaceAccount.id == account_id,
+                SellerMarketplaceAccount.seller_id == seller_id,
+                Marketplace.code == "ozon",
+            ).first()
+            if account is None:
+                raise MarketplaceCommercialNotFound("Магазин Ozon не найден")
+            if per_page not in {50, len(exact_ids)}:
+                raise MarketplaceCommercialValidationError(
+                    "Точный набор не принимает произвольный per_page"
+                )
+            per_page = len(exact_ids)
         query = MarketplaceCommercialProposal.query.options(
             joinedload(MarketplaceCommercialProposal.marketplace),
             joinedload(MarketplaceCommercialProposal.account),
@@ -2443,7 +3569,17 @@ class MarketplaceCommercialService:
             if not isinstance(status, str) or status not in allowed:
                 raise MarketplaceCommercialValidationError("Неизвестный status")
             query = query.filter(MarketplaceCommercialProposal.status == status)
-        return query.order_by(
+        if exact_ids is not None:
+            query = query.filter(MarketplaceCommercialProposal.id.in_(exact_ids))
+        pagination = query.order_by(
             MarketplaceCommercialProposal.created_at.desc(),
             MarketplaceCommercialProposal.id.desc(),
         ).paginate(page=page, per_page=per_page, error_out=False)
+        if exact_ids is not None and (
+            pagination.total != len(exact_ids)
+            or {item.id for item in pagination.items} != set(exact_ids)
+        ):
+            raise MarketplaceCommercialNotFound(
+                "Одна или несколько заявок не найдены в этом магазине"
+            )
+        return pagination

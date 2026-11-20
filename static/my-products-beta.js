@@ -40,6 +40,7 @@
     }
 
     var MAX_BULK_SELECTION = 200;
+    var MAX_OZON_PRICE_HANDOFF = 100;
     function exactWbProductIds(items) {
         if (!Array.isArray(items) || !items.length) return null;
         var ids = items.map(function (item) {
@@ -55,6 +56,98 @@
         if (new Set(left).size !== left.length || new Set(right).size !== right.length) return false;
         var rightSet = new Set(right);
         return left.every(function (id) { return rightSet.has(id); });
+    }
+
+    function exactOzonPriceAccountChoices(items, selectionIds, accounts) {
+        if (!Array.isArray(selectionIds) || !selectionIds.length ||
+            selectionIds.length > MAX_OZON_PRICE_HANDOFF) {
+            return {
+                choices: [],
+                reason: Array.isArray(selectionIds) && selectionIds.length > MAX_OZON_PRICE_HANDOFF
+                    ? 'limit' : 'selection',
+            };
+        }
+        if (selectionIds.some(function (id) {
+            return !Number.isSafeInteger(id) || id <= 0;
+        }) || new Set(selectionIds).size !== selectionIds.length ||
+            !Array.isArray(items) || items.length !== selectionIds.length) {
+            return { choices: [], reason: 'selection' };
+        }
+
+        var itemsById = new Map();
+        for (var i = 0; i < items.length; i += 1) {
+            var item = items[i];
+            if (!item || !Number.isSafeInteger(item.id) || item.id <= 0 ||
+                itemsById.has(item.id)) return { choices: [], reason: 'selection' };
+            itemsById.set(item.id, item);
+        }
+        if (!sameIds(selectionIds, Array.from(itemsById.keys()))) {
+            return { choices: [], reason: 'selection' };
+        }
+
+        if (!Array.isArray(accounts)) return { choices: [], reason: 'accounts' };
+        var accountIds = new Set();
+        var activeAccounts = [];
+        for (var a = 0; a < accounts.length; a += 1) {
+            var account = accounts[a];
+            if (!account || !Number.isSafeInteger(account.id) || account.id <= 0 ||
+                accountIds.has(account.id)) return { choices: [], reason: 'accounts' };
+            accountIds.add(account.id);
+            // The page bootstrap is already seller/Ozon/active scoped. Honor
+            // explicit status fields too when a newer DTO supplies them.
+            if ((account.is_active !== undefined && account.is_active !== true) ||
+                (account.marketplace_code !== undefined &&
+                    account.marketplace_code !== 'ozon') ||
+                (account.connection_status !== undefined &&
+                    account.connection_status !== 'connected')) continue;
+            activeAccounts.push(account);
+        }
+        if (!activeAccounts.length) return { choices: [], reason: 'no_accounts' };
+
+        var choices = [];
+        activeAccounts.forEach(function (account) {
+            var listingIds = [];
+            var eligible = true;
+            selectionIds.forEach(function (productId) {
+                if (!eligible) return;
+                var product = itemsById.get(productId);
+                var listings = product && product.ozon && product.ozon.listings;
+                if (!Array.isArray(listings)) {
+                    eligible = false;
+                    return;
+                }
+                var accountRows = listings.filter(function (listing) {
+                    return listing && listing.account_id === account.id;
+                });
+                if (accountRows.length !== 1) {
+                    eligible = false;
+                    return;
+                }
+                var listing = accountRows[0];
+                if (listing.marketplace_code !== 'ozon' ||
+                    listing.link_status !== 'linked' ||
+                    listing.account_is_active !== true ||
+                    listing.is_available !== true ||
+                    listing.is_archived !== false ||
+                    !Number.isSafeInteger(listing.id) || listing.id <= 0) {
+                    eligible = false;
+                    return;
+                }
+                listingIds.push(listing.id);
+            });
+            if (eligible && listingIds.length === selectionIds.length &&
+                new Set(listingIds).size === listingIds.length) {
+                choices.push({
+                    account_id: account.id,
+                    account_label: typeof account.label === 'string' ? account.label : '',
+                    listing_ids: listingIds,
+                });
+            }
+        });
+        return {
+            choices: choices,
+            reason: choices.length ? null : 'no_common_account',
+        };
     }
 
     function labelProduct(item) {
@@ -205,6 +298,10 @@
                 ozonStorageProblem: hasOzonPending() && !validOzonPending(savedOzon, boot.ozonAccounts || []),
                 ozonRetrySameKey: false,
                 ozonSessionEnded: false,
+                ozonPriceError: '',
+                ozonPriceAccountId: '',
+                ozonPriceHandoffReview: null,
+                ozonPriceDialogError: '',
                 imgFailed: {},
                 tabs: TABS,
 
@@ -302,6 +399,16 @@
                                         : 'откроется проверка выбранного набора цен',
                             disabled: !underLimit || !wbIds || !this.wbConnected,
                         },
+                        this.ozonEnabled ? {
+                            key: 'ozon_prices',
+                            label: 'Изменить цены Ozon',
+                            hint: !chosen.length
+                                ? 'выберите товары'
+                                : chosen.length > MAX_OZON_PRICE_HANDOFF
+                                    ? 'за одно сравнение можно выбрать не больше 100 товаров'
+                                    : 'откроется сравнение для одного магазина, где есть все выбранные карточки',
+                            disabled: !chosen.length || chosen.length > MAX_OZON_PRICE_HANDOFF,
+                        } : null,
                     ].filter(Boolean),
                 }];
             },
@@ -462,6 +569,127 @@
                     ? []
                     : this.items.map(function (item) { return item.id; });
             },
+            resolveOzonPriceAccountChoices: function (items, selectionIds) {
+                return exactOzonPriceAccountChoices(items, selectionIds, this.ozonAccounts);
+            },
+            setOzonPriceHandoffError: function (message) {
+                this.ozonPriceError = message;
+                this.$nextTick(function () {
+                    this.$refs.ozonPriceError?.focus();
+                });
+            },
+            openOzonPriceHandoff: function (items, selectionIds) {
+                this.ozonPriceError = '';
+                this.ozonPriceDialogError = '';
+                if (!sameIds(this.selected, selectionIds)) {
+                    this.setOzonPriceHandoffError(
+                        'Выбор товаров изменился. Отметьте товары заново и повторите действие.'
+                    );
+                    return;
+                }
+                var result = this.resolveOzonPriceAccountChoices(items, selectionIds);
+                if (!result.choices.length) {
+                    var message = result.reason === 'limit'
+                        ? 'За одно сравнение Ozon можно выбрать не больше 100 товаров.'
+                        : result.reason === 'no_accounts'
+                            ? 'Нет активного магазина Ozon. Подключите магазин или откройте «Ценовые заявки Ozon».'
+                            : result.reason === 'selection'
+                                ? 'Список товаров изменился или неполон. Обновите его и отметьте товары заново.'
+                                : result.reason === 'accounts'
+                                    ? 'Не удалось проверить список магазинов Ozon. Обновите страницу и повторите.'
+                                    : 'Не найден один магазин Ozon с точной связанной, доступной и неархивной карточкой для каждого выбранного товара. Выбор не сокращён. Проверьте карточки или откройте «Ценовые заявки Ozon».';
+                    this.setOzonPriceHandoffError(message);
+                    return;
+                }
+                var review = {
+                    imported_product_ids: selectionIds.slice(),
+                    choices: result.choices.map(function (choice) {
+                        return {
+                            account_id: choice.account_id,
+                            account_label: choice.account_label,
+                            listing_ids: choice.listing_ids.slice(),
+                        };
+                    }),
+                };
+                this.ozonPriceHandoffReview = review;
+                if (review.choices.length === 1) {
+                    this.navigateOzonPriceHandoff(review.choices[0].account_id, review);
+                    return;
+                }
+                this._ozonPriceTrigger = document.activeElement;
+                this.ozonPriceAccountId = '';
+                this.$nextTick(function () {
+                    this.$refs.ozonPriceAccountDialog.showModal();
+                    this.$refs.ozonPriceAccount.focus();
+                });
+            },
+            closeOzonPriceHandoff: function () {
+                var dialog = this.$refs.ozonPriceAccountDialog;
+                if (dialog && dialog.open) dialog.close();
+                this.ozonPriceHandoffReview = null;
+                this.ozonPriceAccountId = '';
+                this.ozonPriceDialogError = '';
+                this._ozonPriceTrigger?.focus();
+            },
+            continueOzonPriceHandoff: function () {
+                var review = this.ozonPriceHandoffReview;
+                var accountId = Number(this.ozonPriceAccountId);
+                if (!review || !Number.isSafeInteger(accountId) || accountId <= 0 ||
+                    !review.choices.some(function (choice) {
+                        return choice.account_id === accountId;
+                    })) {
+                    this.ozonPriceDialogError = 'Выберите магазин из списка.';
+                    this.$nextTick(function () {
+                        this.$refs.ozonPriceAccount.focus();
+                    });
+                    return;
+                }
+                this.navigateOzonPriceHandoff(accountId, review);
+            },
+            navigateOzonPriceHandoff: function (accountId, review) {
+                if (!review || !sameIds(this.selected, review.imported_product_ids)) {
+                    this.closeOzonPriceHandoff();
+                    this.setOzonPriceHandoffError(
+                        'Выбор товаров изменился после проверки. Отметьте их заново перед сравнением.'
+                    );
+                    return false;
+                }
+                var selectedItems = this.selectedItems;
+                var latest = this.resolveOzonPriceAccountChoices(
+                    selectedItems,
+                    this.selected,
+                );
+                var freshChoice = latest.choices.find(function (choice) {
+                    return choice.account_id === accountId;
+                });
+                var reviewedChoice = review.choices.find(function (choice) {
+                    return choice.account_id === accountId;
+                });
+                if (!freshChoice || !reviewedChoice ||
+                    !sameIds(freshChoice.listing_ids, reviewedChoice.listing_ids)) {
+                    this.closeOzonPriceHandoff();
+                    this.setOzonPriceHandoffError(
+                        'Связанные карточки изменились после проверки. Обновите список и повторите действие.'
+                    );
+                    return false;
+                }
+                try {
+                    if (typeof this.urls.ozonCommercial !== 'string' ||
+                        !this.urls.ozonCommercial) throw new Error('missing URL');
+                    var target = new URL(this.urls.ozonCommercial, window.location.origin);
+                    if (target.origin !== window.location.origin) throw new Error('foreign URL');
+                    target.searchParams.set('account_id', String(accountId));
+                    target.searchParams.set('bulk_listing_ids', freshChoice.listing_ids.join(','));
+                    window.location.assign(target.pathname + target.search);
+                    return true;
+                } catch (_) {
+                    this.closeOzonPriceHandoff();
+                    this.setOzonPriceHandoffError(
+                        'Не удалось открыть сравнение цен Ozon. Повторите действие со свежим выбором.'
+                    );
+                    return false;
+                }
+            },
 
             /* ---------- массовые действия ---------- */
             startAction: function (action) {
@@ -575,6 +803,16 @@
                         return;
                     }
                     window.location.assign(this.urls.wbPriceChange + '?product_ids=' + encodeURIComponent(priceIds.join(',')));
+                    return;
+                }
+                if (action.key === 'ozon_prices') {
+                    if (selectionIds.length > MAX_OZON_PRICE_HANDOFF) {
+                        this.setOzonPriceHandoffError(
+                            'За одно сравнение Ozon можно выбрать не больше 100 товаров.'
+                        );
+                        return;
+                    }
+                    this.openOzonPriceHandoff(chosen, selectionIds);
                     return;
                 }
                 var plan = plans[action.key];

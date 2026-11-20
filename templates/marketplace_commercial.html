@@ -2,15 +2,15 @@
 {% from "macros/icons.html" import icon %}
 {% block title %}Цены и остатки Ozon — Seller Hub{% endblock %}
 {% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}"><link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='ozon-commercial.css') }}">{% endblock %}
+<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}"><link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='ozon-commercial.css', v='20261121-ozon-bulk-prices') }}">{% endblock %}
 {% block content %}
-<script type="application/json" id="oc-bootstrap">{{ {'mode':'list', 'filters':filters, 'base':url_for('marketplace_commercial.index'), 'catalog':url_for('marketplace_listings.index'), 'writeEnabled':write_enabled} | tojson }}</script>
+<script type="application/json" id="oc-bootstrap">{{ {'mode':'list', 'filters':filters, 'base':url_for('marketplace_commercial.index'), 'catalog':url_for('marketplace_listings.index'), 'writeEnabled':write_enabled, 'bulkSelection':bulk_selection|default(none)} | tojson }}</script>
 <div class="oc-fallback" id="oc-fallback">Загружаем цены и остатки… <a href="{{ url_for('marketplace_commercial.classic', account_id=filters.account_id) }}">Открыть упрощённую версию</a></div>
 <div id="ozon-commercial-app" class="oc-page pricing-workspace" v-cloak>
     {% set pricing_workspace_current = 'ozon-proposals' %}
     {% include 'partials/pricing_workspace_nav.html' %}
     {% include 'partials/pricing_workspace_ozon_facts.html' %}
-    <header class="oc-header"><div><h1>Цены и остатки</h1><p>Изменения в Ozon с проверкой и вашим подтверждением.</p></div><button class="sh-btn sh-btn--primary" @click="openCreate">{{ icon('plus',18) }} Изменить цену или остаток</button></header>
+    <header class="oc-header"><div><h1>Цены и остатки</h1><p>Изменения в Ozon с проверкой и вашим подтверждением.</p></div><div class="oc-header-actions"><button type="button" class="sh-btn sh-btn--primary" @click="openCreate">{{ icon('plus',18) }} Изменить цену или остаток</button><button type="button" ref="bulkLaunchButton" class="sh-btn sh-btn--secondary" :disabled="loading || busy || sessionEnded || !accounts.some(a=>a.is_active)" @click="openBulkPrice">Подготовить цены для нескольких товаров</button></div></header>
     {% if config.get('MARKETPLACE_OZON_ENABLED', false) %}
     <nav class="oc-nav" aria-label="Связанные разделы">
         <a href="{{ url_for('marketplace_listings.index', marketplace='ozon', account_id=filters.account_id) }}">Каталог Ozon</a>

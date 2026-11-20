@@ -1960,7 +1960,11 @@ def register_supplier_routes(app):
         ozon_accounts = []
         if ozon_enabled:
             ozon_accounts = [
-                {'id': account.id, 'label': account.label}
+                {
+                    'id': account.id,
+                    'label': account.label,
+                    'connection_status': account.connection_status,
+                }
                 for account in SellerMarketplaceAccount.query.join(Marketplace).filter(
                     SellerMarketplaceAccount.seller_id == seller.id,
                     SellerMarketplaceAccount.is_active.is_(True),

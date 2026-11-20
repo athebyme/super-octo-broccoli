@@ -30,4 +30,70 @@
         <div v-for="p in batchReview.filter(item=>held(item))" :key="'hold-' + p.id" class="oc-alert">{{ title(p) }}: новые изменения остановлены решением №{{ p.write_quarantine.id }}. <a v-if="reviewUrl(p.write_quarantine)" :href="reviewUrl(p.write_quarantine)">Разобрать исход</a></div><form @submit.prevent="approveBatch"><label class="oc-check"><input type="checkbox" name="confirm_batch" v-model="batchConfirmed" :disabled="busy || batchBlocked || batchReview.some(p=>held(p))" required><span>Сверил весь список и подтверждаю отправку этих изменений в Ozon</span></label><button class="sh-btn sh-btn--primary" type="submit" :disabled="busy || batchBlocked || batchReview.some(p=>held(p))">{{ busy === 'batch' ? 'Отправляем и сверяем…' : 'Применить выбранные в Ozon' }}</button></form><button v-if="batchBlocked" class="sh-btn sh-btn--secondary" @click="closeBatch">Вернуться и проверить состояния</button>
     </div>
 </dialog>
+<dialog ref="bulkPriceDialog" class="oc-dialog oc-dialog-wide oc-bulk-dialog" aria-labelledby="oc-bulk-title" @cancel.prevent="closeBulkPrice">
+    <div class="oc-dialog-head"><div><h2 id="oc-bulk-title">Цены для нескольких товаров</h2><p v-if="bulkStage === 'select'">Выберите товары одного магазина и задайте общее правило.</p><p v-else-if="bulkStage === 'preview'">Проверьте каждую цену перед локальным сохранением.</p><p v-else>Заявки сохранены и ждут отдельного подтверждения.</p></div><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy" @click="closeBulkPrice" aria-label="Закрыть массовую подготовку цен">✕</button></div>
+    <div class="oc-dialog-body">
+        <template v-if="bulkStage === 'select'">
+            <p v-if="bulkHandoffUsed" class="oc-notice" role="status">Выбранный набор передан из «Моих товаров» и проверен для этого магазина. Вы можете удалить отдельные товары или добавить новые.</p>
+            <p v-if="bulkHandoffError" class="oc-alert" role="alert">{{ bulkHandoffError }}</p>
+            <p class="oc-muted">Перед сравнением сервер прочитает актуальную цену продавца в Ozon. Покупательская цена и скидка Ozon остаются неизвестными. Сравнение ничего не отправляет; заявки сохраняются локально.</p>
+            <label>Магазин<select ref="bulkAccount" v-model="bulkAccount" :disabled="busy || bulkSearching" @change="bulkAccountChanged"><option value="">Выберите магазин Ozon</option><option v-for="a in accounts.filter(x=>x.is_active)" :key="a.id" :value="String(a.id)">{{ a.label }}</option></select></label>
+            <form class="oc-search oc-bulk-search" @submit.prevent="searchBulkProducts(1)"><label>Название или артикул<input ref="bulkQuery" v-model="bulkQuery" type="search" maxlength="200" autocomplete="off" placeholder="Найдите товары магазина…" :disabled="!bulkAccount || bulkSearching || busy || sessionEnded"></label><button type="submit" class="sh-btn sh-btn--secondary" :disabled="!bulkAccount || bulkSearching || busy || sessionEnded">Найти</button></form>
+            <p v-if="bulkSearching" class="oc-loading" role="status">Ищем товары…</p>
+            <p v-else-if="bulkSearched && !bulkProducts.length" class="oc-muted">Товары не найдены. Проверьте магазин или измените запрос.</p>
+            <div v-if="bulkProducts.length" class="oc-bulk-products" aria-label="Результаты поиска товаров">
+                <article v-for="p in bulkProducts" :key="p.id" class="oc-bulk-product">
+                    <span class="oc-photo"><img v-if="photo(p)" v-image-deadline :src="photo(p)" alt="" width="48" height="56" loading="lazy" @error="imageError(p)"><span v-else aria-hidden="true">O</span></span>
+                    <span class="oc-bulk-product-label"><strong>{{ p.title || p.offer_id }}</strong><small>{{ p.offer_id }}</small><small v-if="p.is_available !== true">Недоступен для изменения цены</small></span>
+                    <button type="button" class="sh-btn sh-btn--secondary" :aria-label="(bulkSelected.some(item=>item.id === p.id) ? 'Убрать ' : p.is_available === true ? 'Добавить ' : 'Недоступен для изменения цены ') + (p.title || p.offer_id) + ' (' + p.offer_id + ')'" :aria-pressed="bulkSelected.some(item=>item.id === p.id)" :disabled="busy || (p.is_available !== true && !bulkSelected.some(item=>item.id === p.id))" @click="toggleBulkProduct(p)">{{ bulkSelected.some(item=>item.id === p.id) ? 'Убрать' : p.is_available === true ? 'Добавить' : 'Недоступен' }}</button>
+                </article>
+            </div>
+            <nav v-if="bulkProductPages > 1" class="oc-pagination" aria-label="Страницы найденных товаров"><button type="button" class="sh-btn sh-btn--secondary" :disabled="bulkProductPage <= 1 || bulkSearching || busy" @click="searchBulkProducts(bulkProductPage - 1)">Назад</button><span>{{ bulkProductPage }} / {{ bulkProductPages }}</span><button type="button" class="sh-btn sh-btn--secondary" :disabled="bulkProductPage >= bulkProductPages || bulkSearching || busy" @click="searchBulkProducts(bulkProductPage + 1)">Далее</button></nav>
+            <p v-if="bulkSelectionError" class="oc-alert" role="alert">{{ bulkSelectionError }}</p>
+            <p v-if="sessionEnded" class="oc-alert" role="alert">Сессия завершена. <a href="/login">Войти снова</a> и повторно открыть массовую подготовку.</p>
+            <details v-if="bulkSelected.length" class="oc-bulk-selected" :open="bulkHandoffUsed"><summary ref="bulkSelectedSummary">Выбрано товаров: {{ bulkSelected.length }} из 100</summary><ul><li v-for="p in bulkSelected" :key="p.id"><span><strong>{{ p.title }}</strong><small>{{ p.offer_id }}</small></span><button type="button" class="sh-btn sh-btn--secondary" :aria-label="'Убрать ' + p.title" :disabled="busy" @click="toggleBulkProduct(p)">Убрать</button></li></ul></details>
+            <fieldset class="oc-bulk-rule" :disabled="busy"><legend>Правило изменения</legend><div class="oc-kind"><label><input v-model="bulkMode" type="radio" name="bulk_price_mode" value="set">Одинаковая цена</label><label><input v-model="bulkMode" type="radio" name="bulk_price_mode" value="percent">Изменить на процент</label></div>
+                <label v-if="bulkMode === 'set'">Цена продавца, ₽<input ref="bulkAmount" v-model="bulkAmount" type="text" inputmode="decimal" autocomplete="off" maxlength="20" placeholder="Например, 1 250"><small>Целая рублёвая цена с точностью до копейки. В результате будет сумма в рублях.</small></label>
+                <label v-else>Изменение от текущей цены, %<input ref="bulkAmount" v-model="bulkAmount" type="text" inputmode="decimal" autocomplete="off" maxlength="12" placeholder="Например, +5 или -5"><small>Для каждого товара процент считается от текущей цены продавца. Допустимо от −99,99% до +500%; итог округляется до рубля.</small></label>
+                <p v-if="bulkAmount && !bulkNormalizedValue" class="oc-alert" role="alert">Проверьте сумму или процент в указанном диапазоне.</p>
+                <p v-if="bulkMode === 'percent' && Number(bulkNormalizedValue) < 0 && !bulkAllowDecrease" class="oc-notice" role="status">Для снижения цены явно разрешите снижение и укажите основание.</p>
+                <label class="oc-check"><input v-model="bulkAllowDecrease" type="checkbox"><span>Разрешаю снижение цены у товаров, где правило уменьшит сумму</span></label>
+                <label class="oc-check"><input v-model="bulkAllowLarge" type="checkbox"><span>Разрешаю изменение больше чем на 50%</span></label>
+                <label v-if="bulkAllowDecrease || bulkAllowLarge">Обоснование изменения<textarea v-model="bulkGuardrailNote" rows="2" minlength="8" maxlength="1000" required autocomplete="off" placeholder="Не менее 8 символов"></textarea></label>
+                <p v-if="(bulkAllowDecrease || bulkAllowLarge) && bulkGuardrailNote.trim().length < 8" class="oc-muted">Добавьте основание из не менее чем 8 символов.</p>
+            </fieldset>
+            <p v-if="bulkPreviewError" class="oc-alert" role="alert">{{ bulkPreviewError }}</p>
+            <div class="oc-dialog-actions oc-bulk-actions"><p>Сначала увидите результат для каждой карточки. Будут сохранены только строки «Можно сохранить»; Ozon не будет вызван.</p><button type="button" class="sh-btn sh-btn--primary" :disabled="busy || sessionEnded || !bulkCanPreview" @click="previewBulkPrices">{{ busy === 'bulk-preview' ? 'Сравниваем цены…' : 'Сравнить выбранные: ' + bulkSelected.length }}</button></div>
+        </template>
+        <template v-else-if="bulkStage === 'preview'">
+            <h3 ref="bulkPreviewHeading" class="oc-bulk-stage-title" tabindex="-1">Проверка {{ bulkPreview.selected_count }} {{ productWord(bulkPreview.selected_count) }}</h3>
+            <p class="oc-bulk-rule-summary"><strong>{{ bulkRuleLabel(bulkPreviewBody) }}</strong></p>
+            <p v-if="bulkPreviewBody.allow_price_decrease || bulkPreviewBody.allow_large_change" class="oc-muted">Разрешено изменение: <span v-if="bulkPreviewBody.allow_price_decrease">снижение цены</span><span v-if="bulkPreviewBody.allow_price_decrease && bulkPreviewBody.allow_large_change">; </span><span v-if="bulkPreviewBody.allow_large_change">более 50%</span>. Основание: {{ bulkPreviewBody.guardrail_note }}</p>
+            <p class="oc-bulk-counts" role="status" aria-live="polite"><strong>Можно сохранить: {{ bulkPreview.eligible_count }}</strong><span>Цена не изменится: {{ bulkPreview.noop_count }}</span><span>Нельзя сохранить: {{ bulkPreview.blocked_count }}</span></p>
+            <p>Проверьте суммы и причины по каждой карточке. Сохранение создаст локальные заявки. Отправка в Ozon останется отдельным шагом в списке заявок.</p>
+            <p v-if="bulkConfirmError" class="oc-alert" role="alert">{{ bulkConfirmError }}</p>
+            <p v-if="sessionEnded" class="oc-alert" role="alert">Сессия завершена. <a href="/login" :target="bulkConfirmUnknown ? '_blank' : null" :rel="bulkConfirmUnknown ? 'noopener noreferrer' : null">Войти снова</a> и проверить сохранённое состояние.</p>
+            <div class="oc-bulk-preview-list"><article v-for="item in bulkPreview.items" :key="item.listing_id" class="oc-bulk-preview-row">
+                <div class="oc-bulk-preview-title"><strong>{{ item.title || item.offer_id || 'Товар' }}</strong><small>{{ item.offer_id }}<span v-if="item.product_id"> · ID {{ item.product_id }}</span></small></div>
+                <span class="oc-status" :class="bulkStatusClass(item.status)">{{ bulkStatusLabel(item.status) }}</span>
+                <div class="oc-row-values"><span>{{ money(item.current_price,item.currency_code) }}</span><span aria-hidden="true">→</span><strong>{{ money(item.proposed_price,item.currency_code) }}</strong></div>
+                <p v-if="item.reason" class="oc-muted">{{ item.reason }}</p><p v-if="item.price_review?.rounded" class="oc-note">Цена округлена до целого рубля по правилу изменения.</p>
+            </article></div>
+            <div v-if="bulkConfirmUnknown" class="oc-muted">Ответ на сохранение неизвестен: заявки могли появиться. Повторить можно только тем же подтверждением; новый набор заблокирован до проверки.</div>
+            <div class="oc-dialog-actions oc-bulk-actions"><p>Будет сохранено заявок: {{ bulkPreview.eligible_count }}. Ни одна заявка не отправляется в Ozon автоматически.</p><button type="button" class="sh-btn sh-btn--primary" :disabled="busy || bulkBlocked || !bulkPreview.eligible_count || bulkConfirmUnknown" @click="confirmBulkPrices(false)">{{ busy === 'bulk-save' ? 'Сохраняем заявки…' : 'Сохранить ' + bulkPreview.eligible_count + ' ' + proposalWord(bulkPreview.eligible_count) }}</button>
+                <button v-if="bulkConfirmUnknown" ref="bulkConfirmRetry" type="button" class="sh-btn sh-btn--primary" :disabled="busy" @click="confirmBulkPrices(true)">{{ busy === 'bulk-save' ? 'Проверяем сохранение…' : 'Проверить сохранение тем же подтверждением' }}</button>
+                <button v-if="bulkConfirmUnknown" type="button" class="sh-btn sh-btn--secondary" :disabled="busy || !bulkUnknownProposalsUrl()" @click="checkBulkUnknownProposals">Проверить заявки магазина</button>
+                <button type="button" class="sh-btn sh-btn--secondary" :disabled="busy || bulkConfirmUnknown" @click="editBulkPrices">Изменить набор и пересчитать</button>
+            </div>
+        </template>
+        <template v-else>
+            <h3 ref="bulkSavedHeading" class="oc-bulk-stage-title" tabindex="-1">{{ bulkSavedReplay ? 'Ранее сохранённые заявки найдены' : 'Заявки сохранены' }}</h3>
+            <p role="status" aria-live="polite">Сохранено заявок: {{ bulkSavedCount }}. Изменения не отправлялись в Ozon автоматически.</p>
+            <p v-if="bulkSavedUrl" class="oc-muted">Весь точный набор по-прежнему ожидает подтверждения. Проверьте его перед отдельной отправкой.</p>
+            <p v-else class="oc-muted">Состояния части заявок уже изменились. Проверьте каждую заявку по ссылке ниже; новая отправка не выполнялась.</p>
+            <ul v-if="!bulkSavedUrl" class="oc-bulk-saved-list"><li v-for="item in bulkSavedItems" :key="item.proposal.id"><a :href="base + item.proposal.id">{{ title(item.proposal) }}</a><span class="oc-status" :class="statusClass(item.proposal.status)">{{ statuses[item.proposal.status] }}</span></li></ul>
+            <div class="oc-dialog-actions"><a v-if="bulkSavedUrl" class="sh-btn sh-btn--primary" :href="bulkSavedUrl">Проверить точный набор заявок</a><button type="button" class="sh-btn sh-btn--secondary" @click="closeBulkPrice">Закрыть</button></div>
+        </template>
+    </div>
+</dialog>
 {% endraw %}

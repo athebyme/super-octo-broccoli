@@ -290,54 +290,89 @@ class MyProductsFeed:
         drafts: Dict[int, List[Dict[str, Any]]] = {}
         listings: Dict[int, List[Dict[str, Any]]] = {}
         if imported_ids:
-            account_labels = dict(
-                db.session.query(
-                    SellerMarketplaceAccount.id,
-                    SellerMarketplaceAccount.label,
-                ).filter_by(seller_id=seller_id).all()
-            )
-            # Только нужные колонки: обе таблицы широкие (JSON-снимки),
-            # а строке списка достаточно идентичности канала и статуса.
+            from models import Marketplace
+
+            # This projection is specifically Ozon.  Match every channel row
+            # to an account owned by this seller and to that same marketplace;
+            # a malformed foreign or cross-marketplace account link must not
+            # leak its label or look like an Ozon listing in this read model.
             draft_rows = db.session.query(
                 MarketplaceProductDraft.id,
                 MarketplaceProductDraft.imported_product_id,
                 MarketplaceProductDraft.account_id,
                 MarketplaceProductDraft.status,
                 MarketplaceProductDraft.published_listing_id,
+                SellerMarketplaceAccount.label,
+            ).join(
+                Marketplace,
+                Marketplace.id == MarketplaceProductDraft.marketplace_id,
+            ).join(
+                SellerMarketplaceAccount,
+                SellerMarketplaceAccount.id == MarketplaceProductDraft.account_id,
             ).filter(
                 MarketplaceProductDraft.seller_id == seller_id,
                 MarketplaceProductDraft.imported_product_id.in_(imported_ids),
+                MarketplaceProductDraft.marketplace_id
+                == SellerMarketplaceAccount.marketplace_id,
+                Marketplace.code == 'ozon',
+                SellerMarketplaceAccount.seller_id == seller_id,
             ).all()
-            for draft_id, imported_id, account_id, status, published_id in draft_rows:
+            for (
+                draft_id, imported_id, account_id, status, published_id,
+                account_label,
+            ) in draft_rows:
                 drafts.setdefault(imported_id, []).append({
                     'id': draft_id,
                     'account_id': account_id,
-                    'account_label': account_labels.get(account_id, 'Ozon'),
+                    'account_label': account_label,
                     'status': status,
                     'published_listing_id': published_id,
                 })
 
-            from models import Marketplace
-
+            # Keep the query projection-only: MarketplaceListing contains
+            # wide JSON snapshots, but exact handoff needs account identity,
+            # current availability/archive flags, and normalized status.
             listing_rows = db.session.query(
                 MarketplaceListing.id,
                 MarketplaceListing.imported_product_id,
                 MarketplaceListing.account_id,
                 MarketplaceListing.normalized_status,
                 Marketplace.code,
+                MarketplaceListing.is_available,
+                MarketplaceListing.is_archived,
+                SellerMarketplaceAccount.label,
+                SellerMarketplaceAccount.is_active,
             ).join(
                 Marketplace, Marketplace.id == MarketplaceListing.marketplace_id,
+            ).join(
+                SellerMarketplaceAccount,
+                SellerMarketplaceAccount.id == MarketplaceListing.account_id,
             ).filter(
                 MarketplaceListing.seller_id == seller_id,
                 MarketplaceListing.imported_product_id.in_(imported_ids),
+                Marketplace.code == 'ozon',
+                SellerMarketplaceAccount.seller_id == seller_id,
+                SellerMarketplaceAccount.marketplace_id
+                == MarketplaceListing.marketplace_id,
             ).all()
-            for listing_id, imported_id, account_id, status, code in listing_rows:
+            for (
+                listing_id, imported_id, account_id, status, code,
+                is_available, is_archived, account_label, account_is_active,
+            ) in listing_rows:
                 listings.setdefault(imported_id, []).append({
                     'id': listing_id,
                     'account_id': account_id,
-                    'account_label': account_labels.get(account_id, 'Ozon'),
+                    'account_label': account_label,
                     'status': status,
                     'marketplace_code': code,
+                    'is_available': bool(is_available),
+                    'is_archived': bool(is_archived),
+                    'account_is_active': bool(account_is_active),
+                    # The query is grouped by the exact non-null FK to the
+                    # current seller-owned ImportedProduct.  Do not expose a
+                    # foreign product ID; this typed state is enough for the
+                    # caller to require an exact link before handoff.
+                    'link_status': 'linked',
                 })
         return {
             'wb_products': wb_products,
