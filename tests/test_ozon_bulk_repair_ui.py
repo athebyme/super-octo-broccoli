@@ -53,6 +53,13 @@ const ok=data=>({status:200,ok:true,redirected:false,json:async()=>({...data,csr
   s.rows[1].attributes[1].values[0].dictionary_value_id='700002';
   plan=core.planBulk([s.rows[1]],'attribute:20',[exact],s.rows[0].attributes[1],1);
   assert.equal(plan.items.length,0);assert.equal(plan.skipped[0].reason,'Значение уже совпадает','Exact label and ID is a no-op');
+  const identityChange=core.changes(s.rows[1]).find(change=>change.key==='attribute:20');
+  assert(identityChange.showDictionaryIdentities,'Same-label generic ID changes are visible in review');
+  assert.equal(identityChange.beforeIdentities[0],'ID 700001 в справочнике Ozon');
+  assert.equal(identityChange.afterIdentities[0],'ID 700002 в справочнике Ozon');
+  assert.equal(s.shouldShowDictionaryId('20',[{id:'700001',value:'Хлопок'}]),false,'Unique generic labels keep their prior picker text');
+  assert.equal(s.shouldShowDictionaryId('20',[{id:'700001',value:'Хлопок'},{id:'700002',value:'Хлопок'}]),true,'Duplicate generic labels expose their IDs');
+  assert.equal(s.shouldShowDictionaryId('22232',[{id:'700002',value:'3304990000'}]),true,'TN VED always exposes its exact ID');
 
   s=state();s.rows.forEach(r=>r.selected=true);s.bulkKey='attribute:20';s.bulkMode='copy';s.bulkSource=2;
   s.previewBulk();plan=s.bulkPlan;

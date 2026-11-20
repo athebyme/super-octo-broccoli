@@ -25,14 +25,18 @@
     }
     function changes(row) {
         const current = snapshot(row);
-        return Object.keys(current).filter(key => !equal(current[key], row.base[key])).map(key => ({
-            key, label:labels[key] || row.attributes.find(f => 'attribute:'+f.external_id===key)?.name || 'Характеристика',
-            before:row.base[key], after:current[key],
-            beforeLabel:key==='product_type_id' ? row.baseTypeName || 'Не выбран' : display(row.base[key]),
-            afterLabel:key==='product_type_id' ? row.product_type_name || 'Не выбран' : display(current[key]),
-            beforeIdentities:dictionaryIdentities(row.base[key]),
-            afterIdentities:dictionaryIdentities(current[key]),
-        }));
+        return Object.keys(current).filter(key => !equal(current[key], row.base[key])).map(key => {
+            const before=row.base[key],after=current[key];
+            return {
+                key, label:labels[key] || row.attributes.find(f => 'attribute:'+f.external_id===key)?.name || 'Характеристика',
+                before, after,
+                beforeLabel:key==='product_type_id' ? row.baseTypeName || 'Не выбран' : display(before),
+                afterLabel:key==='product_type_id' ? row.product_type_name || 'Не выбран' : display(after),
+                beforeIdentities:dictionaryIdentities(before),
+                afterIdentities:dictionaryIdentities(after),
+                showDictionaryIdentities:shouldShowDictionaryIdentities(key,before,after),
+            };
+        });
     }
     function definition(field) {
         return {...field,id:field.external_id,required:true,collection:field.is_collection,max_values:field.max_values || 1};
@@ -50,6 +54,18 @@
         return value.map(item => item?.dictionary_value_id)
             .filter(id => typeof id === 'string' && id !== '')
             .map(id => 'ID '+id+' в справочнике Ozon');
+    }
+    function shouldShowDictionaryIdentities(key,before,after) {
+        if (key==='attribute:22232') return true;
+        return Array.isArray(before) && Array.isArray(after) &&
+            equal(before.map(item => asText(item?.value)),after.map(item => asText(item?.value))) &&
+            !equal(dictionaryIdentities(before),dictionaryIdentities(after));
+    }
+    function shouldShowDictionaryId(externalAttributeId,items) {
+        if (asText(externalAttributeId)==='22232') return true;
+        if (!Array.isArray(items) || items.length<2) return false;
+        const labels=items.map(item => asText(item?.value));
+        return new Set(labels).size<labels.length;
     }
     function serialize(rows, csrf) {
         const form = new URLSearchParams();
@@ -138,7 +154,7 @@
                 loginUrl() { return '/login?next='+encodeURIComponent(global.location.pathname+global.location.search); },
             },
             methods:{
-                display,dictionaryIdentities,definition,changes,
+                display,dictionaryIdentities,shouldShowDictionaryIdentities,shouldShowDictionaryId,definition,changes,
                 status(row) { return row.server ? 'Конфликт изменений' : row.error || row.repair_error ? 'Не сохранено' :
                     row.action==='ИСКЛЮЧИТЬ' ? 'Исключена из повтора' : changes(row).length ? 'Есть изменения' :
                     row.status==='ready_to_retry' ? 'Проверена локально' : 'Нужно исправить'; },
