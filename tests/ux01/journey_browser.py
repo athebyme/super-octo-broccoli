@@ -407,25 +407,30 @@ def geometry(page, name: str, width: int, theme: str):
     page.wait_for_function("!document.querySelector('.main-content')?.getAnimations().some(a => a.playState === 'running')", timeout=2500)
     page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
     actual = set_theme(page, theme)
-    result = page.evaluate("""() => {
-        const roots = Array.from(document.querySelectorAll('.preparation-journey, .preparation-listing-end-state'));
+    result = page.evaluate("""pageName => {
+        const overview = pageName === 'listing_vue';
+        const roots = Array.from(document.querySelectorAll(overview
+            ? '#marketplace-detail-app .mdet-actions'
+            : '.preparation-journey, .preparation-listing-end-state'));
         return roots.map(el => {
             const rect = el.getBoundingClientRect();
             const disclosure = el.querySelector('.preparation-journey-path ol');
             const nav = el.querySelector('nav');
             return {
-                kind: el.classList.contains('preparation-journey') ? 'journey' : 'listing_end_state',
+                kind: overview ? 'listing_actions' : el.classList.contains('preparation-journey') ? 'journey' : 'listing_end_state',
                 left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width),
                 clientWidth: el.clientWidth, scrollWidth: el.scrollWidth,
                 pathClientWidth: disclosure?.clientWidth ?? null,
                 pathScrollWidth: disclosure?.scrollWidth ?? null,
                 navClientWidth: nav?.clientWidth ?? null, navScrollWidth: nav?.scrollWidth ?? null,
-                touchTargets: Array.from(el.querySelectorAll('a')).map(a => Math.round(a.getBoundingClientRect().height)),
+                touchTargets: Array.from(el.querySelectorAll(overview
+                    ? '.mdet-upload-history, .mdet-update-draft-trigger' : 'a'))
+                    .map(control => Math.round(control.getBoundingClientRect().height)),
                 summaryHeight: el.querySelector('summary') ? Math.round(el.querySelector('summary').getBoundingClientRect().height) : null,
             };
         });
-    }""")
-    assert result, (name, width, theme, "no journey/end state")
+    }""", name)
+    assert result, (name, width, theme, "no preparation actions")
     for item in result:
         assert item["left"] >= -1 and item["right"] <= width + 1, (name, width, theme, item)
         assert item["scrollWidth"] <= item["clientWidth"] + 1, (name, width, theme, item)
@@ -941,20 +946,21 @@ def run():
             assert page.locator(".mp-open[href*='wb-preview']").count() >= 1
             REPORT["checks"].append("beta_internal_page_keeps_existing_channel_actions")
 
-        # Listing screens are the terminal Ozon state; listing status/visibility
-        # remain in the existing identifying workspace header and journey links
-        # retain the exact account scope as the member changes.
+        # Listing status/visibility remain in the shared identifying header.
+        # The overview keeps scoped run history alongside the exact update
+        # action. Classic retains its existing account-scoped journey links.
         for name in ("listing_vue", "listing_classic"):
             wait_document(page, name, PAGE_PATHS[name])
             if SOURCE == "worktree":
                 if name == "listing_vue":
                     page.locator("#marketplace-detail-app:not([v-cloak])").wait_for()
                     page.locator(".listing-workspace-head").wait_for()
-                    end_state = page.locator(".preparation-listing-end-state")
-                    end_state.wait_for()
-                    hrefs = end_state.locator("a").evaluate_all("items => items.map(item => item.href)")
-                    assert all(f"account_id={FIXTURE['account_id']}" in value for value in hrefs), hrefs
-                    assert "сама по себе не подтверждает предыдущие этапы" in end_state.inner_text()
+                    history = page.get_by_role("link", name="История запусков", exact=True)
+                    history.wait_for()
+                    assert parse_qs(urlsplit(history.get_attribute("href")).query) == {
+                        "account_id": [str(FIXTURE["account_id"])],
+                    }
+                    assert page.locator(".preparation-listing-end-state").count() == 0
                 else:
                     end_state = page.locator(".preparation-listing-end-state")
                     end_state.wait_for()

@@ -33,6 +33,10 @@ from services.marketplace_canonical_content import (
 )
 from services.marketplace_warehouses import MarketplaceWarehouseService
 from services.marketplace_listing_display import listing_display
+from services.marketplace_drafts import (
+    MarketplaceDraftError,
+    MarketplaceDraftService,
+)
 from services.listing_navigation import (
     build_listing_catalog_url,
     current_listing_catalog_url,
@@ -119,6 +123,7 @@ def _error_response(error: Exception, status_code: int = 400):
         MarketplaceProductLinkError,
         MarketplaceCanonicalContentError,
         MarketplaceAccountError,
+        MarketplaceDraftError,
     )):
         status_code = error.status_code
         code = error.code
@@ -661,6 +666,55 @@ def detail(listing_id: int):
             )
         ),
     )
+
+
+@marketplace_listings_bp.route(
+    "/<int:listing_id>/update-draft-context",
+    methods=["GET"],
+)
+@login_required
+def update_draft_context(listing_id: int):
+    """Read-only local context for preparing an update of one exact Ozon listing."""
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({
+            "success": False,
+            "error": "Для работы с листингом нужна карточка продавца",
+            "code": "seller_profile_required",
+        }), 403
+    if not current_app.config.get("MARKETPLACE_OZON_ENABLED", False):
+        return jsonify({
+            "success": False,
+            "error": "Подготовка черновиков Ozon отключена",
+            "code": "ozon_feature_disabled",
+        }), 404
+    try:
+        context = MarketplaceDraftService.existing_listing_update_draft_context(
+            seller_id=seller_id,
+            listing_id=listing_id,
+        )
+    except MarketplaceDraftError as exc:
+        return _error_response(exc)
+
+    response_data = {
+        "success": True,
+        "status": context["status"],
+        "account_id": context["account_id"],
+        "account_label": context["account_label"],
+        "imported_product_id": context["imported_product_id"],
+    }
+    if context["status"] == "ready":
+        response_data["expected_existing_listing"] = context[
+            "expected_existing_listing"
+        ]
+    else:
+        response_data["draft_url"] = url_for(
+            "marketplace_drafts.detail",
+            draft_id=context["draft_id"],
+        )
+    response = jsonify(response_data)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 def _link_write_payload(data: Dict[str, Any], allowed: set) -> None:

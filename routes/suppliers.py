@@ -78,6 +78,54 @@ def _form_bulk_product_ids(raw_ids, limit=MAX_BULK_PRODUCTS):
     return normalized
 
 
+def _supplier_import_form_selection(seller_id, form):
+    """Parse a normal/smart supplier import form without widening a declared scope.
+
+    Forms predating the supplier_id field keep their historical digit-filtering
+    behavior. Current catalog/detail forms declare a supplier and must carry a
+    complete, unique, bounded ID list that belongs to that seller's active
+    supplier connection before either import path can run.
+    """
+    supplier_values = form.getlist('supplier_id')
+    raw_ids = form.getlist('product_ids')
+    if not supplier_values:
+        return None, [int(value) for value in raw_ids if value.isdigit()]
+
+    if len(supplier_values) != 1 or not supplier_values[0].isdecimal():
+        raise ValueError('Не удалось проверить выбранного поставщика')
+    supplier_id = _coerce_positive_int(supplier_values[0])
+    max_database_id = (1 << 63) - 1
+    if supplier_id is None or supplier_id > max_database_id:
+        raise ValueError('Не удалось проверить выбранного поставщика')
+    product_ids = _form_bulk_product_ids(raw_ids)
+    if any(product_id > max_database_id for product_id in product_ids):
+        raise ValueError('Список товаров содержит некорректный ID')
+    if not product_ids:
+        return supplier_id, []
+
+    connection = SellerSupplier.query.filter_by(
+        seller_id=seller_id,
+        supplier_id=supplier_id,
+        is_active=True,
+    ).first()
+    if not connection:
+        raise ValueError('У вас нет активного доступа к этому поставщику')
+
+    found_ids = {
+        row[0]
+        for row in db.session.query(SupplierProduct.id).filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.id.in_(product_ids),
+        ).all()
+    }
+    if found_ids != set(product_ids):
+        raise ValueError(
+            'Выбранные товары изменились или относятся к другому поставщику. '
+            'Обновите список и повторите выбор.'
+        )
+    return supplier_id, product_ids
+
+
 # Обычный каталог ограничен 50 строками: legacy 200-row HTML весил >1 МБ и
 # запускал сотни image requests. Bulk-вкладка обновлений сохраняет cap 200.
 MY_PRODUCTS_PAGE_SIZE = 50
@@ -1654,7 +1702,8 @@ def register_supplier_routes(app):
             flash('Поставщик не найден', 'danger')
             return redirect(url_for('supplier_catalog'))
 
-        page = request.args.get('page', 1, type=int)
+        select_all_requested = request.args.get('select_all') == '1'
+        page = 1 if select_all_requested else request.args.get('page', 1, type=int)
         search = request.args.get('search', '').strip()
         show_imported = request.args.get('show_imported', '0') == '1'
         updates_only = request.args.get('updates_only', '0') == '1'
@@ -1752,9 +1801,10 @@ def register_supplier_routes(app):
             wb_existing_sp_ids = _linked_wb_sp_ids()
             wb_existing_sp_ids |= _vendor_code_wb_sp_ids(wb_existing_sp_ids)
 
+        page_size = MAX_BULK_PRODUCTS + 1 if select_all_requested else 50
         pagination = SupplierService.get_available_products_for_seller(
             seller.id, supplier_id,
-            page=page, per_page=50,
+            page=page, per_page=page_size,
             search=search, show_imported=effective_show_imported,
             stock_status=effective_stock,
             wb_filter=wb_filter,
@@ -1762,6 +1812,31 @@ def register_supplier_routes(app):
             updates_only=updates_only,
             wb_existing_sp_ids=wb_existing_sp_ids
         )
+        selection_review = False
+        selection_block_reason = None
+        selection_block_total = None
+        if select_all_requested:
+            selection_block_total = pagination.total
+            if pagination.total > MAX_BULK_PRODUCTS:
+                selection_block_reason = 'limit'
+            elif len(pagination.items) != pagination.total:
+                selection_block_reason = 'changed'
+            else:
+                selection_review = True
+            if selection_block_reason:
+                # Never render or submit a truncated all-filtered result. Keep
+                # the standard 50-row page so the seller can narrow or select
+                # an explicit subset instead.
+                pagination = SupplierService.get_available_products_for_seller(
+                    seller.id, supplier_id,
+                    page=1, per_page=50,
+                    search=search, show_imported=effective_show_imported,
+                    stock_status=effective_stock,
+                    wb_filter=wb_filter,
+                    ai_filter=ai_filter,
+                    updates_only=updates_only,
+                    wb_existing_sp_ids=wb_existing_sp_ids,
+                )
         page_sp_ids = [p.id for p in pagination.items]
         if not wb_filter and page_sp_ids:
             wb_existing_sp_ids = _linked_wb_sp_ids(page_sp_ids)
@@ -1786,6 +1861,13 @@ def register_supplier_routes(app):
             and int(product.content_revision or 1)
             > imported_revision_by_sp[product.id]
         }
+        selected_import_ids = [
+            product.id for product in pagination.items
+            if selection_review
+            and product.id not in imported_sp_ids
+            and product.id not in supplier_update_sp_ids
+            and product.id not in wb_existing_sp_ids
+        ]
 
         stats = SupplierService.get_product_stats(supplier_id)
         price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
@@ -1843,9 +1925,32 @@ def register_supplier_routes(app):
                     ).all()
                 }
 
+        catalog_filter_args = {
+            'page': 1,
+            'search': search,
+            'show_imported': '1' if show_imported else None,
+            'updates_only': '1' if updates_only else None,
+            'stock_status': stock_status,
+            'wb_filter': wb_filter or None,
+            'ai_filter': ai_filter or None,
+        }
+        select_all_url = url_for(
+            'supplier_catalog_products', supplier_id=supplier_id,
+            select_all='1', **catalog_filter_args,
+        )
+        cancel_select_all_url = url_for(
+            'supplier_catalog_products', supplier_id=supplier_id,
+            **catalog_filter_args,
+        )
         return render_template('supplier_catalog_products.html',
                                supplier=supplier, pagination=pagination,
                                stats=stats, search=search,
+                               selection_review=selection_review,
+                               selection_block_reason=selection_block_reason,
+                               selection_block_total=selection_block_total,
+                               selected_import_ids=selected_import_ids,
+                               select_all_url=select_all_url,
+                               cancel_select_all_url=cancel_select_all_url,
                                show_imported=show_imported,
                                updates_only=updates_only,
                                supplier_update_count=supplier_update_count,
@@ -1903,9 +2008,15 @@ def register_supplier_routes(app):
     def supplier_catalog_import():
         """Импорт выбранных товаров к продавцу"""
         seller = current_user.seller
-        supplier_id = request.form.get('supplier_id', type=int)
-        product_ids_raw = request.form.getlist('product_ids')
-        product_ids = [int(pid) for pid in product_ids_raw if pid.isdigit()]
+        try:
+            supplier_id, product_ids = _supplier_import_form_selection(
+                seller.id, request.form,
+            )
+        except ValueError as exc:
+            flash(str(exc), 'warning')
+            return _redirect_seller_supplier_catalog(
+                request.form.get('supplier_id', type=int)
+            )
 
         if not product_ids:
             flash('Не выбраны товары для импорта', 'warning')
@@ -4624,9 +4735,15 @@ def register_supplier_routes(app):
         from services.smart_product_parser import SmartProductParser
 
         seller = current_user.seller
-        supplier_id = request.form.get('supplier_id', type=int)
-        product_ids_raw = request.form.getlist('product_ids')
-        product_ids = [int(pid) for pid in product_ids_raw if pid.isdigit()]
+        try:
+            supplier_id, product_ids = _supplier_import_form_selection(
+                seller.id, request.form,
+            )
+        except ValueError as exc:
+            flash(str(exc), 'warning')
+            return _redirect_seller_supplier_catalog(
+                request.form.get('supplier_id', type=int)
+            )
 
         if not product_ids:
             flash('Не выбраны товары для импорта', 'warning')

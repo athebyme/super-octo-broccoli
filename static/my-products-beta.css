@@ -68,6 +68,13 @@
     gap: 12px;
     padding: 6px 2px 10px;
 }
+.mp-select-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    min-width: 0;
+}
 .mp-selectall {
     display: inline-flex;
     align-items: center;
@@ -77,6 +84,20 @@
     cursor: pointer;
 }
 .mp-selectall input { accent-color: var(--accent); cursor: pointer; }
+.mp-select-filtered {
+    min-height: 32px;
+    padding: 4px 3px;
+    border: 0;
+    color: var(--accent-text);
+    background: transparent;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+.mp-select-filtered:hover { text-decoration: underline; }
+.mp-select-filtered:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; border-radius: var(--r-xs); }
+.mp-select-filtered:disabled { color: var(--text-muted); cursor: wait; text-decoration: none; }
+.mp-select-limit { font-size: 12px; color: var(--text-muted); }
 .mp-listhead-count { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
 /* Rare operations stay available behind one native disclosure. */
@@ -251,6 +272,9 @@
 @media (max-width: 700px) {
     .mp-foot { flex-wrap:wrap; }
     .mp-legacy-link { flex-basis:100%; text-align:center; }
+    .mp-select-controls { gap:4px 10px; }
+    .mp-select-filtered { min-height:44px; }
+    .mp-select-limit { max-width:220px; }
     .mp-bulkbar { gap:8px; padding:9px 10px; }
     .mp-bulkbar .shk-bulkbar-count { flex:1 1 auto; white-space:nowrap; }
     .mp-bulkbar .shk-bulkbar-actions { flex:1 1 100%; width:100%; }

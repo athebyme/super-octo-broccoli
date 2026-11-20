@@ -5822,6 +5822,183 @@ class MarketplaceDraftService:
         return listing, product_type, facts_document, provenance, fact_hash
 
     @classmethod
+    def existing_listing_update_draft_context(
+        cls,
+        *,
+        seller_id: int,
+        listing_id: int,
+    ) -> dict:
+        """Return a local-only, exact context for updating one linked Ozon listing.
+
+        The returned precondition is the same proof accepted by
+        ``create_draft(expected_existing_listing=...)``. This method never
+        reconciles links, creates a draft, or calls a provider.
+        """
+        seller_id = cls._positive_signed_int64(seller_id, "seller_id")
+        listing_id = cls._positive_signed_int64(listing_id, "listing_id")
+        listing = MarketplaceListing.query.options(
+            joinedload(MarketplaceListing.marketplace),
+            joinedload(MarketplaceListing.account),
+            joinedload(MarketplaceListing.product_type).joinedload(
+                MarketplaceProductType.category
+            ),
+        ).join(
+            Marketplace,
+            Marketplace.id == MarketplaceListing.marketplace_id,
+        ).filter(
+            MarketplaceListing.id == listing_id,
+            MarketplaceListing.seller_id == seller_id,
+            Marketplace.code == "ozon",
+            Marketplace.is_active.is_(True),
+        ).first()
+        if listing is None:
+            raise MarketplaceDraftNotFound("Листинг Ozon не найден")
+
+        account = cls._owned_account(
+            seller_id=seller_id,
+            account_id=listing.account_id,
+        )
+        if (
+            listing.account_id != account.id
+            or listing.marketplace_id != account.marketplace_id
+            or listing.imported_product_id is None
+            or listing.canonical_link_status != "linked"
+        ):
+            raise MarketplaceDraftConflict(
+                "К карточке Ozon не привязана точная внутренняя карточка; "
+                "сначала свяжите листинг и перечитайте его"
+            )
+        if (
+            not listing.external_product_id
+            or not listing.offer_id
+            or not listing.is_available
+            or listing.is_archived
+        ):
+            raise MarketplaceDraftConflict(
+                "Точный листинг Ozon недоступен или архивирован; "
+                "синхронизируйте каталог и перечитайте карточку"
+            )
+
+        product = cls._owned_imported_product(
+            seller_id=seller_id,
+            imported_product_id=listing.imported_product_id,
+        )
+        exact_link = cls._linked_listing_for_product(
+            seller_id=seller_id,
+            account=account,
+            product=product,
+        )
+        if exact_link is None or exact_link.id != listing.id:
+            raise MarketplaceDraftConflict(
+                "Связь внутренней карточки с листингом неоднозначна; "
+                "перечитайте карточку"
+            )
+        cls._existing_listing_evidence_hash(listing)
+
+        matching_drafts = cls._existing_drafts_for_listing(
+            seller_id=seller_id,
+            account_id=account.id,
+            product_id=product.id,
+            listing=listing,
+        )
+        if matching_drafts:
+            if len(matching_drafts) != 1:
+                raise MarketplaceDraftConflict(
+                    "Для этой карточки найдено несколько черновиков; "
+                    "откройте нужный черновик из списка"
+                )
+            draft = matching_drafts[0]
+            if (
+                draft.marketplace_id != account.marketplace_id
+                or draft.seller_id != seller_id
+                or draft.account_id != account.id
+                or draft.imported_product_id != product.id
+                or draft.offer_id != listing.offer_id
+                or draft.published_listing_id != listing.id
+            ):
+                raise MarketplaceDraftConflict(
+                    "Для этой внутренней карточки или артикула Ozon уже есть другой "
+                    "черновик; проверьте его в разделе черновиков"
+                )
+            return {
+                "status": "existing",
+                "account_id": account.id,
+                "account_label": account.label or "",
+                "imported_product_id": product.id,
+                "draft_id": draft.id,
+            }
+
+        now = datetime.utcnow()
+        _facts_document, _provenance, fact_hash = cls._fact_snapshot(product)
+        state, _freshness = cls._listing_projection_state(listing, now=now)
+        expected = cls._normalize_existing_listing_precondition({
+            "listing_id": listing.id,
+            "link_version": listing.link_version,
+            "link_status": listing.canonical_link_status,
+            "link_source": listing.link_source,
+            "link_evidence_sha256": cls._existing_listing_evidence_hash(
+                listing,
+            ),
+            "linked_at": listing.linked_at.isoformat()
+            if listing.linked_at else None,
+            "offer_id": listing.offer_id,
+            "external_product_id": listing.external_product_id,
+            "external_category_id": listing.external_category_id,
+            "external_type_id": listing.external_type_id,
+            "source_fact_hash": fact_hash,
+            "baseline_fingerprint": state["fingerprint"],
+            "baseline_contract_version": OzonProductStateContract.CONTRACT_VERSION,
+        })
+        cls._assert_existing_listing_precondition(
+            seller_id=seller_id,
+            account=account,
+            product=product,
+            expected=expected,
+            now=now,
+        )
+
+        if active_catalog_listing_operation(
+            seller_id=seller_id,
+            marketplace_id=account.marketplace_id,
+            account_id=account.id,
+            listing_id=listing.id,
+        ) is not None:
+            raise MarketplaceDraftConflict(
+                "По этой карточке Ozon уже выполняется операция; "
+                "откройте её статус и повторите позже"
+            )
+
+        return {
+            "status": "ready",
+            "account_id": account.id,
+            "account_label": account.label or "",
+            "imported_product_id": product.id,
+            "expected_existing_listing": expected,
+        }
+
+    @classmethod
+    def _existing_drafts_for_listing(
+        cls,
+        *,
+        seller_id: int,
+        account_id: int,
+        product_id: int,
+        listing: MarketplaceListing,
+    ) -> list:
+        """Find bounded same-source/target/offer draft conflicts in one account."""
+        return MarketplaceProductDraft.query.filter(
+            MarketplaceProductDraft.seller_id == seller_id,
+            MarketplaceProductDraft.account_id == account_id,
+            or_(
+                MarketplaceProductDraft.imported_product_id == product_id,
+                MarketplaceProductDraft.published_listing_id == listing.id,
+                MarketplaceProductDraft.offer_id == listing.offer_id,
+            ),
+        ).order_by(
+            MarketplaceProductDraft.id.asc(),
+        ).limit(2).all()
+
+    @classmethod
     def _assert_no_existing_draft_for_listing(
         cls,
         *,
@@ -5830,15 +6007,12 @@ class MarketplaceDraftService:
         product_id: int,
         listing: MarketplaceListing,
     ) -> None:
-        existing = MarketplaceProductDraft.query.filter(
-            MarketplaceProductDraft.seller_id == seller_id,
-            MarketplaceProductDraft.account_id == account_id,
-            or_(
-                MarketplaceProductDraft.imported_product_id == product_id,
-                MarketplaceProductDraft.published_listing_id == listing.id,
-                MarketplaceProductDraft.offer_id == listing.offer_id,
-            ),
-        ).limit(2).all()
+        existing = cls._existing_drafts_for_listing(
+            seller_id=seller_id,
+            account_id=account_id,
+            product_id=product_id,
+            listing=listing,
+        )
         if existing:
             raise MarketplaceDraftConflict(
                 "Для этой внутренней карточки или листинга уже есть черновик; откройте существующий"

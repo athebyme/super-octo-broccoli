@@ -6,7 +6,6 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='marketplace-catalog-beta.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='marketplace-listing-detail-beta.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='preparation-workspace.css') }}">
 
 <script type="application/json" id="mdet-bootstrap">{{ {
     'listingId': listing_id,
@@ -19,6 +18,7 @@
         'managementBase': url_for('marketplace_listings.index'),
         'myProducts': url_for('seller_my_products'),
         'drafts': url_for('marketplace_drafts.index'),
+        'draftEditorBase': url_for('marketplace_drafts.index'),
         'uploadHistory': url_for('ozon_bulk_uploads.index'),
     },
 } | tojson }}</script>
@@ -26,18 +26,6 @@
 <div id="marketplace-detail-app" v-cloak>
 {% raw %}
     {% endraw %}{% include "partials/listing_workspace_beta_header.html" %}{% raw %}
-
-    <aside v-if="listing && listing.id === listingId && listing.marketplace_code === 'ozon'" class="preparation-listing-end-state" aria-label="Путь карточки Ozon: каталог">
-        <div>
-            <p class="preparation-journey-kicker">Последний этап пути</p>
-            <strong>Карточка Ozon</strong>
-            <p>Статус площадки и видимость показаны в сведениях карточки выше. Синхронизированная запись каталога сама по себе не подтверждает предыдущие этапы.</p>
-        </div>
-        <nav aria-label="Действия с Ozon-карточкой">
-            <a :href="urls.drafts + '?account_id=' + encodeURIComponent(listing.account_id)">Подготовить черновик</a>
-            <a :href="urls.uploadHistory + '?account_id=' + encodeURIComponent(listing.account_id)">История запусков</a>
-        </nav>
-    </aside>
 
     <div v-if="error" class="mcat-error" role="alert">
         <span>{{ error }}</span>
@@ -97,6 +85,25 @@
                 </div>
 
                 <div class="mdet-actions">
+                    <template v-if="listing.marketplace_code === 'ozon'">
+                        <button v-if="canPrepareUpdateDraft" id="mdet-update-draft-button" type="button"
+                                class="sh-btn sh-btn--primary mdet-update-draft-trigger"
+                                :disabled="acting || loading"
+                                @click="openUpdateDraftReview">
+                            Подготовить обновление
+                        </button>
+                        <p v-else-if="!ozonEnabled" class="mdet-update-draft-hint">Подготовка обновления Ozon сейчас отключена.</p>
+                        <p v-else-if="!listing.imported_product_id || listing.link_status !== 'linked'" class="mdet-update-draft-hint">
+                            Чтобы подготовить обновление, сначала свяжите карточку Ozon с товаром в Seller Hub.
+                        </p>
+                        <p v-else class="mdet-update-draft-hint">
+                            Обновление недоступно: карточка архивирована или её данные не подтверждены последней синхронизацией.
+                        </p>
+                        <a class="sh-btn sh-btn--secondary mdet-upload-history"
+                           :href="urls.uploadHistory + '?account_id=' + encodeURIComponent(listing.account_id)">
+                            История запусков
+                        </a>
+                    </template>
                     <a v-if="wbPublicUrl" class="sh-btn sh-btn--primary" :href="wbPublicUrl" target="_blank" rel="noopener">
                         Открыть на Wildberries
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="mdet-ext"><path d="M7 17 17 7M9 7h8v8"/></svg>
@@ -264,6 +271,54 @@
             <pre class="listing-workspace-diagnostic-json">{{ JSON.stringify({identifiers:listing.identifiers, statuses:listing.statuses, price_summary:listing.price_summary, stock_summary:listing.stock_summary, media:listing.media, dimensions:listing.dimensions, barcodes:listing.barcodes}, null, 2) }}</pre>
         </details>
     </template>
+    <dialog id="mdet-update-draft-dialog" ref="updateDraftDialog" class="mdet-link-dialog mdet-update-dialog"
+            aria-labelledby="mdet-update-draft-title" aria-describedby="mdet-update-draft-description"
+            @cancel.prevent="closeUpdateDraftReview">
+        <template v-if="updateDraftReview.open">
+            <div class="mdet-link-dialog-head">
+                <div>
+                    <p class="mcat-muted">Ozon · обновление существующей карточки</p>
+                    <h2 id="mdet-update-draft-title" ref="updateDraftTitle" tabindex="-1">Подготовить обновление</h2>
+                </div>
+                <button type="button" class="sh-btn sh-btn--secondary" :disabled="updateDraftReview.saving" @click="closeUpdateDraftReview">Закрыть</button>
+            </div>
+            <p id="mdet-update-draft-description" class="mdet-link-scope">
+                Черновик сохранится в Seller Hub. Отправка в Ozon выполняется отдельно.
+            </p>
+            <p v-if="updateDraftReview.loading" class="mcat-muted" role="status">Читаем состояние этой карточки…</p>
+            <p v-if="updateDraftReview.error" class="mdet-link-error" role="alert">{{ updateDraftReview.error }}</p>
+            <p v-if="updateDraftReview.notice" class="mdet-update-draft-notice" role="status">{{ updateDraftReview.notice }}</p>
+            <p v-if="updateDraftReview.needsRead && updateDraftReview.priorPostUncertain" class="mdet-update-draft-notice" role="status">
+                Не отправляйте запрос повторно. Проверьте результат; если черновик уже сохранён, появится точная ссылка.
+            </p>
+            <section v-if="updateDraftReview.context" class="mdet-link-current mdet-update-draft-context" aria-label="Проверенный магазин и карточка">
+                <strong>{{ updateDraftReview.context.status === 'existing' ? 'Для этой карточки уже есть черновик' : 'Проверьте магазин и карточку' }}</strong>
+                <dl class="mdet-update-draft-facts">
+                    <div><dt>Магазин Ozon</dt><dd>{{ updateDraftReview.context.accountLabel || ('Магазин #' + updateDraftReview.context.accountId) }}</dd></div>
+                    <div><dt>Карточка Ozon</dt><dd>{{ updateDraftReview.listingSnapshot.title || 'Без названия' }} · артикул {{ updateDraftReview.listingSnapshot.offerId || '—' }} · ID {{ updateDraftReview.listingSnapshot.externalProductId || '—' }}</dd></div>
+                    <div><dt>Связанный товар</dt><dd>{{ updateDraftReview.listingSnapshot.canonicalTitle || 'Товар Seller Hub' }}</dd></div>
+                </dl>
+            </section>
+            <div class="mdet-link-actions mdet-update-draft-actions">
+                <button v-if="updateDraftReview.needsRead || updateDraftReview.error" id="mdet-update-draft-read" ref="updateDraftRead" type="button" class="sh-btn sh-btn--secondary"
+                        :disabled="updateDraftReview.loading || updateDraftReview.saving"
+                        @click="readUpdateDraftContext">
+                    {{ updateDraftReview.loading ? 'Читаем…' : updateDraftReview.priorPostUncertain ? 'Проверить результат' : 'Перечитать' }}
+                </button>
+                <a v-if="updateDraftReview.context && updateDraftReview.context.status === 'existing'"
+                   id="mdet-update-draft-existing" ref="updateDraftExisting" class="sh-btn sh-btn--primary"
+                   :href="updateDraftReview.context.draftUrl">
+                    Открыть существующий черновик
+                </a>
+                <button v-if="updateDraftReview.context && updateDraftReview.context.status === 'ready'" id="mdet-update-draft-confirm"
+                        ref="updateDraftConfirm" type="button" class="sh-btn sh-btn--primary"
+                        :disabled="updateDraftReview.loading || updateDraftReview.saving || updateDraftReview.needsRead"
+                        @click="submitUpdateDraft">
+                    {{ updateDraftReview.saving ? 'Сохраняем…' : 'Сохранить черновик' }}
+                </button>
+            </div>
+        </template>
+    </dialog>
     <dialog ref="linkDialog" class="mdet-link-dialog" aria-labelledby="mdet-link-title" @cancel.prevent="closeLinkReview" @click="$event.target === $event.currentTarget && closeLinkReview()">
         <template v-if="linkReview.open">
             <div class="mdet-link-dialog-head"><div><p class="mcat-muted">Ozon · {{ listing.account_label }} · версия связи {{ linkReview.viewedVersion }}</p><h2 id="mdet-link-title" ref="linkTitle" tabindex="-1">{{ linkReview.mode === 'link' ? 'Выберите внутреннюю карточку' : 'Проверьте отвязку' }}</h2></div><button type="button" class="sh-btn sh-btn--secondary" :disabled="linkReview.saving" @click="closeLinkReview">Закрыть</button></div>

@@ -18,6 +18,52 @@
         if (typeof data.csrf === 'string' && data.csrf.length >= 20 && data.csrf.length <= 512) CSRF = data.csrf;
     }
 
+    function positiveInteger(value) {
+        var parsed = typeof value === 'number' ? value
+            : (typeof value === 'string' && /^[1-9]\d*$/.test(value) ? Number(value) : NaN);
+        return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+    }
+
+    function sameOptionalText(left, right) {
+        return String(left == null ? '' : left) === String(right == null ? '' : right);
+    }
+
+    function expectedListingMatches(expected, snapshot) {
+        return !!expected && typeof expected === 'object' && !Array.isArray(expected)
+            && positiveInteger(expected.listing_id) === snapshot.listingId
+            && positiveInteger(expected.link_version) === snapshot.linkVersion
+            && expected.link_status === snapshot.linkStatus
+            && sameOptionalText(expected.offer_id, snapshot.offerId)
+            && sameOptionalText(expected.external_product_id, snapshot.externalProductId)
+            && sameOptionalText(expected.external_category_id, snapshot.externalCategoryId)
+            && sameOptionalText(expected.external_type_id, snapshot.externalTypeId);
+    }
+
+    function exactDraftUrl(candidate, draftId, editorBase) {
+        try {
+            var base = new URL(editorBase, window.location.href);
+            if (base.origin !== window.location.origin) return null;
+            var target;
+            if (typeof candidate === 'string' && candidate.trim()) {
+                target = new URL(candidate, window.location.href);
+            } else {
+                var id = positiveInteger(draftId);
+                if (!id) return null;
+                target = new URL(base.pathname + id, window.location.origin);
+            }
+            if (target.origin !== window.location.origin
+                || target.pathname.indexOf(base.pathname) !== 0
+                || target.search || target.hash
+                || !/^[1-9]\d*$/.test(target.pathname.slice(base.pathname.length))) return null;
+            var targetId = positiveInteger(target.pathname.slice(base.pathname.length));
+            var expectedId = positiveInteger(draftId);
+            if (expectedId && targetId !== expectedId) return null;
+            return target.pathname + target.search + target.hash;
+        } catch (_) {
+            return null;
+        }
+    }
+
     function isJsonContainer(text) {
         var value = typeof text === 'string' ? text.trim() : '';
         return value.length > 1 && value.length <= 5000
@@ -138,6 +184,9 @@
     var linkController = null;
     var linkTimer = null;
     var linkReturnFocus = null;
+    var updateDraftReadController = null;
+    var updateDraftReadSequence = 0;
+    var updateDraftReturnFocus = null;
 
     var candidatePhoto = {
         directives: {'image-deadline': S.imageDeadline},
@@ -229,6 +278,7 @@
                 actionError: false,
                 linkNeedsRead: false,
                 linkReview: {open:false, mode:'', query:'', candidates:[], selected:null, checked:false, loading:false, saving:false, error:'', viewedVersion:null, pending:null, needsChoice:false, unknown:false},
+                updateDraftReview: {open:false, loading:false, saving:false, error:'', notice:'', context:null, needsRead:false, priorPostUncertain:false, listingId:null, listingSnapshot:null},
                 candidateImageErrors: {}
             };
         },
@@ -308,6 +358,12 @@
                 return canonical && this.listing
                     && canonical.id === this.listing.imported_product_id
                     ? canonical : null;
+            },
+            canPrepareUpdateDraft: function () {
+                return !!(this.ozonEnabled && this.listing && this.listing.marketplace_code === 'ozon'
+                    && this.listing.link_status === 'linked'
+                    && positiveInteger(this.listing.imported_product_id)
+                    && this.listing.is_available && !this.listing.is_archived);
             },
             otherMembers: function () {
                 var id = this.listingId;
@@ -403,6 +459,7 @@
         beforeUnmount: function () {
             window.removeEventListener('popstate', this._onPop);
             clearTimeout(linkTimer); if (linkController) linkController.abort();
+            if (updateDraftReadController) updateDraftReadController.abort();
         },
 
         methods: {
@@ -443,6 +500,7 @@
             },
             switchMember: function (member) {
                 if (member.id === this.listingId) return;
+                this.closeUpdateDraftReview();
                 this.closeLinkReview();
                 this.listingId = member.id;
                 this.actionMessage = null;
@@ -464,6 +522,7 @@
                 var target = state.listingId || (isFinite(fromUrl) ? fromUrl : null);
                 if (typeof state.returnUrl === 'string') this.returnUrl = state.returnUrl;
                 if (target && target !== this.listingId) {
+                    this.closeUpdateDraftReview();
                     this.closeLinkReview();
                     this.listingId = target;
                     this.actionMessage = null;
@@ -519,14 +578,20 @@
                 if (options && options.signal) options.signal.addEventListener('abort', function () { controller.abort(); }, {once:true});
                 var timeout = setTimeout(function () { timedOut = true; controller.abort(); }, options && options.method === 'POST' ? 15000 : 10000);
                 try {
+                    var requestOptions = {...options};
+                    var expectedStatus = requestOptions.expectedStatus;
+                    delete requestOptions.expectedStatus;
                     var response = await fetch(url, {
-                        ...options, signal:controller.signal, credentials:'same-origin',
+                        ...requestOptions, signal:controller.signal, credentials:'same-origin',
                         headers:{Accept:'application/json', ...((options && options.method === 'POST') ? {'Content-Type':'application/json', 'X-CSRFToken':CSRF} : {})}
                     });
                     if (response.status === 401 || response.redirected) throw Object.assign(Error('Сессия истекла. Войдите заново, затем прочитайте текущее состояние.'), {status:401});
                     if (response.status === 403) throw Object.assign(Error('Доступ к действию закрыт. Проверьте вход и права, затем прочитайте текущее состояние.'), {status:403});
                     if (!(response.headers.get('content-type') || '').includes('application/json')) throw Error('Сервер вернул неожиданный ответ. Состояние нужно перечитать.');
                     var data = await response.json();
+                    if (expectedStatus && response.status !== expectedStatus) {
+                        throw Object.assign(Error(data.error || 'Сервер не подтвердил сохранение. Перечитайте состояние карточки.'), {status:response.status});
+                    }
                     if (!response.ok || data.success === false) throw Object.assign(Error(data.error || 'Действие не выполнено.'), {status:response.status});
                     return data;
                 } catch (error) {
@@ -535,6 +600,179 @@
                         : 'Сервер не ответил вовремя. Не удалось прочитать текущее состояние.');
                     throw error;
                 } finally { clearTimeout(timeout); }
+            },
+            updateDraftListingSnapshot: function () {
+                var listing = this.listing || {};
+                var canonical = this.canonical;
+                return {
+                    listingId: positiveInteger(listing.id),
+                    accountId: positiveInteger(listing.account_id),
+                    accountLabel: typeof listing.account_label === 'string' ? listing.account_label : '',
+                    importedProductId: positiveInteger(listing.imported_product_id),
+                    title: typeof listing.title === 'string' ? listing.title : '',
+                    canonicalTitle: canonical && typeof canonical.title === 'string' ? canonical.title : '',
+                    offerId: listing.offer_id,
+                    externalProductId: listing.external_product_id,
+                    externalCategoryId: listing.external_category_id,
+                    externalTypeId: listing.external_type_id,
+                    linkVersion: positiveInteger(listing.link_version),
+                    linkStatus: listing.link_status
+                };
+            },
+            openUpdateDraftReview: function () {
+                if (!this.canPrepareUpdateDraft || this.loading || this.acting || this.updateDraftReview.open) return;
+                updateDraftReturnFocus = document.activeElement;
+                this.updateDraftReview = {
+                    open:true, loading:false, saving:false, error:'', notice:'', context:null,
+                    needsRead:false, priorPostUncertain:false,
+                    listingId:this.listingId, listingSnapshot:this.updateDraftListingSnapshot()
+                };
+                this.$nextTick(function () {
+                    if (this.$refs.updateDraftDialog && !this.$refs.updateDraftDialog.open) {
+                        this.$refs.updateDraftDialog.showModal();
+                    }
+                    if (this.$refs.updateDraftTitle) this.$refs.updateDraftTitle.focus();
+                });
+                this.readUpdateDraftContext();
+            },
+            closeUpdateDraftReview: function () {
+                if (this.updateDraftReview.saving) return;
+                updateDraftReadSequence += 1;
+                if (updateDraftReadController) updateDraftReadController.abort();
+                updateDraftReadController = null;
+                if (this.$refs.updateDraftDialog && this.$refs.updateDraftDialog.open) {
+                    this.$refs.updateDraftDialog.close();
+                }
+                this.updateDraftReview.open = false;
+                if (updateDraftReturnFocus && updateDraftReturnFocus.isConnected) updateDraftReturnFocus.focus();
+            },
+            readUpdateDraftContext: async function () {
+                var review = this.updateDraftReview;
+                var snapshot = review.listingSnapshot;
+                if (!review.open || review.loading || review.saving || !snapshot || !review.listingId) return;
+                var focusWasReadButton = !!(this.$refs.updateDraftRead
+                    && document.activeElement === this.$refs.updateDraftRead);
+                if (updateDraftReadController) updateDraftReadController.abort();
+                updateDraftReadController = new AbortController();
+                var controller = updateDraftReadController;
+                var requestId = ++updateDraftReadSequence;
+                review.loading = true;
+                review.error = '';
+                review.notice = '';
+                review.context = null;
+                review.needsRead = true;
+                try {
+                    var data = await this.linkRequest(
+                        this.urls.base + encodeURIComponent(review.listingId) + '/update-draft-context',
+                        {signal:controller.signal}
+                    );
+                    if (requestId !== updateDraftReadSequence || !review.open) return;
+                    if (data.success !== true || (data.status !== 'ready' && data.status !== 'existing')) {
+                        throw Error('Не удалось подтвердить состояние карточки. Перечитайте его или откройте карточку заново.');
+                    }
+                    var accountId = positiveInteger(data.account_id);
+                    var importedProductId = positiveInteger(data.imported_product_id);
+                    if (accountId !== snapshot.accountId || importedProductId !== snapshot.importedProductId) {
+                        throw Error('Связь магазина или товара изменилась. Обновите карточку и начните проверку заново.');
+                    }
+                    var expected = data.expected_existing_listing;
+                    if (data.status === 'ready' && !expectedListingMatches(expected, snapshot)) {
+                        throw Error('Сохранённая карточка изменилась. Обновите страницу и перечитайте её состояние.');
+                    }
+                    if (data.status === 'existing' && expected != null && !expectedListingMatches(expected, snapshot)) {
+                        throw Error('Сохранённая карточка изменилась. Обновите страницу и перечитайте её состояние.');
+                    }
+                    var draftUrl = null;
+                    if (data.status === 'existing') {
+                        draftUrl = exactDraftUrl(data.draft_url, null, this.urls.draftEditorBase);
+                        if (!draftUrl) throw Error('Существующий черновик найден, но его точная ссылка не подтверждена. Перечитайте состояние.');
+                    }
+                    var wasUncertain = review.priorPostUncertain;
+                    review.context = {
+                        status:data.status,
+                        accountId:accountId,
+                        accountLabel:typeof data.account_label === 'string' ? data.account_label : '',
+                        importedProductId:importedProductId,
+                        expectedExistingListing:data.status === 'ready' ? expected : null,
+                        draftUrl:draftUrl
+                    };
+                    review.needsRead = false;
+                    review.priorPostUncertain = false;
+                    if (wasUncertain) {
+                        review.notice = data.status === 'existing' ? ''
+                            : 'Состояние перечитано: существующий черновик не найден. Проверьте карточку и подтвердите локальное сохранение ещё раз.';
+                    }
+                    this.$nextTick(function () {
+                        if (!focusWasReadButton || !review.open) return;
+                        var active = document.activeElement;
+                        if (active && active !== document.body && this.$refs.updateDraftDialog.contains(active)) return;
+                        var destination = data.status === 'existing'
+                            ? this.$refs.updateDraftExisting : this.$refs.updateDraftConfirm;
+                        if (destination) destination.focus();
+                    }.bind(this));
+                } catch (error) {
+                    if (requestId !== updateDraftReadSequence || !review.open || error.name === 'AbortError') return;
+                    review.context = null;
+                    review.needsRead = true;
+                    review.error = error.message || 'Не удалось прочитать состояние карточки.';
+                } finally {
+                    if (requestId === updateDraftReadSequence) {
+                        review.loading = false;
+                        if (updateDraftReadController === controller) updateDraftReadController = null;
+                    }
+                }
+            },
+            requireUpdateDraftRead: function (message, uncertain) {
+                var review = this.updateDraftReview;
+                review.context = null;
+                review.needsRead = true;
+                review.priorPostUncertain = !!uncertain;
+                review.error = message;
+                this.$nextTick(function () {
+                    if (review.open && this.$refs.updateDraftRead) this.$refs.updateDraftRead.focus();
+                }.bind(this));
+            },
+            submitUpdateDraft: async function () {
+                var review = this.updateDraftReview;
+                var context = review.context;
+                if (!review.open || review.loading || review.saving || review.needsRead
+                    || !context || context.status !== 'ready' || !context.expectedExistingListing) return;
+                review.saving = true;
+                review.error = '';
+                review.notice = '';
+                var body = {
+                    account_id:context.accountId,
+                    imported_product_id:context.importedProductId,
+                    expected_existing_listing:context.expectedExistingListing
+                };
+                try {
+                    var data = await this.linkRequest(this.urls.drafts, {
+                        method:'POST', expectedStatus:201, body:JSON.stringify(body)
+                    });
+                    if (data.success !== true) throw Error('Сервер не подтвердил создание черновика. Перечитайте состояние карточки.');
+                    var draft = data.draft && typeof data.draft === 'object' ? data.draft : {};
+                    if (!positiveInteger(draft.id)
+                        || positiveInteger(draft.account_id) !== context.accountId
+                        || positiveInteger(draft.imported_product_id) !== context.importedProductId
+                        || positiveInteger(draft.published_listing_id) !== review.listingId
+                        || !sameOptionalText(draft.offer_id, review.listingSnapshot.offerId)) {
+                        this.requireUpdateDraftRead('Ответ не подтвердил, что черновик относится к этой карточке. Проверьте результат.', true);
+                        return;
+                    }
+                    var target = exactDraftUrl(data.draft_url, draft.id, this.urls.draftEditorBase);
+                    if (!target) {
+                        this.requireUpdateDraftRead('Сохранение могло завершиться, но точная ссылка не подтверждена. Перечитайте состояние карточки.', true);
+                        return;
+                    }
+                    window.location.assign(target);
+                } catch (error) {
+                    this.requireUpdateDraftRead(
+                        error.message || 'Не удалось подтвердить сохранение. Перечитайте состояние карточки.',
+                        !error.status || error.status === 409 || error.status >= 500
+                    );
+                } finally {
+                    review.saving = false;
+                }
             },
             openLinkReview: function (mode) {
                 if (!this.listing || this.loading || this.acting || this.listing.marketplace_code !== 'ozon') return;

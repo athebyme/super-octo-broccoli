@@ -209,6 +209,68 @@
     overflow-wrap: anywhere;
 }
 
+#marketplace-detail-app .mdet-update-draft-trigger,
+#marketplace-detail-app .mdet-upload-history {
+    min-height: 44px;
+}
+#marketplace-detail-app .mdet-update-draft-hint {
+    align-self: center;
+    max-width: 48ch;
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+.mdet-update-dialog .mdet-link-current {
+    margin: 14px 0 0;
+}
+.mdet-update-draft-facts {
+    display: grid;
+    gap: 8px;
+    margin: 12px 0;
+}
+.mdet-update-draft-facts > div {
+    display: grid;
+    grid-template-columns: minmax(108px, 0.34fr) minmax(0, 1fr);
+    gap: 8px;
+    min-width: 0;
+}
+.mdet-update-draft-facts dt {
+    color: var(--text-secondary);
+}
+.mdet-update-draft-facts dd {
+    min-width: 0;
+    margin: 0;
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+.mdet-update-draft-notice {
+    margin: 12px 0;
+    padding: 10px 12px;
+    border-inline-start: 3px solid var(--warn);
+    background: var(--warn-bg);
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+.mdet-update-dialog :is(.sh-btn, button) {
+    min-height: 44px;
+}
+#marketplace-detail-app .mdet-update-dialog .mdet-link-dialog-head > .sh-btn {
+    flex: none;
+    padding-inline: 12px;
+    white-space: nowrap;
+}
+.mdet-update-dialog :is(button, a):focus-visible {
+    outline: 2px solid var(--focus-outline, var(--accent-strong));
+    outline-offset: 2px;
+}
+.mdet-update-draft-actions {
+    align-items: center;
+}
+
 @media (max-width: 760px) {
     .listing-workspace-head { grid-template-columns: minmax(0, 1fr); gap: 8px; }
     .listing-workspace-controls { align-items: stretch; }
@@ -233,5 +295,15 @@
     [data-listing-id] .sh-btn span {
         min-width: 0;
         overflow-wrap: anywhere;
+    }
+}
+
+@media (max-width: 600px) {
+    .mdet-update-draft-facts > div {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 2px;
+    }
+    .mdet-update-draft-actions > .sh-btn {
+        flex: 1 1 100%;
     }
 }

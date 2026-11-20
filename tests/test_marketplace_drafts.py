@@ -457,6 +457,172 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
         self.assertEqual(MarketplaceProductDraft.query.count(), 1)
 
+    def test_existing_listing_context_create_then_exact_existing_reuse(self):
+        product, listing, _expected = self._existing_listing_precondition(
+            external_id="strict-context-reuse"
+        )
+        before_link = (
+            listing.imported_product_id,
+            listing.link_status,
+            listing.link_source,
+            listing.link_version,
+            listing.linked_at,
+            listing.link_evidence_json,
+        )
+        with patch(
+            "services.marketplace_product_links.MarketplaceProductLinkService."
+            "_reconcile_account_products_impl",
+            side_effect=AssertionError("read context must not reconcile links"),
+        ) as reconcile:
+            preview = MarketplaceDraftService.existing_listing_update_draft_context(
+                seller_id=self.seller1_id,
+                listing_id=listing.id,
+            )
+
+        reconcile.assert_not_called()
+        self.assertEqual(preview["status"], "ready")
+        self.assertEqual(preview["account_id"], self.account1.id)
+        self.assertEqual(preview["account_label"], self.account1.label)
+        self.assertEqual(preview["imported_product_id"], product.id)
+        self.assertEqual(
+            set(preview["expected_existing_listing"]),
+            MarketplaceDraftService.EXISTING_LISTING_PRECONDITION_FIELDS,
+        )
+        self.assertEqual(MarketplaceProductDraft.query.count(), 0)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=preview["account_id"],
+            imported_product_id=preview["imported_product_id"],
+            expected_existing_listing=preview["expected_existing_listing"],
+        )
+        reused = MarketplaceDraftService.existing_listing_update_draft_context(
+            seller_id=self.seller1_id,
+            listing_id=listing.id,
+        )
+
+        self.assertEqual(reused["status"], "existing")
+        self.assertEqual(reused["account_id"], self.account1.id)
+        self.assertEqual(reused["account_label"], self.account1.label)
+        self.assertEqual(reused["imported_product_id"], product.id)
+        self.assertEqual(reused["draft_id"], draft.id)
+        self.assertEqual(MarketplaceProductDraft.query.count(), 1)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+        db.session.refresh(listing)
+        self.assertEqual((
+            listing.imported_product_id,
+            listing.link_status,
+            listing.link_source,
+            listing.link_version,
+            listing.linked_at,
+            listing.link_evidence_json,
+        ), before_link)
+
+    def test_existing_listing_context_proof_rejects_concurrent_baseline_drift(self):
+        product, listing, _expected = self._existing_listing_precondition(
+            external_id="strict-context-drift"
+        )
+        preview = MarketplaceDraftService.existing_listing_update_draft_context(
+            seller_id=self.seller1_id,
+            listing_id=listing.id,
+        )
+        listing.title = "Changed after preview"
+        db.session.commit()
+
+        with self.assertRaises(MarketplaceDraftConflict):
+            MarketplaceDraftService.create_draft(
+                seller_id=self.seller1_id,
+                account_id=preview["account_id"],
+                imported_product_id=preview["imported_product_id"],
+                expected_existing_listing=preview["expected_existing_listing"],
+            )
+
+        self.assertEqual(MarketplaceProductDraft.query.count(), 0)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+        self.assertEqual(product.id, listing.imported_product_id)
+
+    def test_existing_listing_context_reuses_exact_draft_after_baseline_ages(self):
+        product, listing, _expected = self._existing_listing_precondition(
+            external_id="strict-context-stale-reuse"
+        )
+        preview = MarketplaceDraftService.existing_listing_update_draft_context(
+            seller_id=self.seller1_id,
+            listing_id=listing.id,
+        )
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=preview["account_id"],
+            imported_product_id=preview["imported_product_id"],
+            expected_existing_listing=preview["expected_existing_listing"],
+        )
+        stale_at = datetime.utcnow() - timedelta(days=3)
+        listing.last_seen_at = stale_at
+        listing.attributes_synced_at = stale_at
+        listing.prices_synced_at = stale_at
+        db.session.commit()
+
+        reused = MarketplaceDraftService.existing_listing_update_draft_context(
+            seller_id=self.seller1_id,
+            listing_id=listing.id,
+        )
+
+        self.assertEqual(reused["status"], "existing")
+        self.assertEqual(reused["draft_id"], draft.id)
+        self.assertEqual(reused["imported_product_id"], product.id)
+        self.assertEqual(MarketplaceProductDraft.query.count(), 1)
+
+    def test_existing_listing_context_rejects_unpinned_matching_source_draft(self):
+        product, listing, _expected = self._existing_listing_precondition(
+            external_id="strict-context-unpinned-draft"
+        )
+        draft = MarketplaceProductDraft(
+            seller_id=self.seller1_id,
+            marketplace_id=self.marketplace.id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            published_listing_id=None,
+            offer_id=listing.offer_id,
+            status="needs_category",
+            source_fact_hash="d" * 64,
+        )
+        db.session.add(draft)
+        db.session.commit()
+
+        with self.assertRaisesRegex(
+            MarketplaceDraftConflict,
+            "артикула Ozon уже есть другой черновик",
+        ):
+            MarketplaceDraftService.existing_listing_update_draft_context(
+                seller_id=self.seller1_id,
+                listing_id=listing.id,
+            )
+
+        self.assertEqual(MarketplaceProductDraft.query.count(), 1)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+
+    def test_existing_listing_context_rejects_unlinked_listing(self):
+        product, listing, _expected = self._existing_listing_precondition(
+            external_id="strict-context-unlinked"
+        )
+        listing.imported_product_id = None
+        listing.link_status = "unlinked"
+        db.session.commit()
+        before = (listing.imported_product_id, listing.link_status)
+
+        with self.assertRaisesRegex(
+            MarketplaceDraftConflict,
+            "не привязана точная внутренняя карточка",
+        ):
+            MarketplaceDraftService.existing_listing_update_draft_context(
+                seller_id=self.seller1_id,
+                listing_id=listing.id,
+            )
+
+        self.assertEqual((listing.imported_product_id, listing.link_status), before)
+        self.assertEqual(MarketplaceProductDraft.query.count(), 0)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+
     def test_atomic_existing_linked_create_preserves_nullable_legacy_link_fields(self):
         product, listing, expected = self._existing_listing_precondition(
             external_id="strict-nullable-link"

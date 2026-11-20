@@ -58,6 +58,24 @@
         return left.every(function (id) { return rightSet.has(id); });
     }
 
+    function sameOrderedIds(left, right) {
+        return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
+            left.every(function (id, index) { return id === right[index]; });
+    }
+
+    function orderedProductIds(items) {
+        if (!Array.isArray(items)) return null;
+        var ids = [];
+        var seen = new Set();
+        for (var i = 0; i < items.length; i += 1) {
+            var id = items[i] && items[i].id;
+            if (!Number.isSafeInteger(id) || id <= 0 || seen.has(id)) return null;
+            seen.add(id);
+            ids.push(id);
+        }
+        return ids;
+    }
+
     function exactOzonPriceAccountChoices(items, selectionIds, accounts) {
         if (!Array.isArray(selectionIds) || !selectionIds.length ||
             selectionIds.length > MAX_OZON_PRICE_HANDOFF) {
@@ -277,10 +295,12 @@
                 urls: boot.urls || {},
 
                 items: [],
+                itemsScope: '',
                 facets: {},
                 pagination: {},
                 loading: true,
                 loadingMore: false,
+                selectAllLoading: false,
                 error: '',
 
                 activeTab: '',
@@ -318,16 +338,37 @@
 
         computed: {
             allSelected: function () {
-                return this.items.length > 0 && this.selected.length === this.items.length;
+                var chosen = this.selected;
+                return this.items.length > 0 && this.items.every(function (item) {
+                    return chosen.indexOf(item.id) !== -1;
+                });
             },
             someSelected: function () {
-                return this.selected.length > 0 && !this.allSelected;
+                var chosen = this.selected;
+                var visibleSelected = this.items.filter(function (item) {
+                    return chosen.indexOf(item.id) !== -1;
+                }).length;
+                return visibleSelected > 0 && visibleSelected < this.items.length;
             },
             selectedItems: function () {
                 var chosen = this.selected;
                 return this.items.filter(function (item) {
                     return chosen.indexOf(item.id) !== -1;
                 });
+            },
+            hasUnshownResults: function () {
+                return this.itemsScope === this.feedScopeKey() &&
+                    Number.isSafeInteger(this.pagination.total) &&
+                    this.pagination.total > this.items.length;
+            },
+            canSelectAllFiltered: function () {
+                return !this.loading && !this.loadingMore &&
+                    this.itemsScope === this.feedScopeKey() &&
+                    (this.searchInput || '').trim().slice(0, 200) === this.filters.search &&
+                    Number.isSafeInteger(this.pagination.total) &&
+                    this.pagination.total > this.items.length &&
+                    this.pagination.total > 0 &&
+                    this.pagination.total <= MAX_BULK_SELECTION;
             },
             /* Основные операции показываются вместе; редкие — в «Ещё». */
             actionGroups: function () {
@@ -478,13 +519,29 @@
         watch: {
             searchInput: function (value) {
                 var self = this;
+                var next = (value || '').trim().slice(0, 200);
+                if (next !== this.filters.search) {
+                    this.cancelFilteredSelect();
+                    this.selected = [];
+                }
                 clearTimeout(this._searchTimer);
                 this._searchTimer = setTimeout(function () {
-                    var next = (value || '').trim().slice(0, 200);
                     if (next !== self.filters.search) self.filters.search = next;
                 }, 300);
             },
             filters: { deep: true, handler: function () { this.load(); } },
+            selected: {
+                deep: true,
+                handler: function (next) {
+                    if (this._selectAllAbort &&
+                        !sameOrderedIds(next, this._selectAllSelectionSnapshot)) {
+                        this.cancelFilteredSelect();
+                    }
+                },
+            },
+            ozonError: function (value) {
+                if (value) this.$nextTick(function () { this.$refs.ozonError?.focus(); });
+            },
         },
 
         mounted: function () {
@@ -493,10 +550,13 @@
         },
         beforeUnmount: function () {
             if (this._jobTimer) clearInterval(this._jobTimer);
+            if (this._abort) this._abort.abort();
+            if (this._loadMoreAbort) this._loadMoreAbort.abort();
+            this.cancelFilteredSelect();
         },
 
         methods: {
-            queryParams: function (page) {
+            queryParams: function (page, perPage) {
                 var params = {
                     search: this.filters.search,
                     supplier: this.filters.supplier,
@@ -504,37 +564,97 @@
                     stock: this.filters.stock,
                     sort: this.filters.sort,
                     page: page || 1,
-                    per_page: 50,
+                    per_page: perPage || 50,
                 };
                 if (this.activeTab === 'updates') params.updates = '1';
                 else if (this.activeTab) params.status = this.activeTab;
                 return params;
             },
+            feedScopeKey: function () {
+                var params = this.queryParams(1, 50);
+                delete params.page;
+                delete params.per_page;
+                return JSON.stringify(params);
+            },
+            cancelFilteredSelect: function () {
+                if (this._selectAllAbort) this._selectAllAbort.abort();
+                this._selectAllAbort = null;
+                this._selectAllSelectionSnapshot = null;
+                this._selectAllRevision = (this._selectAllRevision || 0) + 1;
+                this.selectAllLoading = false;
+            },
             load: function () {
                 var self = this;
                 if (this._abort) this._abort.abort();
+                if (this._loadMoreAbort) this._loadMoreAbort.abort();
+                this._loadMoreAbort = null;
+                this.loadingMore = false;
+                this.cancelFilteredSelect();
+                this.selected = [];
+                var revision = (this._feedRevision || 0) + 1;
+                this._feedRevision = revision;
+                var scope = this.feedScopeKey();
                 var abort = new AbortController();
                 this._abort = abort;
                 this.loading = true;
                 this.error = '';
                 this.$api.get(this.urls.feed, this.queryParams(1), { signal: abort.signal })
                     .then(function (data) {
-                        if (abort.signal.aborted) return;
+                        if (abort.signal.aborted || self._feedRevision !== revision) return;
                         self.items = data.items || [];
                         self.pagination = data.pagination || {};
-                        self.selected = [];
+                        self.itemsScope = scope;
                     }).catch(function (err) {
-                        if (err && err.name === 'AbortError') return;
+                        if ((err && err.name === 'AbortError') || abort.signal.aborted ||
+                            self._feedRevision !== revision) return;
                         self.error = err.message || 'Не удалось загрузить товары';
                     }).finally(function () {
-                        if (!abort.signal.aborted) self.loading = false;
+                        if (self._abort === abort) {
+                            self._abort = null;
+                            self.loading = false;
+                        }
                     });
             },
             loadMore: function () {
+                if (this.loading || this.loadingMore || !this.pagination.has_next ||
+                    this.itemsScope !== this.feedScopeKey()) return;
                 var self = this;
+                var revision = this._feedRevision || 0;
+                var scope = this.feedScopeKey();
+                var currentPage = this.pagination.page;
+                var total = this.pagination.total;
+                var perPage = this.pagination.per_page;
+                if (!Number.isSafeInteger(currentPage) || currentPage < 1 ||
+                    !Number.isSafeInteger(total) || total < 0 ||
+                    !Number.isSafeInteger(perPage) || perPage < 1) {
+                    this.pagination = Object.assign({}, this.pagination, { has_next: false });
+                    this.error = 'Список изменился. Обновите его перед продолжением.';
+                    return;
+                }
+                var nextPage = currentPage + 1;
+                var abort = new AbortController();
+                this._loadMoreAbort = abort;
                 this.loadingMore = true;
-                this.$api.get(this.urls.feed, this.queryParams((this.pagination.page || 1) + 1))
+                this.$api.get(this.urls.feed, this.queryParams(nextPage), { signal: abort.signal })
                     .then(function (data) {
+                        if (abort.signal.aborted || self._feedRevision !== revision ||
+                            self.feedScopeKey() !== scope) return;
+                        var pageIds = data && orderedProductIds(data.items);
+                        var existingIds = orderedProductIds(self.items);
+                        var expectedCount = Math.min(perPage, Math.max(0, total - currentPage * perPage));
+                        var consistent = self.pagination.page === currentPage &&
+                            self.pagination.total === total && data && data.pagination &&
+                            data.pagination.page === nextPage &&
+                            data.pagination.per_page === perPage && data.pagination.total === total &&
+                            typeof data.pagination.has_next === 'boolean' &&
+                            Array.isArray(data.items) && data.items.length === expectedCount &&
+                            pageIds && existingIds &&
+                            !pageIds.some(function (id) { return existingIds.indexOf(id) !== -1; });
+                        if (!consistent) {
+                            self.pagination = Object.assign({}, self.pagination, { has_next: false });
+                            self.error = 'Список изменился. Обновите его перед продолжением.';
+                            return;
+                        }
                         var seen = {};
                         self.items.forEach(function (item) { seen[item.id] = true; });
                         (data.items || []).forEach(function (item) {
@@ -542,8 +662,82 @@
                         });
                         self.pagination = data.pagination || self.pagination;
                     }).catch(function (err) {
+                        if ((err && err.name === 'AbortError') || abort.signal.aborted ||
+                            self._feedRevision !== revision || self.feedScopeKey() !== scope) return;
                         self.error = err.message || 'Не удалось загрузить ещё';
-                    }).finally(function () { self.loadingMore = false; });
+                    }).finally(function () {
+                        if (self._loadMoreAbort === abort) {
+                            self._loadMoreAbort = null;
+                            self.loadingMore = false;
+                        }
+                    });
+            },
+            selectAllFiltered: function () {
+                if (!this.canSelectAllFiltered || this.selectAllLoading) return;
+                var self = this;
+                var total = this.pagination.total;
+                var scope = this.feedScopeKey();
+                if (this.itemsScope !== scope) return;
+                var shownIds = orderedProductIds(this.items);
+                var selectionSnapshot = this.selected.slice();
+                if (!shownIds || new Set(selectionSnapshot).size !== selectionSnapshot.length) {
+                    this.error = 'Не удалось проверить текущий список. Обновите его и повторите выбор.';
+                    return;
+                }
+                var params = this.queryParams(1, MAX_BULK_SELECTION);
+                var revision = (this._selectAllRevision || 0) + 1;
+                this._selectAllRevision = revision;
+                var abort = new AbortController();
+                this._selectAllAbort = abort;
+                this._selectAllSelectionSnapshot = selectionSnapshot;
+                this.selectAllLoading = true;
+                this.error = '';
+                this.$api.get(this.urls.feed, params, { signal: abort.signal })
+                    .then(function (data) {
+                        if (abort.signal.aborted || self._selectAllAbort !== abort ||
+                            self._selectAllRevision !== revision || self.feedScopeKey() !== scope ||
+                            (self.searchInput || '').trim().slice(0, 200) !== self.filters.search ||
+                            !sameOrderedIds(self.selected, selectionSnapshot)) return;
+
+                        var fullIds = data && orderedProductIds(data.items);
+                        var responsePage = data && data.pagination;
+                        var currentShownIds = orderedProductIds(self.items);
+                        var valid = data && data.success === true && Array.isArray(data.items) &&
+                            responsePage && responsePage.page === 1 &&
+                            responsePage.per_page === MAX_BULK_SELECTION &&
+                            responsePage.total === total && responsePage.has_next === false &&
+                            data.items.length === total && fullIds && fullIds.length === total &&
+                            sameOrderedIds(shownIds, fullIds.slice(0, shownIds.length)) &&
+                            currentShownIds &&
+                            sameOrderedIds(currentShownIds, fullIds.slice(0, currentShownIds.length));
+                        if (!valid) {
+                            self.error = 'Список изменился или не загрузился целиком. Обновите его и повторите выбор.';
+                            return;
+                        }
+
+                        self._selectAllAbort = null;
+                        self._selectAllSelectionSnapshot = null;
+                        self.selectAllLoading = false;
+                        if (self._loadMoreAbort) self._loadMoreAbort.abort();
+                        self._loadMoreAbort = null;
+                        self.loadingMore = false;
+                        self._feedRevision = (self._feedRevision || 0) + 1;
+                        self.items = data.items;
+                        self.pagination = responsePage;
+                        self.itemsScope = scope;
+                        self.selected = fullIds.slice();
+                    }).catch(function (err) {
+                        if ((err && err.name === 'AbortError') || abort.signal.aborted ||
+                            self._selectAllAbort !== abort || self._selectAllRevision !== revision ||
+                            self.feedScopeKey() !== scope) return;
+                        self.error = err.message || 'Не удалось выбрать весь результат. Повторите попытку.';
+                    }).finally(function () {
+                        if (self._selectAllAbort === abort) {
+                            self._selectAllAbort = null;
+                            self._selectAllSelectionSnapshot = null;
+                            self.selectAllLoading = false;
+                        }
+                    });
             },
             loadFacets: function () {
                 var self = this;
@@ -693,6 +887,11 @@
 
             /* ---------- массовые действия ---------- */
             startAction: function (action) {
+                if (this.loading || this.itemsScope !== this.feedScopeKey() ||
+                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) {
+                    this.error = 'Список обновляется. Дождитесь загрузки и выберите товары снова.';
+                    return;
+                }
                 var chosen = this.selectedItems;
                 var selectionIds = this.selected.slice();
                 if (!chosen.length || selectionIds.length !== chosen.length ||
@@ -833,7 +1032,7 @@
                     busy: false,
                     productIds: effectIds.slice(),
                     selectionIds: selectionIds.slice(),
-                    labels: selectedProductLabels(this.items, effectIds),
+                    labels: selectedProductLabels(chosen, effectIds),
                 };
                 if (action.key === 'refresh_supplier') this.supplierRefreshResult = null;
             },
@@ -1147,11 +1346,6 @@
                 return 'Что мешает: ' + reasons.map(function (code) {
                     return labels[code] || code;
                 }).join(', ');
-            },
-        },
-        watch: {
-            ozonError: function (value) {
-                if (value) this.$nextTick(function () { this.$refs.ozonError?.focus(); });
             },
         },
     });

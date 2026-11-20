@@ -26,7 +26,9 @@ from models import (
     db,
 )
 from routes.marketplace_listings import register_marketplace_listing_routes
+from routes.marketplace_drafts import register_marketplace_draft_routes
 from services.marketplace_listings import MarketplaceListingService
+from services.marketplace_drafts import MarketplaceDraftService
 
 
 class MarketplaceListingRoutesTest(unittest.TestCase):
@@ -46,6 +48,7 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
         register_marketplace_listing_routes(self.app)
         from routes.marketplace_accounts import register_marketplace_account_routes
         register_marketplace_account_routes(self.app)
+        register_marketplace_draft_routes(self.app)
         self._register_template_stubs()
         self.client = self.app.test_client()
         with self.app.app_context():
@@ -245,6 +248,127 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
         with user_patch, login_patch:
             response = self.client.get("/marketplaces/listings/beta")
         self.assertEqual(response.status_code, 403)
+
+    def test_update_draft_context_returns_exact_ready_contract(self):
+        expected = {
+            "listing_id": self.own_id,
+            "link_version": 1,
+            "link_status": "linked",
+            "link_source": "exact_source_identity",
+            "link_evidence_sha256": "a" * 64,
+            "linked_at": "2026-11-21T10:00:00",
+            "offer_id": "own-offer",
+            "external_product_id": "101",
+            "external_category_id": "10",
+            "external_type_id": "20",
+            "source_fact_hash": "b" * 64,
+            "baseline_fingerprint": "c" * 64,
+            "baseline_contract_version": "test-contract-v1",
+        }
+        service_context = {
+            "status": "ready",
+            "account_id": self.account1_id,
+            "account_label": "Ozon One",
+            "imported_product_id": self.own_source_id,
+            "expected_existing_listing": expected,
+        }
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            MarketplaceDraftService,
+            "existing_listing_update_draft_context",
+            return_value=service_context,
+        ) as context:
+            response = self.client.get(
+                f"/marketplaces/listings/{self.own_id}/update-draft-context",
+                headers={"Accept": "application/json"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Cache-Control"], "private, no-store")
+        self.assertEqual(response.get_json(), {
+            "success": True,
+            "status": "ready",
+            "account_id": self.account1_id,
+            "account_label": "Ozon One",
+            "imported_product_id": self.own_source_id,
+            "expected_existing_listing": expected,
+        })
+        context.assert_called_once_with(
+            seller_id=self.seller1_id,
+            listing_id=self.own_id,
+        )
+
+    def test_update_draft_context_existing_uses_canonical_draft_detail_url(self):
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            MarketplaceDraftService,
+            "existing_listing_update_draft_context",
+            return_value={
+                "status": "existing",
+                "account_id": self.account1_id,
+                "account_label": "Ozon One",
+                "imported_product_id": self.own_source_id,
+                "draft_id": 987,
+            },
+        ):
+            response = self.client.get(
+                f"/marketplaces/listings/{self.own_id}/update-draft-context",
+                headers={"Accept": "application/json"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {
+            "success": True,
+            "status": "existing",
+            "account_id": self.account1_id,
+            "account_label": "Ozon One",
+            "imported_product_id": self.own_source_id,
+            "draft_url": "/marketplaces/drafts/987",
+        })
+
+    def test_update_draft_context_is_seller_scoped_and_requires_exact_link(self):
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            foreign = self.client.get(
+                f"/marketplaces/listings/{self.foreign_id}/update-draft-context",
+                headers={"Accept": "application/json"},
+            )
+            unlinked = self.client.get(
+                f"/marketplaces/listings/{self.own_id}/update-draft-context",
+                headers={"Accept": "application/json"},
+            )
+
+        self.assertEqual(foreign.status_code, 404)
+        self.assertFalse(foreign.get_json()["success"])
+        self.assertIn("не найден", foreign.get_json()["error"])
+        self.assertEqual(unlinked.status_code, 409)
+        self.assertFalse(unlinked.get_json()["success"])
+        self.assertIn("не привязана", unlinked.get_json()["error"])
+
+    def test_update_draft_context_requires_feature_flag_and_seller_profile(self):
+        user_patch, login_patch = self._auth(self.seller1_id)
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = False
+        with user_patch, login_patch, patch.object(
+            MarketplaceDraftService,
+            "existing_listing_update_draft_context",
+        ) as context:
+            disabled = self.client.get(
+                f"/marketplaces/listings/{self.own_id}/update-draft-context",
+                headers={"Accept": "application/json"},
+            )
+        context.assert_not_called()
+        self.assertEqual(disabled.status_code, 404)
+        self.assertEqual(disabled.get_json()["code"], "ozon_feature_disabled")
+
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = True
+        user_patch, login_patch = self._auth(None)
+        with user_patch, login_patch:
+            no_seller = self.client.get(
+                f"/marketplaces/listings/{self.own_id}/update-draft-context",
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(no_seller.status_code, 403)
+        self.assertEqual(no_seller.get_json()["code"], "seller_profile_required")
 
     def test_catalog_bootstrap_and_classic_setup_keep_last_completed_snapshot(self):
         with self.app.app_context():

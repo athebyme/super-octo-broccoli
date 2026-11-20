@@ -109,6 +109,29 @@
     </div>
     {% endif %}
 
+    {% if selection_block_reason == 'limit' %}
+    <div class="sh-alert sh-alert--warning mb-4" role="status">
+        <div class="sh-alert-content">
+            <strong>В текущем фильтре {{ selection_block_total }} товаров.</strong>
+            Массовый выбор ограничен 200 товарами: сузьте фильтры или выберите отдельные позиции
+            на странице. Ни один товар не был отмечен.
+        </div>
+    </div>
+    {% elif selection_block_reason == 'changed' %}
+    <div class="sh-alert sh-alert--warning mb-4" role="status">
+        <div class="sh-alert-content">
+            Список изменился во время подготовки массового выбора. Ни один товар не был отмечен;
+            обновите фильтр или выберите позиции на странице.
+        </div>
+    </div>
+    {% elif pagination.total > 200 %}
+    <div class="mb-4 rounded-lg border p-3 text-sm" role="status"
+         style="border-color:var(--border);background:var(--bg-card);color:var(--text-secondary)">
+        В текущем фильтре {{ pagination.total }} товаров. Сузьте фильтры для массового выбора до 200
+        или выберите товары отдельно на этой странице.
+    </div>
+    {% endif %}
+
     {% set action_counts = namespace(importable=0, updatable=0) %}
     {% for product in pagination.items %}
         {% if product.id in supplier_update_sp_ids %}
@@ -126,7 +149,8 @@
 
     <!-- Отдельные формы не смешивают выбранные товары и локальные обновления. -->
     <div data-supplier-products x-data="{
-        importSelected: [], updateSelected: [], allImport: false, allUpdate: false,
+        importSelected: {{ selected_import_ids|map('string')|list|tojson|forceescape }}, updateSelected: [],
+        allImport: {{ 'true' if selection_review and selected_import_ids else 'false' }}, allUpdate: false,
         selectPage(kind, checked) {
             const ids = Array.from(this.$root.querySelectorAll('input[data-selection-kind]'))
                 .filter(input => input.dataset.selectionKind === kind)
@@ -147,6 +171,20 @@
             <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
         </form>
 
+        {% if selection_review %}
+        <div class="mb-4 rounded-lg border p-3 text-sm" role="status" aria-live="polite"
+             style="border-color:var(--border);background:var(--bg-card);color:var(--text-secondary)">
+            <strong style="color:var(--text)"
+                    x-text="'Выбрано ' + importSelected.length + ' из ' + {{ pagination.total }} + ' по текущему фильтру.'">Выбрано {{ selected_import_ids|length }} из {{ pagination.total }} по текущему фильтру.</strong>
+            {% if pagination.total > selected_import_ids|length %}
+            Остальные позиции видны ниже, но не выбраны для импорта; их статус указан в карточках.
+            {% endif %}
+            Снимите отметки у товаров, которые нужно исключить.
+            <a class="ml-2 underline underline-offset-2" style="color:var(--accent-strong)"
+               href="{{ cancel_select_all_url }}">Отменить массовый выбор</a>
+        </div>
+        {% endif %}
+
         {% if pagination.items %}
         <section class="mb-4 rounded-lg border p-3 sm:p-4" style="border-color:var(--border);background:var(--bg-card)" aria-label="Массовые действия с товарами">
             <div class="flex flex-col gap-3 md:flex-row md:items-start">
@@ -161,21 +199,27 @@
                             <input id="select-all-import" type="checkbox" :checked="allImport"
                                    @change="selectPage('import', $event.target.checked)"
                                    class="rounded border-gray-300">
-                            <span>Выбрать все {{ action_counts.importable }} на странице</span>
+                            <span>Выбрать все {{ action_counts.importable }} {{ 'в текущем фильтре' if selection_review else 'на странице' }}</span>
                         </label>
                         {% else %}
                         <span class="text-xs" style="color:var(--text-muted)">Нет новых позиций на странице</span>
                         {% endif %}
                     </div>
+                    {% if not selection_review and pagination.total > 50 and pagination.total <= 200 %}
+                    <a class="mt-2 inline-flex min-h-11 items-center text-xs underline underline-offset-2"
+                       style="color:var(--accent-strong)" href="{{ select_all_url }}">
+                        Проверить все товары текущего фильтра ({{ pagination.total }})
+                    </a>
+                    {% endif %}
                     <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
                         <button type="submit" form="supplier-import-form" disabled
                                 class="sh-btn sh-btn--primary sh-btn--sm"
                                 :disabled="importSelected.length === 0"
                                 aria-describedby="import-selection-count">
-                            Импортировать товары <span x-text="'(' + importSelected.length + ')'">(0)</span>
+                            Импортировать товары <span x-text="'(' + importSelected.length + ')'">({{ selected_import_ids|length }})</span>
                         </button>
                         <p id="import-selection-count" class="text-xs" style="color:var(--text-muted)" aria-live="polite">
-                            Доступно: {{ action_counts.importable }}. <span x-text="importSelected.length + ' выбрано'">0 выбрано</span>
+                            Доступно: {{ action_counts.importable }}. <span x-text="importSelected.length + ' выбрано'">{{ selected_import_ids|length }} выбрано</span>
                         </p>
                         <a class="text-xs underline underline-offset-2" style="color:var(--accent-strong)" href="{{ url_for('seller_my_products_beta') }}">Дальше: «Мои товары»</a>
                     </div>
@@ -274,6 +318,7 @@
                         {% elif not is_imported %}
                         <input type="checkbox" form="supplier-import-form" name="product_ids" value="{{ product.id }}"
                                data-selection-kind="import"
+                               {% if product.id in selected_import_ids %}checked{% endif %}
                                :checked="importSelected.includes('{{ product.id }}')"
                                @change="importSelected = $event.target.checked ? [...importSelected, '{{ product.id }}'] : importSelected.filter(id => id !== '{{ product.id }}'); allImport = importSelected.length === {{ action_counts.importable }}"
                                class="mt-1 rounded border-gray-300 text-gray-900 flex-shrink-0"

@@ -1,6 +1,7 @@
 """Read-only exact-set handoff from My Products to Ozon price comparison."""
 
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import unittest
@@ -67,6 +68,12 @@ function makeApp(items, accounts, selected = items.map(row => row.id)) {
   const app = {
     items,
     selected,
+    filters: {search: '', supplier: '', has_photos: '', stock: '', sort: ''},
+    searchInput: '',
+    activeTab: '',
+    pagination: {page: 1, per_page: 50, total: items.length, has_next: false},
+    loading: false,
+    itemsScope: '',
     ozonAccounts: accounts,
     ozonEnabled: true,
     wbConnected: true,
@@ -100,6 +107,7 @@ function makeApp(items, accounts, selected = items.map(row => row.id)) {
     },
   });
   Object.assign(app, component.methods);
+  app.itemsScope = app.feedScopeKey();
   return app;
 }
 function assertHandoffUrl(accountId, listingIds) {
@@ -256,7 +264,12 @@ class MyProductsOzonPriceHandoffTest(unittest.TestCase):
         script = (ROOT / 'static' / 'my-products-beta.js').read_text()
         self.assertIn('Изменить цены Ozon', script)
         self.assertIn('bulk_listing_ids', script)
-        self.assertIn("v='20261121-ozon-price-handoff-1'", template)
+        script_asset = re.search(
+            r"filename='my-products-beta\.js', v='([^']+)'",
+            template,
+        )
+        self.assertIsNotNone(script_asset, 'My Products script must use a versioned static URL')
+        self.assertRegex(script_asset.group(1), r'^\d{8}-[a-z0-9][a-z0-9-]*$')
 
 
 if __name__ == '__main__':

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
+import re
 import sys
+import time
 from urllib.parse import parse_qs, urlsplit
 
 from playwright.sync_api import sync_playwright
@@ -13,7 +16,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.ux01 import journey_browser as fixture
-from models import ImportedProduct, Product, Seller, SupplierProduct, db
+from models import BackgroundJob, ImportedProduct, Product, Seller, SupplierProduct, db
 
 
 OUTPUT = Path(os.environ.get("BULK_WORKSPACE_ARTIFACTS", "/artifacts/bulk-workspace"))
@@ -53,11 +56,48 @@ def seed_bulk_selection():
                                      supplier_price=100, currency="RUB", supplier_quantity=4,
                                      supplier_status="in_stock", status="ready")
         db.session.add_all([manual, new_source])
+        bulk_rows = [ImportedProduct(
+            seller_id=seller_id,
+            external_id=f"UX-BULK-OWNED-{index:03}",
+            external_vendor_code=f"UX-BULK-OWNED-{index:03}",
+            source_type="manual",
+            title=f"UX-BULK-OWNED-{index:03}",
+            photo_urls=json.dumps([f"https://fixture.invalid/{index}.svg"]),
+            supplier_quantity=3,
+            import_status="validated",
+            created_at=datetime(2020, 1, 1) + timedelta(days=index),
+        ) for index in range(1, 54)]
+        other_filter = ImportedProduct(
+            seller_id=seller_id,
+            external_id="UX-BULK-OWNED-000-NO-PHOTO",
+            external_vendor_code="UX-BULK-OWNED-000-NO-PHOTO",
+            source_type="manual",
+            title="UX-BULK-OWNED-000-NO-PHOTO",
+            photo_urls="[]",
+            supplier_quantity=3,
+            import_status="validated",
+            created_at=datetime(2019, 1, 1),
+        )
+        foreign_seller = Seller.query.filter(Seller.id != seller_id).first()
+        assert foreign_seller is not None
+        foreign = ImportedProduct(
+            seller_id=foreign_seller.id,
+            external_id="UX-BULK-OWNED-000-FOREIGN",
+            external_vendor_code="UX-BULK-OWNED-000-FOREIGN",
+            source_type="manual",
+            title="UX-BULK-OWNED-000-FOREIGN",
+            photo_urls=json.dumps(["https://fixture.invalid/foreign.svg"]),
+            supplier_quantity=3,
+            import_status="validated",
+            created_at=datetime(2021, 1, 1),
+        )
+        db.session.add_all([*bulk_rows, other_filter, foreign])
         db.session.commit()
         assert wb_product.id != original.id
         return {"wb_id": wb_product.id, "local_id": original.id,
                 "manual_id": manual.id, "import_id": new_source.id,
-                "refresh_source_id": supplier_item.id}
+                "refresh_source_id": supplier_item.id,
+                "bulk_ids": [row.id for row in bulk_rows]}
 
 
 def verify_bounds(page):
@@ -78,6 +118,30 @@ def pick_action(page, name):
     action.click()
 
 
+def feed_matches(response, expected):
+    parsed = urlsplit(response.url)
+    if parsed.path != "/api/my-products" or response.request.method != "GET":
+        return False
+    query = parse_qs(parsed.query)
+    return all(query.get(key) == [value] for key, value in expected.items())
+
+
+def filter_bulk_results(page):
+    with page.expect_response(lambda response: feed_matches(response, {"has_photos": "yes"})) as photos:
+        page.get_by_label("Фото").select_option("yes")
+    assert photos.value.status == 200
+    with page.expect_response(lambda response: feed_matches(response, {
+            "has_photos": "yes", "sort": "title",
+    })) as sorting:
+        page.get_by_label("Сортировка").select_option("title")
+    assert sorting.value.status == 200
+    with page.expect_response(lambda response: feed_matches(response, {
+            "search": "UX-BULK-OWNED", "has_photos": "yes", "sort": "title",
+    })) as searching:
+        page.get_by_placeholder("Название, бренд или артикул").fill("UX-BULK-OWNED")
+    assert searching.value.status == 200
+
+
 def run():
     fixture_ids = seed_bulk_selection()
     OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -85,13 +149,98 @@ def run():
     layouts = []
     posts = []
     errors = []
+    feed_gets = []
+    feed_responses = []
+    bulk_photo_ids = set(fixture_ids["bulk_ids"])
+    delay_next_full_select = False
+    server_delay_next_full_select = False
+    override_over_limit_initial = False
+    over_limit_initial_total = 201
+    mock_over_limit_full = False
+
+    def remember_feed_response(query, status, body):
+        pagination = body.get("pagination") if isinstance(body, dict) else None
+        items = body.get("items") if isinstance(body, dict) else None
+        feed_responses.append({
+            "query": query,
+            "status": status,
+            "page": pagination.get("page") if isinstance(pagination, dict) else None,
+            "per_page": pagination.get("per_page") if isinstance(pagination, dict) else None,
+            "total": pagination.get("total") if isinstance(pagination, dict) else None,
+            "has_next": pagination.get("has_next") if isinstance(pagination, dict) else None,
+            "items": len(items) if isinstance(items, list) else None,
+        })
     refresh_response_override = None
     refresh_response_status = 200
 
     def bridge(route):
         nonlocal refresh_response_override, refresh_response_status
+        nonlocal delay_next_full_select, server_delay_next_full_select
+        nonlocal override_over_limit_initial, over_limit_initial_total, mock_over_limit_full
         request = route.request
         parsed = urlsplit(request.url)
+        if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "GET":
+            if parsed.path == "/api/my-products":
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                feed_gets.append(query)
+                if delay_next_full_select and query.get("per_page") == ["200"]:
+                    delay_next_full_select = False
+                    server_delay_next_full_select = True
+                    route.continue_()
+                    return
+                if (override_over_limit_initial and query.get("search") == ["UX-BULK-OWNED"]
+                        and query.get("per_page") == ["50"]):
+                    override_over_limit_initial = False
+                    response = route.fetch(max_redirects=0)
+                    body = response.json()
+                    body["pagination"]["total"] = over_limit_initial_total
+                    body["pagination"]["has_next"] = True
+                    remember_feed_response(query, response.status, body)
+                    route.fulfill(status=response.status, content_type="application/json",
+                                  body=json.dumps(body))
+                    return
+                if (mock_over_limit_full and query.get("search") == ["UX-BULK-OWNED"]
+                        and query.get("per_page") == ["200"]):
+                    mock_over_limit_full = False
+                    response = route.fetch(max_redirects=0)
+                    body = response.json()
+                    source_items = body["items"]
+                    for index in range(len(source_items), 200):
+                        extra = dict(source_items[index % len(source_items)])
+                        extra["id"] = 900000000 + index
+                        extra["title"] = f"Synthetic overflow item {index}"
+                        extra["vendor_code"] = f"Synthetic overflow {index}"
+                        body["items"].append(extra)
+                    body["pagination"].update({
+                        "total": 201, "pages": 2, "per_page": 200,
+                        "has_next": True,
+                    })
+                    remember_feed_response(query, response.status, body)
+                    route.fulfill(status=response.status, content_type="application/json",
+                                  body=json.dumps(body))
+                    return
+                if parsed.path == "/api/my-products":
+                    response = route.fetch(max_redirects=0)
+                    try:
+                        body = response.json()
+                    except Exception:
+                        body = None
+                    remember_feed_response(query, response.status, body)
+                    if response.status >= 400:
+                        fixture.REPORT["unexpected_http"].append({
+                            "path": parsed.path, "status": response.status,
+                        })
+                    route.fulfill(response=response)
+                    return
+            if parsed.path.startswith("/api/photos/imported-product/"):
+                path_parts = parsed.path.rstrip("/").split("/")
+                try:
+                    photo_product_id = int(path_parts[-2])
+                except (IndexError, ValueError):
+                    photo_product_id = None
+                if photo_product_id in bulk_photo_ids:
+                    route.fulfill(status=204, body=b"")
+                    return
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "POST":
             assert parsed.path in (LOCAL_REFRESH, LOCAL_OZON_PREPARE, LOCAL_WB_ENRICH_REVIEW, LOCAL_SUPPLIER_IMPORT), parsed.path
             if parsed.path in (LOCAL_WB_ENRICH_REVIEW, LOCAL_SUPPLIER_IMPORT):
@@ -111,6 +260,16 @@ def run():
                 route.fulfill(response=route.fetch(max_redirects=0))
             return
         fixture.bridge(route)
+
+    def delay_full_select_response():
+        nonlocal server_delay_next_full_select
+        from flask import request
+        if (server_delay_next_full_select and request.path == "/api/my-products"
+                and request.args.get("per_page") == "200"):
+            server_delay_next_full_select = False
+            time.sleep(0.5)
+
+    fixture.app.before_request_funcs.setdefault(None, []).append(delay_full_select_response)
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(executable_path=fixture.CHROMIUM, headless=True,
@@ -156,6 +315,161 @@ def run():
             layouts.append({"width": width, "theme": theme, "screenshot": screenshot.name})
             context.close()
         checks.append("action_menu_keyboard_and_secondary_overlay_fit_all_layouts")
+
+        context = browser.new_context(viewport={"width": 320, "height": 900})
+        context.add_cookies([fixture.synthetic_login_cookie()])
+        context.route("**/*", bridge)
+        page = context.new_page()
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        open_products(page)
+        filter_bulk_results(page)
+        select_all = page.get_by_role("button", name=f"Выбрать все {len(fixture_ids['bulk_ids'])}")
+        try:
+            select_all.wait_for(timeout=5000)
+        except Exception as error:
+            diagnostics = page.evaluate("""() => ({
+                search: document.querySelector('input[placeholder="Название, бренд или артикул"]')?.value,
+                photos: document.querySelector('select[aria-label="Фото"]')?.value,
+                sort: document.querySelector('select[aria-label="Сортировка"]')?.value,
+                listhead: document.querySelector('.mp-listhead')?.innerText || '',
+                fullSelectButtons: Array.from(document.querySelectorAll('.mp-select-filtered')).map(button => ({
+                    text: button.innerText, disabled: button.disabled,
+                })),
+                visibleRows: document.querySelectorAll('.mp-list article.mp-row').length,
+                footer: document.querySelector('.mp-foot-info')?.innerText || '',
+                appState: (() => {
+                    const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                    return proxy ? {
+                        searchInput: proxy.searchInput,
+                        filters: {...proxy.filters},
+                        activeTab: proxy.activeTab,
+                        pagination: {...proxy.pagination},
+                        itemsScope: proxy.itemsScope,
+                        currentScope: proxy.feedScopeKey(),
+                        loading: proxy.loading,
+                    } : null;
+                })(),
+            })""")
+            raise AssertionError(json.dumps({
+                "reason": "filtered select control did not appear",
+                "actual": diagnostics,
+                "feed_gets": feed_gets[-6:],
+                "feed_responses": feed_responses[-6:],
+                "pageerrors": errors[-6:],
+            }, ensure_ascii=False)) from error
+        verify_bounds(page)
+        control_bounds = select_all.bounding_box()
+        assert control_bounds and control_bounds["height"] >= 44 and control_bounds["width"] >= 44
+        page.screenshot(path=OUTPUT / "filtered-select-light-320.png", animations="disabled")
+        initial_ids = page.locator(".mp-list article.mp-row input[type=checkbox]").evaluate_all(
+            "boxes => boxes.map(box => Number(box.value))"
+        )
+        expected_ids = fixture_ids["bulk_ids"]
+        assert initial_ids == expected_ids[:50], (initial_ids[:3], expected_ids[:3], len(initial_ids))
+        before_select_posts = len(posts)
+        with page.expect_response(lambda response: urlsplit(response.url).path == "/api/my-products"
+                                  and response.request.method == "GET"
+                                  and parse_qs(urlsplit(response.url).query).get("per_page") == ["200"]
+                                  and parse_qs(urlsplit(response.url).query).get("page") == ["1"]) as full_feed:
+            select_all.click()
+        assert full_feed.value.status == 200
+        full_query = parse_qs(urlsplit(full_feed.value.url).query, keep_blank_values=True)
+        assert full_query == {
+            "search": ["UX-BULK-OWNED"], "has_photos": ["yes"],
+            "sort": ["title"], "page": ["1"], "per_page": ["200"],
+        }, full_query
+        page.get_by_text(f"Показано {len(expected_ids)} из {len(expected_ids)}", exact=True).wait_for()
+        selected_ids = page.locator(".mp-list article.mp-row input[type=checkbox]").evaluate_all(
+            "boxes => boxes.filter(box => box.checked).map(box => Number(box.value))"
+        )
+        assert selected_ids == expected_ids, (selected_ids[:3], expected_ids[:3], len(selected_ids))
+        assert page.locator(".mp-list article.mp-row").count() == len(expected_ids)
+        row_boxes = page.locator(".mp-list article.mp-row input[type=checkbox]")
+        for index in range(50, len(expected_ids)):
+            row_boxes.nth(index).uncheck()
+        selected_ids = page.locator(".mp-list article.mp-row input[type=checkbox]").evaluate_all(
+            "boxes => boxes.filter(box => box.checked).map(box => Number(box.value))"
+        )
+        assert selected_ids == expected_ids[:50], (selected_ids[:3], expected_ids[:3], len(selected_ids))
+        with page.expect_response(lambda response: urlsplit(response.url).path == "/my-products/common-content"
+                                  and response.request.method == "GET") as content_review:
+            pick_action(page, "Изменить общий контент")
+        assert content_review.value.status == 200
+        assert parse_qs(urlsplit(page.url).query)["product_id"] == [str(value) for value in expected_ids[:50]]
+        assert len(posts) == before_select_posts, posts
+        assert full_query in feed_gets
+        assert len([query for query in feed_gets if query.get("per_page") == ["200"]]) == 1
+        checks.append("filtered_full_select_uses_exact_owned_ordered_set_and_existing_action_data_without_writes")
+
+        fixture.wait_document(page, "bulk_workspace_over_limit", "/my-products/beta")
+        override_over_limit_initial = True
+        over_limit_initial_total = 201
+        filter_bulk_results(page)
+        page.get_by_text("Показано 50 из 201", exact=True).wait_for()
+        page.locator(".mp-select-limit").get_by_text("не больше 200 товаров", exact=False).wait_for()
+        assert page.locator(".mp-select-filtered").count() == 0
+        over_limit_requests_before = len([query for query in feed_gets
+                                          if query.get("search") == ["UX-BULK-OWNED"]
+                                          and query.get("per_page") == ["200"]])
+        assert len(posts) == before_select_posts, posts
+        checks.append("over_200_filtered_result_keeps_manual_pages_and_shows_selection_limit_without_full_read")
+
+        override_over_limit_initial = True
+        over_limit_initial_total = 200
+        page.reload(wait_until="domcontentloaded")
+        filter_bulk_results(page)
+        overridden_select = page.get_by_role("button", name="Выбрать все 200")
+        overridden_select.wait_for()
+        mock_over_limit_full = True
+        with page.expect_response(lambda response: urlsplit(response.url).path == "/api/my-products"
+                                  and response.request.method == "GET"
+                                  and parse_qs(urlsplit(response.url).query).get("per_page") == ["200"]) as over_limit_full:
+            overridden_select.click()
+        assert over_limit_full.value.status == 200
+        over_limit_body = over_limit_full.value.json()
+        assert over_limit_body["pagination"]["total"] == 201
+        assert over_limit_body["pagination"]["has_next"] is True
+        assert len(over_limit_body["items"]) == 200
+        page.get_by_text("Список изменился или не загрузился целиком", exact=False).wait_for()
+        assert page.locator(".mp-list article.mp-row").count() == 50
+        assert page.locator(".mp-list article.mp-row input[type=checkbox]:checked").count() == 0
+        assert len(posts) == before_select_posts, posts
+        assert len([query for query in feed_gets
+                    if query.get("search") == ["UX-BULK-OWNED"]
+                    and query.get("per_page") == ["200"]]) == over_limit_requests_before + 1
+        checks.append("full_response_over_200_is_rejected_without_selection_or_write")
+
+        race_context = browser.new_context(viewport={"width": 1080, "height": 900})
+        race_context.add_cookies([fixture.synthetic_login_cookie()])
+        race_context.route("**/*", bridge)
+        race_page = race_context.new_page()
+        race_page.on("pageerror", lambda error: errors.append(str(error)))
+        open_products(race_page)
+        filter_bulk_results(race_page)
+        race_page.get_by_role("button", name=f"Выбрать все {len(expected_ids)}").wait_for()
+        delay_next_full_select = True
+        race_page.evaluate("""() => {
+            const button = document.querySelector('.mp-select-filtered');
+            const search = document.querySelector('input[placeholder="Название, бренд или артикул"]');
+            setTimeout(() => {
+                search.value = 'UX-BULK-NO-MATCH';
+                search.dispatchEvent(new Event('input', {bubbles: true}));
+            }, 0);
+            button.click();
+        }""")
+        race_page.wait_for_function("""() => {
+            const search = document.querySelector('input[placeholder="Название, бренд или артикул"]');
+            return search && search.value === 'UX-BULK-NO-MATCH';
+        }""")
+        race_page.get_by_text("По этим условиям товаров нет", exact=True).wait_for()
+        race_page.wait_for_timeout(600)
+        assert race_page.locator(".mp-list article.mp-row").count() == 0
+        assert race_page.locator(".mp-list article.mp-row input[type=checkbox]:checked").count() == 0
+        assert any(query.get("search") == ["UX-BULK-NO-MATCH"] for query in feed_gets)
+        assert len(posts) == before_select_posts, posts
+        checks.append("delayed_full_select_is_discarded_when_search_changes")
+        race_context.close()
+        context.close()
 
         context = browser.new_context(viewport={"width": 1080, "height": 900})
         context.add_cookies([fixture.synthetic_login_cookie()])
@@ -235,6 +549,14 @@ def run():
         assert prepared["body"]["imported_product_ids"] == [fixture_ids["manual_id"]]
         assert prepared["body"]["account_id"] == fixture.FIXTURE["account_id"]
         assert prepared["body"]["confirm_prepare"] is True and "confirm_write" not in prepared["body"]
+        job_path = completed.value.headers["location"]
+        assert re.fullmatch(r"/marketplaces/ozon/uploads/ozon-upload-[0-9a-f]{32}", job_path)
+        page.wait_for_url(fixture.BASE + job_path, wait_until="domcontentloaded")
+        with fixture.app.app_context():
+            queued_job = BackgroundJob.query.filter_by(
+                job_uid=job_path.rsplit("/", 1)[-1], seller_id=fixture.FIXTURE["seller_id"],
+            ).one()
+            assert queued_job.total == 1
         checks.append("ordinary_ozon_bulk_prepare_queues_exact_local_set")
 
         open_products(page)
@@ -245,6 +567,7 @@ def run():
             page.get_by_role("button", name="Дополнить карточки на WB").click()
         assert review.value.status == 200
         assert posts[2] == {"path": LOCAL_WB_ENRICH_REVIEW, "body": {"selected_ids": [str(fixture_ids["wb_id"])]}}
+        page.wait_for_url(fixture.BASE + LOCAL_WB_ENRICH_REVIEW, wait_until="domcontentloaded")
         checks.append("ordinary_wb_enrichment_opens_local_review_with_owned_product_ids")
 
         supplier_path = fixture.PAGE_PATHS["supplier_products"] + "&show_imported=1"
