@@ -24,6 +24,9 @@ from services.wb_stock_contracts import ENDPOINT as WB_STOCK_ENDPOINT, normalize
 logger = logging.getLogger('wb_api')
 
 MAX_WB_MEDIA_FILES = 30
+GET_ALL_CARDS_PAGE_INTERVAL_SECONDS = 0.75
+GET_ALL_CARDS_MAX_RATE_LIMIT_RETRIES = 4
+GET_ALL_CARDS_MAX_RATE_LIMIT_WAIT_SECONDS = 10
 
 
 def chunk_list(items: List, chunk_size: int) -> List[List]:
@@ -762,7 +765,12 @@ class WildberriesAPIClient:
 
         return cards[0]
 
-    def get_all_cards(self, batch_size: int = 100) -> List[Dict[str, Any]]:
+    def get_all_cards(
+        self,
+        batch_size: int = 100,
+        *,
+        retry_rate_limited_pages: bool = False,
+    ) -> List[Dict[str, Any]]:
         """
         Получить все карточки товаров с автоматической cursor-based пагинацией
 
@@ -774,22 +782,52 @@ class WildberriesAPIClient:
 
         Note:
             API v2 использует cursor-based пагинацию вместо offset
+            retry_rate_limited_pages opts the complete read into a bounded
+            per-page 429 retry policy. It is off by default because this helper
+            is also used by request-time import recovery paths.
         """
         all_cards = []
         cursor_updated_at = None
         cursor_nm_id = None
+        rate_limit_retries = 0
+        rate_limit_wait_seconds = 0
 
         while True:
             # Сохраняем текущий cursor перед запросом для проверки на зацикливание
             prev_cursor_updated_at = cursor_updated_at
             prev_cursor_nm_id = cursor_nm_id
 
-            # Запрос с cursor для пагинации
-            data = self.get_cards_list(
-                limit=batch_size,
-                cursor_updated_at=cursor_updated_at,
-                cursor_nm_id=cursor_nm_id
-            )
+            # A known short 429 is safe to retry here: Content card listing is
+            # read-only, and the cursor does not advance until this page succeeds.
+            # The opt-in is only used by the full product sync; importer callers
+            # retain their request-time behavior by using the default False.
+            retried_current_page = False
+            while True:
+                try:
+                    data = self.get_cards_list(
+                        limit=batch_size,
+                        cursor_updated_at=cursor_updated_at,
+                        cursor_nm_id=cursor_nm_id,
+                    )
+                    break
+                except WBRateLimitException as exc:
+                    retry_after = exc.retry_after
+                    if (
+                        not retry_rate_limited_pages
+                        or retried_current_page
+                        or rate_limit_retries >= GET_ALL_CARDS_MAX_RATE_LIMIT_RETRIES
+                        or type(retry_after) is not int
+                        or retry_after <= 0
+                        or retry_after > GET_ALL_CARDS_MAX_RATE_LIMIT_WAIT_SECONDS
+                        or rate_limit_wait_seconds + retry_after
+                        > GET_ALL_CARDS_MAX_RATE_LIMIT_WAIT_SECONDS
+                    ):
+                        raise
+
+                    retried_current_page = True
+                    rate_limit_retries += 1
+                    rate_limit_wait_seconds += retry_after
+                    time.sleep(retry_after)
 
             cards = data.get('cards', [])
 
@@ -821,6 +859,12 @@ class WildberriesAPIClient:
                 prev_cursor_nm_id == cursor_nm_id):
                 logger.warning(f"Cursor not changing, stopping to avoid infinite loop. Total: {len(all_cards)}")
                 break
+
+            if retry_rate_limited_pages:
+                # WB Content permits a 5-request burst with 750ms replenishment.
+                # Pace only when a successful cursor confirms another page;
+                # every request still passes through _make_request's shared caps.
+                time.sleep(GET_ALL_CARDS_PAGE_INTERVAL_SECONDS)
 
         logger.info(f"Total cards loaded: {len(all_cards)}")
         return all_cards

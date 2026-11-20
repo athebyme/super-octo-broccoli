@@ -2204,7 +2204,10 @@ def _perform_product_sync_task(seller_id: int, flask_app):
             with WildberriesAPIClient(seller.wb_api_key) as client:
                 # Получаем все карточки
                 app.logger.info(f"🔄 Background sync: fetching cards for seller_id={seller_id}")
-                all_cards = client.get_all_cards(batch_size=100)
+                all_cards = client.get_all_cards(
+                    batch_size=100,
+                    retry_rate_limited_pages=True,
+                )
                 app.logger.info(f"✅ Background sync: got {len(all_cards)} cards from WB API")
 
                 # Получаем цены из Prices API (отдельный endpoint!)

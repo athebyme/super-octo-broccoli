@@ -15,13 +15,14 @@
 """
 
 import unittest
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import MagicMock, call, patch
 
 import requests
 
 from services.brand_cache import BrandCache
 from services.wb_api_client import (
-    WildberriesAPIClient, WBRateLimitException,
+    WildberriesAPIClient, WBAPIException, WBRateLimitException,
     WBTransportUncertainException,
 )
 
@@ -185,6 +186,174 @@ class TestRateLimit429RetryAfter(unittest.TestCase):
         self.assertFalse(
             client.session.request.call_args.kwargs['allow_redirects']
         )
+
+
+class TestGetAllCardsBoundedRateLimitRetry(unittest.TestCase):
+    @staticmethod
+    def _page(nm_id, cursor=None):
+        return {
+            'cards': [{'nmID': nm_id}],
+            'cursor': cursor,
+        }
+
+    @staticmethod
+    def _cursor(nm_id):
+        return {
+            'updatedAt': f'2026-11-20T00:00:{nm_id:02d}Z',
+            'nmID': nm_id,
+        }
+
+    def test_opt_in_retries_same_page_after_short_429_and_keeps_prior_page(self):
+        client = WildberriesAPIClient('catalog-retry-token')
+        cursor = self._cursor(101)
+        client.get_cards_list = MagicMock(side_effect=[
+            self._page(101, cursor),
+            WBRateLimitException('429', retry_after=1),
+            self._page(102),
+        ])
+
+        with patch('services.wb_api_client.time.sleep') as sleep:
+            cards = client.get_all_cards(retry_rate_limited_pages=True)
+
+        self.assertEqual(cards, [{'nmID': 101}, {'nmID': 102}])
+        self.assertEqual(client.get_cards_list.call_args_list, [
+            call(limit=100, cursor_updated_at=None, cursor_nm_id=None),
+            call(limit=100, cursor_updated_at=cursor['updatedAt'], cursor_nm_id=101),
+            call(limit=100, cursor_updated_at=cursor['updatedAt'], cursor_nm_id=101),
+        ])
+        sleep.assert_has_calls([call(0.75), call(1)])
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_default_catalog_read_does_not_add_request_path_waits(self):
+        client = WildberriesAPIClient('catalog-default-token')
+        client.get_cards_list = MagicMock(
+            side_effect=WBRateLimitException('429', retry_after=1),
+        )
+
+        with patch('services.wb_api_client.time.sleep') as sleep:
+            with self.assertRaises(WBRateLimitException):
+                client.get_all_cards()
+
+        client.get_cards_list.assert_called_once_with(
+            limit=100, cursor_updated_at=None, cursor_nm_id=None,
+        )
+        sleep.assert_not_called()
+
+    def test_untyped_unknown_and_long_failures_are_not_retried(self):
+        failures = [
+            WBAPIException('unrelated API failure'),
+            WBRateLimitException('missing retry delay', retry_after=None),
+            WBRateLimitException('long retry delay', retry_after=11),
+        ]
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__, retry_after=getattr(failure, 'retry_after', None)):
+                client = WildberriesAPIClient('catalog-no-retry-token')
+                client.get_cards_list = MagicMock(side_effect=failure)
+
+                with patch('services.wb_api_client.time.sleep') as sleep:
+                    with self.assertRaises(type(failure)):
+                        client.get_all_cards(retry_rate_limited_pages=True)
+
+                client.get_cards_list.assert_called_once()
+                sleep.assert_not_called()
+
+    def test_page_is_retried_at_most_once(self):
+        client = WildberriesAPIClient('catalog-page-budget-token')
+        cursor = self._cursor(101)
+        client.get_cards_list = MagicMock(side_effect=[
+            self._page(101, cursor),
+            WBRateLimitException('429', retry_after=1),
+            WBRateLimitException('429 again', retry_after=1),
+        ])
+
+        with patch('services.wb_api_client.time.sleep') as sleep:
+            with self.assertRaisesRegex(WBRateLimitException, '429 again'):
+                client.get_all_cards(retry_rate_limited_pages=True)
+
+        self.assertEqual(client.get_cards_list.call_count, 3)
+        sleep.assert_has_calls([call(0.75), call(1)])
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_fetch_stops_after_aggregate_retry_attempt_budget(self):
+        client = WildberriesAPIClient('catalog-attempt-budget-token')
+        side_effects = [self._page(1, self._cursor(1))]
+        for nm_id, delay in enumerate((1, 2, 3, 4), start=2):
+            side_effects.extend([
+                WBRateLimitException('429', retry_after=delay),
+                self._page(nm_id, self._cursor(nm_id)),
+            ])
+        side_effects.append(WBRateLimitException('fifth 429', retry_after=1))
+        client.get_cards_list = MagicMock(side_effect=side_effects)
+
+        with patch('services.wb_api_client.time.sleep') as sleep:
+            with self.assertRaisesRegex(WBRateLimitException, 'fifth 429'):
+                client.get_all_cards(retry_rate_limited_pages=True)
+
+        self.assertEqual(client.get_cards_list.call_count, 10)
+        self.assertEqual(
+            [entry.args[0] for entry in sleep.call_args_list],
+            [0.75, 1, 0.75, 2, 0.75, 3, 0.75, 4, 0.75],
+        )
+
+    def test_fetch_stops_when_provider_directed_wait_budget_would_exceed_ten_seconds(self):
+        client = WildberriesAPIClient('catalog-wait-budget-token')
+        cursor = self._cursor(101)
+        next_cursor = self._cursor(102)
+        client.get_cards_list = MagicMock(side_effect=[
+            self._page(101, cursor),
+            WBRateLimitException('429', retry_after=10),
+            self._page(102, next_cursor),
+            WBRateLimitException('would exceed total wait budget', retry_after=1),
+        ])
+
+        with patch('services.wb_api_client.time.sleep') as sleep:
+            with self.assertRaisesRegex(
+                WBRateLimitException,
+                'would exceed total wait budget',
+            ):
+                client.get_all_cards(retry_rate_limited_pages=True)
+
+        self.assertEqual(client.get_cards_list.call_count, 4)
+        self.assertEqual(
+            [entry.args[0] for entry in sleep.call_args_list],
+            [0.75, 10, 0.75],
+        )
+
+    def test_product_sync_worker_opts_into_bounded_catalog_retry(self):
+        import os
+        os.environ.setdefault('SKIP_SCHEDULER', '1')
+        import seller_platform
+
+        seller = SimpleNamespace(
+            id=991,
+            wb_api_key='synthetic-not-a-real-key',
+            api_sync_status='ready',
+            product_sync_settings=None,
+        )
+        query = SimpleNamespace(get=lambda _seller_id: seller)
+        observed = {}
+
+        class FakeClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def get_all_cards(self, **kwargs):
+                observed.update(kwargs)
+                raise WBRateLimitException('synthetic 429', retry_after=1)
+
+        with seller_platform.app.app_context():
+            with patch.object(seller_platform.Seller, 'query', query), \
+                 patch.object(seller_platform, 'db_commit_with_retry'), \
+                 patch.object(seller_platform, 'WildberriesAPIClient', return_value=FakeClient()):
+                seller_platform._perform_product_sync_task(991, seller_platform.app)
+
+        self.assertEqual(observed, {
+            'batch_size': 100,
+            'retry_rate_limited_pages': True,
+        })
 
 
 class TestBrandCursorPagination(unittest.TestCase):
