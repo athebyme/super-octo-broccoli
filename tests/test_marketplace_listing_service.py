@@ -5,6 +5,7 @@ from datetime import datetime
 import unittest
 
 from flask import Flask
+from sqlalchemy import event
 
 from models import (
     ImportedProduct,
@@ -538,6 +539,85 @@ class MarketplaceListingServiceTest(unittest.TestCase):
         self.assertEqual(summary["values"]["net_price"], "700.00")
         self.assertNotIn("premium_price", summary["values"])
         self.assertNotIn("recommended_price", summary["values"])
+
+    def test_latest_completed_catalog_time_is_owned_ozon_snapshot_not_latest_attempt(self):
+        other_ozon_account = SellerMarketplaceAccount(
+            seller_id=self.seller1.id,
+            marketplace_id=self.ozon.id,
+            external_account_id="seller-one-second-client",
+            label="Ozon second account",
+            is_active=True,
+            connection_status="connected",
+        )
+        wb = Marketplace(
+            name="Wildberries",
+            code="wb",
+            adapter_code="wb",
+            is_active=True,
+        )
+        db.session.add_all([other_ozon_account, wb])
+        db.session.flush()
+        wb_account = SellerMarketplaceAccount(
+            seller_id=self.seller1.id,
+            marketplace_id=wb.id,
+            external_account_id="seller-one-wb-client",
+            label="WB account",
+            is_active=True,
+            connection_status="connected",
+        )
+        db.session.add(wb_account)
+        db.session.flush()
+
+        def sync(account_id, status, completed_at=None, *, seller_id=None, marketplace_id=None):
+            return MarketplaceCatalogSync(
+                seller_id=self.seller1.id if seller_id is None else seller_id,
+                marketplace_id=self.ozon.id if marketplace_id is None else marketplace_id,
+                account_id=account_id,
+                status=status,
+                phase="completed" if status == "completed" else "active",
+                completed_at=completed_at,
+            )
+
+        latest_but_ineligible = datetime(2026, 11, 20, 8, 0, 0)
+        db.session.add_all([
+            sync(self.account1.id, "completed", datetime(2026, 11, 15, 9)),
+            sync(self.account1.id, "completed", datetime(2026, 11, 18, 10, 30, 4, 123456)),
+            sync(self.account1.id, "running"),
+            sync(self.account1.id, "failed", latest_but_ineligible),
+            # Corrupted rows must not cross tenant/marketplace identity.
+            sync(self.account1.id, "completed", latest_but_ineligible, seller_id=self.seller2.id),
+            sync(self.account1.id, "completed", latest_but_ineligible, marketplace_id=wb.id),
+            sync(self.account2.id, "completed", latest_but_ineligible, seller_id=self.seller2.id),
+            sync(other_ozon_account.id, "completed"),  # NULL completed_at
+            sync(wb_account.id, "completed", latest_but_ineligible, marketplace_id=wb.id),
+        ])
+        db.session.commit()
+        seller_id = self.seller1.id
+        account1_id, other_ozon_account_id = self.account1.id, other_ozon_account.id
+
+        statements = []
+
+        def capture_select(_conn, _cursor, statement, _parameters, _context, _many):
+            if statement.lstrip().lower().startswith("select"):
+                statements.append(statement)
+
+        event.listen(db.engine, "before_cursor_execute", capture_select)
+        try:
+            latest = MarketplaceListingService.latest_completed_catalog_at(
+                seller_id=seller_id,
+            )
+        finally:
+            event.remove(db.engine, "before_cursor_execute", capture_select)
+
+        self.assertEqual(len(statements), 1)
+        self.assertIn("max(", statements[0].lower())
+        self.assertEqual(
+            latest,
+            {
+                account1_id: "2026-11-18T10:30:04.123456Z",
+                other_ozon_account_id: None,
+            },
+        )
 
     def test_successful_sweep_supersedes_older_failed_resume_checkpoint(self):
         old = MarketplaceCatalogSync(

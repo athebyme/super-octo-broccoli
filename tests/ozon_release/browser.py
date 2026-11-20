@@ -3,7 +3,7 @@
 The test server binds container loopback only. Production Gunicorn/TLS and live
 seller-data acceptance remain separate gates.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 import hashlib
 import html
@@ -18,7 +18,7 @@ import logging
 from urllib.parse import urlsplit
 
 import requests
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 from werkzeug.serving import make_server
 
 OUT = Path('/artifacts')
@@ -45,7 +45,8 @@ requests.sessions.Session.request = forbid_network
 socket.create_connection = forbid_network
 
 from seller_platform import app
-from models import db, BackgroundJob, MarketplaceOperation, MarketplaceListing, MarketplaceProductDraft
+from models import (db, BackgroundJob, MarketplaceCatalogSync, MarketplaceOperation,
+                    MarketplaceListing, MarketplaceProductDraft, SellerMarketplaceAccount)
 from services.ozon_quality_queue import run_quality_tick
 from tests.ozon_release.seed import seed, USERNAME, PASSWORD, PHOTO, CATEGORIES
 
@@ -140,6 +141,108 @@ def layout(name, widths=(1440,390,320)):
 
 def quality_loaded():
     page.wait_for_function("document.querySelector('#oqw-app:not([v-cloak]) section[aria-busy]')?.getAttribute('aria-busy')==='false'")
+
+
+def exercise_catalog_freshness():
+    old_completed = datetime(2026, 11, 19, 15, 0)
+    old_datetime = old_completed.isoformat() + 'Z'
+    retry_at = (datetime.utcnow() + timedelta(minutes=5)).isoformat() + 'Z'
+    active_message = 'Загружаем товары, цены и остатки из Ozon…'
+    failed_message = 'Не удалось завершить загрузку. Сохранённые товары доступны; повторите попытку.'
+    completed_message = 'Каталог загружен. Можно перейти к товарам.'
+    mutation_count = len(REPORT['mutations'])
+    with app.app_context():
+        account = db.session.get(SellerMarketplaceAccount, aid)
+        scope = {'seller_id': account.seller_id, 'account_id': aid,
+                 'marketplace_id': account.marketplace_id}
+        previous = MarketplaceCatalogSync(**scope, status='completed', phase='completed',
+                                          visibility='ARCHIVED', completed_at=old_completed,
+                                          seen_count=36, page_count=2)
+        db.session.add(previous)
+        db.session.commit()
+
+    views = (
+        ('vue', '/marketplaces/listings/', '.mcat-accounts .mcat-account'),
+        ('classic', '/marketplaces/listings/classic', '.catalog-accounts .catalog-account'),
+        ('settings', '/marketplaces/accounts/', f'#ozon-account-{aid}'),
+    )
+    for index, (view, path, selector) in enumerate(views):
+        with app.app_context():
+            run = MarketplaceCatalogSync(**scope, phase='archived', visibility='ARCHIVED',
+                                         seen_count=3, page_count=1)
+            job = BackgroundJob(job_uid=f'oc:{aid}:synthetic-freshness-{index}',
+                                seller_id=scope['seller_id'], job_type='ozon_account_sync',
+                                status='pending', processed=3, error_message=active_message)
+            db.session.add_all([run, job])
+            db.session.flush()
+            result = {'account_id': aid, 'phase': 'catalog', 'code': 'catalog',
+                      'sync_id': run.id, 'next_retry_at': retry_at}
+            job.set_result(result)
+            job_id, run_id = job.id, run.id
+            db.session.commit()
+
+        url = path + '?marketplace=ozon&account_id=' + str(aid)
+        goto(url, selector)
+        card = page.locator(selector)
+        timestamp = card.locator('time[data-catalog-completed-at]')
+        expect(timestamp).to_be_visible(timeout=5000)
+        expect(timestamp).to_have_attribute('datetime', old_datetime)
+        expect(timestamp.locator('..')).to_contain_text('Последняя полная загрузка')
+        expect(card.get_by_text(active_message, exact=False)).to_be_visible()
+        expect(card.get_by_text(re.compile('Следующая попытка|Продолжим после'))).to_be_visible()
+        layout(f'catalog-freshness-{view}', widths=(1440, 320))
+
+        with app.app_context():
+            run = db.session.get(MarketplaceCatalogSync, run_id)
+            job = db.session.get(BackgroundJob, job_id)
+            run.status = 'failed'
+            job.status = 'failed'
+            job.error_message = failed_message
+            job.set_result({**result, 'phase': 'failed', 'code': 'sync_failed', 'next_retry_at': None})
+            db.session.commit()
+        expect(card.get_by_text(failed_message, exact=False)).to_be_visible(timeout=12000)
+        expect(timestamp).to_have_attribute('datetime', old_datetime)
+        expect(timestamp).to_be_visible()
+
+        # A newer successful run becomes visible only after the status poll.
+        with app.app_context():
+            run = db.session.get(MarketplaceCatalogSync, run_id)
+            job = db.session.get(BackgroundJob, job_id)
+            run.status = 'running'
+            job.status = 'pending'
+            job.error_message = active_message
+            job.set_result(result)
+            db.session.commit()
+        goto(url, selector)
+        expect(timestamp).to_have_attribute('datetime', old_datetime)
+        new_completed = old_completed + timedelta(hours=1)
+        with app.app_context():
+            run = db.session.get(MarketplaceCatalogSync, run_id)
+            job = db.session.get(BackgroundJob, job_id)
+            run.status, run.phase, run.completed_at = 'completed', 'completed', new_completed
+            job.status = 'completed'
+            job.error_message = completed_message
+            job.set_result({**result, 'phase': 'completed', 'code': 'completed', 'next_retry_at': None})
+            db.session.commit()
+        expect(timestamp).to_have_attribute('datetime', new_completed.isoformat() + 'Z', timeout=12000)
+        expect(timestamp).to_be_visible()
+        if view == 'classic':
+            expect(page.get_by_role('button', name='Показать обновлённые товары')).to_be_visible()
+        passed(f'catalog_freshness_{view}_separates_saved_snapshot_from_retry_failure_and_success')
+        old_completed = new_completed
+        old_datetime = new_completed.isoformat() + 'Z'
+
+    with app.app_context():
+        account = db.session.get(SellerMarketplaceAccount, aid)
+        account.is_active = False
+        db.session.commit()
+    selector = f'#ozon-account-{aid}'
+    goto('/marketplaces/accounts/?account_id=' + str(aid), selector)
+    card = page.locator(selector)
+    expect(card.get_by_text('Кабинет отключён.', exact=False)).to_be_visible()
+    expect(card.locator('time[data-catalog-completed-at]')).to_have_attribute('datetime', old_datetime)
+    assert len(REPORT['mutations']) == mutation_count
+    passed('disconnected_catalog_keeps_last_completion_without_browser_mutations')
 
 
 @contextmanager
@@ -306,6 +409,7 @@ try:
             finally:
                 api.dispose()
         passed('real_csrf_login_rejects_external_and_browser_normalized_redirects')
+        exercise_catalog_freshness()
         with app.app_context():
             assert MarketplaceOperation.query.count()==0
             for row in MarketplaceListing.query.filter_by(account_id=aid):

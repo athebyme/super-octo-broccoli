@@ -46,6 +46,7 @@
     <section class="catalog-accounts" aria-label="Синхронизация кабинетов">
         {% for account in accounts if account.marketplace.code == 'ozon' and (not filters.account_id or filters.account_id == account.id) %}
         {% set sync = latest_syncs.get(account.id) %}
+        {% set completed_at = catalog_completed_at.get(account.id) %}
         <article class="sh-card catalog-account">
             <div class="catalog-account-heading">
                 <span class="catalog-account-mark">{{ icon('office', 22, stroke=1.5) }}</span>
@@ -62,9 +63,13 @@
                     </p>
                     <p x-cloak x-show="active({{ account.id }})" class="catalog-account-freshness"><span class="sh-spinner sh-spinner--sm" aria-hidden="true"></span> Получено: <span x-text="count({{ account.id }})"></span>. Загрузка продолжится и после закрытия страницы.</p>
                     <p x-cloak x-show="retryTime({{ account.id }})" x-text="retryTime({{ account.id }})" class="mt-1 text-xs" style="color:var(--text-muted)"></p>
-                    {% if sync and sync.status == 'completed' and sync.completed_at %}
-                    <p class="catalog-account-freshness" x-show="!catalogUpdated">Полная загрузка: <time datetime="{{ sync.completed_at.isoformat() }}Z">{{ sync.completed_at.strftime('%d.%m.%Y %H:%M') }} UTC</time></p>
-                    {% endif %}
+                    <p class="catalog-account-freshness" role="status" aria-live="polite">
+                        Последняя полная загрузка:
+                        <time data-catalog-completed-at {% if completed_at %}datetime="{{ completed_at }}"{% else %}x-cloak{% endif %}
+                              :datetime="completedAt({{ account.id }})" x-show="completedAt({{ account.id }})"
+                              x-text="formattedCompletedAt({{ account.id }})">{{ completed_at or '' }}</time>
+                        <span {% if completed_at %}x-cloak{% endif %} x-show="!completedAt({{ account.id }})">ещё не выполнялась</span>
+                    </p>
                     <p x-cloak x-show="errors[{{ account.id }}]" x-text="errors[{{ account.id }}]" class="mt-1 text-xs" style="color:var(--danger)" role="alert"></p>
             </div>
             <div class="catalog-account-actions">

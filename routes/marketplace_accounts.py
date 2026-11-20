@@ -143,6 +143,13 @@ def index():
     }
     jobs = latest_account_jobs(seller_id=seller_id, account_ids=ozon_ids)
     syncs = MarketplaceListingService.latest_syncs(seller_id=seller_id)
+    catalog_completed_at = (
+        MarketplaceListingService.latest_completed_catalog_at(
+            seller_id=seller_id,
+        )
+        if ozon_ids
+        else {}
+    )
     return render_template(
         "marketplace_accounts.html",
         accounts=accounts,
@@ -150,10 +157,12 @@ def index():
         upload_ready_account_ids=upload_ready_account_ids,
         onboarding_jobs=jobs,
         latest_syncs=syncs,
+        catalog_completed_at=catalog_completed_at,
         setup_config={
             'accounts': [account.to_public_dict() for account in accounts if account.marketplace.code == 'ozon'],
             'onboarding_jobs': jobs,
             'catalog_syncs': {account_id: sync.to_public_dict() for account_id, sync in syncs.items()},
+            'catalog_completed_at': catalog_completed_at,
             'status_url': url_for('marketplace_accounts.list_api'),
             'accounts_url': url_for('marketplace_accounts.index'),
             'ozon_enabled': _ozon_enabled(),
@@ -178,12 +187,20 @@ def list_api():
     accounts = MarketplaceAccountService.list_accounts(seller_id=seller_id)
     ozon_ids = [account.id for account in accounts if account.marketplace.code == 'ozon']
     syncs = MarketplaceListingService.latest_syncs(seller_id=seller_id)
+    catalog_completed_at = (
+        MarketplaceListingService.latest_completed_catalog_at(
+            seller_id=seller_id,
+        )
+        if ozon_ids
+        else {}
+    )
     return jsonify({
         "success": True,
         "accounts": [account.to_public_dict() for account in accounts],
         "ozon_enabled": _ozon_enabled(),
         "onboarding_jobs": latest_account_jobs(seller_id=seller_id, account_ids=ozon_ids),
         "catalog_syncs": {account_id: sync.to_public_dict() for account_id, sync in syncs.items()},
+        "catalog_completed_at": catalog_completed_at,
     })
 
 

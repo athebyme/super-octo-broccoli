@@ -44,6 +44,7 @@
                 accounts: (bootstrap.accounts || []).map(function (acc) {
                     acc._syncing = false;
                     acc._error = null;
+                    if (!Object.prototype.hasOwnProperty.call(acc, 'last_completed_at')) acc.last_completed_at = null;
                     return acc;
                 }),
                 urls: bootstrap.urls || {},
@@ -715,10 +716,21 @@
             },
             syncDate: function (acc) {
                 var retry = utcDate((acc.sync_job || {}).next_retry_at);
-                var completed = (acc.last_sync || {}).status === 'completed' && utcDate(acc.last_sync.completed_at);
-                var value = this.syncActive(acc) && retry ? retry : completed;
-                return value ? (this.syncActive(acc) && retry ? 'Продолжим после ' : 'Полная загрузка: ')
-                    + value.toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'}) : '';
+                return this.syncActive(acc) && retry
+                    ? 'Продолжим после ' + retry.toLocaleString('ru-RU', {
+                        day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
+                    }) : '';
+            },
+            lastCompletedAt: function (acc) {
+                var value = utcDate(acc.last_completed_at);
+                return value && !Number.isNaN(value.getTime()) ? acc.last_completed_at : null;
+            },
+            formattedLastCompletedAt: function (acc) {
+                var value = utcDate(this.lastCompletedAt(acc));
+                return value && !Number.isNaN(value.getTime()) ? value.toLocaleString('ru-RU', {
+                    day: '2-digit', month: '2-digit', year: 'numeric',
+                    hour: '2-digit', minute: '2-digit', timeZone: 'UTC'
+                }) + ' UTC' : '';
             },
             syncActive: function (acc) {
                 return acc._syncing || activeJob(acc.sync_job);
@@ -769,6 +781,9 @@
                         if (activeJob(acc.sync_job) && job && job.status === 'completed') changed = true;
                         acc.sync_job = job || null;
                         acc.last_sync = (data.catalog_syncs || {})[acc.id] || acc.last_sync;
+                        if (data.catalog_completed_at && typeof data.catalog_completed_at === 'object') {
+                            acc.last_completed_at = data.catalog_completed_at[acc.id] || null;
+                        }
                         var current = (data.accounts || []).find(row => row.id === acc.id);
                         if (current) {
                             acc.is_active = current.is_active;

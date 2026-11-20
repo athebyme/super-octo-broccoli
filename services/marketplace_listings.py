@@ -16,7 +16,7 @@ import math
 import os
 import tempfile
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
@@ -2541,3 +2541,47 @@ class MarketplaceListingService:
         for row in rows:
             result.setdefault(row.account_id, row)
         return result
+
+    @classmethod
+    def latest_completed_catalog_at(
+        cls,
+        *,
+        seller_id: int,
+    ) -> Dict[int, Optional[str]]:
+        """Return the latest completed Ozon snapshot time for each owned account.
+
+        Current attempts are exposed separately by ``latest_syncs``.  This
+        read-only aggregate keeps a newer running or failed attempt from
+        hiding the freshness of the last successfully completed snapshot.
+        Stored sync identity is checked against the joined account on all
+        tenant and marketplace keys before it can contribute to the maximum.
+        """
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        rows = db.session.query(
+            SellerMarketplaceAccount.id,
+            func.max(MarketplaceCatalogSync.completed_at),
+        ).join(
+            Marketplace,
+            Marketplace.id == SellerMarketplaceAccount.marketplace_id,
+        ).outerjoin(
+            MarketplaceCatalogSync,
+            and_(
+                MarketplaceCatalogSync.account_id == SellerMarketplaceAccount.id,
+                MarketplaceCatalogSync.seller_id == SellerMarketplaceAccount.seller_id,
+                MarketplaceCatalogSync.marketplace_id == SellerMarketplaceAccount.marketplace_id,
+                MarketplaceCatalogSync.status == "completed",
+                MarketplaceCatalogSync.completed_at.isnot(None),
+            ),
+        ).filter(
+            SellerMarketplaceAccount.seller_id == seller_id,
+            Marketplace.code == "ozon",
+        ).group_by(
+            SellerMarketplaceAccount.id,
+        ).all()
+
+        return {
+            account_id: completed_at.isoformat() + "Z"
+            if completed_at is not None
+            else None
+            for account_id, completed_at in rows
+        }

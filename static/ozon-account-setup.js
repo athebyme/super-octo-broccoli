@@ -30,7 +30,7 @@
         const historyControllers = new Map();
         return {
             accounts: {}, jobs: {}, syncs: {}, busy: {new: false}, errors: {}, pollError: '',
-            pollFailures: 0, config: {}, enabled: true, sessionExpired: false, uncertain: {}, conflicts: {}, reviewed: {}, catalogUpdated: false, keyOpen: {},
+            pollFailures: 0, config: {}, catalogCompletedAt: {}, enabled: true, sessionExpired: false, uncertain: {}, conflicts: {}, reviewed: {}, catalogUpdated: false, keyOpen: {},
             actionModes: {}, settingsReview: {}, settingsReviewed: {}, saved: {}, history: {},
             settingsErrors: {}, settingsConflicts: {}, settingsUncertain: {},
             init(config) {
@@ -69,6 +69,7 @@
                 historyControllers.forEach(controller => controller.abort());
             },
             apply(data) {
+                this.setCatalogCompletedAt(data.catalog_completed_at);
                 Object.entries(data.onboarding_jobs || {}).forEach(([id, job]) => {
                     if (active(this.jobs[id]) && job.status === 'completed') this.catalogUpdated = true;
                 });
@@ -79,6 +80,23 @@
                 });
                 if (data.onboarding_jobs) this.jobs = data.onboarding_jobs;
                 if (data.catalog_syncs) this.syncs = data.catalog_syncs;
+            },
+            setCatalogCompletedAt(values) {
+                if (!values || typeof values !== 'object' || Array.isArray(values)) return;
+                this.catalogCompletedAt = {...values};
+            },
+            completedAt(id) {
+                const value = this.catalogCompletedAt[id];
+                const parsed = date(value);
+                return parsed && !Number.isNaN(parsed.getTime()) ? value : null;
+            },
+            formattedCompletedAt(id) {
+                const value = date(this.completedAt(id));
+                if (!value || Number.isNaN(value.getTime())) return '';
+                return value.toLocaleString('ru-RU', {
+                    day: '2-digit', month: '2-digit', year: 'numeric',
+                    hour: '2-digit', minute: '2-digit', timeZone: 'UTC'
+                }) + ' UTC';
             },
             schedule() {
                 clearTimeout(timer);

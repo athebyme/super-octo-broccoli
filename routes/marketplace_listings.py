@@ -227,12 +227,24 @@ def classic():
         accounts = MarketplaceAccountService.list_accounts(
             seller_id=seller_id,
         )
+        ozon_account_ids = [
+            account.id
+            for account in accounts
+            if account.marketplace and account.marketplace.code == "ozon"
+        ]
         latest_syncs = MarketplaceListingService.latest_syncs(
             seller_id=seller_id,
         )
+        catalog_completed_at = (
+            MarketplaceListingService.latest_completed_catalog_at(
+                seller_id=seller_id,
+            )
+            if ozon_account_ids
+            else {}
+        )
         onboarding_jobs = latest_account_jobs(
             seller_id=seller_id,
-            account_ids=[account.id for account in accounts if account.marketplace.code == 'ozon'],
+            account_ids=ozon_account_ids,
         )
     except (MarketplaceListingError, ValueError) as exc:
         return _error_response(exc)
@@ -242,12 +254,14 @@ def classic():
         listings=pagination.items,
         accounts=accounts,
         latest_syncs=latest_syncs,
+        catalog_completed_at=catalog_completed_at,
         onboarding_jobs=onboarding_jobs,
         listing_previews={row.id: listing_display(row) for row in pagination.items},
         setup_config={
             'accounts': [account.to_public_dict() for account in accounts if account.marketplace.code == 'ozon'],
             'onboarding_jobs': onboarding_jobs,
             'catalog_syncs': {key: value.to_public_dict() for key, value in latest_syncs.items()},
+            'catalog_completed_at': catalog_completed_at,
             'status_url': url_for('marketplace_accounts.list_api'),
             'accounts_url': url_for('marketplace_accounts.index'),
             'ozon_enabled': bool(current_app.config.get('MARKETPLACE_OZON_ENABLED', False)),
@@ -278,9 +292,21 @@ def index():
         return _error_response(exc)
     accounts = MarketplaceAccountService.list_accounts(seller_id=seller_id)
     latest_syncs = MarketplaceListingService.latest_syncs(seller_id=seller_id)
+    ozon_account_ids = [
+        account.id
+        for account in accounts
+        if account.marketplace and account.marketplace.code == "ozon"
+    ]
+    catalog_completed_at = (
+        MarketplaceListingService.latest_completed_catalog_at(
+            seller_id=seller_id,
+        )
+        if ozon_account_ids
+        else {}
+    )
     onboarding_jobs = latest_account_jobs(
         seller_id=seller_id,
-        account_ids=[account.id for account in accounts if account.marketplace.code == 'ozon'],
+        account_ids=ozon_account_ids,
     )
     accounts_payload = []
     for account in accounts:
@@ -300,6 +326,7 @@ def index():
             "credential_expires_at": account.to_public_dict().get('credential_expires_at'),
             "connection_status": account.connection_status,
             "last_sync": last_sync.to_public_dict() if last_sync else None,
+            "last_completed_at": catalog_completed_at.get(account.id),
             "sync_job": onboarding_jobs.get(account.id),
         })
     return render_template(

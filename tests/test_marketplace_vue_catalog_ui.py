@@ -91,6 +91,38 @@ assert.deepEqual(page.visibleAccounts,[]);assert.match(page.emptyState.title,/Wi
 ''')
 
 
+def test_full_catalog_completion_is_separate_from_current_sync_and_updates_from_status_map():
+    run_node(SETUP + r'''
+(async()=>{
+const acc=page.accounts[1];
+acc.last_completed_at='2026-11-19T08:10:00Z';
+acc.sync_job={status:'running',next_retry_at:'2026-11-20T10:15:00Z',message:'Загрузка продолжится позже'};
+acc.last_sync={status:'failed',error_message:'429'};
+assert.equal(page.lastCompletedAt(acc),'2026-11-19T08:10:00Z');
+assert.match(page.formattedLastCompletedAt(acc),/^19\.11\.2026.*UTC$/);
+assert.ok(page.syncDate(acc).startsWith('Продолжим после '));
+assert.match(page.syncHint(acc),/Загрузка продолжится позже/);
+page.urls.accountsStatus='/accounts/status';
+global.document.hidden=false;
+global.fetch=async url=>{
+    assert.equal(url,'/accounts/status');
+    return {ok:true,status:200,headers:{get:()=> 'application/json'},json:async()=>({success:true,
+        onboarding_jobs:{'2':{status:'failed',message:'Попытка завершилась ошибкой'}},
+        catalog_syncs:{'2':{status:'failed',error_message:'429'}},
+        catalog_completed_at:{'1':null,'2':'2026-11-20T09:40:00Z'},
+        accounts:[{id:2,is_active:false,has_credentials:false,connection_status:'unchecked'}],ozon_enabled:true})};
+};
+await page.pollSync();
+assert.equal(acc.last_completed_at,'2026-11-20T09:40:00Z');
+assert.equal(page.lastCompletedAt(acc),'2026-11-20T09:40:00Z');
+assert.equal(page.syncFailed(acc),true);
+assert.equal(page.canSync(acc),false);
+assert.equal(acc.sync_job.status,'failed');
+assert.equal(acc.last_sync.status,'failed');
+})().catch(e=>{console.error(e);process.exitCode=1});
+''')
+
+
 def test_late_detail_failure_does_not_replace_new_card_and_keyboard_keeps_link_behavior():
     run_node(SETUP + r'''
 (async()=>{

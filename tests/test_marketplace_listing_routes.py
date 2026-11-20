@@ -3,6 +3,7 @@
 
 from datetime import datetime
 from pathlib import Path
+import json
 import re
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -16,6 +17,7 @@ from models import (
     ImportedProduct,
     Marketplace,
     MarketplaceCanonicalContentProposal,
+    MarketplaceCatalogSync,
     MarketplaceListing,
     Product,
     Seller,
@@ -243,6 +245,76 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
         with user_patch, login_patch:
             response = self.client.get("/marketplaces/listings/beta")
         self.assertEqual(response.status_code, 403)
+
+    def test_catalog_bootstrap_and_classic_setup_keep_last_completed_snapshot(self):
+        with self.app.app_context():
+            marketplace_id = db.session.get(
+                Marketplace,
+                db.session.get(SellerMarketplaceAccount, self.account1_id).marketplace_id,
+            ).id
+            second_account = SellerMarketplaceAccount(
+                seller_id=self.seller1_id,
+                marketplace_id=marketplace_id,
+                external_account_id="route-one-second-client",
+                label="Ozon One Second",
+                is_active=True,
+                connection_status="connected",
+            )
+            db.session.add(second_account)
+            db.session.flush()
+            def sync(account_id, status, completed_at=None):
+                return MarketplaceCatalogSync(
+                    seller_id=self.seller1_id,
+                    marketplace_id=marketplace_id,
+                    account_id=account_id,
+                    status=status,
+                    phase="completed" if status == "completed" else "active",
+                    completed_at=completed_at,
+                )
+
+            db.session.add_all([
+                sync(self.account1_id, "completed", datetime(2026, 11, 18, 9, 10, 11)),
+                sync(self.account1_id, "running"),
+                sync(second_account.id, "completed", datetime(2026, 11, 17, 8, 9, 10)),
+                sync(second_account.id, "failed"),
+            ])
+            db.session.commit()
+            second_account_id = second_account.id
+            expected = {
+                self.account1_id: "2026-11-18T09:10:11Z",
+                second_account_id: "2026-11-17T08:09:10Z",
+            }
+            sync_count = MarketplaceCatalogSync.query.count()
+
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            beta = self.client.get("/marketplaces/listings/")
+        self.assertEqual(beta.status_code, 200)
+        match = re.search(
+            r'<script type="application/json" id="mcat-bootstrap">(.*?)</script>',
+            beta.get_data(as_text=True),
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        bootstrap = json.loads(match.group(1))
+        payload_by_id = {account["id"]: account for account in bootstrap["accounts"]}
+        self.assertEqual(payload_by_id[self.account1_id]["last_completed_at"], expected[self.account1_id])
+        self.assertEqual(payload_by_id[second_account_id]["last_completed_at"], expected[second_account_id])
+        self.assertEqual(payload_by_id[self.account1_id]["last_sync"]["status"], "running")
+        self.assertEqual(payload_by_id[second_account_id]["last_sync"]["status"], "failed")
+
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch(
+            "routes.marketplace_listings.render_template",
+            return_value="classic",
+        ) as render:
+            classic = self.client.get("/marketplaces/listings/classic?marketplace=ozon")
+        self.assertEqual(classic.status_code, 200)
+        context = render.call_args.kwargs
+        self.assertEqual(context["catalog_completed_at"], expected)
+        self.assertEqual(context["setup_config"]["catalog_completed_at"], expected)
+        with self.app.app_context():
+            self.assertEqual(MarketplaceCatalogSync.query.count(), sync_count)
 
     def test_list_api_exposes_bounded_primary_image(self):
         with self.app.app_context():

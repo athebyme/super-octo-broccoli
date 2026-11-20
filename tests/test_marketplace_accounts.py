@@ -18,6 +18,7 @@ from models import (
     ImportedProduct,
     Marketplace,
     MarketplaceCanonicalContentProposal,
+    MarketplaceCatalogSync,
     MarketplaceListing,
     MarketplaceOperation,
     Seller,
@@ -543,6 +544,74 @@ class MarketplaceAccountsTest(unittest.TestCase):
         ready_ids = render.call_args.kwargs["upload_ready_account_ids"]
         self.assertIn(ready_id, ready_ids)
         self.assertNotIn(expired_id, ready_ids)
+
+    def test_get_routes_expose_latest_completed_catalog_times_without_hiding_latest_attempt(self):
+        with self.app.app_context():
+            primary = self._save(external_account_id="freshness-primary")
+            secondary = self._save(external_account_id="freshness-secondary")
+            foreign = self._save(
+                seller_id=self.seller2_id,
+                external_account_id="freshness-foreign",
+            )
+            ozon_id = primary.marketplace_id
+            def sync(account, status, completed_at=None, *, seller_id=None):
+                return MarketplaceCatalogSync(
+                    seller_id=account.seller_id if seller_id is None else seller_id,
+                    marketplace_id=ozon_id,
+                    account_id=account.id,
+                    status=status,
+                    phase="completed" if status == "completed" else "active",
+                    completed_at=completed_at,
+                )
+
+            db.session.add_all([
+                sync(primary, "completed", datetime(2026, 11, 17, 10)),
+                sync(primary, "running"),
+                sync(secondary, "completed", datetime(2026, 11, 18, 11, 12, 13)),
+                sync(secondary, "failed", datetime(2026, 11, 20, 11)),
+                sync(foreign, "completed", datetime(2026, 11, 20, 12)),
+            ])
+            db.session.commit()
+            primary_id, secondary_id = primary.id, secondary.id
+            sync_count = MarketplaceCatalogSync.query.count()
+
+        user_patch, login_patch = self._login_patches(self.seller1_id)
+        with user_patch, login_patch:
+            api_response = self.client.get("/marketplaces/accounts/api")
+        self.assertEqual(api_response.status_code, 200)
+        api_payload = api_response.get_json()
+        expected = {
+            primary_id: "2026-11-17T10:00:00Z",
+            secondary_id: "2026-11-18T11:12:13Z",
+        }
+        self.assertEqual(
+            api_payload["catalog_completed_at"],
+            {str(account_id): completed_at for account_id, completed_at in expected.items()},
+        )
+        self.assertEqual(
+            api_payload["catalog_syncs"][str(primary_id)]["status"],
+            "running",
+        )
+        self.assertEqual(
+            api_payload["catalog_syncs"][str(secondary_id)]["status"],
+            "failed",
+        )
+
+        user_patch, login_patch = self._login_patches(self.seller1_id)
+        with user_patch, login_patch, patch(
+            "routes.marketplace_accounts.render_template",
+            return_value="accounts",
+        ) as render:
+            index_response = self.client.get("/marketplaces/accounts/")
+        self.assertEqual(index_response.status_code, 200)
+        template_context = render.call_args.kwargs
+        self.assertEqual(template_context["catalog_completed_at"], expected)
+        self.assertEqual(
+            template_context["setup_config"]["catalog_completed_at"],
+            expected,
+        )
+        with self.app.app_context():
+            self.assertEqual(MarketplaceCatalogSync.query.count(), sync_count)
 
     def test_html_create_can_return_to_shared_api_settings(self):
         user_patch, login_patch = self._login_patches(self.seller1_id)

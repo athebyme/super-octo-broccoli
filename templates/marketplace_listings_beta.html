@@ -97,6 +97,11 @@
             </div>
             <p class="mcat-account-message" role="status">{{ syncHint(acc) }}</p>
             <p v-if="syncDate(acc)" class="mcat-account-date">{{ syncDate(acc) }}</p>
+            <p class="mcat-account-date" role="status" aria-live="polite">
+                Последняя полная загрузка:
+                <time v-if="lastCompletedAt(acc)" data-catalog-completed-at :datetime="lastCompletedAt(acc)" v-text="formattedLastCompletedAt(acc)"></time>
+                <span v-else>ещё не выполнялась</span>
+            </p>
             <p v-if="canSync(acc) && !syncFailed(acc)" class="mcat-account-date">Автообновление включено · примерно раз в час, с учётом пауз Ozon</p>
             <div class="mcat-account-actions">
                 <button v-if="canSync(acc)" type="button" class="sh-btn sh-btn--secondary" :disabled="syncActive(acc)" @click="syncAccount(acc)">

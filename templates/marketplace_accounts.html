@@ -102,6 +102,7 @@
         {% for account in accounts if account.marketplace.code == 'ozon' %}
         {% set aid = account.id %}
         {% set sync = latest_syncs.get(aid) %}
+        {% set completed_at = catalog_completed_at.get(aid) %}
         {% set job = onboarding_jobs.get(aid) %}
         {% set is_connected = account.is_active and account.has_credentials and account.connection_status == 'connected' %}
         <article class="sh-card p-4 sm:p-5 scroll-mt-20" id="ozon-account-{{ aid }}">
@@ -160,6 +161,11 @@
                     Получено товаров: <span v-text="count({{ aid }})"></span>
                 </p>
                 <p v-cloak v-show="retryTime({{ aid }})" v-text="retryTime({{ aid }})" class="text-xs mt-1" style="color:var(--text-muted)"></p>
+                <p class="text-xs mt-2" style="color:var(--text-muted)">
+                    Последняя полная загрузка:
+                    <time v-if="completedAt({{ aid }})" data-catalog-completed-at :datetime="completedAt({{ aid }})" v-text="formattedCompletedAt({{ aid }})">{{ completed_at or '' }}</time>
+                    <span v-else>ещё не выполнялась</span>
+                </p>
                 <p v-show="active({{ aid }})" v-cloak class="text-xs mt-1" style="color:var(--text-muted)">Страницу можно закрыть. Прогресс также доступен в фоновых задачах.</p>
             </div>
             <p v-cloak v-show="errors[{{ aid }}]" v-text="errors[{{ aid }}]" role="alert" class="sh-alert sh-alert--danger text-sm mt-3"></p>
