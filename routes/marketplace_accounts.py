@@ -157,7 +157,6 @@ def index():
         upload_ready_account_ids=upload_ready_account_ids,
         onboarding_jobs=jobs,
         latest_syncs=syncs,
-        catalog_completed_at=catalog_completed_at,
         setup_config={
             'accounts': [account.to_public_dict() for account in accounts if account.marketplace.code == 'ozon'],
             'onboarding_jobs': jobs,
