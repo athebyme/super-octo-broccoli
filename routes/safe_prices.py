@@ -45,9 +45,16 @@ from services.price_reconciliation import (  # noqa: E402
     PriceReconciliationService,
     STATUS_SUBMITTED as SUBMITTED_STATUS,
 )
+from services.product_selection import (
+    MAX_BULK_PRODUCT_SELECTION,
+    ProductSelectionError,
+    parse_selected_product_ids,
+)
 
 # Blueprint для роутов цен
 prices_bp = Blueprint('prices', __name__, url_prefix='/prices')
+MAX_EXACT_QUERY_LENGTH = MAX_BULK_PRODUCT_SELECTION * 20 - 1
+MAX_JS_SAFE_PRODUCT_ID = (1 << 53) - 1
 
 
 def get_current_seller():
@@ -65,6 +72,106 @@ def get_or_create_settings(seller_id: int) -> SafePriceChangeSettings:
         db.session.add(settings)
         db.session.commit()
     return settings
+
+
+def _parse_exact_product_ids(raw_ids, *, from_query=False):
+    """Parse the bounded explicit product handoff without accepting a fallback."""
+    try:
+        product_ids = parse_selected_product_ids(raw_ids, from_query=from_query)
+    except ProductSelectionError as exc:
+        message = str(exc)
+        if 'positive integer' in message or 'выберите хотя бы один товар' in message.lower():
+            message = 'Укажите до 200 уникальных положительных ID товаров.'
+        return None, message
+    if any(product_id > MAX_JS_SAFE_PRODUCT_ID for product_id in product_ids):
+        return None, 'ID товара выходит за поддерживаемый диапазон. Вернитесь в каталог.'
+    return product_ids, None
+
+
+def _parse_exact_product_query(raw_values):
+    if len(raw_values) != 1:
+        return None, 'Некорректная ссылка на выбор товаров. Вернитесь в каталог и выберите товары заново.'
+    raw_value = raw_values[0]
+    if len(raw_value) > MAX_EXACT_QUERY_LENGTH:
+        return None, 'Ссылка содержит слишком много ID товаров. Вернитесь в каталог и сузьте выбор.'
+    return _parse_exact_product_ids(raw_value.split(','), from_query=True)
+
+
+def _resolve_exact_active_products(seller_id: int, product_ids: list[int]):
+    """Return only the requested seller-owned active WB cards in requested order."""
+    products = Product.query.populate_existing().filter(
+        Product.seller_id == seller_id,
+        Product.id.in_(product_ids),
+    ).all()
+    by_id = {product.id: product for product in products}
+    if len(by_id) != len(product_ids):
+        return None, 'missing'
+    if any(not by_id[product_id].is_active for product_id in product_ids):
+        return None, 'inactive'
+    if any(
+        not by_id[product_id].nm_id or by_id[product_id].nm_id <= 0
+        for product_id in product_ids
+    ):
+        return None, 'missing_wb_id'
+    return [by_id[product_id] for product_id in product_ids], None
+
+
+def _price_product_json(product):
+    return {
+        'id': product.id,
+        'nm_id': product.nm_id,
+        'vendor_code': product.vendor_code,
+        'title': product.title[:80] if product.title else '',
+        'brand': product.brand or '',
+        'category': product.object_name or '',
+        'price': float(product.price) if product.price else 0,
+        'discount_price': float(product.discount_price) if product.discount_price else None,
+        'supplier_price': float(product.supplier_price) if product.supplier_price else None,
+        'wb_price': float(product.wb_price) if product.wb_price else None,
+        'wb_discount': product.wb_discount,
+        'wb_discounted_price': (
+            float(product.wb_discounted_price) if product.wb_discounted_price else None
+        ),
+        'wb_price_synced_at': (
+            product.wb_price_synced_at.strftime('%d.%m.%Y %H:%M')
+            if product.wb_price_synced_at else None
+        ),
+    }
+
+
+def _exact_selection_problem(reason: str, *, handoff=False):
+    if reason == 'missing':
+        if handoff:
+            return 404, 'Один или несколько товаров не найдены в вашем каталоге.'
+        return 409, 'Состав выбора изменился. Вернитесь в каталог и выберите товары заново.'
+    if reason == 'inactive':
+        if handoff:
+            return 400, 'Один или несколько товаров больше неактивны. Вернитесь в каталог.'
+        return 409, 'Один или несколько товаров больше неактивны. Вернитесь в каталог и выберите товары заново.'
+    if reason == 'missing_wb_id':
+        if handoff:
+            return 400, 'У одного или нескольких товаров нет действующего ID Wildberries. Обновите выбор в каталоге.'
+        return 409, 'У одного или нескольких товаров больше нет действующего ID Wildberries. Вернитесь в каталог.'
+    return 409, 'Состав выбора изменился. Вернитесь в каталог и выберите товары заново.'
+
+
+def _exact_selection_json_error(reason: str):
+    status, message = _exact_selection_problem(reason)
+    return jsonify({
+        'success': False,
+        'code': 'exact_selection_changed',
+        'error': message,
+        'return_url': url_for('seller_my_products_beta'),
+    }), status
+
+
+def _render_price_selection_error(message: str, status_code: int):
+    return render_template(
+        'prices_change.html',
+        selection_error=message,
+        selection_handoff=True,
+        selected_product_ids=[],
+    ), status_code
 
 
 class FormulaEvaluator:
@@ -451,30 +558,48 @@ def prices_change():
         flash('Необходимо быть продавцом для доступа к этой странице', 'warning')
         return redirect(url_for('dashboard'))
 
+    selection_handoff = 'product_ids' in request.args
+    selected_product_ids = []
+    if selection_handoff:
+        raw_values = request.args.getlist('product_ids')
+        selected_product_ids, parse_error = _parse_exact_product_query(raw_values)
+        if parse_error:
+            return _render_price_selection_error(parse_error, 400)
+        _, problem = _resolve_exact_active_products(seller.id, selected_product_ids)
+        if problem:
+            status_code, message = _exact_selection_problem(problem, handoff=True)
+            return _render_price_selection_error(message, status_code)
+
     settings = get_or_create_settings(seller.id)
 
-    # Получаем уникальные бренды и категории для фильтров
-    brands = db.session.query(Product.brand).filter(
-        Product.seller_id == seller.id,
-        Product.is_active == True,
-        Product.brand.isnot(None),
-        Product.brand != ''
-    ).distinct().order_by(Product.brand).all()
-    brands = [b[0] for b in brands if b[0]]
+    if selection_handoff:
+        brands = []
+        categories = []
+    else:
+        # Получаем уникальные бренды и категории для обычного режима выбора.
+        brands = db.session.query(Product.brand).filter(
+            Product.seller_id == seller.id,
+            Product.is_active == True,
+            Product.brand.isnot(None),
+            Product.brand != ''
+        ).distinct().order_by(Product.brand).all()
+        brands = [b[0] for b in brands if b[0]]
 
-    categories = db.session.query(Product.object_name).filter(
-        Product.seller_id == seller.id,
-        Product.is_active == True,
-        Product.object_name.isnot(None),
-        Product.object_name != ''
-    ).distinct().order_by(Product.object_name).all()
-    categories = [c[0] for c in categories if c[0]]
+        categories = db.session.query(Product.object_name).filter(
+            Product.seller_id == seller.id,
+            Product.is_active == True,
+            Product.object_name.isnot(None),
+            Product.object_name != ''
+        ).distinct().order_by(Product.object_name).all()
+        categories = [c[0] for c in categories if c[0]]
 
     return render_template(
         'prices_change.html',
         settings=settings,
         brands=brands,
-        categories=categories
+        categories=categories,
+        selection_handoff=selection_handoff,
+        selected_product_ids=selected_product_ids,
     )
 
 
@@ -486,18 +611,35 @@ def create_batch():
     if not seller:
         return jsonify({'error': 'Unauthorized'}), 401
 
-    settings = get_or_create_settings(seller.id)
     data = request.get_json()
+    exact_selection = False
+    selected_ids = None
+    if isinstance(data, dict) and 'exact_selection' in data:
+        if not isinstance(data['exact_selection'], bool):
+            return jsonify({'error': 'Некорректный режим точного выбора товаров'}), 400
+        exact_selection = data['exact_selection'] is True
+        if exact_selection:
+            selected_ids, parse_error = _parse_exact_product_ids(data.get('product_ids', []))
+            if parse_error:
+                return jsonify({'error': parse_error}), 400
+            _, problem = _resolve_exact_active_products(seller.id, selected_ids)
+            if problem:
+                return _exact_selection_json_error(problem)
 
-    if not data:
-        return jsonify({'error': 'No data provided'}), 400
+    settings = get_or_create_settings(seller.id)
+
+    if not isinstance(data, dict):
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        return jsonify({'error': 'Некорректный формат запроса'}), 400
 
     try:
         change_type = data.get('change_type', 'percent')
         change_value = float(data.get('change_value', 0)) if data.get('change_value') else 0
         name = data.get('name', '').strip()
         description = data.get('description', '').strip()
-        selected_ids = data.get('product_ids', [])
+        if not exact_selection:
+            selected_ids = data.get('product_ids', [])
         formula = data.get('formula', '').strip()
         formula_variables = data.get('formula_variables', {})
         price_source = data.get('price_source', 'local')
@@ -513,11 +655,18 @@ def create_batch():
                          f'Включите "Разрешить массовые операции" в настройках.'
             }), 400
 
-        # Получаем выбранные товары
-        selected_products = Product.query.filter(
-            Product.id.in_(selected_ids),
-            Product.seller_id == seller.id
-        ).all()
+        # Перед расчётом перепроверяем точный handoff без неактивных и чужих карточек.
+        if exact_selection:
+            selected_products, problem = _resolve_exact_active_products(
+                seller.id, selected_ids,
+            )
+            if problem:
+                return _exact_selection_json_error(problem)
+        else:
+            selected_products = Product.query.filter(
+                Product.id.in_(selected_ids),
+                Product.seller_id == seller.id
+            ).all()
 
         if not selected_products:
             return jsonify({'error': 'Товары не найдены'}), 404
@@ -535,6 +684,12 @@ def create_batch():
                 'error': 'Обнаружены опасные изменения. Операция заблокирована настройками безопасности.',
                 'stats': stats
             }), 403
+
+        if exact_selection:
+            # Calculation is local but may take time; recheck before any batch rows are added.
+            _, problem = _resolve_exact_active_products(seller.id, selected_ids)
+            if problem:
+                return _exact_selection_json_error(problem)
 
         # Создаем батч
         batch = PriceChangeBatch(
@@ -1168,6 +1323,25 @@ def api_get_products():
     if not seller:
         return jsonify({'error': 'Unauthorized'}), 401
 
+    if 'product_ids' in request.args:
+        raw_values = request.args.getlist('product_ids')
+        product_ids, parse_error = _parse_exact_product_query(raw_values)
+        if parse_error:
+            return jsonify({'success': False, 'error': parse_error}), 400
+        products, problem = _resolve_exact_active_products(seller.id, product_ids)
+        if problem:
+            return _exact_selection_json_error(problem)
+        product_data = [_price_product_json(product) for product in products]
+        return jsonify({
+            'success': True,
+            'exact_selection': True,
+            'products': product_data,
+            'total': len(product_data),
+            'page': 1,
+            'per_page': len(product_data),
+            'pages': 1,
+        })
+
     # Параметры пагинации
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
@@ -1205,23 +1379,7 @@ def api_get_products():
     products = query.order_by(Product.title).offset((page - 1) * per_page).limit(per_page).all()
 
     # Формируем ответ
-    products_data = []
-    for p in products:
-        products_data.append({
-            'id': p.id,
-            'nm_id': p.nm_id,
-            'vendor_code': p.vendor_code,
-            'title': p.title[:80] if p.title else '',
-            'brand': p.brand or '',
-            'category': p.object_name or '',
-            'price': float(p.price) if p.price else 0,
-            'discount_price': float(p.discount_price) if p.discount_price else None,
-            'supplier_price': float(p.supplier_price) if p.supplier_price else None,
-            'wb_price': float(p.wb_price) if p.wb_price else None,
-            'wb_discount': p.wb_discount,
-            'wb_discounted_price': float(p.wb_discounted_price) if p.wb_discounted_price else None,
-            'wb_price_synced_at': p.wb_price_synced_at.strftime('%d.%m.%Y %H:%M') if p.wb_price_synced_at else None
-        })
+    products_data = [_price_product_json(product) for product in products]
 
     return jsonify({
         'success': True,
@@ -1244,8 +1402,21 @@ def api_preview_changes():
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No data provided'}), 400
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Некорректный формат запроса'}), 400
 
+    if isinstance(data, dict) and 'exact_selection' in data and not isinstance(data['exact_selection'], bool):
+        return jsonify({'error': 'Некорректный режим точного выбора товаров'}), 400
+    exact_selection = isinstance(data, dict) and data.get('exact_selection') is True
     product_ids = data.get('product_ids', [])
+    if exact_selection:
+        product_ids, parse_error = _parse_exact_product_ids(product_ids)
+        if parse_error:
+            return jsonify({'error': parse_error}), 400
+        _, problem = _resolve_exact_active_products(seller.id, product_ids)
+        if problem:
+            return _exact_selection_json_error(problem)
+
     change_type = data.get('change_type', 'percent')
     change_value = float(data.get('change_value', 0)) if data.get('change_value') else 0
     formula = data.get('formula', '')
@@ -1257,10 +1428,16 @@ def api_preview_changes():
 
     settings = get_or_create_settings(seller.id)
 
-    products = Product.query.filter(
-        Product.id.in_(product_ids),
-        Product.seller_id == seller.id
-    ).all()
+    if exact_selection:
+        # Re-read the exact seller-owned active set immediately before calculation.
+        products, problem = _resolve_exact_active_products(seller.id, product_ids)
+        if problem:
+            return _exact_selection_json_error(problem)
+    else:
+        products = Product.query.filter(
+            Product.id.in_(product_ids),
+            Product.seller_id == seller.id
+        ).all()
 
     items, stats = calculate_price_changes(
         products, change_type, change_value, settings,
@@ -1268,11 +1445,14 @@ def api_preview_changes():
         price_source=price_source
     )
 
-    return jsonify({
+    response_data = {
         'success': True,
         'items': items,
-        'stats': stats
-    })
+        'stats': stats,
+    }
+    if exact_selection:
+        response_data['exact_selection'] = True
+    return jsonify(response_data)
 
 
 @prices_bp.route('/api/batch/<int:batch_id>/status')

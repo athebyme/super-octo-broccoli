@@ -153,9 +153,7 @@
                 <div class="flex items-center gap-2">
                     <h1 class="sh-page-title">Мои товары</h1>
                     {% include 'partials/card_journey_help.html' %}
-                    <a href="{{ url_for('seller_my_products_beta') }}" class="sh-btn sh-btn--accent sh-btn--sm"
-                       style="margin-left:12px"
-                       title="Новый экран массовых операций: видно, что произойдёт, до подтверждения">Новая версия</a>
+                    <a href="{{ url_for('seller_my_products_beta') }}" class="sh-btn sh-btn--secondary sh-btn--sm">Массовые действия</a>
                 </div>
                 <p class="sh-page-subtitle">
                     {{ stats.total }} товаров · {{ stats.validated }} готово к WB · {{ stats.imported }} на WB{% if ozon_drafts_total %} · {{ ozon_drafts_total }} черновиков Ozon{% endif %}

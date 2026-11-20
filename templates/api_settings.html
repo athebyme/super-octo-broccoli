@@ -1,23 +1,22 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, status_icon %}
 
-{% block title %}Настройки API - Seller Hub{% endblock %}
+{% block title %}Подключения — Seller Hub{% endblock %}
 
 {% block content %}
 <div class="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-    <!-- Hero header -->
-    <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8">
-        <div class="relative">
-            <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Настройки API</h1>
-            <p class="mt-2 text-sm text-gray-400">
-                Настройте API ключи для синхронизации данных с маркетплейсами
-            </p>
+    <header class="sh-page-header">
+        <div class="sh-page-header-content">
+            <div>
+                <h1 class="sh-page-title">Подключения</h1>
+                <p class="sh-page-subtitle">Кабинеты и ключи маркетплейсов</p>
+            </div>
         </div>
-    </div>
+    </header>
 
     {% include "partials/seller_workspace_settings_nav.html" %}
 
-    <p class="seller-workspace-note">Наличие сохранённого ключа и отметка подключения показывают наблюдавшееся состояние, но не подтверждают доступ каждого метода API. Срок ключа и ошибки подключения показаны рядом с соответствующим кабинетом.</p>
+    <p class="seller-workspace-note">Сохранённый ключ не подтверждает доступ ко всем методам API. Статус и срок его действия показаны рядом с кабинетом.</p>
 
     <section class="sh-card p-5 sm:p-6" aria-labelledby="ozon-api-settings-title">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -29,15 +28,14 @@
                     <div class="flex flex-wrap items-center gap-2">
                         <h2 id="ozon-api-settings-title" class="text-lg font-semibold" style="color:var(--text)">Ozon</h2>
                     </div>
-                    <p class="mt-1 text-sm" style="color:var(--text-secondary)">
-                        Подключите магазин одним действием. Проверка ключа и загрузка каталога продолжатся в фоне.
-                    </p>
                 </div>
             </div>
+            {% if ozon_enabled and not ozon_accounts %}
             <a href="{{ url_for('marketplace_accounts.index') }}" class="sh-btn sh-btn--secondary self-start">
-                {{ 'Мои подключения' if ozon_accounts else 'Подключить Ozon' }}
+                Подключить Ozon
                 {{ icon('arrow-right', size=16) }}
             </a>
+            {% endif %}
         </div>
 
         {% if not ozon_enabled %}

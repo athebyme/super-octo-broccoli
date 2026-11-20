@@ -8,7 +8,7 @@
 {% set requested_account_id = request.args.get('account_id', '') %}
 {% set account_choice = namespace(requested=none, default=none, context=none) %}
 {% if endpoint.startswith('ozon_account_health.') and account_id is defined %}
-    {# This route passes the seller-owned account returned by its exact scope check. #}
+    {# The health route passes only the seller-owned account returned by its exact scope check. #}
     {% set account_choice.context = account_id %}
 {% endif %}
 {% if requested_account_id and requested_account_id.isascii() and requested_account_id.isdecimal() and not requested_account_id.startswith('0') and requested_account_id|length <= 18 %}
@@ -39,31 +39,27 @@
     {% endif %}
 {% endif %}
 {% set ozon_destination_account_id = selected_account_id if selected_account_id is not none and (ozon_account_context or requested_marketplace == 'ozon') else mp_last_account %}
-<nav class="seller-workspace-settings-nav" aria-label="Разделы настроек">
-    <div class="seller-workspace-settings-group">
-        <span class="seller-workspace-settings-label">Подключения</span>
-        <a href="{{ url_for('api_settings') }}" class="seller-workspace-settings-link{% if endpoint == 'api_settings' %} is-active{% endif %}"{% if endpoint == 'api_settings' %} aria-current="page"{% endif %}>Wildberries и API</a>
+{% set settings_more_open = endpoint == 'product_defaults_page' or endpoint == 'auto_publish_settings' or endpoint.startswith('prohibited_words.seller') or endpoint.startswith('marketplace_readiness.') or endpoint == 'api_logs' or endpoint.startswith('ozon_account_health.') %}
+<nav class="seller-workspace-settings-nav" aria-label="Настройки продавца">
+    <div class="seller-workspace-settings-primary" role="group" aria-label="Основные настройки">
+        <a href="{{ url_for('api_settings') }}" class="seller-workspace-settings-link{% if endpoint == 'api_settings' %} is-active{% endif %}"{% if endpoint == 'api_settings' %} aria-current="page"{% endif %}>Подключения</a>
         {% if config.get('MARKETPLACE_OZON_ENABLED') %}
         <a href="{{ url_for('marketplace_accounts.index', account_id=ozon_destination_account_id) }}" class="seller-workspace-settings-link{% if endpoint.startswith('marketplace_accounts.') %} is-active{% endif %}"{% if endpoint.startswith('marketplace_accounts.') %} aria-current="page"{% endif %}>Кабинеты Ozon</a>
         {% endif %}
+        <a href="{{ url_for('telegram_alerts_page') }}" class="seller-workspace-settings-link{% if endpoint == 'telegram_alerts_page' %} is-active{% endif %}"{% if endpoint == 'telegram_alerts_page' %} aria-current="page"{% endif %}>Настройки уведомлений</a>
     </div>
-    <div class="seller-workspace-settings-group">
-        <span class="seller-workspace-settings-label">Товары</span>
-        <a href="{{ url_for('product_defaults_page') }}" class="seller-workspace-settings-link{% if endpoint == 'product_defaults_page' %} is-active{% endif %}"{% if endpoint == 'product_defaults_page' %} aria-current="page"{% endif %}>Значения по умолчанию WB</a>
-        <a href="{{ url_for('auto_publish_settings', marketplace=selected_marketplace, account_id=selected_account_id) }}" class="seller-workspace-settings-link{% if endpoint == 'auto_publish_settings' %} is-active{% endif %}"{% if endpoint == 'auto_publish_settings' %} aria-current="page"{% endif %}>Автопубликация</a>
-        <a href="{{ url_for('prohibited_words.seller_index') }}" class="seller-workspace-settings-link{% if endpoint.startswith('prohibited_words.seller') %} is-active{% endif %}"{% if endpoint.startswith('prohibited_words.seller') %} aria-current="page"{% endif %}>Ограничения контента</a>
-    </div>
-    <div class="seller-workspace-settings-group">
-        <span class="seller-workspace-settings-label">Уведомления</span>
-        <a href="{{ url_for('telegram_alerts_page') }}" class="seller-workspace-settings-link{% if endpoint == 'telegram_alerts_page' %} is-active{% endif %}"{% if endpoint == 'telegram_alerts_page' %} aria-current="page"{% endif %}>Аналитические уведомления</a>
-        <a href="{{ url_for('notifications_page') }}" class="seller-workspace-settings-link">Центр уведомлений</a>
-    </div>
-    <div class="seller-workspace-settings-group">
-        <span class="seller-workspace-settings-label">Диагностика</span>
-        <a href="{{ url_for('marketplace_readiness.index') }}" class="seller-workspace-settings-link{% if endpoint.startswith('marketplace_readiness.') %} is-active{% endif %}"{% if endpoint.startswith('marketplace_readiness.') %} aria-current="page"{% endif %}>Готовность и флаги</a>
-        <a href="{{ url_for('api_logs') }}" class="seller-workspace-settings-link{% if endpoint == 'api_logs' %} is-active{% endif %}"{% if endpoint == 'api_logs' %} aria-current="page"{% endif %}>Журнал запросов WB</a>
-        {% if ozon_destination_account_id %}
-        <a href="{{ url_for('ozon_account_health.page', account_id=ozon_destination_account_id) }}" class="seller-workspace-settings-link{% if endpoint.startswith('ozon_account_health.') %} is-active{% endif %}"{% if endpoint.startswith('ozon_account_health.') %} aria-current="page"{% endif %}>Состояние кабинета Ozon</a>
-        {% endif %}
-    </div>
+    <details class="seller-workspace-settings-more"{% if settings_more_open %} open{% endif %}>
+        <summary class="seller-workspace-settings-summary">Дополнительные настройки</summary>
+        <div class="seller-workspace-settings-secondary">
+            <a href="{{ url_for('notifications_page') }}" class="seller-workspace-settings-link">Центр уведомлений</a>
+            <a href="{{ url_for('product_defaults_page') }}" class="seller-workspace-settings-link{% if endpoint == 'product_defaults_page' %} is-active{% endif %}"{% if endpoint == 'product_defaults_page' %} aria-current="page"{% endif %}>Значения по умолчанию WB</a>
+            <a href="{{ url_for('auto_publish_settings', marketplace=selected_marketplace, account_id=selected_account_id) }}" class="seller-workspace-settings-link{% if endpoint == 'auto_publish_settings' %} is-active{% endif %}"{% if endpoint == 'auto_publish_settings' %} aria-current="page"{% endif %}>Автопубликация</a>
+            <a href="{{ url_for('prohibited_words.seller_index') }}" class="seller-workspace-settings-link{% if endpoint.startswith('prohibited_words.seller') %} is-active{% endif %}"{% if endpoint.startswith('prohibited_words.seller') %} aria-current="page"{% endif %}>Ограничения контента</a>
+            <a href="{{ url_for('marketplace_readiness.index') }}" class="seller-workspace-settings-link{% if endpoint.startswith('marketplace_readiness.') %} is-active{% endif %}"{% if endpoint.startswith('marketplace_readiness.') %} aria-current="page"{% endif %}>Готовность и флаги</a>
+            <a href="{{ url_for('api_logs') }}" class="seller-workspace-settings-link{% if endpoint == 'api_logs' %} is-active{% endif %}"{% if endpoint == 'api_logs' %} aria-current="page"{% endif %}>Журнал запросов WB</a>
+            {% if ozon_destination_account_id %}
+            <a href="{{ url_for('ozon_account_health.page', account_id=ozon_destination_account_id) }}" class="seller-workspace-settings-link{% if endpoint.startswith('ozon_account_health.') %} is-active{% endif %}"{% if endpoint.startswith('ozon_account_health.') %} aria-current="page"{% endif %}>Состояние кабинета Ozon</a>
+            {% endif %}
+        </div>
+    </details>
 </nav>

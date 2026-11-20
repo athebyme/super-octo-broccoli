@@ -4,7 +4,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261120-bulk-workspace') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
     'wbConnected': wb_connected,
@@ -22,6 +22,8 @@
         'enrichBulk': url_for('products_enrich_bulk'),
         'wbPreviewBase': '/my-products/',
         'supplierCatalog': url_for('supplier_catalog'),
+        'wbPriceChange': url_for('prices.prices_change'),
+        'ozonPriceProposals': url_for('marketplace_commercial.index', proposal_kind='price', status='pending_review', account_id=ozon_accounts[0].id if ozon_accounts|length == 1 else none),
         'apiSettings': url_for('api_settings'),
         'classic': url_for('seller_my_products'),
         'commonContent': url_for('common_product_content_editor_page'),
@@ -35,18 +37,17 @@
     <header class="shk-head">
         <div>
             <h1 class="shk-head-title">Мои товары</h1>
-            <p class="shk-head-sub">
-                Выберите карточки и примените действие ко всем сразу — публикация, обновление данных, фото.
-            </p>
+            <p class="shk-head-sub">Выберите товары для массовых действий.</p>
         </div>
-        <div class="shk-head-actions">
+        <div class="mp-head-actions">
             <a class="sh-btn sh-btn--primary" :href="urls.supplierCatalog">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="shk-btn-icon"><path d="M12 5v14M5 12h14"/></svg>
-                Добавить товары
+                Импортировать товары
             </a>
-            <a class="shk-quiet-link" :href="urls.classic" title="Открыть прежний интерфейс этой страницы">
-                Старая версия
-            </a>
+            <nav class="mp-price-links" aria-label="Работа с ценами">
+                <a :href="urls.wbPriceChange">Цены WB</a>
+                <a v-if="ozonEnabled" :href="urls.ozonPriceProposals">Ценовые заявки Ozon</a>
+            </nav>
         </div>
     </header>
 
@@ -99,8 +100,8 @@
     <div class="mp-listhead" v-if="items.length || loading">
         <label class="mp-selectall">
             <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected"
-                   @change="toggleAll" aria-label="Выбрать все на странице">
-            <span>{{ allSelected ? 'Снять выбор' : 'Выбрать все на странице' }}</span>
+                   @change="toggleAll" aria-label="Выбрать все загруженные товары">
+            <span>{{ allSelected ? 'Снять выбор' : 'Выбрать загруженные' }}</span>
         </label>
         <span class="mp-listhead-count">
             {{ $fmt.int(pagination.total || 0) }} {{ $fmt.plural(pagination.total || 0, 'товар', 'товара', 'товаров') }}
@@ -204,22 +205,37 @@
         </article>
     </div>
 
-    <div v-if="items.length" class="mp-foot">
+    <div v-if="items.length || !loading" class="mp-foot">
         <span class="mp-foot-info">Показано {{ items.length }} из {{ $fmt.int(pagination.total || 0) }}</span>
         <button v-if="pagination.has_next" type="button" class="sh-btn sh-btn--secondary"
                 :class="{'is-loading': loadingMore}" :disabled="loadingMore" @click="loadMore">Показать ещё</button>
+        <a class="mp-legacy-link" :href="urls.classic">Прежний список</a>
     </div>
 
-    <!-- Массовые действия: сгруппированы, опасные отдельно -->
-    <sh-bulk-bar :count="selected.length" @clear="selected = []">
+    <!-- Основные операции собраны в одном списке; редкие действия скрыты до запроса. -->
+    <sh-bulk-bar class="mp-bulkbar" :count="selected.length" @clear="selected = []">
         <sh-action-menu :count="selected.length" :groups="actionGroups"
-                        label="Что сделать" @pick="startAction"></sh-action-menu>
+                        label="Что сделать" @pick="startAction"
+                        @opened="$refs.moreActions?.removeAttribute('open')"></sh-action-menu>
+        <details ref="moreActions" class="mp-more-actions" v-if="selected.length">
+            <summary>Ещё</summary>
+            <div class="mp-more-actions-menu" role="group" aria-label="Дополнительные действия">
+                <span class="shk-actions-group-title">Дополнительно</span>
+                <button v-for="action in secondaryActions" :key="action.key" type="button"
+                        class="shk-actions-item" :class="{'is-danger': action.danger}"
+                        :disabled="action.disabled"
+                        @click="startAction(action); $event.currentTarget.closest('details').open = false">
+                    <span class="shk-actions-item-label">{{ action.label }}</span>
+                    <span v-if="action.hint" class="shk-actions-item-hint">{{ action.hint }}</span>
+                </button>
+            </div>
+        </details>
     </sh-bulk-bar>
 
     <sh-confirm :open="confirm.open" :title="confirm.title" :message="confirm.message"
                 :details="confirm.details" :confirm-label="confirm.label"
                 :danger="confirm.danger" :busy="confirm.busy"
-                @confirm="runAction" @cancel="confirm.open = false"></sh-confirm>
+                @confirm="runAction" @cancel="cancelAction"></sh-confirm>
     <dialog ref="ozonDialog" class="mp-ozon-dialog" aria-labelledby="mp-ozon-dialog-title" @cancel.prevent="closeOzonDialog">
         <div class="mp-ozon-dialog-head"><div><p class="mp-ozon-eyebrow">Ozon · локальная подготовка</p><h2 id="mp-ozon-dialog-title">Подготовить {{ ozonIds.length }} товаров</h2></div><button type="button" class="mp-ozon-close" aria-label="Закрыть" :disabled="!!ozonBusy" @click="closeOzonDialog">×</button></div>
         <p>Создадим или обновим локальные черновики. Ничего не отправится в Ozon. После подготовки вы проверите поля, фото и ошибки, затем отдельно подтвердите отправку готовых карточек.</p>
@@ -232,7 +248,7 @@
 </div>
 
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
-<script src="{{ url_for('static', filename='sh-vue-kit.js') }}"></script>
+<script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261120-bulk-workspace') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261120-bulk-workspace') }}"></script>
 {% endblock %}

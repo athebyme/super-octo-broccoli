@@ -2134,7 +2134,7 @@
     </style>
     <link rel="stylesheet" href="{{ url_for('static', filename='sh-ui.css', v='20260716-2') }}">
     {% if current_user.is_authenticated and current_user.seller %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='seller-workspace.css', v='20260930-ux01') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='seller-workspace.css', v='20261120-bulk-workspace') }}">
     {% endif %}
     {% if current_user.is_authenticated and current_user.seller %}
     <link rel="stylesheet" href="{{ url_for('static', filename='ai-chat-popup.css', v='20260715-image1') }}">
@@ -2520,10 +2520,10 @@
         <span class="sh-cmdpal-item-label">Карточки WB</span>
         <span class="sh-cmdpal-item-hint">Товары · Wildberries</span>
     </a>
-    <a href="{{ url_for('seller_my_products') }}" class="sh-cmdpal-item">
+    <a href="{{ url_for('seller_my_products_beta') }}" class="sh-cmdpal-item">
         {{ icon('package', size=20) }}
-        <span class="sh-cmdpal-item-label">Внутренние товары</span>
-        <span class="sh-cmdpal-item-hint">ImportedProduct · источник и связь с WB</span>
+        <span class="sh-cmdpal-item-label">Мои товары</span>
+        <span class="sh-cmdpal-item-hint">Внутренние товары · массовые действия</span>
     </a>
     <a href="{{ url_for('supplier_catalog') }}" class="sh-cmdpal-item">
         {{ icon('office', size=20) }}

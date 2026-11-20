@@ -61,7 +61,7 @@ class SellerWorkspaceNavigationTest(unittest.TestCase):
         )
 
         cls.endpoint_cases = {
-            "seller_my_products_beta": ("products", "Внутренние товары"),
+            "seller_my_products_beta": ("products", "Мои товары"),
             "supplier_catalog_product_detail": ("products", "Каталог поставщиков"),
             "supplier_catalog_export": ("products", "Каталог поставщиков"),
             "marketplace_listings.detail": ("products", "Карточки кабинетов"),
@@ -175,6 +175,7 @@ class SellerWorkspaceNavigationTest(unittest.TestCase):
             (REPOSITORY / path).read_text(encoding="utf-8")
             for path in (
                 "templates/base.html",
+                "templates/my_products_beta.html",
                 "templates/partials/seller_workspace_nav.html",
                 "templates/partials/seller_workspace_utility.html",
             )

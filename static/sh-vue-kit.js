@@ -171,6 +171,7 @@
     /* ==================== Компоненты ==================== */
 
     var components = {};
+    var confirmInstanceSequence = 0;
 
     /* Плитка показателя: крупное число, подпись, необязательная динамика */
     components['sh-stat'] = {
@@ -509,8 +510,11 @@
             label: { type: String, default: 'Действия' },
             disabled: { type: Boolean, default: false },
         },
-        emits: ['pick'],
+        emits: ['pick', 'opened'],
         data: function () { return { open: false }; },
+        watch: {
+            open: function (value) { if (value) this.$emit('opened'); },
+        },
         mounted: function () {
             this._onDoc = this.onDocClick.bind(this);
             document.addEventListener('click', this._onDoc);
@@ -522,6 +526,73 @@
             onDocClick: function (event) {
                 if (this.$el && !this.$el.contains(event.target)) this.open = false;
             },
+            enabledMenuItems: function () {
+                var menu = this.$el && this.$el.querySelector('[role="menu"]');
+                return menu ? Array.from(menu.querySelectorAll('[role="menuitem"]:not(:disabled)')) : [];
+            },
+            focusMenuItem: function (position) {
+                var self = this;
+                this.$nextTick(function () {
+                    if (!self.open) return;
+                    var items = self.enabledMenuItems();
+                    if (!items.length) return;
+                    items[position === 'last' ? items.length - 1 : 0].focus();
+                });
+            },
+            openMenu: function (position) {
+                if (this.disabled || !this.count) return;
+                this.open = true;
+                this.focusMenuItem(position);
+            },
+            toggleMenu: function (event) {
+                if (this.open) {
+                    this.open = false;
+                    return;
+                }
+                if (this.disabled || !this.count) return;
+                this.open = true;
+                // Native Enter/Space clicks have detail 0; move keyboard users
+                // directly into the menu while pointer users keep normal focus.
+                if (event && event.detail === 0) this.focusMenuItem('first');
+            },
+            closeMenu: function (restoreTrigger) {
+                this.open = false;
+                if (!restoreTrigger) return;
+                var self = this;
+                this.$nextTick(function () {
+                    if (self.$refs.trigger) self.$refs.trigger.focus();
+                });
+            },
+            onTriggerKeydown: function (event) {
+                if (event.key === 'Escape' && this.open) {
+                    event.preventDefault();
+                    this.closeMenu(true);
+                    return;
+                }
+                if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+                event.preventDefault();
+                this.openMenu(event.key === 'ArrowUp' ? 'last' : 'first');
+            },
+            onMenuKeydown: function (event) {
+                var items = this.enabledMenuItems();
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    this.closeMenu(true);
+                    return;
+                }
+                if (!items.length) return;
+                var activeIndex = items.indexOf(document.activeElement);
+                var nextIndex;
+                if (event.key === 'Home') nextIndex = 0;
+                else if (event.key === 'End') nextIndex = items.length - 1;
+                else if (event.key === 'ArrowDown') {
+                    nextIndex = activeIndex < 0 ? 0 : (activeIndex + 1) % items.length;
+                } else if (event.key === 'ArrowUp') {
+                    nextIndex = activeIndex < 0 ? items.length - 1 : (activeIndex - 1 + items.length) % items.length;
+                } else return;
+                event.preventDefault();
+                items[nextIndex].focus();
+            },
             pick: function (action) {
                 if (action.disabled) return;
                 this.open = false;
@@ -530,14 +601,15 @@
         },
         template: `
             <div class="shk-actions">
-                <button type="button" class="sh-btn sh-btn--primary sh-btn--sm"
-                        :disabled="disabled || !count" @click.stop="open = !open"
+                <button ref="trigger" type="button" class="sh-btn sh-btn--primary sh-btn--sm"
+                        :disabled="disabled || !count" aria-haspopup="menu"
+                        @click.stop="toggleMenu($event)" @keydown="onTriggerKeydown"
                         :aria-expanded="open ? 'true' : 'false'">
                     {{ label }}
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="shk-actions-caret"><path d="m6 9 6 6 6-6"/></svg>
                 </button>
                 <transition name="shk-fade">
-                    <div v-if="open" class="shk-actions-menu" role="menu">
+                    <div v-if="open" class="shk-actions-menu" role="menu" @keydown="onMenuKeydown">
                         <div v-for="group in groups" :key="group.title" class="shk-actions-group"
                              :class="{'is-danger': group.danger}">
                             <span class="shk-actions-group-title">{{ group.title }}</span>
@@ -567,6 +639,9 @@
             busy: { type: Boolean, default: false },
         },
         emits: ['confirm', 'cancel'],
+        data: function () {
+            return { titleId: 'shk-confirm-title-' + (++confirmInstanceSequence) };
+        },
         watch: {
             open: function (value) {
                 if (!value) return;
@@ -597,8 +672,8 @@
                     <div v-if="open" class="shk-backdrop" @click="$emit('cancel')"></div>
                 </transition>
                 <transition name="shk-rise">
-                    <div v-if="open" class="shk-confirm" role="alertdialog" aria-modal="true">
-                        <h3 class="shk-confirm-title">{{ title }}</h3>
+                    <div v-if="open" class="shk-confirm" role="alertdialog" aria-modal="true" :aria-labelledby="titleId">
+                        <h3 :id="titleId" class="shk-confirm-title">{{ title || 'Подтвердите действие' }}</h3>
                         <p v-if="message" class="shk-confirm-text">{{ message }}</p>
                         <ul v-if="details.length" class="shk-confirm-list">
                             <li v-for="(line, i) in details" :key="i">{{ line }}</li>

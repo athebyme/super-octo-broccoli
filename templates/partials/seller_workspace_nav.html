@@ -52,11 +52,11 @@
 
     {% call workspace_group('products', 'Товары', 'package') %}
     <div class="seller-workspace-link-group-title">Карточки и подготовка</div>
+    <a href="{{ url_for('seller_my_products_beta') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint in ['seller_my_products', 'seller_my_products_beta', 'seller_product_wb_preview'] %} active{% endif %}"{% if endpoint in ['seller_my_products', 'seller_my_products_beta', 'seller_product_wb_preview'] %} aria-current="page"{% endif %}>Мои товары</a>
     <a href="{{ url_for('products_list') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_edit_history'] %} active{% endif %}"{% if endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_edit_history'] %} aria-current="page"{% endif %}>Карточки WB</a>
     {% if config.get('MARKETPLACE_OZON_ENABLED') %}
     <a href="{{ url_for('marketplace_listings.index') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint.startswith('marketplace_listings.') %} active{% endif %}"{% if endpoint.startswith('marketplace_listings.') %} aria-current="page"{% endif %}>Карточки кабинетов</a>
     {% endif %}
-    <a href="{{ url_for('seller_my_products') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint in ['seller_my_products', 'seller_my_products_beta', 'seller_product_wb_preview'] %} active{% endif %}"{% if endpoint in ['seller_my_products', 'seller_my_products_beta', 'seller_product_wb_preview'] %} aria-current="page"{% endif %}>Внутренние товары</a>
     {% if config.get('MARKETPLACE_OZON_ENABLED') %}
     <a href="{{ url_for('marketplace_drafts.index', account_id=mp_last_account) }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint.startswith('marketplace_drafts.') %} active{% endif %}"{% if endpoint.startswith('marketplace_drafts.') %} aria-current="page"{% endif %}>Черновики Ozon</a>
     {% endif %}

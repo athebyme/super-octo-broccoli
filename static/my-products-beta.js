@@ -39,6 +39,24 @@
         }).join('');
     }
 
+    var MAX_BULK_SELECTION = 200;
+    function exactWbProductIds(items) {
+        if (!Array.isArray(items) || !items.length) return null;
+        var ids = items.map(function (item) {
+            return item && item.wb ? item.wb.product_id : null;
+        });
+        if (ids.some(function (id) {
+            return !Number.isSafeInteger(id) || id <= 0;
+        }) || new Set(ids).size !== ids.length) return null;
+        return ids;
+    }
+    function sameIds(left, right) {
+        if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+        if (new Set(left).size !== left.length || new Set(right).size !== right.length) return false;
+        var rightSet = new Set(right);
+        return left.every(function (id) { return rightSet.has(id); });
+    }
+
     var TABS = [
         { key: '', label: 'Все', countKey: 'all' },
         { key: 'pending', label: 'В работе', countKey: 'pending' },
@@ -89,6 +107,7 @@
                 confirm: {
                     open: false, key: null, title: '', message: '',
                     details: [], label: 'Продолжить', danger: false, busy: false,
+                    productIds: [], selectionIds: [],
                 },
             };
         },
@@ -106,85 +125,117 @@
                     return chosen.indexOf(item.id) !== -1;
                 });
             },
-            /* Действия зависят от того, ЧТО выбрано: публиковать нечего, если
-               все карточки уже на WB, и наоборот. */
+            /* Основные операции показываются вместе; редкие — в «Ещё». */
             actionGroups: function () {
                 var chosen = this.selectedItems;
-                var published = chosen.filter(function (i) { return i.wb; }).length;
-                var unpublished = chosen.length - published;
+                var createRows = chosen.filter(function (item) {
+                    return !item.wb && ['pending', 'failed', 'validated'].indexOf(item.import_status) !== -1;
+                });
+                var wbIds = exactWbProductIds(chosen);
                 var withUpdates = chosen.filter(function (i) { return i.has_supplier_update; }).length;
-                var groups = [];
-
-                groups.push({
-                    title: 'Публикация',
+                var underLimit = chosen.length <= MAX_BULK_SELECTION;
+                return [{
+                    title: 'Основные действия',
                     items: [
                         {
                             key: 'push_wb',
-                            label: 'Отправить на Wildberries',
-                            hint: unpublished
-                                ? 'создаст ' + unpublished + ' '
-                                    + this.$fmt.plural(unpublished, 'новую карточку', 'новые карточки', 'новых карточек')
-                                : 'все выбранные уже на WB',
-                            disabled: !this.wbConnected || !unpublished,
+                            label: 'Создать карточки WB',
+                            hint: !this.wbConnected
+                                ? 'подключите кабинет Wildberries'
+                                : !underLimit
+                                ? 'за один запуск можно выбрать не больше 200 товаров'
+                                : createRows.length
+                                    ? 'для ' + createRows.length + ' товаров, ещё не связанных с WB'
+                                    : 'выберите товары, которые ещё не связаны с WB',
+                            disabled: !this.wbConnected || !underLimit || !createRows.length,
                         },
                         this.ozonEnabled ? {
                             key: 'ozon',
                             label: 'Подготовить для Ozon',
-                            hint: 'создаст локальные черновики; отправка подтверждается отдельно',
-                            disabled: !this.ozonAccounts.length || !!this.ozonPending || this.ozonStorageProblem || !!this.ozonBusy,
+                            hint: !underLimit
+                                ? 'за один запуск можно выбрать не больше 200 товаров'
+                                : !this.ozonAccounts.length
+                                    ? 'сначала подключите магазин Ozon'
+                                    : this.ozonBusy
+                                        ? 'дождитесь завершения текущего действия'
+                                    : this.ozonPending || this.ozonStorageProblem || this.ozonSessionEnded
+                                        ? 'сначала проверьте сохранённый результат подготовки'
+                                : 'локальные черновики в выбранном магазине; отправка подтверждается отдельно',
+                            disabled: !underLimit || !this.ozonAccounts.length || !!this.ozonPending || this.ozonStorageProblem || !!this.ozonBusy || this.ozonSessionEnded,
                         } : null,
-                    ].filter(Boolean),
-                });
-
-                groups.push({
-                    title: 'Данные и контент',
-                    items: [
                         {
                             key: 'refresh_supplier',
-                            label: 'Подтянуть данные поставщика',
-                            hint: withUpdates
-                                ? 'у ' + withUpdates + ' ' + this.$fmt.plural(withUpdates, 'карточки', 'карточек', 'карточек') + ' есть новые данные'
-                                : 'обновит названия, характеристики, фото',
+                            label: 'Обновить из поставщика',
+                            hint: !underLimit
+                                ? 'за один запуск можно выбрать не больше 200 товаров'
+                                : withUpdates
+                                    ? withUpdates + ' с новыми данными; изменения останутся в Seller Hub'
+                                    : 'обновит только ваши данные в Seller Hub, карточки площадок не меняются',
+                            disabled: !underLimit,
                         },
                         {
                             key: 'common_content',
                             label: 'Изменить общий контент',
                             hint: chosen.length > 50
                                 ? 'за один раз можно открыть не больше 50 товаров'
-                                : 'сохранит только общий товар в Seller Hub; карточки каналов не изменятся',
+                                : 'изменит данные в Seller Hub; карточки площадок не обновятся',
                             disabled: !chosen.length || chosen.length > 50,
                         },
                         {
-                            key: 'enrich',
-                            label: 'Дополнить карточки на WB',
-                            hint: published
-                                ? 'фото и характеристики для ' + published + ' '
-                                    + this.$fmt.plural(published, 'карточки', 'карточек', 'карточек')
-                                : 'только для опубликованных',
-                            disabled: !published,
+                            key: 'wb_prices',
+                            label: 'Изменить цены WB',
+                            hint: !underLimit
+                                ? 'за один запуск можно выбрать не больше 200 товаров'
+                                : !wbIds
+                                    ? chosen.some(function (item) { return !item.wb; })
+                                        ? 'выберите только товары с карточкой Wildberries'
+                                        : 'у части выбора нет связанного ID карточки WB'
+                                    : !this.wbConnected
+                                        ? 'подключите кабинет Wildberries'
+                                        : 'откроется проверка выбранного набора цен',
+                            disabled: !underLimit || !wbIds || !this.wbConnected,
                         },
-                        {
-                            key: 'audit',
-                            label: 'Сверить с Wildberries',
-                            hint: 'покажет расхождения фото и характеристик',
-                            disabled: !this.wbConnected || !published,
-                        },
-                    ],
-                });
-
-                groups.push({
-                    title: 'Опасные',
-                    danger: true,
-                    items: [{
+                    ].filter(Boolean),
+                }];
+            },
+            secondaryActions: function () {
+                var chosen = this.selectedItems;
+                var published = chosen.filter(function (item) { return item.wb; }).length;
+                var wbIds = exactWbProductIds(chosen);
+                var underLimit = chosen.length <= MAX_BULK_SELECTION;
+                return [
+                    {
+                        key: 'audit',
+                        label: 'Сверить с Wildberries',
+                        hint: !underLimit
+                            ? 'за один запуск можно выбрать не больше 200 товаров'
+                            : !this.wbConnected
+                                ? 'подключите кабинет Wildberries'
+                                : !wbIds
+                                ? chosen.some(function (item) { return !item.wb; })
+                                    ? 'выберите только опубликованные карточки WB'
+                                    : 'у части выбора нет связанного ID карточки WB'
+                                : 'только чтение: покажет расхождения фото и характеристик',
+                        disabled: !this.wbConnected || !wbIds || !underLimit,
+                    },
+                    {
+                        key: 'enrich',
+                        label: 'Дополнить карточки на WB',
+                        hint: wbIds && underLimit
+                            ? 'выбрать фото и характеристики на экране проверки'
+                            : 'нужны только опубликованные карточки WB; лимит 200',
+                        disabled: !wbIds || !underLimit,
+                    },
+                    {
                         key: 'delete',
                         label: 'Удалить из «Моих товаров»',
                         hint: published
-                            ? published + ' ' + this.$fmt.plural(published, 'карточка уже на маркетплейсе — останется', 'карточки уже на маркетплейсе — останутся', 'карточек уже на маркетплейсе — останутся') + ' там'
-                            : 'станут доступны для повторного импорта',
+                            ? published + ' ' + this.$fmt.plural(published, 'карточка WB останется', 'карточки WB останутся', 'карточек WB останутся') + ' на площадке'
+                            : 'товары снова станут доступны для импорта',
                         danger: true,
-                    }],
-                });
-                return groups;
+                        disabled: !underLimit,
+                    },
+                ];
             },
             emptyState: function () {
                 if (this.filters.search || this.filters.supplier
@@ -308,28 +359,40 @@
             /* ---------- массовые действия ---------- */
             startAction: function (action) {
                 var chosen = this.selectedItems;
+                var selectionIds = this.selected.slice();
+                if (!chosen.length || selectionIds.length !== chosen.length ||
+                    new Set(selectionIds).size !== selectionIds.length ||
+                    chosen.some(function (item) { return selectionIds.indexOf(item.id) === -1; })) {
+                    this.error = 'Выбор изменился. Обновите список и отметьте товары заново.';
+                    return;
+                }
                 var published = chosen.filter(function (i) { return i.wb; }).length;
+                var createIds = chosen.filter(function (item) {
+                    return !item.wb && ['pending', 'failed', 'validated'].indexOf(item.import_status) !== -1;
+                }).map(function (item) { return item.id; });
                 var plans = {
                     push_wb: {
-                        title: 'Отправить на Wildberries',
-                        message: 'Создадим карточки для ' + (chosen.length - published) + ' '
-                            + this.$fmt.plural(chosen.length - published, 'товара', 'товаров', 'товаров')
-                            + ', которых там ещё нет.',
+                        title: 'Создать карточки WB',
+                        message: 'Попробуем создать карточки для ' + createIds.length + ' '
+                            + this.$fmt.plural(createIds.length, 'товар', 'товара', 'товаров') + '.',
                         details: [
-                            'Уже опубликованные карточки пропустим',
-                            'Цены и остатки не меняем — только создаём карточки',
+                            chosen.length > createIds.length
+                                ? 'Остальные выбранные товары не войдут в этот запуск.'
+                                : 'Запускается только создание карточек, ещё не связанных с WB.',
+                            'Для ожидающих или ошибочных товаров сначала проверим готовность.',
+                            'При создании отправим рассчитанную цену, если она доступна, и доступные фото.',
                             'Отправка идёт в фоне, за ней можно следить здесь',
                         ],
-                        label: 'Отправить',
+                        label: 'Создать карточки',
                     },
                     refresh_supplier: {
-                        title: 'Подтянуть данные поставщика',
+                        title: 'Обновить из поставщика',
                         message: 'Обновим ' + chosen.length + ' '
                             + this.$fmt.plural(chosen.length, 'карточку', 'карточки', 'карточек')
                             + ' данными из каталога поставщика.',
                         details: [
-                            'Меняются только ваши карточки в Seller Hub',
-                            'Карточки на маркетплейсах не изменятся',
+                            'Изменятся только данные в Seller Hub; карточки на площадках не меняются.',
+                            'Товары без связи с каталогом поставщика будут отмечены отдельно.',
                         ],
                         label: 'Обновить',
                     },
@@ -360,18 +423,22 @@
                     },
                 };
                 if (action.key === 'enrich') {
-                    // Экран подтверждения обогащения — отдельный, с выбором полей
-                    window.location.href = this.urls.enrichBulk + '?ids='
-                        + this.selected.join(',');
+                    var enrichIds = exactWbProductIds(chosen);
+                    if (!enrichIds || enrichIds.length > MAX_BULK_SELECTION) {
+                        this.error = 'Для изменения выберите только опубликованные карточки WB, не больше 200.';
+                        return;
+                    }
+                    // Существующий review route принимает POST selected_ids с WB Product ID.
+                    this.postSelectionForm(this.urls.enrichBulk, enrichIds);
                     return;
                 }
                 if (action.key === 'ozon') {
                     if (this.ozonPending || this.ozonStorageProblem || this.ozonBusy || this.ozonSessionEnded) return;
-                    if (!chosen.length || chosen.length > 200) {
+                    if (!selectionIds.length || selectionIds.length > MAX_BULK_SELECTION) {
                         this.ozonError = 'Выберите от 1 до 200 товаров для одной подготовки.';
                         return;
                     }
-                    this.ozonIds = chosen.map(function (item) { return item.id; });
+                    this.ozonIds = selectionIds.slice();
                     this.ozonAccountId = this.ozonAccounts.length === 1 ? String(this.ozonAccounts[0].id) : '';
                     this.ozonConfirmed = false;
                     this.ozonError = '';
@@ -382,9 +449,7 @@
                     return;
                 }
                 if (action.key === 'common_content') {
-                    var productIds = [...new Set(chosen.map(function (item) { return Number(item.id); }))]
-                        .filter(function (id) { return Number.isSafeInteger(id) && id > 0; });
-                    if (!productIds.length) return;
+                    var productIds = selectionIds.slice();
                     if (productIds.length > 50) {
                         this.error = 'За один раз можно открыть не больше 50 товаров. Снимите часть отметок.';
                         return;
@@ -396,8 +461,22 @@
                     }
                     return;
                 }
+                if (action.key === 'wb_prices') {
+                    var priceIds = exactWbProductIds(chosen);
+                    if (!priceIds || priceIds.length > MAX_BULK_SELECTION || !this.wbConnected) {
+                        this.error = 'Для изменения цены выберите до 200 карточек WB и проверьте подключение кабинета.';
+                        return;
+                    }
+                    window.location.assign(this.urls.wbPriceChange + '?product_ids=' + encodeURIComponent(priceIds.join(',')));
+                    return;
+                }
                 var plan = plans[action.key];
                 if (!plan) return;
+                var effectIds = action.key === 'push_wb' ? createIds : selectionIds;
+                if (!effectIds.length || effectIds.length > MAX_BULK_SELECTION) {
+                    this.error = 'Для одного запуска выберите допустимый набор товаров и повторите действие.';
+                    return;
+                }
                 this.confirm = {
                     open: true,
                     key: action.key,
@@ -407,13 +486,54 @@
                     label: plan.label,
                     danger: !!plan.danger,
                     busy: false,
+                    productIds: effectIds.slice(),
+                    selectionIds: selectionIds.slice(),
                 };
+            },
+            postSelectionForm: function (url, productIds) {
+                var csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+                if (!csrf) {
+                    this.error = 'Защита формы недоступна. Обновите страницу и повторите действие.';
+                    return;
+                }
+                var form = document.createElement('form');
+                form.method = 'post';
+                form.action = url;
+                var csrfInput = document.createElement('input');
+                csrfInput.type = 'hidden';
+                csrfInput.name = 'csrf_token';
+                csrfInput.value = csrf;
+                form.appendChild(csrfInput);
+                productIds.forEach(function (id) {
+                    var input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = 'selected_ids';
+                    input.value = String(id);
+                    form.appendChild(input);
+                });
+                document.body.appendChild(form);
+                form.submit();
+            },
+            cancelAction: function () {
+                if (this.confirm.busy) return;
+                this.confirm.open = false;
+                this.confirm.productIds = [];
+                this.confirm.selectionIds = [];
             },
             runAction: function () {
                 var self = this;
+                if (this.confirm.busy || !this.confirm.open) return;
                 var key = this.confirm.key;
-                var ids = this.selected.slice();
-                if (!key || !ids.length) return;
+                var ids = Array.isArray(this.confirm.productIds) ? this.confirm.productIds.slice() : [];
+                var selectionAtReview = Array.isArray(this.confirm.selectionIds) ? this.confirm.selectionIds.slice() : [];
+                if (!key || !ids.length || ids.length > MAX_BULK_SELECTION) return;
+                if (!sameIds(this.selected, selectionAtReview)) {
+                    this.confirm.open = false;
+                    this.confirm.productIds = [];
+                    this.confirm.selectionIds = [];
+                    this.error = 'Выбор изменился после проверки. Отметьте нужные товары и откройте действие заново.';
+                    return;
+                }
                 this.confirm.busy = true;
 
                 var request;
@@ -434,17 +554,23 @@
 
                 request.then(function (data) {
                     self.confirm.open = false;
-                    self.selected = [];
+                    if (sameIds(self.selected, selectionAtReview)) self.selected = [];
                     if (data.job_uid || data.job_id) {
-                        self.trackJob(data.job_uid || data.job_id);
+                        self.trackJob(data.job_uid || data.job_id, ids.length);
                     } else {
+                        var updated = typeof data.updated === 'number' ? data.updated : null;
+                        var deleted = typeof data.deleted === 'number' ? data.deleted : null;
+                        var skipped = typeof data.skipped === 'number' ? data.skipped : 0;
+                        var succeeded = updated !== null ? updated : (deleted !== null ? deleted : ids.length);
+                        var processed = updated !== null ? updated + skipped : ids.length;
                         // Синхронное действие: показываем итог сразу
                         self.job = {
                             status: 'done',
                             total: ids.length,
-                            processed: ids.length,
-                            succeeded: data.updated || data.deleted || ids.length,
-                            failed: data.errors || 0,
+                            processed: processed,
+                            succeeded: succeeded,
+                            skipped: skipped,
+                            failed: typeof data.errors === 'number' ? data.errors : 0,
                             message: data.message || '',
                         };
                         self.load();
@@ -455,6 +581,8 @@
                     self.confirm.open = false;
                 }).finally(function () {
                     self.confirm.busy = false;
+                    self.confirm.productIds = [];
+                    self.confirm.selectionIds = [];
                 });
             },
             closeOzonDialog: function () {
@@ -565,7 +693,7 @@
                         error instanceof TypeError ? 'Нет связи. Повторите только чтение.' : error.message;
                 } finally { clearTimeout(timer); this.ozonBusy = ''; }
             },
-            trackJob: function (jobUid) {
+            trackJob: function (jobUid, total) {
                 var self = this;
                 if (this._jobTimer) clearInterval(this._jobTimer);
                 var poll = function () {
@@ -585,7 +713,7 @@
                         self._jobTimer = null;
                     });
                 };
-                this.job = { status: 'running', total: this.selected.length, processed: 0 };
+                this.job = { status: 'running', total: total || 0, processed: 0 };
                 poll();
                 this._jobTimer = setInterval(poll, 2500);
             },

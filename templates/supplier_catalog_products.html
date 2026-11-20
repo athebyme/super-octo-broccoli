@@ -11,24 +11,28 @@
         <span class="text-gray-900">{{ supplier.name }}</span>
     </nav>
 
-    <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-6">
-        <div class="relative">
-            <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">{{ supplier.name }}</h1>
-            <p class="mt-2 text-sm text-gray-400">
-                {{ stats.total }} товаров в каталоге
-                {% if price_stock_stats and price_stock_stats.in_stock > 0 %}
-                | {{ price_stock_stats.in_stock }} в наличии
+    <header class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div class="min-w-0">
+            <p class="text-xs" style="color:var(--text-muted)">Каталог поставщика</p>
+            <h1 class="mt-1 text-2xl font-semibold" style="color:var(--text)">{{ supplier.name }}</h1>
+            <p class="mt-1 text-sm" style="color:var(--text-secondary)">
+                {{ stats.total }} товаров
+                {% if price_stock_stats and price_stock_stats.in_stock is not none %}
+                <span class="mx-1" aria-hidden="true">·</span>{{ price_stock_stats.in_stock }} в наличии
                 {% endif %}
             </p>
         </div>
-    </div>
+    </header>
 
-    {{ preparation_journey('source', none, 'каталог «' ~ supplier.name ~ '»', 'Импортируйте выбранный источник в отдельный внутренний товар; Ozon-черновик создаётся позже и отдельно.', channel='Ozon') }}
+    {{ preparation_journey('source', none, 'товар из каталога поставщика', 'Выберите позиции для импорта. Публикация на площадке здесь не выполняется.', channel='Ozon') }}
 
     {% if supplier_update_count %}
     <div class="sh-alert sh-alert--warning" role="status">
         <div class="sh-alert-content flex flex-wrap items-center justify-between gap-3">
-            <div><strong>Общая карточка обновилась у {{ supplier_update_count }} товаров</strong><div>Можно подтянуть новую категорию и характеристики в свою карточку. Опубликованная карточка WB сама не изменится.</div></div>
+            <div>
+                <strong>Обновления в общем каталоге: {{ supplier_update_count }}</strong>
+                <span class="block text-sm">Изменятся ваши локальные карточки. Карточки WB останутся без изменений.</span>
+            </div>
             <a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('supplier_catalog_products', supplier_id=supplier.id, updates_only=1, show_imported=1, stock_status='all') }}">Показать обновления</a>
         </div>
     </div>
@@ -105,60 +109,150 @@
     </div>
     {% endif %}
 
-    <!-- Товары -->
-    <form method="POST" action="{{ url_for('supplier_catalog_import') }}" id="import-form"
-          x-data="{ selectedAll: false, selected: [], updates: [] }">
-        <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
+    {% set action_counts = namespace(importable=0, updatable=0) %}
+    {% for product in pagination.items %}
+        {% if product.id in supplier_update_sp_ids %}
+            {% set action_counts.updatable = action_counts.updatable + 1 %}
+        {% elif product.id not in imported_sp_ids and product.id not in wb_existing_sp_ids %}
+            {% set action_counts.importable = action_counts.importable + 1 %}
+        {% endif %}
+    {% endfor %}
+    {% set draft_options = namespace(count=0) %}
+    {% for account in ozon_import_accounts %}
+        {% if account.id not in ozon_auto_account_ids %}
+            {% set draft_options.count = draft_options.count + 1 %}
+        {% endif %}
+    {% endfor %}
 
-        <!-- Панель действий -->
-        <div class="bg-white rounded-t-lg border border-b-0 border-gray-200 px-4 py-3 flex items-center justify-between">
-            <div class="flex items-center gap-3">
-                <label class="flex items-center gap-2">
-                    <input type="checkbox" x-model="selectedAll"
-                           @change="selected = selectedAll ? [...document.querySelectorAll('[name=product_ids]')].map(el => el.value) : []; updates = selectedAll ? [...document.querySelectorAll('[name=update_product_ids]')].map(el => el.value) : []"
-                           class="rounded border-gray-300 text-gray-900">
-                    <span class="text-sm text-gray-600">Все на странице</span>
-                </label>
-                <span class="text-sm text-gray-400" x-text="selected.length + ' выбрано'"></span>
-            </div>
-            <div class="flex items-center gap-3 flex-wrap">
-                {% if ozon_import_accounts %}
-                <div class="flex items-center gap-2 flex-wrap" role="group" aria-label="Каналы подготовки">
-                    <span class="text-xs font-medium uppercase tracking-wide" style="color:var(--text-muted)">Каналы:</span>
-                    <span class="inline-flex items-center gap-1.5 text-sm" style="color:var(--text-secondary)" title="Импорт всегда создаёт карточку для подготовки к WB">
-                        <span class="sh-mp-dot sh-mp-dot--wb" aria-hidden="true"></span>WB
-                    </span>
-                    {% for account in ozon_import_accounts %}
-                    {% if account.id in ozon_auto_account_ids %}
-                    <span class="inline-flex items-center gap-1.5 text-sm" style="color:var(--text-secondary)"
-                          title="Авто-публикация включена: черновики для «{{ account.label }}» создаются при импорте автоматически">
-                        <span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>{{ account.label }} · авто
-                    </span>
-                    {% else %}
-                    <label class="inline-flex items-center gap-1.5 text-sm cursor-pointer" style="color:var(--text-secondary)"
-                           title="Дополнительно подготовить локальные Ozon-черновики для «{{ account.label }}»; публикации в Ozon не будет">
-                        <input type="checkbox" name="draft_account_ids" value="{{ account.id }}" class="rounded border-gray-300">
-                        <span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>{{ account.label }}
-                    </label>
+    <!-- Отдельные формы не смешивают выбранные товары и локальные обновления. -->
+    <div data-supplier-products x-data="{
+        importSelected: [], updateSelected: [], allImport: false, allUpdate: false,
+        selectPage(kind, checked) {
+            const ids = Array.from(this.$root.querySelectorAll('input[data-selection-kind]'))
+                .filter(input => input.dataset.selectionKind === kind)
+                .map(input => input.value);
+            if (kind === 'import') {
+                this.importSelected = checked ? ids : [];
+                this.allImport = checked;
+            } else {
+                this.updateSelected = checked ? ids : [];
+                this.allUpdate = checked;
+            }
+        }
+    }">
+        <form method="POST" action="{{ url_for('supplier_catalog_import') }}" id="supplier-import-form" class="hidden">
+            <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
+        </form>
+        <form method="POST" action="{{ url_for('supplier_catalog_update') }}" id="supplier-update-form" class="hidden">
+            <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
+        </form>
+
+        {% if pagination.items %}
+        <section class="mb-4 rounded-lg border p-3 sm:p-4" style="border-color:var(--border);background:var(--bg-card)" aria-label="Массовые действия с товарами">
+            <div class="flex flex-col gap-3 md:flex-row md:items-start">
+                <div class="min-w-0 flex-1" role="group" aria-labelledby="supplier-import-heading">
+                    <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                        <div>
+                            <h2 id="supplier-import-heading" class="text-sm font-semibold" style="color:var(--text)">Импортировать товары</h2>
+                            <p class="text-xs" style="color:var(--text-secondary)">Создать локальные карточки без отправки на площадку.</p>
+                        </div>
+                        {% if action_counts.importable %}
+                        <label class="flex min-h-11 items-center gap-2 text-xs" style="color:var(--text-secondary)">
+                            <input id="select-all-import" type="checkbox" :checked="allImport"
+                                   @change="selectPage('import', $event.target.checked)"
+                                   class="rounded border-gray-300">
+                            <span>Выбрать все {{ action_counts.importable }} на странице</span>
+                        </label>
+                        {% else %}
+                        <span class="text-xs" style="color:var(--text-muted)">Нет новых позиций на странице</span>
+                        {% endif %}
+                    </div>
+                    <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+                        <button type="submit" form="supplier-import-form" disabled
+                                class="sh-btn sh-btn--primary sh-btn--sm"
+                                :disabled="importSelected.length === 0"
+                                aria-describedby="import-selection-count">
+                            Импортировать товары <span x-text="'(' + importSelected.length + ')'">(0)</span>
+                        </button>
+                        <p id="import-selection-count" class="text-xs" style="color:var(--text-muted)" aria-live="polite">
+                            Доступно: {{ action_counts.importable }}. <span x-text="importSelected.length + ' выбрано'">0 выбрано</span>
+                        </p>
+                        <a class="text-xs underline underline-offset-2" style="color:var(--accent-strong)" href="{{ url_for('seller_my_products_beta') }}">Дальше: «Мои товары»</a>
+                    </div>
+                    {% if ozon_auto_account_ids %}
+                    <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs" style="color:var(--text-secondary)">
+                        <span>Ozon-черновики автоматически:</span>
+                        {% for account in ozon_import_accounts if account.id in ozon_auto_account_ids %}
+                        <span class="inline-flex items-center gap-1.5"><span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>{{ account.label }}</span>
+                        {% endfor %}
+                    </div>
                     {% endif %}
-                    {% endfor %}
+                    <details class="mt-1">
+                        <summary class="flex min-h-11 cursor-pointer items-center text-xs underline underline-offset-2" style="color:var(--text-secondary)">Другие настройки импорта</summary>
+                        <div class="mt-2 flex max-w-full flex-col gap-3 border-l pl-3" style="border-color:var(--border)">
+                            <div>
+                                <p class="text-xs" style="color:var(--text-secondary)">Сначала определить бренд, категорию и характеристики.</p>
+                                <button type="submit" form="supplier-import-form" formaction="{{ url_for('supplier_catalog_smart_import') }}"
+                                        disabled onclick="return confirm('Обогатить выбранные товары (бренд, категория, характеристики) и импортировать их?')"
+                                        class="sh-btn sh-btn--secondary sh-btn--sm mt-2"
+                                        :disabled="importSelected.length === 0">
+                                    Обогатить и импортировать <span x-text="'(' + importSelected.length + ')'">(0)</span>
+                                </button>
+                            </div>
+                            {% if draft_options.count %}
+                            <fieldset class="flex flex-wrap gap-x-4 gap-y-1">
+                                <legend class="mb-1 text-xs" style="color:var(--text-secondary)">Также подготовить черновик Ozon</legend>
+                                {% for account in ozon_import_accounts %}
+                                {% if account.id not in ozon_auto_account_ids %}
+                                <label class="flex min-h-11 items-center gap-2 text-xs" style="color:var(--text-secondary)">
+                                    <input type="checkbox" form="supplier-import-form" name="draft_account_ids" value="{{ account.id }}" class="rounded border-gray-300">
+                                    <span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>{{ account.label }}
+                                </label>
+                                {% endif %}
+                                {% endfor %}
+                                <p class="w-full text-xs" style="color:var(--text-muted)">Создаётся локально, без отправки в Ozon.</p>
+                            </fieldset>
+                            {% endif %}
+                        </div>
+                    </details>
                 </div>
-                {% endif %}
-                <button type="submit" formaction="{{ url_for('supplier_catalog_smart_import') }}"
-                        onclick="return confirm('Товары будут обогащены (бренд, категория, характеристики) и импортированы. Продолжить?')"
-                        class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85 disabled:opacity-40"
-                        :disabled="selected.length === 0">
-                    Импортировать
-                </button>
-                <button type="submit" formaction="{{ url_for('supplier_catalog_update') }}"
-                        onclick="return confirm('Обновить выбранные карточки из общего каталога поставщика? Опубликованная карточка WB автоматически не меняется.')"
-                        class="sh-btn sh-btn--secondary sh-btn--md"
-                        style="border-color:var(--warn-border);color:var(--warn)"
-                        :disabled="updates.length === 0">
-                    Обновить карточки <span x-text="updates.length ? '· ' + updates.length : ''"></span>
-                </button>
+
+                <div class="border-t md:self-stretch md:border-l md:border-t-0" style="border-color:var(--border)" aria-hidden="true"></div>
+
+                <div class="min-w-0 flex-1" role="group" aria-labelledby="supplier-update-heading">
+                    <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                        <div>
+                            <h2 id="supplier-update-heading" class="text-sm font-semibold" style="color:var(--warn)">Обновить из каталога</h2>
+                            <p class="text-xs" style="color:var(--text-secondary)">Скопировать новые данные в локальные карточки. WB не меняется.</p>
+                        </div>
+                        {% if action_counts.updatable %}
+                        <label class="flex min-h-11 items-center gap-2 text-xs" style="color:var(--text-secondary)">
+                            <input id="select-all-updates" type="checkbox" :checked="allUpdate"
+                                   @change="selectPage('update', $event.target.checked)"
+                                   class="rounded border-gray-300">
+                            <span>Выбрать все {{ action_counts.updatable }} на странице</span>
+                        </label>
+                        {% else %}
+                        <span class="text-xs" style="color:var(--text-muted)">Нет изменений на странице</span>
+                        {% endif %}
+                    </div>
+                    <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+                        <button type="submit" form="supplier-update-form" disabled
+                                onclick="return confirm('Скопировать изменения из общего каталога в выбранные локальные карточки? WB не меняется.')"
+                                class="sh-btn sh-btn--secondary sh-btn--sm"
+                                style="border-color:var(--warn-border);color:var(--warn)"
+                                :disabled="updateSelected.length === 0"
+                                aria-describedby="update-selection-count">
+                            Обновить из каталога <span x-text="'(' + updateSelected.length + ')'">(0)</span>
+                        </button>
+                        <p id="update-selection-count" class="text-xs" style="color:var(--text-muted)" aria-live="polite">
+                            С новыми данными: {{ action_counts.updatable }}. <span x-text="updateSelected.length + ' выбрано'">0 выбрано</span>
+                        </p>
+                    </div>
+                </div>
             </div>
-        </div>
+        </section>
+        {% endif %}
 
         <div class="bg-white border border-gray-200 rounded-b-lg overflow-hidden">
             {% if pagination.items %}
@@ -169,17 +263,21 @@
                 <div class="p-4 {{ 'bg-purple-50' if is_on_wb else ('bg-gray-50' if is_imported else 'bg-white') }} hover:bg-gray-50 transition-colors flex flex-col">
                     <div class="flex items-start gap-3 flex-1">
                         {% if product.id in supplier_update_sp_ids %}
-                        <input type="checkbox" name="update_product_ids" value="{{ product.id }}"
-                               :checked="updates.includes('{{ product.id }}')"
-                               @change="updates = $event.target.checked ? [...updates, '{{ product.id }}'] : updates.filter(id => id !== '{{ product.id }}')"
-                               class="mt-1 rounded flex-shrink-0" style="accent-color:var(--warn)" title="Выбрать для обновления из общего каталога">
+                        <input type="checkbox" form="supplier-update-form" name="update_product_ids" value="{{ product.id }}"
+                               data-selection-kind="update"
+                               :checked="updateSelected.includes('{{ product.id }}')"
+                               @change="updateSelected = $event.target.checked ? [...updateSelected, '{{ product.id }}'] : updateSelected.filter(id => id !== '{{ product.id }}'); allUpdate = updateSelected.length === {{ action_counts.updatable }}"
+                               class="mt-1 rounded flex-shrink-0" style="accent-color:var(--warn)"
+                               aria-label="Выбрать {{ product.title or 'товар без названия' }} для обновления из каталога">
                         {% elif is_on_wb %}
                         <span class="mt-1 text-purple-500 text-sm flex-shrink-0" title="Уже на Wildberries">&#10003;</span>
                         {% elif not is_imported %}
-                        <input type="checkbox" name="product_ids" value="{{ product.id }}"
-                               :checked="selected.includes('{{ product.id }}')"
-                               @change="selected = $event.target.checked ? [...selected, '{{ product.id }}'] : selected.filter(id => id !== '{{ product.id }}')"
-                               class="mt-1 rounded border-gray-300 text-gray-900 flex-shrink-0">
+                        <input type="checkbox" form="supplier-import-form" name="product_ids" value="{{ product.id }}"
+                               data-selection-kind="import"
+                               :checked="importSelected.includes('{{ product.id }}')"
+                               @change="importSelected = $event.target.checked ? [...importSelected, '{{ product.id }}'] : importSelected.filter(id => id !== '{{ product.id }}'); allImport = importSelected.length === {{ action_counts.importable }}"
+                               class="mt-1 rounded border-gray-300 text-gray-900 flex-shrink-0"
+                               aria-label="Выбрать {{ product.title or 'товар без названия' }} для импорта">
                         {% else %}
                         <span class="mt-1 text-gray-400 text-sm flex-shrink-0" title="Уже импортирован">&#10003;</span>
                         {% endif %}
@@ -256,7 +354,7 @@
                                     <span class="text-xs text-gray-500 font-medium">Импортирован</span>
                                     {% endif %}
                                     {% if product.id in supplier_update_sp_ids %}
-                                    <span class="sh-badge sh-badge--yellow sh-badge--sm" title="В общей карточке появились новые данные. Выберите товар и нажмите «Обновить карточки».">Есть обновление</span>
+                                    <span class="sh-badge sh-badge--yellow sh-badge--sm" title="В общем каталоге появились новые данные. Выберите товар для обновления локальной карточки.">Есть обновление</span>
                                     {% endif %}
                                     {% if ozon_draft_sp_ids and product.id in ozon_draft_sp_ids %}
                                     <span class="inline-flex items-center gap-1 text-xs font-medium" style="color:var(--text-secondary)" title="Есть Ozon-черновик">
@@ -279,7 +377,7 @@
             </div>
             {% endif %}
         </div>
-    </form>
+    </div>
 
     <!-- Пагинация -->
     {% if pagination.pages > 1 %}

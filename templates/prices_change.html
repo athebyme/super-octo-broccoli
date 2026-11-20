@@ -5,7 +5,21 @@
 {% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}">{% endblock %}
 
 {% block content %}
-<div class="pricing-workspace max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="priceChangeApp()">
+{% if selection_error %}
+<div class="pricing-workspace max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <header class="mb-6">
+        <h1 class="text-2xl font-semibold text-gray-900">Не удалось открыть выбор товаров</h1>
+    </header>
+    <div class="bg-red-50 border border-red-200 rounded-xl p-5" role="alert">
+        <p class="text-sm text-red-800">{{ selection_error }}</p>
+        <a href="{{ url_for('seller_my_products_beta') }}" class="inline-flex mt-4 px-4 py-2 rounded-lg bg-white border border-red-300 text-sm font-medium text-red-800 hover:bg-red-100">
+            Вернуться в «Мои товары»
+        </a>
+    </div>
+</div>
+{% else %}
+<div class="pricing-workspace max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
+     x-data="priceChangeApp({{ selection_handoff|default(false)|tojson }}, {{ selected_product_ids|default([])|tojson }})">
     {% set pricing_workspace_current = 'wb-change' %}
     {% include 'partials/pricing_workspace_nav.html' %}
 
@@ -26,6 +40,18 @@
         </div>
     </div>
 
+    {% if selection_handoff %}
+    <div class="mb-6 p-4 rounded-xl border border-indigo-200 bg-indigo-50 text-sm text-indigo-900" role="status">
+        Выбор закреплён: {{ selected_product_ids|length }} товаров из «Мои товары».
+        <a href="{{ url_for('seller_my_products_beta') }}" class="font-medium underline">Вернуться в каталог</a>
+    </div>
+    {% endif %}
+
+    <div x-show="requestError" x-cloak class="mb-6 p-4 rounded-xl border border-red-200 bg-red-50 text-sm text-red-800" role="alert">
+        <p x-text="requestError"></p>
+        <a x-show="selectionHandoff" href="{{ url_for('seller_my_products_beta') }}" class="inline-flex mt-2 font-medium underline">Вернуться в «Мои товары»</a>
+    </div>
+
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Левая колонка - Параметры изменения -->
         <div class="lg:col-span-1 space-y-6">
@@ -35,7 +61,7 @@
                     <h3 class="font-medium text-gray-900">Выбрано товаров</h3>
                     <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium bg-indigo-100 text-indigo-800" x-text="selectedIds.length"></span>
                 </div>
-                <button @click="clearSelection" class="text-sm text-red-600 hover:text-red-800">
+                <button x-show="!selectionHandoff" @click="clearSelection" class="text-sm text-red-600 hover:text-red-800">
                     Очистить выбор
                 </button>
             </div>
@@ -58,6 +84,11 @@
 
                 <template x-if="useMarketplacePrices">
                     <div>
+                        {% if selection_handoff %}
+                        <p class="text-xs text-purple-700 bg-purple-50 border border-purple-200 rounded-lg p-2.5 mb-3">
+                            Расчёт использует сохранённую цену WB. Для карточек без цены WB берётся локальная цена товара.
+                        </p>
+                        {% else %}
                         <p class="text-xs text-purple-700 bg-purple-50 border border-purple-200 rounded-lg p-2.5 mb-3">
                             Все действия будут выполняться с актуальными ценами с&nbsp;Wildberries.
                             Сначала синхронизируйте цены.
@@ -90,6 +121,7 @@
                                 <span x-text="wbSyncResult.error"></span>
                             </template>
                         </div>
+                        {% endif %}
                     </div>
                 </template>
             </div>
@@ -249,7 +281,7 @@
                     </div>
                 </template>
 
-                <button @click="loadPreview" :disabled="previewLoading"
+                <button @click="loadPreview" :disabled="previewLoading || (selectionHandoff && !!requestError)"
                         class="w-full mt-4 px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 disabled:opacity-50 text-sm flex items-center justify-center">
                     <svg x-show="previewLoading" class="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">
                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -260,7 +292,7 @@
             </div>
 
             <!-- Кнопка создания батча -->
-            <button @click="createBatch" :disabled="selectedIds.length === 0 || (changeType !== 'supplier_pricing' && !changeValue && !formula) || submitting"
+            <button @click="createBatch" :disabled="selectedIds.length === 0 || (changeType !== 'supplier_pricing' && !changeValue && !formula) || submitting || (selectionHandoff && !!requestError)"
                     class="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium transition flex items-center justify-center">
                 <svg x-show="submitting" class="animate-spin h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -277,6 +309,11 @@
         <div class="lg:col-span-2">
             <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
                 <!-- Фильтры -->
+                {% if selection_handoff %}
+                <div class="px-4 py-4 border-b border-gray-200 text-sm text-gray-600" role="status">
+                    Показаны только товары из выбранного списка. Состав нельзя изменить здесь.
+                </div>
+                {% else %}
                 <div class="px-4 py-4 border-b border-gray-200 space-y-4">
                     <div class="flex flex-col sm:flex-row gap-3">
                         <!-- Поиск -->
@@ -326,6 +363,7 @@
                         </div>
                     </div>
                 </div>
+                {% endif %}
 
                 <!-- Загрузка -->
                 <div x-show="loading" class="px-6 py-12 text-center">
@@ -341,10 +379,12 @@
                     <table class="min-w-full divide-y divide-gray-200">
                         <thead class="bg-gray-50">
                             <tr>
+                                {% if not selection_handoff %}
                                 <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-10">
                                     <input type="checkbox" :checked="isPageSelected()" @change="togglePageSelection()"
                                            class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
                                 </th>
+                                {% endif %}
                                 <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                                     Товар
                                 </th>
@@ -370,12 +410,14 @@
                             <template x-for="product in products" :key="product.id">
                                 <tr class="hover:bg-gray-50 transition"
                                     :class="{ 'bg-indigo-50': isSelected(product.id) }">
+                                    {% if not selection_handoff %}
                                     <td class="px-4 py-3 whitespace-nowrap">
                                         <input type="checkbox"
                                                :checked="isSelected(product.id)"
                                                @change="toggleProduct(product.id)"
                                                class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
                                     </td>
+                                    {% endif %}
                                     <td class="px-4 py-3">
                                         <div class="text-sm font-medium text-gray-900" x-text="product.vendor_code"></div>
                                         <div class="text-xs text-gray-500 truncate max-w-xs" x-text="product.title"></div>
@@ -422,7 +464,7 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
                     </svg>
                     <h3 class="mt-2 text-sm font-medium text-gray-900">Нет товаров</h3>
-                    <p class="mt-1 text-sm text-gray-500">Попробуйте изменить фильтры</p>
+                    <p class="mt-1 text-sm text-gray-500">{% if selection_handoff %}Вернитесь в каталог, чтобы выбрать товары заново.{% else %}Попробуйте изменить фильтры.{% endif %}</p>
                 </div>
 
                 <!-- Пагинация -->
@@ -455,8 +497,12 @@
 </div>
 
 <script>
-function priceChangeApp() {
+function priceChangeApp(selectionHandoff = false, handoffProductIds = []) {
     return {
+        selectionHandoff,
+        handoffProductIds,
+        requestError: '',
+
         // Источник цен (маркетплейс / локальная БД)
         useMarketplacePrices: false,
         syncingWb: false,
@@ -500,13 +546,17 @@ function priceChangeApp() {
         warningThreshold: {{ settings.warning_threshold_percent }},
 
         init() {
-            // Загружаем сохраненный выбор из localStorage
-            const saved = localStorage.getItem('price_change_selected');
-            if (saved) {
-                try {
-                    this.selectedIds = JSON.parse(saved);
-                } catch (e) {
-                    this.selectedIds = [];
+            if (this.selectionHandoff) {
+                this.selectedIds = this.handoffProductIds.slice();
+            } else {
+                // Обычный режим сохраняет выбор между прямыми открытиями страницы.
+                const saved = localStorage.getItem('price_change_selected');
+                if (saved) {
+                    try {
+                        this.selectedIds = JSON.parse(saved);
+                    } catch (e) {
+                        this.selectedIds = [];
+                    }
                 }
             }
 
@@ -528,17 +578,29 @@ function priceChangeApp() {
                     brand: this.filterBrand,
                     category: this.filterCategory
                 });
+                if (this.selectionHandoff) {
+                    params.set('product_ids', this.handoffProductIds.join(','));
+                }
 
                 const response = await fetch(`{{ url_for('prices.api_get_products') }}?${params}`);
                 const data = await response.json();
 
-                if (data.success) {
+                if (response.ok && data.success) {
+                    this.requestError = '';
                     this.products = data.products;
                     this.totalProducts = data.total;
                     this.totalPages = data.pages;
+                } else {
+                    this.products = [];
+                    this.totalProducts = 0;
+                    this.totalPages = 1;
+                    this.requestError = data.error || 'Не удалось загрузить товары.';
                 }
             } catch (error) {
                 console.error('Error loading products:', error);
+                if (this.selectionHandoff) {
+                    this.requestError = 'Не удалось проверить выбранные товары. Вернитесь в каталог и выберите их заново.';
+                }
             } finally {
                 this.loading = false;
             }
@@ -632,6 +694,7 @@ function priceChangeApp() {
         },
 
         saveSelection() {
+            if (this.selectionHandoff) return;
             localStorage.setItem('price_change_selected', JSON.stringify(this.selectedIds));
         },
 
@@ -642,7 +705,7 @@ function priceChangeApp() {
         },
 
         async syncWbPrices() {
-            if (this.syncingWb) return;
+            if (this.selectionHandoff || this.syncingWb) return;
             this.syncingWb = true;
             this.wbSyncResult = null;
 
@@ -768,6 +831,7 @@ function priceChangeApp() {
             if (this.selectedIds.length === 0) return;
 
             this.previewLoading = true;
+            this.requestError = '';
             try {
                 const response = await fetch('{{ url_for("prices.api_preview_changes") }}', {
                     method: 'POST',
@@ -777,16 +841,24 @@ function priceChangeApp() {
                         change_type: this.changeType,
                         change_value: this.changeValue,
                         formula: this.formula,
-                        price_source: this.useMarketplacePrices ? 'marketplace' : 'local'
+                        price_source: this.useMarketplacePrices ? 'marketplace' : 'local',
+                        exact_selection: this.selectionHandoff
                     })
                 });
 
                 const data = await response.json();
-                if (data.success) {
+                if (response.ok && data.success) {
                     this.preview = data;
+                } else if (this.selectionHandoff) {
+                    this.preview = null;
+                    this.requestError = data.error || 'Состав выбора изменился. Вернитесь в каталог.';
                 }
             } catch (error) {
                 console.error('Preview error:', error);
+                if (this.selectionHandoff) {
+                    this.preview = null;
+                    this.requestError = 'Не удалось проверить выбранные товары. Вернитесь в каталог и повторите выбор.';
+                }
             } finally {
                 this.previewLoading = false;
             }
@@ -805,6 +877,7 @@ function priceChangeApp() {
             }
 
             this.submitting = true;
+            this.requestError = '';
             try {
                 const response = await fetch('{{ url_for("prices.create_batch") }}', {
                     method: 'POST',
@@ -816,7 +889,8 @@ function priceChangeApp() {
                         formula: this.formula,
                         name: this.name,
                         description: this.description,
-                        price_source: this.useMarketplacePrices ? 'marketplace' : 'local'
+                        price_source: this.useMarketplacePrices ? 'marketplace' : 'local',
+                        exact_selection: this.selectionHandoff
                     })
                 });
 
@@ -827,12 +901,18 @@ function priceChangeApp() {
                     this.clearSelection();
                     // Переходим на страницу батча
                     window.location.href = data.redirect;
+                } else if (this.selectionHandoff) {
+                    this.requestError = data.error || 'Состав выбора изменился. Вернитесь в каталог.';
                 } else {
                     alert('Ошибка: ' + (data.error || 'Неизвестная ошибка'));
                 }
             } catch (error) {
                 console.error('Create batch error:', error);
-                alert('Ошибка сети');
+                if (this.selectionHandoff) {
+                    this.requestError = 'Не удалось создать предложение. Проверьте связь и состав выбора, затем вернитесь в каталог.';
+                } else {
+                    alert('Ошибка сети');
+                }
             } finally {
                 this.submitting = false;
             }
@@ -840,4 +920,5 @@ function priceChangeApp() {
     }
 }
 </script>
+{% endif %}
 {% endblock %}

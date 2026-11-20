@@ -121,16 +121,14 @@
                     <a class="sh-btn sh-btn--primary" href="{{ url_for('marketplace_drafts.index', account_id=aid) }}">Подготовить товар</a>
                 </div>
             </div>
-            <div v-cloak v-show="connected({{ aid }})" class="seller-workspace-note mt-3" role="status">
-                <strong>Права метода отправки карточек:</strong>
-                <span v-show="canWrite({{ aid }})">разрешение найдено в правах ключа; каждая отправка всё равно требует отдельного подтверждения и проверки.</span>
-                <span v-show="!canWrite({{ aid }})">разрешение не подтверждено. Просмотр каталога и подготовка черновиков не подтверждают доступ к отправке.</span>
-            </div>
-            {% if not publication_enabled %}
-            <p class="seller-workspace-note mt-2" role="status">Отправка карточек Ozon отключена настройкой платформы. Локальная подготовка доступна; включение настройки не подтверждает фактический доступ метода.</p>
-            {% else %}
-            <p class="seller-workspace-note mt-2" role="status">Отправка карточек Ozon включена в настройках платформы; реальный доступ метода и состояние кабинета проверяются отдельно.</p>
-            {% endif %}
+            <p class="seller-workspace-note mt-3" role="status">
+                {% if not publication_enabled %}Отправка отключена настройкой платформы; локальная подготовка доступна. Доступ метода проверяется отдельно.{% else %}Отправка включена настройкой платформы; доступ метода проверяется отдельно.{% endif %}
+                <span v-cloak v-show="connected({{ aid }})">
+                    <strong>Права метода:</strong>
+                    <span v-show="canWrite({{ aid }})">разрешение найдено в правах ключа; каждую отправку нужно отдельно проверить и подтвердить.</span>
+                    <span v-show="!canWrite({{ aid }})">разрешение не подтверждено; просмотр и черновики не дают доступа к отправке.</span>
+                </span>
+            </p>
             <section v-if="(accounts[{{ aid }}] || {}).has_credentials" class="ozon-key-expiry" :data-state="expiry({{ aid }}).state" aria-label="Срок ключа" aria-live="polite">
                 <div class="ozon-key-expiry-copy">
                     <strong v-text="expiry({{ aid }}).label"></strong>
@@ -139,19 +137,8 @@
                 </div>
                 {% if ozon_enabled %}<button v-if="expiry({{ aid }}).needs_attention" type="button" class="sh-btn sh-btn--secondary sh-btn--sm" aria-controls="ozon-key-settings-{{ aid }}" :aria-expanded="!!keyOpen[{{ aid }}]" @click="openKey({{ aid }})">{{ icon('key', size=16) }} Заменить ключ</button>{% endif %}
             </section>
-            <p class="mt-3 text-sm"><a class="sh-btn sh-btn--secondary" href="{{ url_for('ozon_account_health.page', account_id=aid) }}">Состояние магазина</a></p>
-            <div class="sh-stepper my-4" role="list" aria-label="Этапы подключения">
-                {% for label in ['Подключение', 'Каталог', 'Работа с товарами'] %}
-                <div class="sh-step" role="listitem"
-                     :class="{'sh-step--done': step({{ aid }}) > {{ loop.index0 }}, 'sh-step--current': step({{ aid }}) === {{ loop.index0 }}, 'sh-step--upcoming': step({{ aid }}) < {{ loop.index0 }}}"
-                     :aria-current="step({{ aid }}) === {{ loop.index0 }} ? 'step' : null">
-                    <span class="sh-step-dot">{{ loop.index }}</span><span class="sh-step-label">{{ label }}</span>
-                </div>
-                {% if not loop.last %}<span class="sh-step-line" :class="{'sh-step-line--done': step({{ aid }}) > {{ loop.index0 }}}"></span>{% endif %}
-                {% endfor %}
-            </div>
-            <div class="text-sm rounded-md px-3 py-3" style="background:var(--bg-hover)" aria-live="polite">
-                <p class="text-xs mb-2" style="color:var(--text-muted)"><span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span> Ozon · каталог карточек кабинета <span v-text="(accounts[{{ aid }}] || {}).label || {{ account.label | tojson | forceescape }}"></span></p>
+            <div class="seller-workspace-account-catalog text-sm rounded-md px-3 py-3" style="background:var(--bg-hover)" aria-live="polite">
+                <p class="text-xs mb-2" style="color:var(--text-muted)">Каталог</p>
                 <div class="flex items-start gap-2">
                     <span class="sh-spinner mt-0.5 shrink-0" v-show="active({{ aid }})" v-cloak aria-hidden="true"></span>
                     <p v-text="message({{ aid }})" :style="(jobs[{{ aid }}] || {}).status === 'failed' ? 'color:var(--danger)' : ''"></p>
@@ -196,8 +183,9 @@
             </div>
             {% endif %}
             <details id="ozon-key-settings-{{ aid }}" data-key-settings @toggle="keyOpen[{{ aid }}] = $event.currentTarget.open" class="border-t mt-4 pt-3" style="border-color:var(--border)">
-                <summary class="cursor-pointer text-sm" style="color:var(--text-secondary)">Доступы, настройки и замена ключа</summary>
+                <summary class="cursor-pointer text-sm" style="color:var(--text-secondary)">Ключ и настройки кабинета</summary>
                 <div class="space-y-4 mt-3 text-sm">
+                    <a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('ozon_account_health.page', account_id=aid) }}">Состояние магазина</a>
                     {% if account.connection_checked_at %}<p class="text-xs" style="color:var(--text-muted)">Последняя проверка: {{ account.connection_checked_at.strftime('%d.%m.%Y %H:%M') }} UTC.</p>{% endif %}
                     {% if ozon_enabled %}
                     <form method="post" action="{{ url_for('marketplace_accounts.update', account_id=aid) }}" data-account-id="{{ aid }}"
