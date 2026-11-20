@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-20T10:32:18.710200+00:00",
+  "generated_at": "2026-11-20T10:47:07.072439+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -4077,7 +4077,7 @@
     },
     {
       "path": "tests/test_marketplace_accounts.py",
-      "sha256": "8cb6507cd5bb372168300a2ffe90e0f8e4b900b51758e92cde064eacd3b64a01"
+      "sha256": "61b215a8465040ca41ea366590b3975b3ea659c303847ed404fffff71d8e55f4"
     },
     {
       "path": "tests/test_marketplace_accounts_migration.py",
@@ -5020,5 +5020,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "d36788b2a43e54265776ec36fb8c397d6f569f90693ab4e63204f738bb013768"
+  "aggregate_sha256": "696fdb90d1320b9f94c579b223c9677f4558f5e1f1a718b7767fa3dddccf4fba"
 }

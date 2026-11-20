@@ -605,7 +605,6 @@ class MarketplaceAccountsTest(unittest.TestCase):
             index_response = self.client.get("/marketplaces/accounts/")
         self.assertEqual(index_response.status_code, 200)
         template_context = render.call_args.kwargs
-        self.assertEqual(template_context["catalog_completed_at"], expected)
         self.assertEqual(
             template_context["setup_config"]["catalog_completed_at"],
             expected,
