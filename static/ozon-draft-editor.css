@@ -121,6 +121,8 @@
 .ode-message p { margin-top: 7px; }
 .ode-card .ode-message { margin-top: 15px; }
 .ode-message--error, .ode-message--warning { border-left: 3px solid var(--danger); }
+.ode .ode-action-error { scroll-margin-block: 16px; }
+.ode .ode-action-error:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
 .ode-message--warning { border-left-color: var(--warn); }
 .ode-message--success { border-left: 3px solid var(--ok); }
 .ode-link { color: var(--accent-strong); white-space: nowrap; text-decoration: underline; text-underline-offset: 3px; }

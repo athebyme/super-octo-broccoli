@@ -68,6 +68,12 @@
     function focusable(element) {
         return !!element && !element.disabled && !(element.matches && element.matches(':disabled'));
     }
+    function visibleFocusTarget(element) {
+        return !!element && element !== document.body && element !== document.documentElement &&
+            element.isConnected && focusable(element) &&
+            !(element.closest && element.closest('[inert], [aria-hidden="true"]')) &&
+            (!element.getClientRects || element.getClientRects().length > 0);
+    }
     function fallbackHeading(section) {
         const id = {content:'ode-content-heading', media:'ode-media-heading', attributes:'ode-attributes-heading', delivery:'ode-delivery-heading'}[section];
         return document.getElementById(id) || document.getElementById('ode-section');
@@ -387,8 +393,21 @@
                 },
                 readableError(error) { return error instanceof TypeError ? 'Нет ответа от сервера. Проверьте соединение; введённые данные остаются на экране.' : error.message; },
                 patch() { const current = serialize(this.form); return Object.fromEntries(Object.entries(current).filter(([key, value]) => !equal(value, this.original[key]))); },
-                async mutate(action, body, message) {
+                focusActionErrorAfterFailure(originFocus, restoredFocus = null) {
+                    this.$nextTick(() => {
+                        if (!alive || !this.error) return;
+                        const active = document.activeElement;
+                        if (active !== originFocus && active !== restoredFocus && visibleFocusTarget(active)) return;
+                        const target = this.$refs.actionError;
+                        if (!target) return;
+                        target.focus({preventScroll:true});
+                        target.scrollIntoView?.({behavior:'auto', block:'center'});
+                    });
+                },
+                async mutate(action, body, message, {focusError = true} = {}) {
                     if (this.locked || this.loading) return false;
+                    const originFocus = document.activeElement;
+                    let focusAfterFailure = false;
                     this.busy = action; this.error = ''; this.notice = '';
                     try {
                         await this.request(config.urls[action], {method:'POST', body:JSON.stringify(body)});
@@ -401,8 +420,13 @@
                         if (!alive) return false;
                         this.conflict = error.status === 409 || error.status === 403 || error.status === 401;
                         if (!error.status || error.status >= 500) this.uncertain = true;
-                        this.error = this.readableError(error); return false;
-                    } finally { if (alive) this.busy = ''; }
+                        this.error = this.readableError(error); focusAfterFailure = focusError; return false;
+                    } finally {
+                        if (alive) {
+                            this.busy = '';
+                            if (focusAfterFailure) this.focusActionErrorAfterFailure(originFocus);
+                        }
+                    }
                 },
                 async save() {
                     if (!this.dirty) return;
@@ -620,7 +644,7 @@
                     const review = this.categoryReview;
                     if (!review.open || review.loading || review.saving || review.hasMore || !review.confirmed || !review.token || review.needsChoice || this.dirty || this.locked || this.draft.version !== review.viewedVersion) return;
                     review.saving = true; review.error = '';
-                    const success = await this.mutate('save', {expected_version:review.viewedVersion, patch:{product_type_id:review.target.id, save_mapping:review.mapping}, category_review_token:review.token}, 'Категория выбрана. Проверьте сохранённые характеристики перед отправкой.');
+                    const success = await this.mutate('save', {expected_version:review.viewedVersion, patch:{product_type_id:review.target.id, save_mapping:review.mapping}, category_review_token:review.token}, 'Категория выбрана. Проверьте сохранённые характеристики перед отправкой.', {focusError:false});
                     review.saving = false; review.confirmed = false; review.token = '';
                     if (success) this.closeCategoryReview();
                     else if (this.conflict || this.uncertain) review.needsChoice = true;
@@ -663,6 +687,8 @@
                 closePublication() { if (this.busy) return; this.$refs.publicationDialog?.close(); this.confirmation = null; dialogReturnFocus?.focus?.(); },
                 async publish() {
                     if (!this.canPublish || !this.confirmedWrite) return;
+                    const originFocus = document.activeElement, restoredFocus = dialogReturnFocus;
+                    let focusAfterFailure = false;
                     this.busy = 'publish'; this.error = '';
                     const body = {expected_version:this.draft.version, idempotency_key:config.idempotencyKey + ':v' + this.draft.version};
                     if (this.draft.published_listing_id) body.confirm_write = true;
@@ -671,8 +697,13 @@
                         this.uncertain = true;
                         if (alive) { this.busy = ''; global.location.assign(this.operationUrl(result.operation.id)); }
                     } catch (error) {
-                        if (alive) { this.conflict = error.status === 409; this.uncertain = !error.status || error.status >= 500; this.error = this.readableError(error); this.$refs.publicationDialog.close(); this.confirmation = null; }
-                    } finally { if (alive) this.busy = ''; }
+                        if (alive) { this.conflict = error.status === 409; this.uncertain = !error.status || error.status >= 500; this.error = this.readableError(error); this.$refs.publicationDialog.close(); this.confirmation = null; focusAfterFailure = true; }
+                    } finally {
+                        if (alive) {
+                            this.busy = '';
+                            if (focusAfterFailure) this.focusActionErrorAfterFailure(originFocus, restoredFocus);
+                        }
+                    }
                 },
             },
             mounted() {

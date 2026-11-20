@@ -44,7 +44,7 @@
         <div class="ode-header-line"><div><p class="ode-eyebrow">Ozon · Редактор товара</p><h1>Подготовка карточки</h1></div><a :href="config.urls.catalog" class="sh-btn sh-btn--secondary">{{ icon('package', size=16) }} Каталог</a></div>
     </header>
 {% raw %}
-    <div v-if="error" class="ode-message ode-message--error" role="alert"><div>{{ error }}<p v-if="conflict">Сохранённая версия изменилась. Ваши правки оставлены на экране: скопируйте нужные значения перед загрузкой новой версии.</p><p v-if="uncertain">Результат последнего действия не подтверждён. Загрузите сохранённую версию перед следующим действием.</p></div><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy" @click="load(true)">Загрузить сохранённое</button></div>
+    <div v-if="error" ref="actionError" tabindex="-1" class="ode-message ode-message--error ode-action-error" role="alert"><div>{{ error }}<p v-if="conflict">Сохранённая версия изменилась. Ваши правки оставлены на экране: скопируйте нужные значения перед загрузкой новой версии.</p><p v-if="uncertain">Результат последнего действия не подтверждён. Загрузите сохранённую версию перед следующим действием.</p></div><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy" @click="load(true)">Загрузить сохранённое</button></div>
     <p v-if="notice" class="ode-message ode-message--success" role="status">{{ notice }}</p>
     <div v-if="loading && !draft" class="ode-loading" role="status"><div class="ode-skeleton"></div><div><div class="ode-skeleton ode-skeleton--line"></div><div class="ode-skeleton ode-skeleton--line"></div><p>Собираем карточку и требования Ozon…</p></div></div>
     <template v-if="draft">

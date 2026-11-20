@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-20T14:28:39.706534+00:00",
+  "generated_at": "2026-11-20T15:34:29.720616+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "66b5928dc5aea67696cfa8892434239f2f06a8c57d8bbdb43999f75306f420f7"
+      "sha256": "4f09044f0f070d64fcf67754a03011f46bbd5891df1695bebcfd3d6841c14b53"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -2641,11 +2641,11 @@
     },
     {
       "path": "static/ozon-draft-editor.css",
-      "sha256": "2cefca1bc11afb61e39f3e653afdecec4a35cff8a6b7a8d15b688795b84afb15"
+      "sha256": "b71b0aaf9fcd58f684b54d9fc51b7d49fb072f3af6ca49ff43cc3ed3eae38b7c"
     },
     {
       "path": "static/ozon-draft-editor.js",
-      "sha256": "11c67ed4b845d0ee7c4c5bb0e82e186231379f8a3862fdf36e0ac00955bfa195"
+      "sha256": "4ad295c21296136080da4163c2c854b90b058260d70a0551b8d8dc01020ab6a1"
     },
     {
       "path": "static/ozon-drafts-vue.js",
@@ -3121,7 +3121,7 @@
     },
     {
       "path": "templates/marketplace_draft_detail.html",
-      "sha256": "b61090053d792b380097d8bb07e4266697213f224eac68fdc2ee43451cec8542"
+      "sha256": "bc3ca87b30485a198f36fa34fc5ac9cfde6346e1133cc265aab48cb67c91ca7a"
     },
     {
       "path": "templates/marketplace_draft_detail_classic.html",
@@ -3633,7 +3633,7 @@
     },
     {
       "path": "tests/ozon_release/ozon_complete_journey_browser.py",
-      "sha256": "ffacf87b77a02f8c69afd3454e9ac72b386665e1d8b877131b08b28d0390099f"
+      "sha256": "b39b268e38189c642c1059ce0d65707e4abec23cec673b8dfdb8f2dea0ac9713"
     },
     {
       "path": "tests/ozon_release/quarantine_browser.py",
@@ -5024,5 +5024,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "f9cb0b6418d9ae0c8b4c624905b1328a3fd3506c20765eca8030bee91ffbd8e2"
+  "aggregate_sha256": "7f9e5a67d0e7f9e73cdc5df327ed927cda55a07dfa237ee85cbfeebe4000678e"
 }

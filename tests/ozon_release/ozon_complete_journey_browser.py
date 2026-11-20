@@ -8,6 +8,7 @@ and the marketplace adapter are synthetic; the process has no external network.
 import base64
 from contextlib import ExitStack
 from datetime import datetime
+from decimal import Decimal
 import hashlib
 import json
 import logging
@@ -45,6 +46,12 @@ report = {
     "safe_exception_frames": [],
     "ai_create_response": {},
     "synthetic": {},
+    "action_error_focus": {},
+    "action_failure_injection": {
+        "requests": 0,
+        "expected_responses": 0,
+        "blocked_repeats": 0,
+    },
     "mobile_ozon_photo_touch_observations": [],
     "scope": "synthetic_full_ozon_draft_to_publication",
 }
@@ -332,12 +339,39 @@ server_thread.start()
 base = "http://127.0.0.1:" + str(server.server_port)
 provider = SyntheticOzonProvider()
 registry = SyntheticRegistry(provider)
+action_failure = {
+    "armed": False,
+    "path": None,
+    "status": 503,
+    "attempts": 0,
+    "blocked_repeats": 0,
+}
 
 
 def browser_bridge(route):
     request = route.request
     parsed = urlsplit(request.url)
     if parsed.hostname == "127.0.0.1" and parsed.port == server.server_port:
+        if (action_failure["armed"] and request.method == "POST"
+                and parsed.path == action_failure["path"]):
+            action_failure["attempts"] += 1
+            report["action_failure_injection"]["requests"] = action_failure["attempts"]
+            if action_failure["attempts"] == 1:
+                route.fulfill(
+                    status=action_failure["status"],
+                    content_type="application/json",
+                    body=json.dumps({
+                        "success": False,
+                        "error": "Синтетический сбой: результат действия не подтверждён.",
+                    }, ensure_ascii=False),
+                )
+            else:
+                # Keep any retry away from the local API/provider, but make the
+                # duplicate visible to the assertion below.
+                action_failure["blocked_repeats"] += 1
+                report["action_failure_injection"]["blocked_repeats"] = action_failure["blocked_repeats"]
+                route.abort(error_code="blockedbyclient")
+            return
         response = route.fetch(max_redirects=0)
         if parsed.path == "/marketplaces/api/drafts/ai-completions" and request.method == "POST":
             try:
@@ -391,6 +425,386 @@ def passed(name):
     assert not report["external"], report["external"]
     report["checks"].append(name)
     print(json.dumps({"journey_check": name}), flush=True)
+
+
+def action_error_focus_snapshot(page):
+    """Capture safe keyboard/focus geometry for the expected error region."""
+    return page.evaluate("""() => {
+        const root = document.querySelector('#ozon-draft-editor');
+        const region = root?.querySelector('.ode-action-error') || null;
+        const fallback = root?.querySelector(':scope > .ode-message--error') || null;
+        const visibleRegion = region || fallback;
+        const recovery = visibleRegion?.querySelector('button') || null;
+        const active = document.activeElement;
+        const rect = element => {
+            if (!element) return null;
+            const value = element.getBoundingClientRect();
+            return Object.fromEntries(['left','top','right','bottom','width','height'].map(key =>
+                [key, Math.round(value[key] * 10) / 10]));
+        };
+        const hitTest = (owner, x, y) => {
+            const hit = document.elementFromPoint(x, y);
+            return {
+                x:Math.round(x * 10) / 10,
+                y:Math.round(y * 10) / 10,
+                covered:!!owner && !!hit && (hit === owner || owner.contains(hit)),
+                hit_tag:hit?.tagName || null,
+                hit_id:hit?.id || null,
+                hit_class:typeof hit?.className === 'string' ? hit.className.slice(0,120) : null,
+            };
+        };
+        const visible = element => {
+            if (!element) return false;
+            const style = getComputedStyle(element);
+            const value = element.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden' &&
+                value.width > 0 && value.height > 0;
+        };
+        const inViewport = element => {
+            const value = rect(element);
+            return !!value && value.right > 0 && value.left < innerWidth &&
+                value.bottom > 0 && value.top < innerHeight;
+        };
+        const focusStyle = active ? getComputedStyle(active) : null;
+        const className = active && typeof active.className === 'string' ? active.className : '';
+        const regionRect = visibleRegion?.getBoundingClientRect() || null;
+        const firstEdgeY = regionRect ? regionRect.top + Math.min(12, regionRect.height / 2) : null;
+        const firstEdgeHitTests = regionRect ? {
+            left:hitTest(visibleRegion, regionRect.left + 8, firstEdgeY),
+            center_near_top:hitTest(visibleRegion, (regionRect.left + regionRect.right) / 2, firstEdgeY),
+            right:hitTest(visibleRegion, regionRect.right - 8, firstEdgeY),
+        } : null;
+        const recoveryRect = recovery?.getBoundingClientRect() || null;
+        const recoveryButtonHitTest = recoveryRect ? hitTest(
+            recovery, (recoveryRect.left + recoveryRect.right) / 2,
+            (recoveryRect.top + recoveryRect.bottom) / 2,
+        ) : null;
+        return {
+            expected_region_count:root?.querySelectorAll('.ode-action-error').length || 0,
+            fallback_region_count:fallback ? 1 : 0,
+            region_visible:visible(visibleRegion),
+            region_in_viewport:inViewport(visibleRegion),
+            region_rect:rect(visibleRegion),
+            region_first_edge_hit_tests:firstEdgeHitTests,
+            active_tag:active?.tagName || null,
+            active_id:active?.id || null,
+            active_class:className.slice(0,120),
+            focus_matches_region:!!region && active === region,
+            focus_visible:!!active?.matches?.(':focus-visible'),
+            focus_outline_width:focusStyle ? parseFloat(focusStyle.outlineWidth) || 0 : 0,
+            focus_outline_style:focusStyle?.outlineStyle || null,
+            recovery_count:visibleRegion?.querySelectorAll('button').length || 0,
+            recovery_visible:visible(recovery),
+            recovery_in_viewport:inViewport(recovery),
+            recovery_disabled:recovery?.disabled ?? null,
+            recovery_focused:!!recovery && active === recovery,
+            recovery_rect:rect(recovery),
+            recovery_button_hit_test:recoveryButtonHitTest,
+            viewport:{width:innerWidth,height:innerHeight},
+            page_width:document.documentElement.scrollWidth,
+        };
+    }""")
+
+
+def focus_error_view(page, theme):
+    page.set_viewport_size({"width": 390, "height": 800})
+    page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+    page.wait_for_function("document.fonts.status === 'loaded'")
+    page.wait_for_function(
+        "!document.querySelector('.main-content')?.getAnimations().some(a => a.playState === 'running')",
+        timeout=3000,
+    )
+
+
+def track_browser_response(response):
+    if response.status < 500:
+        return
+    path = urlsplit(response.url).path
+    expected = (
+        action_failure["armed"]
+        and path == action_failure["path"]
+        and response.status == action_failure["status"]
+        and action_failure["attempts"] == 1
+    )
+    if expected:
+        report["action_failure_injection"]["expected_responses"] += 1
+        return
+    report["unexpected_http"].append({"status": response.status, "path": path})
+
+
+def local_draft_commercial_state(target_draft_id):
+    with app.app_context():
+        db.session.expire_all()
+        draft = db.session.get(MarketplaceProductDraft, target_draft_id)
+        assert draft is not None
+        return {
+            "version": draft.version,
+            "status": draft.status,
+            "validation_status": draft.validation_status,
+            "commercial": json.loads(draft.commercial_json or "{}"),
+        }
+
+
+def action_error_focus_check(context, page):
+    """Exercise both failed editor actions through real browser controls."""
+    config = bootstrap(page, "#ode-bootstrap")
+    save_path = urlsplit(config["urls"]["save"]).path
+    editor_url = base + f"/marketplaces/drafts/{draft_id}"
+    focus_results = {}
+
+    # Keep a dirty price in this tab while a second normal editor tab saves a
+    # different value at the same draft version. The first tab then gets the
+    # real optimistic-concurrency 409 through the production Flask route.
+    focus_error_view(page, "light")
+    page.get_by_role("button", name="Цена и упаковка", exact=True).click()
+    page.locator("#ode-old-price").wait_for(state="visible")
+    page.locator("#ode-old-price").fill("1400")
+    concurrent = context.new_page()
+    concurrent.set_default_timeout(20000)
+    concurrent.on("pageerror", lambda error: report["js_errors"].append(str(error)))
+    concurrent.goto(editor_url)
+    concurrent.locator("#ozon-draft-editor:not([v-cloak])").wait_for()
+    concurrent.get_by_role("button", name="Цена и упаковка", exact=True).click()
+    concurrent.locator("#ode-old-price").wait_for(state="visible")
+    concurrent.locator("#ode-old-price").fill("1300")
+    with concurrent.expect_response(lambda response:
+            response.request.method == "POST" and
+            urlsplit(response.url).path == save_path) as concurrent_save_info:
+        concurrent.get_by_role("button", name="Сохранить", exact=True).click()
+    concurrent_save = concurrent_save_info.value
+    assert concurrent_save.status == 200, {
+        "concurrent_save_status": concurrent_save.status,
+        "path": urlsplit(concurrent_save.url).path,
+    }
+    concurrent.get_by_text(
+        "Изменения сохранены. Теперь проверьте карточку перед отправкой.", exact=True,
+    ).wait_for()
+    saved_state = local_draft_commercial_state(draft_id)
+    assert Decimal(str(saved_state["commercial"].get("old_price"))) == Decimal("1300"), {
+        "saved_version": saved_state["version"],
+        "saved_old_price_matches": False,
+    }
+
+    page.bring_to_front()
+    save_posts = []
+    page.on("request", lambda request: save_posts.append(request.url)
+            if request.method == "POST" and urlsplit(request.url).path == save_path else None)
+    save_button = page.locator(".ode-savebar button").filter(has_text="Сохранить")
+    save_button.focus()
+    save_focused_before = save_button.evaluate("node => node === document.activeElement")
+    with page.expect_response(lambda response:
+            response.request.method == "POST" and
+            urlsplit(response.url).path == save_path) as conflict_info:
+        page.keyboard.press("Enter")
+    conflict_response = conflict_info.value
+    page.locator("#ozon-draft-editor .ode-message--error").wait_for()
+    page.wait_for_function("""() => {
+        const banner = document.querySelector('#ozon-draft-editor .ode-message--error');
+        const footer = document.querySelector('.ode-savebar strong');
+        return !!banner && !!footer && !footer.textContent.includes('Выполняем действие');
+    }""")
+    dirty_value_after_conflict = page.locator("#ode-old-price").input_value()
+    save_focus_result = action_error_focus_snapshot(page)
+    page.keyboard.press("Tab")
+    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    save_tab_result = action_error_focus_snapshot(page)
+    save_recovery = page.get_by_role("button", name="Загрузить сохранённое", exact=True)
+    save_recovery_visible = save_recovery.is_visible()
+    save_recovery_enabled = save_recovery.is_enabled()
+    recovery_confirm_message = "Загрузить сохранённую версию? Несохранённые правки в этой вкладке будут потеряны."
+    recovery_dialogs = []
+    recovery_editor_responses = []
+    recovery_editor_gets = []
+    save_focus_record = {
+        "theme": "light",
+        "width": 390,
+        "height": 800,
+        "http_status": conflict_response.status,
+        "keyboard_enter_activated_save": save_focused_before,
+        "dirty_old_price_preserved": dirty_value_after_conflict == "1400",
+        "concurrent_saved_old_price_preserved": Decimal(str(
+            saved_state["commercial"].get("old_price"),
+        )) == Decimal("1300"),
+        "posts_before_recovery": len(save_posts),
+        "recovery_visible": save_recovery_visible,
+        "recovery_enabled": save_recovery_enabled,
+        "after_action": save_focus_result,
+        "after_tab": save_tab_result,
+        "recovery_dialogs": recovery_dialogs,
+        "recovery_editor_gets": recovery_editor_gets,
+    }
+    focus_results["save_conflict"] = save_focus_record
+    report["action_error_focus"] = focus_results
+
+    def handle_recovery_dialog(dialog):
+        observed = {"type": dialog.type, "message": dialog.message}
+        recovery_dialogs.append(observed)
+        if dialog.type == "confirm" and dialog.message == recovery_confirm_message:
+            dialog.accept()
+        else:
+            dialog.dismiss()
+
+    expected_editor_get_url = base + config["urls"]["editor"]
+
+    def capture_recovery_editor_get(response):
+        if response.request.method == "GET" and response.url == expected_editor_get_url:
+            recovery_editor_responses.append(response)
+            recovery_editor_gets.append({
+                "method": response.request.method,
+                "url": response.url,
+                "status": response.status,
+            })
+
+    page.once("dialog", handle_recovery_dialog)
+    page.on("response", capture_recovery_editor_get)
+    if save_tab_result["recovery_focused"] and save_recovery_enabled:
+        page.keyboard.press("Enter")
+    else:
+        # Let the baseline continue to the publication case even when it has
+        # no action-error focus handoff; this is a GET readback, not a retry.
+        save_recovery.click()
+    assert recovery_dialogs == [{"type": "confirm", "message": recovery_confirm_message}], {
+        "recovery_dialogs": recovery_dialogs,
+    }
+    page.wait_for_function("""() =>
+        !document.querySelector('#ozon-draft-editor .ode-message--error') &&
+        document.querySelector('#ode-old-price')?.value === '1300'
+    """)
+    page.remove_listener("response", capture_recovery_editor_get)
+    assert len(recovery_editor_responses) == 1, recovery_editor_gets
+    recovery_editor_response = recovery_editor_responses[0]
+    assert recovery_editor_response.status == 200 and recovery_editor_response.url == expected_editor_get_url, {
+        "status": recovery_editor_response.status,
+        "url": recovery_editor_response.url,
+        "expected_url": expected_editor_get_url,
+    }
+    recovery_editor_document = recovery_editor_response.json()
+    assert recovery_editor_document["draft"]["id"] == draft_id
+    recovered_editor_old_price = recovery_editor_document["documents"]["commercial"].get("old_price")
+    assert Decimal(str(recovered_editor_old_price)) == Decimal("1300"), {
+        "recovery_editor_old_price": recovered_editor_old_price,
+    }
+    save_focus_record["recovery_editor_old_price"] = str(recovered_editor_old_price)
+    save_focus_record["recovery_ui_old_price"] = page.locator("#ode-old-price").input_value()
+    save_posts_after_readback = len(save_posts)
+    recovered_state = local_draft_commercial_state(draft_id)
+    assert Decimal(str(recovered_state["commercial"].get("old_price"))) == Decimal("1300")
+    concurrent.close()
+
+    # Revalidate the locally recovered, unchanged valid fields before the
+    # publication attempt. This is a local Seller Hub check only.
+    validate = page.get_by_role("button", name="Проверить карточку", exact=True)
+    validate.focus()
+    page.keyboard.press("Enter")
+    page.get_by_text(
+        "Текущие поля проходят локальную проверку. При отправке данные будут проверены повторно.",
+        exact=True,
+    ).wait_for()
+    publish_config = bootstrap(page, "#ode-bootstrap")
+    publish_path = urlsplit(publish_config["urls"]["publish"]).path
+
+    # Model one exact HTTP 503 at the browser boundary: it never reaches the
+    # local route or Ozon adapter. Any repeat is also blocked and counted.
+    focus_error_view(page, "dark")
+    provider_before = {"writes": provider.physical_writes, "readbacks": len(provider.full_read_calls)}
+    draft_before_failure = local_draft_commercial_state(draft_id)
+    action_failure.update({"armed": True, "path": publish_path, "status": 503, "attempts": 0, "blocked_repeats": 0})
+    publish_posts = []
+    page.on("request", lambda request: publish_posts.append(request.url)
+            if request.method == "POST" and urlsplit(request.url).path == publish_path else None)
+
+    publish_button = page.locator(".ode-savebar button.sh-btn--primary")
+    publish_button.focus()
+    page.keyboard.press("Enter")
+    dialog = page.locator('dialog[aria-labelledby="ode-publish-title"]')
+    dialog.wait_for(state="visible")
+    confirm_box = dialog.get_by_role("checkbox")
+    confirm_box.focus()
+    page.keyboard.press("Space")
+    assert confirm_box.is_checked()
+    confirm_button = dialog.get_by_role("button", name="Подтвердить отправку", exact=True)
+    confirm_button.focus()
+    with page.expect_response(lambda response:
+            response.request.method == "POST" and
+            urlsplit(response.url).path == publish_path) as publish_failure_info:
+        page.keyboard.press("Enter")
+    publish_failure = publish_failure_info.value
+    page.locator("#ozon-draft-editor .ode-message--error").wait_for()
+    page.wait_for_function("""() => {
+        const dialog = document.querySelector('dialog[aria-labelledby="ode-publish-title"]');
+        const banner = document.querySelector('#ozon-draft-editor .ode-message--error');
+        const footer = document.querySelector('.ode-savebar strong');
+        return !!dialog && !dialog.open && !!banner && !!footer &&
+            !footer.textContent.includes('Выполняем действие');
+    }""")
+    publish_focus_result = action_error_focus_snapshot(page)
+    page.keyboard.press("Tab")
+    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    publish_tab_result = action_error_focus_snapshot(page)
+    publish_recovery = page.get_by_role("button", name="Загрузить сохранённое", exact=True)
+    publish_recovery_visible = publish_recovery.is_visible()
+    publish_recovery_enabled = publish_recovery.is_enabled()
+    provider_after = {"writes": provider.physical_writes, "readbacks": len(provider.full_read_calls)}
+    draft_after_failure = local_draft_commercial_state(draft_id)
+
+    save_focus_record["posts_after_recovery"] = save_posts_after_readback
+    save_focus_record["concurrent_saved_old_price_preserved"] = Decimal(str(
+        recovered_state["commercial"].get("old_price"),
+    )) == Decimal("1300")
+    focus_results["publication_unknown"] = {
+        "theme": "dark",
+        "width": 390,
+        "height": 800,
+        "http_status": publish_failure.status,
+        "publish_post_count": len(publish_posts),
+        "injected_request_count": action_failure["attempts"],
+        "blocked_repeat_count": action_failure["blocked_repeats"],
+        "dialog_closed": not dialog.evaluate("node => node.open"),
+        "publish_remains_locked": publish_button.is_disabled(),
+        "recovery_visible": publish_recovery_visible,
+        "recovery_enabled": publish_recovery_enabled,
+        "provider_before": provider_before,
+        "provider_after": provider_after,
+        "draft_unchanged": {
+            "version": draft_after_failure["version"] == draft_before_failure["version"],
+            "status": draft_after_failure["status"] == draft_before_failure["status"],
+            "validation_status": draft_after_failure["validation_status"] == draft_before_failure["validation_status"],
+            "old_price": Decimal(str(draft_after_failure["commercial"].get("old_price"))) ==
+                Decimal(str(draft_before_failure["commercial"].get("old_price"))),
+        },
+        "after_action": publish_focus_result,
+        "after_tab": publish_tab_result,
+    }
+    report["action_error_focus"] = focus_results
+
+    # Evaluate both outcomes only after both failure cases have been captured,
+    # so a baseline without the new selector still yields both diagnostics.
+    for name in ("save_conflict", "publication_unknown"):
+        result = focus_results[name]
+        after_action = result["after_action"]
+        after_tab = result["after_tab"]
+        assert after_action["expected_region_count"] == 1, (name, result)
+        assert after_action["focus_matches_region"], (name, result)
+        assert after_action["region_visible"] and after_action["region_in_viewport"], (name, result)
+        first_edge_hits = after_action["region_first_edge_hit_tests"]
+        assert first_edge_hits and all(point["covered"] for point in first_edge_hits.values()), (name, result)
+        assert after_action["focus_visible"] and after_action["focus_outline_width"] >= 2 and after_action["focus_outline_style"] != "none", (name, result)
+        assert after_action["recovery_count"] == 1 and after_action["recovery_visible"] and not after_action["recovery_disabled"], (name, result)
+        assert after_tab["recovery_focused"] and after_tab["recovery_in_viewport"], (name, result)
+        assert after_tab["recovery_button_hit_test"] and after_tab["recovery_button_hit_test"]["covered"], (name, result)
+        assert after_tab["focus_visible"] and after_tab["focus_outline_width"] >= 2 and after_tab["focus_outline_style"] != "none", (name, result)
+    save_result = focus_results["save_conflict"]
+    assert save_result["http_status"] == 409, save_result
+    assert save_result["keyboard_enter_activated_save"] and save_result["dirty_old_price_preserved"], save_result
+    assert save_result["concurrent_saved_old_price_preserved"] and save_result["posts_before_recovery"] == 1 and save_result["posts_after_recovery"] == 1, save_result
+    publish_result = focus_results["publication_unknown"]
+    assert publish_result["http_status"] == 503 and publish_result["publish_post_count"] == 1, publish_result
+    assert publish_result["injected_request_count"] == 1 and publish_result["blocked_repeat_count"] == 0, publish_result
+    assert publish_result["dialog_closed"] and publish_result["publish_remains_locked"], publish_result
+    assert publish_result["provider_before"] == publish_result["provider_after"], publish_result
+    assert all(publish_result["draft_unchanged"].values()), publish_result
+    assert report["action_failure_injection"]["expected_responses"] == 1, report["action_failure_injection"]
+    passed("failed_save_and_publication_focus_visible_recovery_without_repeat")
 
 
 def bootstrap(page, selector):
@@ -1005,9 +1419,7 @@ try:
             page = context.new_page()
             page.set_default_timeout(20000)
             page.on("pageerror", lambda error: report["js_errors"].append(str(error)))
-            page.on("response", lambda response: report["unexpected_http"].append({
-                "status": response.status, "path": urlsplit(response.url).path,
-            }) if response.status >= 500 else None)
+            page.on("response", track_browser_response)
 
             page.goto(base + "/login?next=/marketplaces/drafts/?account_id=" + str(account_id))
             page.locator("input[name=username]").fill(USERNAME)
@@ -1199,6 +1611,7 @@ try:
             page.locator("#ozon-draft-editor:not([v-cloak])").wait_for()
             layout(page, "reviewed-draft")
             passed("seller_fills_clean_new_category_media_packaging_vat_and_fresh_validation")
+            action_error_focus_check(context, page)
 
             page.goto(base + "/marketplaces/drafts/?account_id=" + str(account_id))
             page.locator("#ozon-drafts-list:not([v-cloak])").wait_for()
