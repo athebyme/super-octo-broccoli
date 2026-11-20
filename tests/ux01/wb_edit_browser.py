@@ -44,6 +44,7 @@ ARTIFACTS_PATH = Path(
     or REPORT_PATH.parent / "wb-edit-browser-artifacts"
 )
 SOURCE = os.environ.get("UX01_WB_EDIT_SOURCE", "worktree")
+BULK_SCHEMA_RACE_ONLY = "--bulk-schema-race-only" in sys.argv
 ASSET_DIR = ROOT / "tests/ozon_release/assets"
 USERNAME = "ux01-wb-edit-seller"
 PASSWORD = "synthetic-wb-edit-password"
@@ -936,6 +937,179 @@ def assert_bulk_editor_mobile_footer(
     )
     page.get_by_role("button", name="Редактировать", exact=True).click()
     page.wait_for_url("**/products/bulk-edit")
+
+
+def assert_bulk_schema_load_races(page) -> dict[str, object]:
+    """Drive deferred responses through the rendered Alpine bulk editor method."""
+    page.wait_for_function("""() => {
+        const form = document.querySelector('form[action="/products/bulk-edit"]');
+        return !!window.Alpine?.$data && !!form;
+    }""", timeout=5000)
+    return page.evaluate("""async () => {
+        const form = document.querySelector('form[action="/products/bulk-edit"]');
+        const state = window.Alpine.$data(form);
+        const stateKeys = [
+            'operation', 'categories', 'selectedCategory', 'showCategorySelector',
+            'characteristics', 'commonCharacteristics', 'characteristicsByCategory',
+            'characteristicsLoadGeneration', 'selectedChar', 'selectedCharId',
+            'charValue', 'charValueAdd', 'selectedValues', 'selectedValuesAdd',
+            'loading', 'loadError', 'products', 'pendingChanges', 'addingCharId',
+            'addingChar', 'addingValue', 'addingSelectedValues',
+        ];
+        const originalState = Object.fromEntries(stateKeys.map(key => [key, state[key]]));
+        const originalFetch = window.fetch;
+        const originalLoader = state.loadCharacteristics;
+        const requests = [];
+        const loads = [];
+        state.loadCharacteristics = function (...args) {
+            const promise = originalLoader.apply(this, args);
+            loads.push(promise);
+            return promise;
+        };
+        window.fetch = (url, init) => new Promise((resolve, reject) => {
+            requests.push({url: String(url), init, resolve, reject});
+        });
+        state.categories = [
+            {subject_id: 100, name: 'Subject A'},
+            {subject_id: 200, name: 'Subject B'},
+        ];
+        state.products = [{id: 1}];
+        state.operation = 'update_characteristic';
+
+        const schema = (id, name) => [{id, name, charc_type: 0, values: []}];
+        function start(subjectId) {
+            state.selectCategory(String(subjectId));
+            const index = loads.length - 1;
+            const request = requests[index];
+            if (!request || !loads[index]) {
+                throw new Error('Expected a deferred schema request for subject ' + subjectId);
+            }
+            const body = JSON.parse(request.init.body);
+            if (body.subject_ids.join(',') !== String(subjectId)) {
+                throw new Error('Wrong subject filter: ' + JSON.stringify(body.subject_ids));
+            }
+            return {request, promise: loads[index]};
+        }
+        async function settle(item, {status = 200, bySubject = {}, common = [], error = null} = {}) {
+            item.request.resolve({
+                ok: status >= 200 && status < 300,
+                status,
+                json: async () => ({
+                    by_subject: bySubject,
+                    common,
+                    ...(error ? {error} : {}),
+                }),
+            });
+            await item.promise;
+        }
+        function snapshot() {
+            const copyRows = rows => rows.map(row => ({id: String(row.id), name: row.name}));
+            return {
+                category: state.selectedCategory,
+                operation: state.operation,
+                characteristics: copyRows(state.characteristics),
+                common: copyRows(state.commonCharacteristics),
+                byCategory: Object.fromEntries(Object.entries(state.characteristicsByCategory)
+                    .map(([id, rows]) => [id, copyRows(rows)])),
+                selectedChar: state.selectedChar
+                    ? {id: String(state.selectedChar.id), name: state.selectedChar.name}
+                    : null,
+                selectedCharId: state.selectedCharId,
+                charValue: state.charValue,
+                charValueAdd: state.charValueAdd,
+                selectedValues: [...state.selectedValues],
+                selectedValuesAdd: [...state.selectedValuesAdd],
+                pendingChanges: state.pendingChanges.map(change => ({...change})),
+                loading: state.loading,
+                loadError: state.loadError,
+            };
+        }
+        function unchanged(actual, expected, label) {
+            if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+                throw new Error(label + ': ' + JSON.stringify({expected, actual}));
+            }
+        }
+        function pinInProgressBState() {
+            state.selectedChar = {id: 'chosen', name: 'Chosen on B'};
+            state.selectedCharId = 'chosen';
+            state.charValue = 'B draft';
+            state.charValueAdd = 'B add draft';
+            state.selectedValues = ['b-value'];
+            state.selectedValuesAdd = ['b-add-value'];
+            state.pendingChanges = [{
+                charId: '9', charName: 'Prepared B change',
+                value: 'prepared', displayValue: 'prepared',
+            }];
+        }
+
+        try {
+            // Older A success after B has loaded must not replace B's schema or draft.
+            const successA = start(100);
+            const currentB = start(200);
+            await settle(currentB, {bySubject: {'200': schema(9, 'B schema')}});
+            pinInProgressBState();
+            const afterB = snapshot();
+            await settle(successA, {bySubject: {'100': schema(9, 'A schema')}});
+            unchanged(snapshot(), afterB, 'stale A success changed current B editor state');
+
+            // A stale rejection must not put an error on the successfully loaded B schema.
+            const failureA = start(100);
+            const secondB = start(200);
+            await settle(secondB, {bySubject: {'200': schema(9, 'B schema')}});
+            pinInProgressBState();
+            const afterSecondB = snapshot();
+            await settle(failureA, {status: 503, error: 'stale A failure'});
+            unchanged(snapshot(), afterSecondB, 'stale A failure changed current B editor state');
+
+            // A→B→A: neither the intervening B nor the earlier A owns the final A state.
+            const firstA = start(100);
+            const betweenB = start(200);
+            const newestA = start(100);
+            await settle(newestA, {bySubject: {'100': schema(9, 'Newest A schema')}});
+            const afterNewestA = snapshot();
+            await settle(betweenB, {bySubject: {'200': schema(9, 'Stale B schema')}});
+            unchanged(snapshot(), afterNewestA, 'stale B success changed newest A editor state');
+            await settle(firstA, {status: 503, error: 'stale first A failure'});
+            unchanged(snapshot(), afterNewestA, 'earlier A failure changed newest A editor state');
+
+            // Switching operations invalidates pending schema work and clears its spinner.
+            const oldOperationLoad = start(100);
+            state.operation = 'update_brand';
+            state.clearFields();
+            const afterOperationChange = snapshot();
+            await settle(oldOperationLoad, {bySubject: {'100': schema(9, 'Late schema')}});
+            unchanged(snapshot(), afterOperationChange, 'stale schema response changed operation state');
+
+            // Clearing the subject starts an unfiltered request; the old A response stays stale.
+            state.operation = 'update_characteristic';
+            const oldSubjectLoad = start(100);
+            state.clearCategoryFilter();
+            const clearIndex = loads.length - 1;
+            const clearSubjectLoad = {request: requests[clearIndex], promise: loads[clearIndex]};
+            await settle(clearSubjectLoad, {common: schema(7, 'Common field')});
+            const afterSubjectClear = snapshot();
+            await settle(oldSubjectLoad, {
+                bySubject: {'100': schema(9, 'Late A schema')},
+                common: schema(8, 'Stale common field'),
+            });
+            unchanged(snapshot(), afterSubjectClear, 'stale subject response changed cleared filter state');
+
+            return {
+                passed: true,
+                scenarios: [
+                    'stale_success_after_A_to_B',
+                    'stale_failure_after_A_to_B',
+                    'stale_success_and_failure_after_A_to_B_to_A',
+                    'operation_change_invalidates_pending_load',
+                    'subject_clear_invalidates_prior_subject',
+                ],
+            };
+        } finally {
+            window.fetch = originalFetch;
+            state.loadCharacteristics = originalLoader;
+            for (const key of stateKeys) state[key] = originalState[key];
+        }
+    }""")
 
 
 def wait_for_layout_settle(page, *, width: int, theme: str) -> dict:
@@ -2111,7 +2285,7 @@ def click_next_product_page(page, *, sort: str, expected_page: int = 2) -> None:
     )
 
 
-def run_browser(app, fixture: dict[str, int]) -> None:
+def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = False) -> None:
     from seller_platform import app as seller_app
     from models import BulkEditHistory, CardEditHistory, Product, db
 
@@ -2189,6 +2363,23 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             _assert_local_products_url(page.url, {})
             assert REPORT["provider_attempts"] == 0
             interaction("authenticated_login_with_csrf_enabled")
+
+            if bulk_schema_race_only:
+                page.goto(
+                    BASE + "/products?search=Pipedream&brand=Pipedream"
+                    "&sort=title&order=asc&page=1&per_page=50",
+                    wait_until="domcontentloaded",
+                )
+                assert page.locator(".product-checkbox").count() == 50
+                page.locator("#selectAll").check()
+                page.get_by_role("button", name="Редактировать", exact=True).click()
+                page.wait_for_url("**/products/bulk-edit")
+                observations = assert_bulk_schema_load_races(page)
+                check("bulk_characteristics_schema_latest_request_wins", **observations)
+                interaction("deferred_schema_success_failure_and_context_switches_keep_current_editor_state")
+                assert REPORT["provider_attempts"] == 0
+                REPORT["status"] = "complete"
+                return
 
             # Exercise a non-default page size before the existing exact-50
             # selection journey. Sorting must retain 100 and all meaningful
@@ -2346,6 +2537,12 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             assert "50 товаров" in page.locator("body").inner_text()
             assert "Pipedream" in page.locator("body").inner_text()
             assert_keyboard_focus(page, "bulk_editor")
+            schema_race_observations = assert_bulk_schema_load_races(page)
+            check(
+                "bulk_characteristics_schema_latest_request_wins",
+                **schema_race_observations,
+            )
+            interaction("deferred_schema_success_failure_and_context_switches_keep_current_editor_state")
             return_links = page.locator('nav a[href^="/products?"]')
             assert return_links.count() == 1, f"Expected one safe products return link, got {return_links.count()}"
             return_href = return_links.get_attribute("href")
@@ -3928,7 +4125,9 @@ def main() -> int:
     SERVER_THREAD.start()
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
     try:
-        run_browser(app, fixture)
+        if BULK_SCHEMA_RACE_ONLY:
+            REPORT["scope"] = "synthetic_wb_bulk_characteristics_schema_race"
+        run_browser(app, fixture, bulk_schema_race_only=BULK_SCHEMA_RACE_ONLY)
     except Exception as exc:
         REPORT["status"] = "failed"
         REPORT["failure"] = {"type": type(exc).__name__, "message": str(exc)[:500]}

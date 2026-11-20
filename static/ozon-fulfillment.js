@@ -14,6 +14,18 @@
   const positive = (value, fallback=1) => /^[1-9]\d*$/.test(String(value || '')) && Number(value)<=100000 ? Number(value) : fallback;
   const instant = value => value ? new Date(/[Zz]|[+-]\d\d:\d\d$/.test(value) ? value : value+'Z') : null;
   function date(value) { const d=instant(value); return d && Number.isFinite(d.getTime()) ? d.toLocaleString('ru-RU',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : 'Дата не указана'; }
+  function dateOnly(value) {
+    if (typeof value!=='string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return '';
+    const [year,month,day]=value.split('-').map(Number);
+    const parsed=new Date(Date.UTC(year,month-1,day,12));
+    return Number.isFinite(parsed.getTime())
+      ? new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'}).format(parsed)
+      : '';
+  }
+  function dateRange(start,end) {
+    const from=dateOnly(start),to=dateOnly(end);
+    return from && to ? from+' — '+to : 'период не указан';
+  }
   function money(value, currency) {
     if (value === null || value === undefined || value === '' || !/^\d+(\.\d+)?$/.test(String(value)) || !Number.isFinite(Number(value))) return 'Цена не указана';
     if (!/^[A-Z]{3}$/.test(currency || '')) return Number(value).toLocaleString('ru-RU')+' · валюта не указана';
@@ -48,13 +60,57 @@
       directives:{'image-deadline':global.mcatShared.imageDeadline},
       data:()=>({...refreshData,config,kind:config.kind,period:'30d',filters:filtersFromURL(),observedFilters:null,searchDraft:'',
         items:[],pagination:{page:1,pages:0,total:0},statusCounts:{},loading:false,loaded:false,error:'',sessionEnded:false,
-        lastCompleted:null,syncState:null,failedImages:{},detailId:null,detail:null,detailLoading:false,detailError:'',detailPage:1}),
+        coverageSync:null,failedImages:{},detailId:null,detail:null,detailLoading:false,detailError:'',detailPage:1}),
       computed:{
         sourceOptions() { return (this.kind==='orders'?['fbo','fbs']:this.kind==='returns'?['fbo_fbs','rfbs']:['posting_fbo','posting_fbs','rfbs_conditional']).map(value=>({value,label:sources[value]})); },
         hasFilters() { return Boolean(this.filters.search || this.filters.source || this.filters.status); },
         statusOptions() { const keys=new Set(Object.keys(this.statusCounts));if(this.filters.status)keys.add(this.filters.status);return [...keys].sort().map(value=>({value,label:this.statusLabel(value),count:this.statusCounts[value]||0})); },
-        resultsLabel() { return new Intl.NumberFormat('ru-RU').format(this.pagination.total)+' '+({orders:'отправлений',returns:'возвратов',cancellations:'отмен'}[this.kind]); },
-        freshness() { return this.lastCompleted?.completed_at ? 'Данные обновлены '+date(this.lastCompleted.completed_at) : 'Полная загрузка за выбранный период ещё не подтверждена'; },
+        stalePeriod() { return Boolean(this.observedFilters && this.observedFilters.period!==this.filters.period); },
+        coverageSyncForView() {
+          const coverage=this.coverageSync;
+          const completed=instant(coverage?.completed_at);
+          if(!this.loaded || !this.observedFilters || this.stalePeriod || !coverage
+             || !coverage.period_start || !coverage.period_end
+             || coverage.period_start>coverage.period_end || !completed
+             || !Number.isFinite(completed.getTime())) return null;
+          return coverage;
+        },
+        hasCoverageForView() { return Boolean(this.coverageSyncForView); },
+        resultsLabel() {
+          const count=new Intl.NumberFormat('ru-RU').format(this.pagination.total);
+          const noun={orders:'отправлений',returns:'возвратов',cancellations:'отмен'}[this.kind];
+          if(this.stalePeriod) return this.pagination.total ? 'Предыдущий список: '+count+' '+noun : 'Предыдущий список';
+          if(this.hasCoverageForView) return count+' '+noun;
+          return this.pagination.total ? 'Сохранённые записи: '+count+' '+noun : 'Сохранённые данные';
+        },
+        freshness() {
+          if(!this.loaded || this.stalePeriod) return '';
+          const coverage=this.coverageSyncForView;
+          if(coverage) {
+            return 'Загрузка за '+dateRange(coverage.period_start,coverage.period_end)+' завершена '+date(coverage.completed_at)+' и покрывает выбранные '+(this.filters.period==='7d'?'7 дней':'30 дней')+'.';
+          }
+          return this.pagination.total ? 'Показаны сохранённые записи. Полная загрузка за выбранные даты не подтверждена.' : '';
+        },
+        emptyTitle() {
+          if(this.hasCoverageForView) {
+            if(this.filters.page>1) return 'На этой странице нет записей';
+            if(this.hasFilters) return 'Ничего не нашлось';
+            return 'За этот период записей пока нет';
+          }
+          if(this.filters.page>1) return 'На этой странице нет сохранённых записей';
+          if(this.hasFilters) return 'Сохранённых записей по текущему фильтру нет';
+          return 'Полная загрузка за выбранные даты не подтверждена';
+        },
+        emptyDescription() {
+          if(this.hasCoverageForView) {
+            if(this.hasFilters) return 'Попробуйте другой номер, артикул или статус.';
+            if(this.filters.page>1) return 'Вернитесь на первую страницу списка.';
+            return 'Выберите другой период или загрузите данные из Ozon.';
+          }
+          if(this.filters.page>1) return 'Полнота списка за выбранные даты не подтверждена.';
+          if(this.hasFilters) return 'Без полной загрузки нельзя подтвердить, что за выбранный период записей нет.';
+          return 'Сохранённых записей нет. Загрузите данные из Ozon за выбранные даты.';
+        },
         staleScope() { return this.observedFilters && JSON.stringify(this.filters)!==JSON.stringify(this.observedFilters); },
         loginUrl() { return '/login?next='+encodeURIComponent(location.pathname+location.search); },
       },
@@ -84,7 +140,7 @@
             const data=await read(config.api[this.kind]+'?'+q,listController);
             if(!alive || revision!==listVersion)return;
             if(!Array.isArray(data.items) || !validPagination(data.pagination,scope.page,25) || data.scope?.account_id!==config.accountId) throw Error('Не удалось подтвердить список выбранного магазина. Повторите загрузку.');
-            this.items=data.items;this.pagination=data.pagination;this.statusCounts=data.status_counts||{};this.lastCompleted=data.last_completed_sync||null;this.syncState=data.sync||null;this.observedFilters=scope;this.loaded=true;
+            this.items=data.items;this.pagination=data.pagination;this.statusCounts=data.status_counts||{};this.coverageSync=data.coverage_sync||null;this.observedFilters=scope;this.loaded=true;
           } catch(e) { if(alive && revision===listVersion && e.name!=='AbortError'){this.error=e.message;this.sessionEnded=Boolean(e.sessionEnded);} }
           finally { if(alive && revision===listVersion)this.loading=false; }
         },
@@ -133,7 +189,7 @@
       beforeUnmount() {alive=false;listVersion++;detailVersion++;listController?.abort();detailController?.abort();this.destroyRefresh();window.removeEventListener('popstate',pop);this.dismissDetail(false);},
     };
   }
-  global.ozonFulfillment={createOptions,money,date};
+  global.ozonFulfillment={createOptions,money,date,dateRange};
   const bootstrap=document.getElementById('of-bootstrap');
   if(bootstrap && global.Vue) global.Vue.createApp(createOptions(JSON.parse(bootstrap.textContent))).mount('#of-app');
 })(window);

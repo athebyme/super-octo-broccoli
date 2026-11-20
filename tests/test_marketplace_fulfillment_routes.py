@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import date, datetime
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -353,6 +353,165 @@ class MarketplaceFulfillmentRoutesTest(unittest.TestCase):
                 self.assertEqual(data['last_completed_sync']['period_code'],'30d')
                 self.assertEqual(data['last_completed_sync']['status'],'completed')
                 self.assertEqual(data['sync']['status'],'running')
+
+    def test_compact_coverage_uses_latest_completed_same_scope_covering_window(self):
+        today = date(2026, 11, 20)
+        requested_start = date(2026, 11, 14)
+        requested_end = today
+        full_start = date(2026, 10, 22)
+
+        def add_run(*, seller_id, marketplace_id, account_id, period_code,
+                    period_start, period_end, status, completed_at, marker):
+            db.session.add(MarketplaceFulfillmentSync(
+                seller_id=seller_id,
+                marketplace_id=marketplace_id,
+                account_id=account_id,
+                period_code=period_code,
+                period_start=period_start,
+                period_end=period_end,
+                status=status,
+                completed_at=completed_at,
+                request_fingerprint=marker.ljust(64, '0'),
+            ))
+
+        with self.app.app_context():
+            own = db.session.get(SellerMarketplaceAccount, self.own_account_id)
+            foreign = db.session.get(SellerMarketplaceAccount, self.foreign_account_id)
+            other_marketplace = Marketplace(
+                code='other', name='Other', adapter_code='other', is_active=True,
+            )
+            db.session.add(other_marketplace)
+            db.session.flush()
+
+            add_run(
+                seller_id=self.seller1_id, marketplace_id=own.marketplace_id,
+                account_id=own.id, period_code='7d',
+                period_start=date(2026, 9, 18), period_end=date(2026, 9, 24),
+                status='completed', completed_at=datetime(2026, 9, 24, 12),
+                marker='a',
+            )
+            add_run(
+                seller_id=self.seller1_id, marketplace_id=own.marketplace_id,
+                account_id=own.id, period_code='30d',
+                period_start=full_start, period_end=requested_end,
+                status='completed', completed_at=datetime(2026, 11, 19, 10),
+                marker='b',
+            )
+            add_run(
+                seller_id=self.seller1_id, marketplace_id=own.marketplace_id,
+                account_id=own.id, period_code='30d',
+                period_start=full_start, period_end=requested_end,
+                status='completed', completed_at=datetime(2026, 11, 20, 8, 24),
+                marker='c',
+            )
+            # The newer row is a partial actual window, despite claiming 30d.
+            add_run(
+                seller_id=self.seller1_id, marketplace_id=own.marketplace_id,
+                account_id=own.id, period_code='30d',
+                period_start=date(2026, 11, 15), period_end=requested_end,
+                status='completed', completed_at=datetime(2026, 11, 20, 9),
+                marker='d',
+            )
+            add_run(
+                seller_id=self.seller1_id, marketplace_id=own.marketplace_id,
+                account_id=own.id, period_code='30d',
+                period_start=full_start, period_end=requested_end,
+                status='completed', completed_at=None, marker='e',
+            )
+            add_run(
+                seller_id=self.seller1_id, marketplace_id=own.marketplace_id,
+                account_id=own.id, period_code='7d',
+                period_start=requested_start, period_end=requested_end,
+                status='running', completed_at=None, marker='f',
+            )
+            add_run(
+                seller_id=self.seller2_id, marketplace_id=foreign.marketplace_id,
+                account_id=foreign.id, period_code='30d',
+                period_start=full_start, period_end=requested_end,
+                status='completed', completed_at=datetime(2026, 11, 20, 10),
+                marker='g',
+            )
+            # Corrupt cross-marketplace history must not be used for this account.
+            add_run(
+                seller_id=self.seller1_id, marketplace_id=other_marketplace.id,
+                account_id=own.id, period_code='30d',
+                period_start=full_start, period_end=requested_end,
+                status='completed', completed_at=datetime(2026, 11, 20, 11),
+                marker='h',
+            )
+            db.session.commit()
+
+            results = [
+                MarketplaceFulfillmentService.list_postings(
+                    seller_id=self.seller1_id, account_id=self.own_account_id,
+                    period_code='7d', today=today, compact=True,
+                ),
+                MarketplaceFulfillmentService.list_returns(
+                    seller_id=self.seller1_id, account_id=self.own_account_id,
+                    period_code='7d', today=today, compact=True,
+                ),
+                MarketplaceFulfillmentService.list_cancellations(
+                    seller_id=self.seller1_id, account_id=self.own_account_id,
+                    period_code='7d', today=today, compact=True,
+                ),
+            ]
+
+        for data in results:
+            with self.subTest(view=data['scope']):
+                self.assertEqual(
+                    data['coverage_sync'],
+                    {
+                        'period_code': '30d',
+                        'period_start': '2026-10-22',
+                        'period_end': '2026-11-20',
+                        'completed_at': '2026-11-20T08:24:00',
+                    },
+                )
+                self.assertEqual(data['last_completed_sync']['period_code'], '7d')
+                self.assertEqual(data['last_completed_sync']['period_start'], '2026-09-18')
+                self.assertEqual(data['last_completed_sync']['period_end'], '2026-09-24')
+
+    def test_compact_coverage_is_unknown_without_full_completed_same_scope_run(self):
+        today = date(2026, 11, 20)
+        requested_start = date(2026, 11, 14)
+        requested_end = today
+        full_start = date(2026, 10, 22)
+        with self.app.app_context():
+            own = db.session.get(SellerMarketplaceAccount, self.own_account_id)
+            foreign = db.session.get(SellerMarketplaceAccount, self.foreign_account_id)
+            for index, values in enumerate((
+                # Actual window is partial, even though this run says 30d.
+                (self.seller1_id, own.marketplace_id, own.id, '30d', date(2026, 11, 15), requested_end, 'completed', datetime(2026, 11, 20, 9)),
+                (self.seller1_id, own.marketplace_id, own.id, '30d', full_start, requested_end, 'completed', None),
+                (self.seller1_id, own.marketplace_id, own.id, '30d', full_start, requested_end, 'running', None),
+                (self.seller2_id, foreign.marketplace_id, foreign.id, '30d', full_start, requested_end, 'completed', datetime(2026, 11, 20, 10)),
+            )):
+                seller_id, marketplace_id, account_id, period_code, start, end, status, completed_at = values
+                db.session.add(MarketplaceFulfillmentSync(
+                    seller_id=seller_id, marketplace_id=marketplace_id,
+                    account_id=account_id, period_code=period_code,
+                    period_start=start, period_end=end, status=status,
+                    completed_at=completed_at,
+                    request_fingerprint=(str(index + 1) * 64),
+                ))
+            db.session.commit()
+            results = [
+                MarketplaceFulfillmentService.list_postings(
+                    seller_id=self.seller1_id, account_id=self.own_account_id,
+                    period_code='7d', today=today, compact=True,
+                ),
+                MarketplaceFulfillmentService.list_returns(
+                    seller_id=self.seller1_id, account_id=self.own_account_id,
+                    period_code='7d', today=today, compact=True,
+                ),
+                MarketplaceFulfillmentService.list_cancellations(
+                    seller_id=self.seller1_id, account_id=self.own_account_id,
+                    period_code='7d', today=today, compact=True,
+                ),
+            ]
+        for data in results:
+            with self.subTest(view=data['scope']):
+                self.assertIsNone(data['coverage_sync'])
 
     def test_preview_query_count_does_not_grow_per_posting(self):
         from sqlalchemy import event

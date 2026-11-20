@@ -40,13 +40,13 @@
     <label>Схема<select name="source" :value="filters.source" @change="navigate({source:$event.target.value,page:1})"><option value="">Все схемы</option><option v-for="option in sourceOptions" :key="option.value" :value="option.value" v-text="option.label"></option></select></label>
     <label>Статус<select name="status" :value="filters.status" @change="navigate({status:$event.target.value,page:1})"><option value="">Все статусы</option><option v-for="option in statusOptions" :key="option.value" :value="option.value" v-text="option.label+' ('+option.count+')'"></option></select></label>
   </form>
-  <div class="of-list-heading"><div><strong v-if="loaded" v-text="resultsLabel"></strong><span v-else>Загружаем список…</span><span class="of-muted" v-text="freshness"></span></div><button v-if="hasFilters" class="of-text-button" type="button" @click="resetFilters()">Сбросить фильтры</button></div>
+  <div class="of-list-heading"><div><strong v-if="loaded" v-text="resultsLabel"></strong><span v-else>Загружаем список…</span><span v-if="freshness" class="of-muted" v-text="freshness"></span></div><button v-if="hasFilters" class="of-text-button" type="button" @click="resetFilters()">Сбросить фильтры</button></div>
   <div v-if="error" class="of-notice of-error" role="alert"><div><strong v-text="error"></strong><p v-if="loaded" v-text="staleScope ? 'Ниже остаётся предыдущий список. Новые условия поиска ещё не загружены.' : 'Показываем последний загруженный список.'"></p></div><a v-if="sessionEnded" :href="loginUrl" class="sh-btn sh-btn--secondary">Войти снова</a><button v-else class="sh-btn sh-btn--secondary" type="button" @click="load()">Повторить загрузку</button></div>
   <div v-if="loading && !loaded" class="of-loading" role="status">Загружаем сохранённые данные…<div v-for="n in 3" :key="n" class="sh-skeleton of-skeleton"></div></div>
   <div v-else-if="loaded && !items.length && !error && !loading" class="of-empty">
     {{ icon('package', size=40) }}
-    <h2 v-text="filters.page>1 ? 'На этой странице нет записей' : hasFilters ? 'Ничего не нашлось' : 'За этот период записей пока нет'"></h2>
-    <p v-text="hasFilters ? 'Попробуйте другой номер, артикул или статус.' : 'Выберите другой период или загрузите данные из Ozon.'"></p>
+    <h2 v-text="emptyTitle"></h2>
+    <p v-text="emptyDescription"></p>
     <button v-if="filters.page>1" type="button" class="sh-btn sh-btn--secondary" @click="navigate({page:1})">На первую страницу</button>
     <button v-else-if="hasFilters" type="button" class="sh-btn sh-btn--secondary" @click="resetFilters()">Сбросить фильтры</button>
     <button v-else type="button" class="sh-btn sh-btn--secondary" @click="requestRefresh()" :disabled="refreshing || refreshUncertain || refreshSessionEnded">Загрузить из Ozon</button>

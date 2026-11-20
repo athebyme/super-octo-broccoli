@@ -1041,7 +1041,7 @@ class MarketplaceFulfillmentService:
     ) -> Dict[str, Any]:
         account = cls._owned_account(seller_id=seller_id, account_id=account_id)
         page, per_page = cls._page_args(page=page, per_page=per_page)
-        period_code, period_start, _ = cls._period(
+        period_code, period_start, period_end = cls._period(
             period_code, today=today or date.today()
         )
         period_floor = datetime.combine(period_start, datetime.min.time())
@@ -1091,7 +1091,12 @@ class MarketplaceFulfillmentService:
                 "pagination": {"page": page, "per_page": per_page, "total": pagination.total, "pages": pagination.pages},
                 "status_counts": status_counts,
                 "scope": {"account_id": account.id, "marketplace": "ozon"},
-                **sync_context(account=account, period_code=period_code),
+                **sync_context(
+                    account=account,
+                    period_code=period_code,
+                    period_start=period_start,
+                    period_end=period_end,
+                ),
             }
         status_rows = db.session.query(
             MarketplacePosting.status,
@@ -1157,7 +1162,9 @@ class MarketplaceFulfillmentService:
     ) -> Dict[str, Any]:
         account = cls._owned_account(seller_id=seller_id, account_id=account_id)
         page, per_page = cls._page_args(page=page, per_page=per_page)
-        _, period_start, _ = cls._period(period_code, today=today or date.today())
+        period_code, period_start, period_end = cls._period(
+            period_code, today=today or date.today(),
+        )
         period_floor = datetime.combine(period_start, datetime.min.time())
         query = MarketplaceReturn.query.filter(
             MarketplaceReturn.seller_id == account.seller_id,
@@ -1200,7 +1207,12 @@ class MarketplaceFulfillmentService:
             from services.marketplace_fulfillment_display import listing_previews, related_postings, sync_context
             listing_previews(documents, account=account)
             related_postings(documents, pagination.items, account=account)
-            context = sync_context(account=account, period_code=period_code)
+            context = sync_context(
+                account=account,
+                period_code=period_code,
+                period_start=period_start,
+                period_end=period_end,
+            )
             context['status_counts'] = status_counts
         return {
             "items": documents,
@@ -1231,7 +1243,9 @@ class MarketplaceFulfillmentService:
     ) -> Dict[str, Any]:
         account = cls._owned_account(seller_id=seller_id, account_id=account_id)
         page, per_page = cls._page_args(page=page, per_page=per_page)
-        _, period_start, _ = cls._period(period_code, today=today or date.today())
+        period_code, period_start, period_end = cls._period(
+            period_code, today=today or date.today(),
+        )
         period_floor = datetime.combine(period_start, datetime.min.time())
         query = MarketplaceCancellation.query.filter(
             MarketplaceCancellation.seller_id == account.seller_id,
@@ -1271,7 +1285,12 @@ class MarketplaceFulfillmentService:
             from services.marketplace_fulfillment_display import listing_previews, related_postings, sync_context
             listing_previews(documents, account=account)
             related_postings(documents, pagination.items, account=account)
-            context = sync_context(account=account, period_code=period_code)
+            context = sync_context(
+                account=account,
+                period_code=period_code,
+                period_start=period_start,
+                period_end=period_end,
+            )
             context['status_counts'] = status_counts
         return {
             "items": documents,

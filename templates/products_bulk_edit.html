@@ -132,6 +132,7 @@
         characteristics: [],
         commonCharacteristics: [],
         characteristicsByCategory: {},
+        characteristicsLoadGeneration: 0,
         selectedChar: null,
         selectedCharId: null,
         charValue: '',
@@ -359,6 +360,10 @@
 
         clearFields() {
             // Очищаем все поля при смене операции
+            // Any response from a previous schema request no longer owns this UI.
+            this.characteristicsLoadGeneration += 1;
+            this.loading = false;
+            this.loadError = null;
             this.selectedChar = null;
             this.selectedCharId = null;
             this.charValue = '';
@@ -463,7 +468,19 @@
         },
 
         async loadCharacteristics() {
+            const loadGeneration = ++this.characteristicsLoadGeneration;
+            const requestedCategory = String(this.selectedCategory ?? '') || null;
+            const requestedOperation = this.operation;
+            const ownsLoad = () => this.characteristicsLoadGeneration === loadGeneration;
+            const contextMatches = () => {
+                const currentCategory = String(this.selectedCategory ?? '') || null;
+                return ownsLoad()
+                    && currentCategory === requestedCategory
+                    && this.operation === requestedOperation;
+            };
+
             if (!this.categories || this.categories.length === 0) {
+                this.loading = false;
                 this.loadError = 'У выбранных товаров нет подтверждённого subjectID WB.';
                 return;
             }
@@ -487,21 +504,22 @@
                     },
                     body: JSON.stringify({
                         product_ids: this.products.map(product => Number(product.id)),
-                        subject_ids: this.selectedCategory ? [Number(this.selectedCategory)] : []
+                        subject_ids: requestedCategory ? [Number(requestedCategory)] : []
                     })
                 });
                 const data = await response.json().catch(() => ({}));
+                if (!contextMatches()) return;
                 if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
                 this.characteristicsByCategory = data.by_subject || {};
                 this.commonCharacteristics = data.common || [];
-                this.characteristics = this.selectedCategory
-                    ? (this.characteristicsByCategory[String(this.selectedCategory)] || [])
+                this.characteristics = requestedCategory
+                    ? (this.characteristicsByCategory[requestedCategory] || [])
                     : this.commonCharacteristics;
                 this.pendingChanges = this.pendingChanges.map(change => {
                     const char = this.characteristics.find(item => String(item.id) === String(change.charId));
                     return char ? {...change, charName: char.name} : change;
                 });
-                if (this.operation === 'add_characteristic' && initialAddCharacteristicId) {
+                if (requestedOperation === 'add_characteristic' && initialAddCharacteristicId) {
                     let value = initialAddCharacteristicValue;
                     if (typeof value === 'string' && value.trim().startsWith('[')) {
                         try { value = JSON.parse(value); } catch (_error) {}
@@ -519,16 +537,17 @@
                         this.charValueAdd = String(value ?? '');
                     }
                 }
-                if (!this.selectedCategory && this.categories.length > 1) {
+                if (!requestedCategory && this.categories.length > 1) {
                     this.loadError = 'Сначала выберите точный предмет WB. Общие поля между разными subjectID не объединяются.';
                 } else if (!this.characteristics.length) {
                     this.loadError = 'Локальная схема для этого subjectID пуста или недоступна. Проверьте freshness справочника WB.';
                 }
             } catch (e) {
+                if (!contextMatches()) return;
                 console.error('Failed to load cached exact-subject characteristics:', e);
                 this.loadError = e.message;
             } finally {
-                this.loading = false;
+                if (ownsLoad()) this.loading = false;
             }
         },
 

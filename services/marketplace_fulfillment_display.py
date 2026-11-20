@@ -103,7 +103,7 @@ def posting_detail(posting, *, account, page=1, per_page=50):
     return data
 
 
-def sync_context(*, account, period_code):
+def sync_context(*, account, period_code, period_start, period_end):
     query = MarketplaceFulfillmentSync.query.filter_by(
         seller_id=account.seller_id, marketplace_id=account.marketplace_id,
         account_id=account.id, period_code=period_code,
@@ -112,9 +112,27 @@ def sync_context(*, account, period_code):
         MarketplaceFulfillmentSync.completed_at.desc(), MarketplaceFulfillmentSync.id.desc(),
     ).first()
     latest = query.order_by(MarketplaceFulfillmentSync.id.desc()).first()
+    coverage = MarketplaceFulfillmentSync.query.filter(
+        MarketplaceFulfillmentSync.seller_id == account.seller_id,
+        MarketplaceFulfillmentSync.marketplace_id == account.marketplace_id,
+        MarketplaceFulfillmentSync.account_id == account.id,
+        MarketplaceFulfillmentSync.status == 'completed',
+        MarketplaceFulfillmentSync.completed_at.isnot(None),
+        MarketplaceFulfillmentSync.period_start <= period_start,
+        MarketplaceFulfillmentSync.period_end >= period_end,
+    ).order_by(
+        MarketplaceFulfillmentSync.completed_at.desc(),
+        MarketplaceFulfillmentSync.id.desc(),
+    ).first()
     return {
         'last_completed_sync': completed.to_public_dict() if completed else None,
         'sync': latest.to_public_dict() if latest else None,
+        'coverage_sync': ({
+            'period_code': coverage.period_code,
+            'period_start': coverage.period_start.isoformat(),
+            'period_end': coverage.period_end.isoformat(),
+            'completed_at': coverage.completed_at.isoformat(),
+        } if coverage else None),
     }
 
 

@@ -87,3 +87,68 @@ global.document={hidden:false,addEventListener:()=>{},removeEventListener:()=>{}
     result=subprocess.run([node,'-e',script],capture_output=True,text=True,timeout=10)
     assert result.returncode==0,result.stderr
     assert 'SCENARIO_COMPLETED' in result.stdout, result.stderr
+
+
+def test_coverage_date_is_bound_to_loaded_period_and_empty_unknown_is_not_zero():
+    node=shutil.which('node')
+    if not node:pytest.skip('Node required')
+    setup=r'''
+const assert=require('node:assert/strict');global.window=global;
+global.location=new URL('https://fixture.test/marketplaces/orders?account_id=1&period=7d');
+global.history={state:{},pushState(state,_,url){this.state=state;location=new URL(url,location);},replaceState(state,_,url){this.pushState(state,_,url);},back(){}};
+global.addEventListener=()=>{};global.removeEventListener=()=>{};
+global.document={hidden:false,getElementById:()=>null,body:{style:{overflow:''}},addEventListener:()=>{},removeEventListener:()=>{}};
+global.mcatShared={imageDeadline:{}};
+'''
+    source='\n'.join((ROOT/'static'/name).read_text() for name in ['ozon-read-refresh.js','ozon-fulfillment.js'])
+    scenario=r'''
+(async()=>{
+ const config={accountId:1,kind:'orders',csrfToken:'test',api:{orders:'/api/orders'},pages:{orders:'/marketplaces/orders'}};
+ const makePage=options=>{
+   const page={...options.data(),...options.methods,$nextTick:async()=>{},$refs:{}};
+   for(const [k,f] of Object.entries(options.computed))Object.defineProperty(page,k,{get:()=>f.call(page)});
+   return page;
+ };
+ const covered={period_code:'30d',period_start:'2026-10-22',period_end:'2026-11-20',completed_at:'2026-11-20T08:24:22'};
+ const fullData=(coverage,items=[{id:1}],total=items.length)=>({
+   items,pagination:{page:1,per_page:25,total,pages:Math.ceil(total/25)},scope:{account_id:1},status_counts:{},coverage_sync:coverage,
+ });
+ let responseData=fullData(covered);
+ global.fetch=async()=>({ok:true,status:200,redirected:false,headers:{get:()=> 'application/json'},json:async()=>({success:true,data:responseData})});
+ const options=ozonFulfillment.createOptions(config),page=makePage(options);
+ await page.load();
+ assert.equal(page.hasCoverageForView,true);
+ assert.equal(page.resultsLabel,'1 отправлений');
+ assert.ok(page.freshness.includes('22 окт'));
+ assert.ok(page.freshness.includes('20 ноя'));
+ assert.match(page.freshness,/\d{1,2}:\d{2}/);
+ assert.ok(page.freshness.includes('покрывает выбранные 7 дней'));
+
+ page.filters={...page.filters,period:'30d'};page.period='30d';
+ assert.equal(page.coverageSyncForView,null);
+ assert.equal(page.freshness,'');
+ assert.ok(page.resultsLabel.startsWith('Предыдущий список:'));
+ global.fetch=async()=>({ok:false,status:503,redirected:false,headers:{get:()=> 'application/json'},json:async()=>({success:false,error:'offline'})});
+ await page.load();
+ assert.equal(page.coverageSyncForView,null);
+ assert.equal(page.freshness,'');
+ assert.ok(page.resultsLabel.startsWith('Предыдущий список:'));
+ assert.ok(page.error.includes('offline'));
+ options.beforeUnmount.call(page);
+
+ responseData=fullData(null,[],0);
+ global.fetch=async()=>({ok:true,status:200,redirected:false,headers:{get:()=> 'application/json'},json:async()=>({success:true,data:responseData})});
+ const emptyOptions=ozonFulfillment.createOptions(config),empty=makePage(emptyOptions);
+ empty.filters={...empty.filters,period:'7d',page:1,search:'',source:'',status:''};empty.period='7d';
+ await empty.load();
+ assert.equal(empty.hasCoverageForView,false);
+ assert.equal(empty.resultsLabel,'Сохранённые данные');
+ assert.equal(empty.emptyTitle,'Полная загрузка за выбранные даты не подтверждена');
+ assert.ok(empty.emptyDescription.includes('отсутствие записей'));
+ assert.ok(!empty.resultsLabel.includes('0'));
+ emptyOptions.beforeUnmount.call(empty);
+})().then(()=>console.log('SCENARIO_COMPLETED')).catch(e=>{console.error(e);process.exitCode=1;});
+'''
+    result=subprocess.run([node,'-e',setup+source+scenario],capture_output=True,text=True,timeout=15)
+    assert result.returncode==0,result.stderr
+    assert 'SCENARIO_COMPLETED' in result.stdout,result.stderr
