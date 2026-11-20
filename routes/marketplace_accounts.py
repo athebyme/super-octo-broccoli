@@ -141,7 +141,7 @@ def index():
             )
         )
     }
-    jobs = latest_account_jobs(seller_id=seller_id, account_ids=ozon_ids)
+    jobs = latest_account_jobs(seller_id=seller_id, account_ids=ozon_ids, accounts=accounts)
     syncs = MarketplaceListingService.latest_syncs(seller_id=seller_id)
     catalog_completed_at = (
         MarketplaceListingService.latest_completed_catalog_at(
@@ -197,7 +197,9 @@ def list_api():
         "success": True,
         "accounts": [account.to_public_dict() for account in accounts],
         "ozon_enabled": _ozon_enabled(),
-        "onboarding_jobs": latest_account_jobs(seller_id=seller_id, account_ids=ozon_ids),
+        "onboarding_jobs": latest_account_jobs(
+            seller_id=seller_id, account_ids=ozon_ids, accounts=accounts,
+        ),
         "catalog_syncs": {account_id: sync.to_public_dict() for account_id, sync in syncs.items()},
         "catalog_completed_at": catalog_completed_at,
     })

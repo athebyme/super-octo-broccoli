@@ -74,6 +74,59 @@ const assert = require('node:assert/strict');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 ''')
 
+    def test_stale_summary_and_failed_refresh_keep_visible_loaded_data(self):
+        self.run_component(r'''
+(async () => {
+  const state = analyticsPage();
+  state.$nextTick = () => {};
+  const originalToLocaleString = Date.prototype.toLocaleString;
+  Date.prototype.toLocaleString = function() { return this.toISOString(); };
+  const summary = {kpi: {revenue: 321, orders: 3, avgCheck: 107,
+    buyouts: 2, cancels: 0, openCardCount: 10, addToCartCount: 4},
+    dynamics: {revenue: 1, orders: 2, buyouts: 3}, topProducts: [], dailyData: [],
+    created_at: '2026-11-20T11:00:00'};
+  let refreshFails = false;
+  global.fetch = async url => {
+    if (String(url).startsWith('/api/analytics/summary?')) {
+      return {ok: true, json: async () => ({success: true, data: summary, stale: true})};
+    }
+    if (url === '/api/analytics/refresh' && refreshFails) {
+      return {ok: false, json: async () => ({
+        success: false, error: 'Synthetic safe refresh message',
+        error_code: 'provider_unavailable'
+      })};
+    }
+    return {ok: true, json: async () => ({data: {items: []}})};
+  };
+
+  await state.loadData();
+  assert.equal(state.hasData, true);
+  assert.equal(state.loadedPeriod, '30d');
+  assert.equal(state.kpi.revenue, 321);
+  assert.equal(state.dataStale, true);
+  assert.match(state.displayedPeriodMessage(), /сохранённые данные/);
+  assert.equal(state.dataAge, '2026-11-20T11:00:00.000Z');
+  assert.equal(state.formatDataAge('2026-11-20T14:00:00+03:00'),
+    '2026-11-20T11:00:00.000Z');
+  assert.equal(state.formatDataAge('2026-11-20T11:00:00Z'),
+    '2026-11-20T11:00:00.000Z');
+  assert.equal(state.formatDataAge('invalid timestamp'), null);
+  assert.match(state.error, /ранее сохранённые данные/);
+
+  state.applyData({...summary, created_at: null});
+  assert.equal(state.dataAge, null);
+
+  refreshFails = true;
+  await state.refreshData();
+  assert.equal(state.hasData, true);
+  assert.equal(state.loadedPeriod, '30d');
+  assert.equal(state.kpi.revenue, 321);
+  assert.equal(state.dataStale, true);
+  assert.equal(state.error, 'Synthetic safe refresh message');
+  Date.prototype.toLocaleString = originalToLocaleString;
+})().catch(error => { console.error(error); process.exitCode = 1; });
+''')
+
     def test_failed_new_period_keeps_loaded_data_and_ignores_delayed_old_success(self):
         self.run_component(r'''
 (async () => {

@@ -123,6 +123,65 @@ assert.equal(acc.last_sync.status,'failed');
 ''')
 
 
+def test_manual_catalog_cooldown_is_exact_visible_and_blocks_both_sync_actions():
+    run_node(SETUP + r'''
+(async()=>{
+const timers=new Map();let nextTimer=0;global.setTimeout=(fn,ms)=>{timers.set(++nextTimer,{fn,ms});return nextTimer};global.clearTimeout=id=>timers.delete(id);
+const acc=page.accounts[1];const future=new Date(Date.now()+60*60*1000).toISOString();
+acc.sync_job={status:'failed',manual_retry_at:future,next_retry_at:'2099-01-01T00:00:00Z',message:'Пауза Ozon'};
+acc.last_sync={status:'failed'};page.cooldownClock=Date.now();
+assert.equal(page.syncCooldownAt(acc),future);assert.equal(page.syncCoolingDown(acc),true);
+assert.match(page.formattedSyncCooldownAt(acc),/UTC$/);assert.equal(page.syncDate(acc),'');
+let posts=0,confirms=0;global.fetch=async()=>{posts++;throw Error('sync POST must be blocked')};global.confirm=()=>{confirms++;return true};
+page.syncAccount(acc,false);page.syncAccount(acc,true);await new Promise(setImmediate);
+assert.equal(posts,0);assert.equal(confirms,0);assert.equal(acc._syncing,false);
+
+acc.sync_job={status:'running',manual_retry_at:future,next_retry_at:future,message:'Продолжим позже'};
+assert.equal(page.syncCoolingDown(acc),false);assert.ok(page.syncDate(acc).startsWith('Продолжим после '));
+page.syncAccount(acc,false);assert.equal(posts,0,'active work continues to suppress manual POSTs');
+
+for(const deadline of ['invalid-deadline',new Date(Date.now()-5000).toISOString()]){
+    acc.sync_job={status:'failed',manual_retry_at:deadline,message:'Попытка завершилась'};
+    assert.equal(page.syncCoolingDown(acc),false);assert.equal(page.syncDate(acc),'');
+    global.fetch=async()=>{posts++;return {ok:true,status:202,headers:{get:()=> 'application/json'},json:async()=>({success:true,job:{account_id:2,status:'completed',message:'Загрузка запущена'}})}};
+    page.syncAccount(acc,false);await new Promise(setImmediate);await new Promise(setImmediate);
+    assert.equal(acc.sync_job.status,'completed');
+}
+assert.equal(posts,2,'past and invalid public deadlines keep the ordinary request path');
+})().catch(e=>{console.error(e);process.exitCode=1});
+''')
+
+
+def test_cooldown_conflict_rechecks_local_status_once_without_replaying_post():
+    run_node(SETUP + r'''
+(async()=>{
+const timers=new Map();let nextTimer=0;global.setTimeout=(fn,ms)=>{timers.set(++nextTimer,{fn,ms});return nextTimer};global.clearTimeout=id=>timers.delete(id);
+const acc=page.accounts[1];let posts=0,gets=0;page.urls.accountsStatus='/accounts/status';
+const retryAt=new Date(Date.now()+60*60*1000).toISOString();let unauthorized=false;
+global.fetch=async(url,options={})=>{
+    if(options.method==='POST'){
+        posts++;const body={success:false,code:'ozon_catalog_cooldown',error:'Озон запросил паузу'};
+        return {ok:false,status:409,headers:{get:()=> 'application/json'},clone:()=>({json:async()=>body}),json:async()=>body};
+    }
+    gets++;assert.equal(url,'/accounts/status');
+    if(unauthorized)return {ok:false,status:401,headers:{get:()=> 'application/json'},json:async()=>({success:false,error:'Session expired'})};
+    return {ok:true,status:200,headers:{get:()=> 'application/json'},json:async()=>({success:true,
+        onboarding_jobs:{'2':{status:'failed',manual_retry_at:retryAt,message:'Озон запросил паузу'}},
+        catalog_syncs:{'2':{status:'failed'}},catalog_completed_at:{'2':null},
+        accounts:[{id:2,is_active:true,has_credentials:true,connection_status:'connected'}],ozon_enabled:true})};
+};
+page.syncAccount(acc,false);await new Promise(setImmediate);await new Promise(setImmediate);await new Promise(setImmediate);
+assert.equal(posts,1);assert.equal(gets,1);assert.equal(page.syncCoolingDown(acc),true);
+assert.equal(acc._syncing,false);assert.equal(acc._error,null);assert.equal(page.syncDate(acc),'');
+acc.sync_job={status:'failed',manual_retry_at:null};acc._error=null;page.syncSessionExpired=false;page.syncError='';unauthorized=true;
+page.syncAccount(acc,false);await new Promise(setImmediate);await new Promise(setImmediate);await new Promise(setImmediate);
+assert.equal(posts,2);assert.equal(gets,2);assert.equal(page.syncCoolingDown(acc),false);
+assert.equal(page.syncSessionExpired,true);assert.match(page.syncError,/Сессия истекла/);
+assert.match(acc._error,/Озон запросил паузу/);
+})().catch(e=>{console.error(e);process.exitCode=1});
+''')
+
+
 def test_late_detail_failure_does_not_replace_new_card_and_keyboard_keeps_link_behavior():
     run_node(SETUP + r'''
 (async()=>{

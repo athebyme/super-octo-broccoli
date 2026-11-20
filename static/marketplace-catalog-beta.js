@@ -24,7 +24,7 @@
     };
 
     var S = window.mcatShared;
-    var syncTimer, syncController, syncRevision = 0, syncStopped = false;
+    var syncTimer, cooldownWakeTimer, syncController, syncRevision = 0, syncStopped = false;
     var syncRequests = new Set();
     function activeJob(job) { return !!job && ['pending', 'running'].includes(job.status); }
     function saved(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
@@ -60,6 +60,7 @@
                 loading: true,
                 loadingMore: false,
                 syncError: '', syncFailures: 0, syncSessionExpired: false,
+                cooldownClock: Date.now(),
                 error: null,
                 animate: false,
                 advancedFiltersOpen: false,
@@ -280,16 +281,23 @@
             this._onVisibility = () => {
                 clearTimeout(syncTimer);
                 if (document.hidden) {
+                    clearTimeout(cooldownWakeTimer);
                     if (syncController) syncController.abort();
-                } else { this.scheduleSyncPoll(); }
+                } else {
+                    this.cooldownClock = Date.now();
+                    this.scheduleCooldownWake();
+                    this.scheduleSyncPoll();
+                }
             };
             document.addEventListener('visibilitychange', this._onVisibility);
+            this.scheduleCooldownWake();
             this.scheduleSyncPoll();
             this.refresh();
         },
         beforeUnmount: function () {
             syncStopped = true;
             clearTimeout(syncTimer);
+            clearTimeout(cooldownWakeTimer);
             clearTimeout(this._searchTimer);
             if (this._totalRaf) cancelAnimationFrame(this._totalRaf);
             if (syncController) syncController.abort();
@@ -714,12 +722,51 @@
             syncFailed: function (acc) {
                 return !!(acc._error || (acc.sync_job || {}).status === 'failed' || (acc.last_sync || {}).status === 'failed');
             },
+            syncCooldownAt: function (acc) {
+                var job = acc && acc.sync_job;
+                if (!job || job.status !== 'failed') return null;
+                var retry = utcDate(job.manual_retry_at);
+                if (!retry || Number.isNaN(retry.getTime())) return null;
+                // Track cooldownClock so the disabled controls become eligible
+                // when the local deadline passes, without creating a request.
+                var now = Math.max(Date.now(), this.cooldownClock || 0);
+                return retry.getTime() > now ? retry.toISOString() : null;
+            },
+            syncCoolingDown: function (acc) {
+                return !!this.syncCooldownAt(acc);
+            },
+            formattedSyncCooldownAt: function (acc) {
+                var value = utcDate(this.syncCooldownAt(acc));
+                return value && !Number.isNaN(value.getTime())
+                    ? value.toLocaleString('ru-RU', {
+                        day:'2-digit', month:'2-digit', year:'numeric',
+                        hour:'2-digit', minute:'2-digit', timeZone:'UTC'
+                    }) + ' UTC' : '';
+            },
             syncDate: function (acc) {
                 var retry = utcDate((acc.sync_job || {}).next_retry_at);
+                if (this.syncCoolingDown(acc)) return '';
                 return this.syncActive(acc) && retry
                     ? 'Продолжим после ' + retry.toLocaleString('ru-RU', {
                         day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
                     }) : '';
+            },
+            scheduleCooldownWake: function () {
+                clearTimeout(cooldownWakeTimer);
+                if (syncStopped || document.hidden) return;
+                var now = Date.now();
+                var next = this.accounts.reduce(function (soonest, acc) {
+                    var retry = acc.sync_job && acc.sync_job.status === 'failed'
+                        ? utcDate(acc.sync_job.manual_retry_at) : null;
+                    if (!retry || Number.isNaN(retry.getTime()) || retry.getTime() <= now) return soonest;
+                    return soonest === null ? retry.getTime() : Math.min(soonest, retry.getTime());
+                }, null);
+                if (next === null) return;
+                cooldownWakeTimer = setTimeout(() => {
+                    if (syncStopped) return;
+                    this.cooldownClock = Date.now();
+                    this.scheduleCooldownWake();
+                }, Math.min(2147483647, Math.max(0, next - now) + 10));
             },
             lastCompletedAt: function (acc) {
                 var value = utcDate(acc.last_completed_at);
@@ -805,12 +852,15 @@
                 } finally {
                     clearTimeout(timeout);
                     syncController = null;
+                    this.scheduleCooldownWake();
                     this.scheduleSyncPoll();
                 }
             },
             syncAccount: function (acc, forceRestart) {
                 var self = this;
-                if (this.syncActive(acc) || !this.canSync(acc)) return;
+                this.cooldownClock = Date.now();
+                this.scheduleCooldownWake();
+                if (this.syncActive(acc) || this.syncCoolingDown(acc) || !this.canSync(acc)) return;
                 if (forceRestart && !window.confirm('Начать синхронизацию ' + acc.label + ' заново с первой страницы?')) return;
                 acc._syncing = true;
                 acc._error = null;
@@ -829,11 +879,28 @@
                         'X-CSRFToken': CSRF
                     },
                     body: JSON.stringify(body)
-                }).then(S.readJson).then(function (data) {
+                }).then(async function (response) {
+                    if (response.status === 409 && typeof response.clone === 'function') {
+                        var failure = null;
+                        try { failure = await response.clone().json(); } catch (_) { /* Preserve normal error handling. */ }
+                        if (failure && failure.code === 'ozon_catalog_cooldown') {
+                            await self.pollSync();
+                            var cooldownError = new Error(failure.error || 'Ozon попросил паузу. Статус обновлён.');
+                            cooldownError.code = 'ozon_catalog_cooldown';
+                            throw cooldownError;
+                        }
+                    }
+                    return S.readJson(response);
+                }).then(function (data) {
                     if (syncStopped) return;
                     syncRevision += 1;
                     acc.sync_job = data.job;
+                    self.scheduleCooldownWake();
                 }).catch(function (err) {
+                    if (err.code === 'ozon_catalog_cooldown') {
+                        acc._error = self.syncCoolingDown(acc) ? null : err.message;
+                        return;
+                    }
                     acc._error = err.name === 'AbortError' || err instanceof TypeError
                         ? 'Ответ не получен. Загрузка могла начаться — обновите страницу перед повтором.'
                         : err.message || 'Не удалось запустить загрузку';

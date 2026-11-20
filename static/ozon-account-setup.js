@@ -25,12 +25,12 @@
     }
 
     window.ozonAccountSetup = function () {
-        let timer, pollController, visibilityHandler, landingHandler, stopped = false, revision = 0;
+        let timer, cooldownTimer, pollController, visibilityHandler, landingHandler, stopped = false, revision = 0;
         const formControllers = new Set();
         const historyControllers = new Map();
         return {
             accounts: {}, jobs: {}, syncs: {}, busy: {new: false}, errors: {}, pollError: '',
-            pollFailures: 0, config: {}, catalogCompletedAt: {}, enabled: true, sessionExpired: false, uncertain: {}, conflicts: {}, reviewed: {}, catalogUpdated: false, keyOpen: {},
+            pollFailures: 0, config: {}, catalogCompletedAt: {}, cooldownClock: Date.now(), enabled: true, sessionExpired: false, uncertain: {}, conflicts: {}, reviewed: {}, catalogUpdated: false, keyOpen: {},
             actionModes: {}, settingsReview: {}, settingsReviewed: {}, saved: {}, history: {},
             settingsErrors: {}, settingsConflicts: {}, settingsUncertain: {},
             init(config) {
@@ -51,9 +51,14 @@
                 visibilityHandler = () => {
                     clearTimeout(timer);
                     if (document.hidden) {
+                        clearTimeout(cooldownTimer);
                         if (pollController) pollController.abort();
-                    } else if (this.enabled && !this.sessionExpired && Object.values(this.jobs).some(active)) {
-                        this.refresh();
+                    } else {
+                        this.cooldownClock = Date.now();
+                        this.scheduleCooldownWake();
+                        if (this.enabled && !this.sessionExpired && Object.values(this.jobs).some(active)) {
+                            this.refresh();
+                        }
                     }
                 };
                 document.addEventListener('visibilitychange', visibilityHandler);
@@ -62,6 +67,7 @@
             destroy() {
                 stopped = true;
                 clearTimeout(timer);
+                clearTimeout(cooldownTimer);
                 document.removeEventListener('visibilitychange', visibilityHandler);
                 if (landingHandler) window.removeEventListener('load', landingHandler);
                 if (pollController) pollController.abort();
@@ -80,6 +86,7 @@
                 });
                 if (data.onboarding_jobs) this.jobs = data.onboarding_jobs;
                 if (data.catalog_syncs) this.syncs = data.catalog_syncs;
+                this.scheduleCooldownWake();
             },
             setCatalogCompletedAt(values) {
                 if (!values || typeof values !== 'object' || Array.isArray(values)) return;
@@ -136,6 +143,7 @@
                 if (!form.reportValidity()) return;
                 const id = form.dataset.accountId || 'new';
                 if (this.busy[id]) return;
+                if (form.dataset.manualCooldown === 'true' && this.coolingDown(Number(id))) return;
                 const payload = new FormData(form);
                 const mode = form.dataset.accountAction || 'key';
                 const errors = mode === 'settings' ? this.settingsErrors : this.errors;
@@ -169,10 +177,14 @@
                     });
                     const data = await read(response);
                     if (stopped) return;
-                    if (id !== 'new' && (!data.account || data.account.id !== Number(id)
-                            || data.account.marketplace_code !== 'ozon'
-                            || !Number.isSafeInteger(data.account.version) || data.account.version <= 0
-                            || data.account.external_account_id !== this.accounts[id]?.external_account_id)) {
+                    const exactSyncJob = form.dataset.catalogSync === 'true'
+                        && data.job && Number.isSafeInteger(data.job.account_id)
+                        && data.job.account_id === Number(id);
+                    const exactAccount = data.account && data.account.id === Number(id)
+                        && data.account.marketplace_code === 'ozon'
+                        && Number.isSafeInteger(data.account.version) && data.account.version > 0
+                        && data.account.external_account_id === this.accounts[id]?.external_account_id;
+                    if (id !== 'new' && !(form.dataset.catalogSync === 'true' ? exactSyncJob : exactAccount)) {
                         const error = new Error('Ответ относится к другому магазину. Перечитайте состояние перед повтором.');
                         error.code = 'unconfirmed_response';
                         throw error;
@@ -182,8 +194,11 @@
                     // or a second submission. Server never sends it back.
                     const key = form.elements.namedItem('api_key');
                     if (key) key.value = '';
-                    if (data.account) this.accounts[data.account.id] = data.account;
+                    if (data.account && form.dataset.catalogSync !== 'true') {
+                        this.accounts[data.account.id] = data.account;
+                    }
                     if (data.job) this.jobs[data.job.account_id] = data.job;
+                    this.scheduleCooldownWake();
                     if (data.setup_error) this.errors[id] = data.message;
                     if (mode === 'settings') {
                         // Only this explicit save owns this form's viewed version.
@@ -212,12 +227,19 @@
                     }
                 } catch (error) {
                     if (!stopped) {
-                        this.sessionExpired = error.code === 'auth_required';
+                        const cooldownConflict = error.code === 'ozon_catalog_cooldown'
+                            && form.dataset.manualCooldown === 'true';
+                        let refreshedCooldown = false;
+                        if (cooldownConflict) {
+                            await this.refresh();
+                            refreshedCooldown = this.coolingDown(Number(id));
+                        }
+                        if (!cooldownConflict) this.sessionExpired = error.code === 'auth_required';
                         conflicts[id] = error.code === 'marketplace_account_version_conflict';
                         uncertain[id] = error.name === 'AbortError' || error instanceof TypeError || error.code === 'unconfirmed_response';
-                        errors[id] = error.name === 'AbortError' || error instanceof TypeError
+                        errors[id] = refreshedCooldown ? '' : (error.name === 'AbortError' || error instanceof TypeError
                             ? 'Ответ не получен. Действие могло сохраниться — обновите статус перед повтором.'
-                            : error.message;
+                            : error.message);
                     }
                 } finally {
                     clearTimeout(timeout);
@@ -319,6 +341,41 @@
             },
             active(id) { return active(this.jobs[id]); },
             anyActive() { return Object.values(this.jobs).some(active); },
+            cooldownAt(id) {
+                const job = this.jobs[id] || {};
+                if (job.status !== 'failed') return null;
+                const retry = date(job.manual_retry_at);
+                if (!retry || Number.isNaN(retry.getTime())) return null;
+                const now = Math.max(Date.now(), this.cooldownClock || 0);
+                return retry.getTime() > now ? retry.toISOString() : null;
+            },
+            coolingDown(id) { return !!this.cooldownAt(id); },
+            formattedCooldownAt(id) {
+                const value = date(this.cooldownAt(id));
+                if (!value || Number.isNaN(value.getTime())) return '';
+                return value.toLocaleString('ru-RU', {
+                    day:'2-digit', month:'2-digit', year:'numeric',
+                    hour:'2-digit', minute:'2-digit', timeZone:'UTC'
+                }) + ' UTC';
+            },
+            scheduleCooldownWake() {
+                clearTimeout(cooldownTimer);
+                if (stopped || document.hidden) return;
+                const now = Date.now();
+                const deadlines = Object.values(this.jobs).map(job => {
+                    if (!job || job.status !== 'failed') return null;
+                    const retry = date(job.manual_retry_at);
+                    return retry && !Number.isNaN(retry.getTime()) && retry.getTime() > now
+                        ? retry.getTime() : null;
+                }).filter(value => value !== null);
+                if (!deadlines.length) return;
+                const next = Math.min(...deadlines);
+                cooldownTimer = setTimeout(() => {
+                    if (stopped) return;
+                    this.cooldownClock = Date.now();
+                    this.scheduleCooldownWake();
+                }, Math.min(2147483647, Math.max(0, next - now) + 10));
+            },
             connected(id) {
                 const account = this.accounts[id] || {};
                 const expiry = date(account.credential_expires_at);
@@ -363,8 +420,10 @@
                 return job && (this.active(id) || job.status === 'completed') ? job.processed : (sync ? sync.seen_count : 0);
             },
             retryTime(id) {
-                const value = date((this.jobs[id] || {}).next_retry_at);
-                return value && !Number.isNaN(value.getTime())
+                const job = this.jobs[id] || {};
+                if (job.status === 'failed') return '';
+                const value = date(job.next_retry_at);
+                return value && !Number.isNaN(value.getTime()) && value.getTime() > Date.now()
                     ? 'Следующая попытка: ' + value.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'}) : '';
             },
             async reviewCurrent(id) {

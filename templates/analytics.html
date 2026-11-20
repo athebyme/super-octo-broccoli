@@ -342,6 +342,7 @@ function analyticsPage() {
         error: null,
         hasData: false,
         dataAge: null,
+        dataStale: false,
         periods: [
             { label: '7д', value: '7d' },
             { label: '30д', value: '30d' },
@@ -390,9 +391,21 @@ function analyticsPage() {
             return `Не удалось загрузить данные за ${this.periodLabel(this.period)}. На экране остаются данные за ${loaded}.`;
         },
 
+        formatDataAge(value) {
+            if (typeof value !== 'string' || !value.trim()) return null;
+            const timestamp = value.trim();
+            const hasTimezone = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(timestamp);
+            const instant = new Date(hasTimezone ? timestamp : `${timestamp}Z`);
+            if (!Number.isFinite(instant.getTime())) return null;
+            return instant.toLocaleString('ru-RU');
+        },
+
         displayedPeriodMessage() {
             if (!this.loadedPeriod) return '';
             const loaded = this.periodLabel(this.loadedPeriod);
+            if (this.dataStale && this.period === this.loadedPeriod) {
+                return `Показаны сохранённые данные за ${loaded}. Их актуальность не подтверждена.`;
+            }
             if (this.loading && this.period !== this.loadedPeriod) {
                 return `Показаны данные за ${loaded}; загружаем период ${this.periodLabel(this.period)}.`;
             }
@@ -424,11 +437,16 @@ function analyticsPage() {
                 this.applyData(json.data, { requestedPeriod, clearDaily: periodChanged });
                 this.hasData = true;
                 this.loadedPeriod = requestedPeriod;
+                this.dataStale = json.stale === true;
+                this.error = this.dataStale
+                    ? 'Обновление не удалось. Показаны ранее сохранённые данные.'
+                    : null;
                 if (periodChanged) this.productsList = [];
                 this.loadProducts(requestedPeriod, revision);
             } catch (e) {
                 if (this.isCurrentSummaryRequest(revision, requestedPeriod)) {
                     this.error = e.message;
+                    if (this.loadedPeriod === requestedPeriod) this.dataStale = true;
                 }
             } finally {
                 if (this.isCurrentSummaryRequest(revision, requestedPeriod)) {
@@ -456,11 +474,13 @@ function analyticsPage() {
                 this.applyData(json.data, { requestedPeriod, clearDaily: true });
                 this.hasData = true;
                 this.loadedPeriod = requestedPeriod;
+                this.dataStale = false;
                 this.productsList = [];
                 this.loadProducts(requestedPeriod, revision);
             } catch (e) {
                 if (this.isCurrentSummaryRequest(revision, requestedPeriod)) {
                     this.error = e.message;
+                    if (this.loadedPeriod === requestedPeriod) this.dataStale = true;
                 }
             } finally {
                 if (this.isCurrentSummaryRequest(revision, requestedPeriod)) {
@@ -551,9 +571,7 @@ function analyticsPage() {
                 this.dailyData = [];
                 this.dailyDataPeriod = null;
             }
-            if (data.created_at) {
-                this.dataAge = new Date(data.created_at).toLocaleString('ru-RU');
-            }
+            this.dataAge = this.formatDataAge(data.created_at);
 
             this.$nextTick(() => {
                 this.initSparklines();

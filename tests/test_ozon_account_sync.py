@@ -15,8 +15,8 @@ from services.marketplace_adapters import ConnectionCheck
 from services.marketplace_listings import MarketplaceListingService
 from services.marketplace_operation_locks import try_account_operation_lock
 from services.ozon_account_sync import (
-    JOB_TYPE, MAX_CALLS_PER_TICK, _advance, _BudgetedClient, enqueue_account_sync,
-    get_account_job, latest_account_jobs, run_account_sync_tick,
+    JOB_TYPE, MAX_CALLS_PER_TICK, _advance, _BudgetedClient, _defer,
+    enqueue_account_sync, get_account_job, latest_account_jobs, run_account_sync_tick,
 )
 from services.ozon_api_client import OzonAPIError, OzonRateLimitError
 from tests.test_marketplace_listing_service import SYNTHETIC_CREDENTIALS, SyntheticCatalogAdapter
@@ -230,12 +230,74 @@ def test_429_is_durable_and_never_shortens_retry_after(setup):
     result = get_account_job(seller_id=setup.seller_id, account_id=setup.account_id)
     assert result['status'] == 'pending' and result['code'] == 'ozon_rate_limited'
     assert datetime.fromisoformat(result['next_retry_at'].removesuffix('Z')) >= now + timedelta(seconds=5000)
+    assert result['manual_retry_at'] is None
     assert 'sensitive provider body' not in json.dumps(result)
     factory = Mock(side_effect=AssertionError('cooldown HTTP'))
     assert not _advance(job_id, setup.seller_id, now=now + timedelta(seconds=4999), adapter_factory=factory)
     factory.assert_not_called()
     assert advance(setup, job_id, Catalog(), now=now + timedelta(seconds=5001))
     assert db.session.get(BackgroundJob, job_id).processed == 1
+
+
+def test_failed_cooldown_publication_matches_current_credential_and_expires(setup):
+    connected(setup)
+    now = datetime.utcnow()
+    job = enqueue(setup)
+    _defer(job, job.get_progress(), 'ozon_rate_limited', now, retry_after=3 * 86400)
+
+    direct = get_account_job(seller_id=setup.seller_id, account_id=setup.account_id)
+    assert direct['status'] == 'failed'
+    assert direct['manual_retry_at'] == direct['next_retry_at']
+    assert 'fingerprint' not in json.dumps(direct).lower()
+    account_list = latest_account_jobs(
+        seller_id=setup.seller_id, account_ids=[setup.account_id],
+    )
+    assert account_list[setup.account_id]['manual_retry_at'] == direct['manual_retry_at']
+    passed_accounts = latest_account_jobs(
+        seller_id=setup.seller_id, account_ids=[setup.account_id],
+        accounts=[setup.account],
+    )
+    assert passed_accounts[setup.account_id]['manual_retry_at'] == direct['manual_retry_at']
+
+    # Credential rotation breaks the exact checkpoint binding. The old
+    # deadline remains private and no longer blocks a normal new request.
+    setup.account._credentials_encrypted = 'rotated-synthetic-ciphertext'
+    db.session.commit()
+    rotated = get_account_job(seller_id=setup.seller_id, account_id=setup.account_id)
+    assert rotated['manual_retry_at'] is None
+    restarted = enqueue_account_sync(
+        seller_id=setup.seller_id, account_id=setup.account_id,
+        force_restart=True,
+    )
+    assert restarted['status'] == 'pending'
+    assert restarted['manual_retry_at'] is None
+
+
+@pytest.mark.parametrize('deadline_kind', ['invalid', 'past'])
+def test_invalid_or_elapsed_failed_cooldown_does_not_publish_or_block(setup, deadline_kind):
+    connected(setup)
+    now = datetime.utcnow()
+    job = enqueue(setup)
+    _defer(job, job.get_progress(), 'ozon_rate_limited', now, retry_after=3 * 86400)
+    state = job.get_progress()
+    state['auto_retry_not_before'] = (
+        'not-a-date' if deadline_kind == 'invalid'
+        else (datetime.utcnow() - timedelta(seconds=5)).isoformat() + 'Z'
+    )
+    job.set_progress(state)
+    db.session.commit()
+
+    projected = latest_account_jobs(
+        seller_id=setup.seller_id, account_ids=[setup.account_id],
+        accounts=[setup.account],
+    )[setup.account_id]
+    assert projected['status'] == 'failed'
+    assert projected['manual_retry_at'] is None
+    allowed = enqueue_account_sync(
+        seller_id=setup.seller_id, account_id=setup.account_id,
+        force_restart=True,
+    )
+    assert allowed['status'] == 'pending'
 
 
 def test_catalog_403_does_not_disable_authenticated_account(setup):

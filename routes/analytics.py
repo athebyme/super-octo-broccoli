@@ -8,7 +8,7 @@ from flask import render_template, request, jsonify, redirect, url_for, flash
 from flask_login import login_required, current_user
 
 from models import db
-from services.analytics_service import AnalyticsService
+from services.analytics_service import AnalyticsRefreshError, AnalyticsService
 
 logger = logging.getLogger('analytics_routes')
 
@@ -50,9 +50,34 @@ def register_analytics_routes(app):
                 force=force,
             )
             return jsonify({'success': True, 'data': data})
-        except Exception as e:
-            logger.exception(f"Error fetching analytics summary: {e}")
-            return jsonify({'error': str(e)}), 500
+        except AnalyticsRefreshError as e:
+            if not force:
+                try:
+                    period_start, period_end = AnalyticsService._calc_period(period)
+                    stale = AnalyticsService.get_latest_snapshot(
+                        current_user.seller.id, period_start, period_end,
+                    )
+                    stale_data = stale.to_dict() if stale else None
+                except Exception:
+                    stale_data = None
+                if stale_data:
+                    return jsonify({
+                        'success': True,
+                        'data': stale_data,
+                        'stale': True,
+                    })
+            return jsonify({
+                'success': False,
+                'error': e.public_message,
+                'error_code': e.code,
+            }), e.status_code
+        except Exception:
+            logger.error("Unexpected failure loading WB analytics summary")
+            return jsonify({
+                'success': False,
+                'error': 'Не удалось загрузить аналитику Wildberries. Попробуйте позже.',
+                'error_code': 'analytics_unavailable',
+            }), 503
 
     @app.route('/api/analytics/daily')
     @login_required
@@ -76,6 +101,12 @@ def register_analytics_routes(app):
                 period_code=period,
             )
             return jsonify({'success': True, 'data': daily or []})
+        except AnalyticsRefreshError as e:
+            return jsonify({
+                'success': False,
+                'error': e.public_message,
+                'error_code': e.code,
+            }), e.status_code
         except Exception as e:
             logger.exception(f"Error fetching daily analytics: {e}")
             return jsonify({'error': str(e)}), 500
@@ -152,6 +183,16 @@ def register_analytics_routes(app):
                 force=True,
             )
             return jsonify({'success': True, 'data': data})
-        except Exception as e:
-            logger.exception(f"Error refreshing analytics: {e}")
-            return jsonify({'error': str(e)}), 500
+        except AnalyticsRefreshError as e:
+            return jsonify({
+                'success': False,
+                'error': e.public_message,
+                'error_code': e.code,
+            }), e.status_code
+        except Exception:
+            logger.error("Unexpected failure refreshing WB analytics")
+            return jsonify({
+                'success': False,
+                'error': 'Не удалось обновить аналитику Wildberries. Попробуйте позже.',
+                'error_code': 'analytics_unavailable',
+            }), 503

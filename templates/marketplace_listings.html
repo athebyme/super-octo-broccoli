@@ -62,7 +62,11 @@
                         {% endif %}
                     </p>
                     <p x-cloak x-show="active({{ account.id }})" class="catalog-account-freshness"><span class="sh-spinner sh-spinner--sm" aria-hidden="true"></span> Получено: <span x-text="count({{ account.id }})"></span>. Загрузка продолжится и после закрытия страницы.</p>
-                    <p x-cloak x-show="retryTime({{ account.id }})" x-text="retryTime({{ account.id }})" class="mt-1 text-xs" style="color:var(--text-muted)"></p>
+                    <p x-cloak x-show="cooldownAt({{ account.id }})" class="mt-1 text-xs" style="color:var(--text-muted)" role="status" aria-live="polite">
+                        Ozon попросил паузу. Повторная загрузка доступна после
+                        <time :datetime="cooldownAt({{ account.id }})" x-text="formattedCooldownAt({{ account.id }})"></time>.
+                    </p>
+                    <p x-cloak x-show="!cooldownAt({{ account.id }}) && retryTime({{ account.id }})" x-text="retryTime({{ account.id }})" class="mt-1 text-xs" style="color:var(--text-muted)" role="status" aria-live="polite"></p>
                     <p class="catalog-account-freshness" role="status" aria-live="polite">
                         Последняя полная загрузка:
                         <time data-catalog-completed-at {% if completed_at %}datetime="{{ completed_at }}"{% else %}x-cloak{% endif %}
@@ -75,12 +79,13 @@
             <div class="catalog-account-actions">
                 {% if account.is_active and account.has_credentials and account.connection_status == 'connected' %}
                 <form method="post" action="{{ url_for('marketplace_listings.sync_account', account_id=account.id) }}"
-                      data-account-id="{{ account.id }}" @submit.prevent="submit($event)" x-show="connected({{ account.id }})">
+                      data-account-id="{{ account.id }}" data-manual-cooldown="true" data-catalog-sync="true" @submit.prevent="submit($event)" x-show="connected({{ account.id }})">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button class="sh-btn sh-btn--secondary" type="submit" :disabled="busy[{{ account.id }}] || active({{ account.id }})">
+                    <button class="sh-btn sh-btn--secondary" type="submit" :disabled="busy[{{ account.id }}] || active({{ account.id }}) || coolingDown({{ account.id }})">
                         {{ icon('refresh', 15) }} <span x-text="active({{ account.id }}) ? 'Загрузка идёт…' : (busy[{{ account.id }}] ? 'Запускаем…' : 'Обновить каталог')">Обновить каталог</span>
                     </button>
                 </form>
+                <button x-cloak x-show="cooldownAt({{ account.id }})" type="button" class="sh-btn sh-btn--secondary" @click="refresh()">Проверить статус</button>
                 <a x-cloak x-show="!connected({{ account.id }})" href="{{ url_for('marketplace_accounts.index', account_id=account.id, _anchor='ozon-account-' ~ account.id) }}" class="sh-btn sh-btn--secondary">{{ icon('key', 15) }} Настроить подключение</a>
                 {% else %}
                 <a href="{{ url_for('marketplace_accounts.index', account_id=account.id, _anchor='ozon-account-' ~ account.id) }}" class="sh-btn sh-btn--secondary">Настроить подключение</a>

@@ -6,6 +6,7 @@
 кэширует снимки в БД, предоставляет данные для дашборда.
 """
 import logging
+import math
 from datetime import date, datetime, timedelta
 from typing import Dict, Any, Optional, List
 
@@ -13,6 +14,32 @@ from models import db, AnalyticsSnapshot, ProductAnalytics, Seller, APILog
 from services.wb_api_client import WildberriesAPIClient, WBAPIException
 
 logger = logging.getLogger('analytics_service')
+
+
+class AnalyticsRefreshError(Exception):
+    """A safe, typed failure while refreshing the WB analytics projection."""
+
+    _PUBLIC_ERRORS = {
+        'provider_unavailable': (
+            502,
+            'Не удалось получить аналитику Wildberries. Попробуйте позже.',
+        ),
+        'invalid_provider_response': (
+            502,
+            'Wildberries вернул неполные данные аналитики. Попробуйте позже.',
+        ),
+        'persistence_failed': (
+            503,
+            'Не удалось сохранить обновление аналитики. Попробуйте позже.',
+        ),
+    }
+
+    def __init__(self, code: str):
+        if code not in self._PUBLIC_ERRORS:
+            code = 'provider_unavailable'
+        self.code = code
+        self.status_code, self.public_message = self._PUBLIC_ERRORS[code]
+        super().__init__(code)
 
 
 class AnalyticsService:
@@ -63,6 +90,110 @@ class AnalyticsService:
         ).order_by(AnalyticsSnapshot.created_at.desc()).first()
 
     @classmethod
+    def get_latest_snapshot(cls, seller_id: int, period_start: date, period_end: date) -> Optional[AnalyticsSnapshot]:
+        """Получить последний сохранённый снимок строго для продавца и периода."""
+        return AnalyticsSnapshot.query.filter(
+            AnalyticsSnapshot.seller_id == seller_id,
+            AnalyticsSnapshot.period_start == period_start,
+            AnalyticsSnapshot.period_end == period_end,
+        ).order_by(AnalyticsSnapshot.created_at.desc()).first()
+
+    @staticmethod
+    def _is_finite_number(value: Any) -> bool:
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return False
+        try:
+            return math.isfinite(value)
+        except (OverflowError, TypeError, ValueError):
+            return False
+
+    @classmethod
+    def _extract_products(cls, result: Any) -> List[Dict[str, Any]]:
+        """Validate a supported explicit WB products envelope before any writes."""
+        if not isinstance(result, dict):
+            raise AnalyticsRefreshError('invalid_provider_response')
+
+        if result.get('error'):
+            raise AnalyticsRefreshError('provider_unavailable')
+
+        if 'data' in result:
+            data = result['data']
+            if isinstance(data, list):
+                products = data
+            elif isinstance(data, dict):
+                if 'products' in data:
+                    # A malformed canonical field must not be hidden by a fallback.
+                    products = data['products']
+                elif 'products' in result:
+                    products = result['products']
+                else:
+                    raise AnalyticsRefreshError('invalid_provider_response')
+            else:
+                raise AnalyticsRefreshError('invalid_provider_response')
+        elif 'products' in result:
+            products = result['products']
+        else:
+            raise AnalyticsRefreshError('invalid_provider_response')
+
+        if not isinstance(products, list):
+            raise AnalyticsRefreshError('invalid_provider_response')
+
+        numeric_fields = (
+            'orderSum', 'orderCount', 'buyoutCount', 'buyoutSum',
+            'cancelCount', 'cancelSum', 'openCount', 'cartCount',
+        )
+        comparison_fields = ('orderSum', 'orderCount', 'buyoutCount')
+        conversion_fields = (
+            'addToCartPercent', 'cartToOrderPercent', 'buyoutPercent',
+        )
+
+        for item in products:
+            if not isinstance(item, dict):
+                raise AnalyticsRefreshError('invalid_provider_response')
+            product = item.get('product')
+            statistic = item.get('statistic')
+            if not isinstance(product, dict) or not isinstance(statistic, dict):
+                raise AnalyticsRefreshError('invalid_provider_response')
+            nm_id = product.get('nmId')
+            if isinstance(nm_id, bool) or not isinstance(nm_id, int) or nm_id <= 0:
+                raise AnalyticsRefreshError('invalid_provider_response')
+
+            selected = statistic.get('selected')
+            if not isinstance(selected, dict):
+                raise AnalyticsRefreshError('invalid_provider_response')
+            comparison = statistic.get('comparison', {})
+            if not isinstance(comparison, dict):
+                raise AnalyticsRefreshError('invalid_provider_response')
+            conversions = selected.get('conversions', {})
+            if not isinstance(conversions, dict):
+                raise AnalyticsRefreshError('invalid_provider_response')
+            stocks = product.get('stocks', {})
+            if not isinstance(stocks, dict):
+                raise AnalyticsRefreshError('invalid_provider_response')
+
+            has_numeric_observation = False
+            for section, fields in (
+                (selected, numeric_fields),
+                (comparison, comparison_fields),
+                (conversions, conversion_fields),
+                (stocks, ('wb', 'mp')),
+            ):
+                for field in fields:
+                    if field in section:
+                        if not cls._is_finite_number(section[field]):
+                            raise AnalyticsRefreshError('invalid_provider_response')
+                        if section is selected or section is conversions:
+                            has_numeric_observation = True
+            if not has_numeric_observation:
+                raise AnalyticsRefreshError('invalid_provider_response')
+
+            for field in ('title', 'vendorCode', 'brandName', 'subjectName'):
+                if field in product and product[field] is not None and not isinstance(product[field], str):
+                    raise AnalyticsRefreshError('invalid_provider_response')
+
+        return products
+
+    @classmethod
     def fetch_and_cache_snapshot(
         cls,
         seller: Seller,
@@ -83,32 +214,23 @@ class AnalyticsService:
         """
         period_start, period_end = cls._calc_period(period_code)
 
-        # Проверяем кэш
+        # A confirmed empty response is still a valid cached observation.
         if not force:
             cached = cls.get_cached_snapshot(seller.id, period_start, period_end)
-            if cached and (cached.orders_count or cached.open_card_count):
+            if cached:
                 logger.info(f"Using cached analytics snapshot for seller={seller.id}, period={period_code}")
                 return cached.to_dict()
-            elif cached:
-                logger.info(f"Cached snapshot is empty (0 orders), refreshing from API")
-
-        # При force-обновлении удаляем старые пустые снимки
-        if force:
-            AnalyticsSnapshot.query.filter(
-                AnalyticsSnapshot.seller_id == seller.id,
-                AnalyticsSnapshot.period_start == period_start,
-                AnalyticsSnapshot.period_end == period_end,
-            ).delete()
-            db.session.commit()
 
         # Загружаем из WB API
         logger.info(f"Fetching analytics from WB API for seller={seller.id}, period={period_code}")
         past_start, past_end = cls._calc_past_period(period_start, period_end)
 
-        client = cls._get_wb_client(seller)
+        try:
+            client = cls._get_wb_client(seller)
+        except Exception:
+            raise AnalyticsRefreshError('provider_unavailable') from None
 
         try:
-            # 1. Получаем статистику по всем товарам за выбранный период
             result = client.get_sales_funnel_products(
                 period_start=period_start.isoformat(),
                 period_end=period_end.isoformat(),
@@ -119,74 +241,49 @@ class AnalyticsService:
                 offset=0,
                 seller_id=seller.id,
             )
-
-            logger.info(f"WB API raw response keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
-
-            # Проверяем на ошибку API
-            if isinstance(result, dict) and result.get('error'):
-                error_text = result.get('errorText', 'Unknown error')
-                additional = result.get('additionalErrors', [])
-                logger.error(f"WB Analytics API error: {error_text}, additional: {additional}")
-                return cls._empty_snapshot(period_start, period_end)
-
-            # Извлекаем products — структура может быть разной
-            data = result.get('data', result)
-            products = []
-            if isinstance(data, dict):
-                products = data.get('products', [])
-                # Если products пуст, логируем data keys для диагностики
-                if not products:
-                    logger.warning(f"WB API data keys (no products found): {list(data.keys())}")
-                    # Попытка: может products лежит на уровне выше
-                    products = result.get('products', [])
-            elif isinstance(data, list):
-                products = data
-
-            logger.info(f"WB API returned {len(products)} products for analytics")
-            if products:
-                # Логируем структуру первого продукта для диагностики
-                first = products[0]
-                logger.info(f"First product keys: {list(first.keys())}")
-                if 'statistic' in first:
-                    stat_keys = list(first['statistic'].keys())
-                    logger.info(f"First product statistic keys: {stat_keys}")
-                    selected = first['statistic'].get('selected', {})
-                    logger.info(f"First product selected keys: {list(selected.keys())}")
-                    logger.info(f"First product orderSum={selected.get('orderSum')}, orderCount={selected.get('orderCount')}")
-
-            # Агрегируем KPI
-            snapshot = cls._build_snapshot(seller.id, period_start, period_end, products)
-
-            # Сохраняем в БД
-            db.session.add(snapshot)
-
-            # Сохраняем детализацию по товарам
-            cls._save_product_analytics(seller.id, period_start, period_end, products)
-
-            db.session.commit()
-            logger.info(f"Analytics snapshot saved: {snapshot}")
-
-            return snapshot.to_dict()
-
-        except WBAPIException as e:
-            logger.error(f"WB API error fetching analytics: {e}")
-            # Пытаемся вернуть последний доступный кэш
-            fallback = AnalyticsSnapshot.query.filter(
-                AnalyticsSnapshot.seller_id == seller.id,
-                AnalyticsSnapshot.period_start == period_start,
-                AnalyticsSnapshot.period_end == period_end,
-            ).order_by(AnalyticsSnapshot.created_at.desc()).first()
-            if fallback:
-                return fallback.to_dict()
-            return cls._empty_snapshot(period_start, period_end)
-
-        except Exception as e:
-            logger.exception(f"Unexpected error fetching analytics: {e}")
-            db.session.rollback()
-            return cls._empty_snapshot(period_start, period_end)
-
+        except WBAPIException:
+            raise AnalyticsRefreshError('provider_unavailable') from None
+        except AnalyticsRefreshError:
+            raise
+        except Exception:
+            raise AnalyticsRefreshError('provider_unavailable') from None
         finally:
-            client.close()
+            try:
+                client.close()
+            except Exception:
+                # Closing a client must not replace the read or persistence outcome.
+                pass
+
+        try:
+            products = cls._extract_products(result)
+            snapshot = cls._build_snapshot(
+                seller.id, period_start, period_end, products,
+            )
+        except AnalyticsRefreshError:
+            raise
+        except Exception:
+            raise AnalyticsRefreshError('invalid_provider_response') from None
+
+        # Replace only this seller/period projection in one transaction. A failed
+        # commit rolls back both tables and leaves the previous snapshot readable.
+        try:
+            if force:
+                AnalyticsSnapshot.query.filter(
+                    AnalyticsSnapshot.seller_id == seller.id,
+                    AnalyticsSnapshot.period_start == period_start,
+                    AnalyticsSnapshot.period_end == period_end,
+                ).delete(synchronize_session=False)
+            cls._save_product_analytics(
+                seller.id, period_start, period_end, products,
+            )
+            db.session.add(snapshot)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            raise AnalyticsRefreshError('persistence_failed') from None
+
+        logger.info(f"Analytics snapshot saved for seller={seller.id}, period={period_code}")
+        return snapshot.to_dict()
 
     @classmethod
     def _build_snapshot(
@@ -507,28 +604,4 @@ class AnalyticsService:
             'page': page,
             'pages': pagination.pages,
             'per_page': per_page,
-        }
-
-    @staticmethod
-    def _empty_snapshot(period_start: date, period_end: date) -> Dict[str, Any]:
-        """Пустой снимок когда данных нет."""
-        return {
-            'period_start': period_start.isoformat(),
-            'period_end': period_end.isoformat(),
-            'kpi': {
-                'revenue': 0, 'orders': 0, 'avgCheck': 0,
-                'buyouts': 0, 'cancels': 0,
-                'openCardCount': 0, 'addToCartCount': 0,
-            },
-            'conversions': {
-                'addToCartPercent': 0,
-                'cartToOrderPercent': 0,
-                'buyoutPercent': 0,
-            },
-            'dynamics': {
-                'revenue': 0, 'orders': 0, 'buyouts': 0,
-            },
-            'dailyData': [],
-            'topProducts': [],
-            'created_at': None,
         }

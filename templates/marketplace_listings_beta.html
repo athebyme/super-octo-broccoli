@@ -102,15 +102,20 @@
                 <time v-if="lastCompletedAt(acc)" data-catalog-completed-at :datetime="lastCompletedAt(acc)" v-text="formattedLastCompletedAt(acc)"></time>
                 <span v-else>ещё не выполнялась</span>
             </p>
+            <p v-if="syncCoolingDown(acc)" class="mcat-account-date" role="status" aria-live="polite">
+                Ozon попросил паузу. Повторная загрузка доступна после
+                <time :datetime="syncCooldownAt(acc)" v-text="formattedSyncCooldownAt(acc)"></time>.
+            </p>
             <p v-if="canSync(acc) && !syncFailed(acc)" class="mcat-account-date">Автообновление включено · примерно раз в час, с учётом пауз Ozon</p>
             <div class="mcat-account-actions">
-                <button v-if="canSync(acc)" type="button" class="sh-btn sh-btn--secondary" :disabled="syncActive(acc)" @click="syncAccount(acc)">
+                <button v-if="canSync(acc)" type="button" class="sh-btn sh-btn--secondary" :disabled="syncActive(acc) || syncCoolingDown(acc)" @click="syncAccount(acc)">
                     <span v-if="syncActive(acc)" class="sh-spinner sh-spinner--sm" aria-hidden="true"></span>
                     <template v-else>{% endraw %}{{ icon('refresh', 15) }}{% raw %}</template>
                     {{ syncActive(acc) ? 'Загрузка идёт…' : 'Обновить каталог' }}
                 </button>
                 <a v-else class="sh-btn sh-btn--secondary" :href="accountSettingsUrl(acc)">{% endraw %}{{ icon('key', 15) }}{% raw %} Настроить подключение</a>
-                <button v-if="canSync(acc) && !syncActive(acc) && syncFailed(acc)" type="button" class="sh-btn sh-btn--secondary" @click="syncAccount(acc, true)">Загрузить заново</button>
+                <button v-if="canSync(acc) && !syncActive(acc) && syncFailed(acc)" type="button" class="sh-btn sh-btn--secondary" :disabled="syncCoolingDown(acc)" @click="syncAccount(acc, true)">Загрузить заново</button>
+                <button v-if="syncCoolingDown(acc)" type="button" class="sh-btn sh-btn--secondary" @click="pollSync">Проверить статус</button>
                 <a v-if="canSync(acc)" class="mcat-account-settings" :href="accountSettingsUrl(acc)">Настройки {% endraw %}{{ icon('chevron-right', 13) }}{% raw %}</a>
             </div>
         </article>

@@ -5,7 +5,7 @@ Catalog snapshots/cursors remain owned by MarketplaceListingService. No prices,
 stocks, publications, global references or LLM writes belong to this workflow.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import math
 import time
@@ -13,7 +13,7 @@ import uuid
 
 from sqlalchemy import case, func, or_, select, union_all
 
-from models import BackgroundJob, MarketplaceCatalogSync, db
+from models import BackgroundJob, Marketplace, MarketplaceCatalogSync, SellerMarketplaceAccount, db
 from services.marketplace_accounts import (
     MarketplaceAccountConflict, MarketplaceAccountError, MarketplaceAccountNotFound,
     MarketplaceAccountService, MarketplaceAccountValidationError,
@@ -148,7 +148,36 @@ def _public_result(job, state, code):
     })
 
 
-def public_job(job):
+def _manual_retry_at(account, job, *, now=None):
+    """Return the verified cooldown for this exact stored account key only."""
+    if account is None or job is None or job.status != 'failed':
+        return None
+    state = job.get_progress()
+    fingerprint = _fingerprint(account)
+    if (
+        not isinstance(fingerprint, str)
+        or not fingerprint
+        or state.get('credential_fingerprint') != fingerprint
+    ):
+        return None
+    value = state.get('auto_retry_not_before')
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        deadline = datetime.fromisoformat(value[:-1] if value.endswith('Z') else value)
+        if deadline.tzinfo is not None:
+            deadline = deadline.astimezone(timezone.utc).replace(tzinfo=None)
+        now = now or datetime.utcnow()
+        if now.tzinfo is not None:
+            now = now.astimezone(timezone.utc).replace(tzinfo=None)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if deadline <= now:
+        return None
+    return deadline.isoformat() + 'Z'
+
+
+def public_job(job, *, account=None, now=None):
     if job is None:
         return None
     result = job.get_result()
@@ -159,12 +188,13 @@ def public_job(job):
         'processed': job.processed or 0, 'total': job.total or 0,
         'page_count': result.get('page_count', 0), 'sync_id': result.get('sync_id'),
         'next_retry_at': result.get('next_retry_at'),
+        'manual_retry_at': _manual_retry_at(account, job, now=now),
         'updated_at': job.updated_at.isoformat() + 'Z' if job.updated_at else None,
     }
 
 
-def latest_account_jobs(*, seller_id, account_ids):
-    """One bounded query for up to 10 owned account scopes, without JSON scans."""
+def latest_account_jobs(*, seller_id, account_ids, accounts=None):
+    """Bounded latest jobs, with one optional batched owned-account lookup."""
     MarketplaceAccountService._positive_integer(seller_id, 'seller_id')
     ids = list(dict.fromkeys(account_ids))
     if len(ids) > MarketplaceAccountService.MAX_ACCOUNTS_PER_MARKETPLACE:
@@ -177,12 +207,41 @@ def latest_account_jobs(*, seller_id, account_ids):
     ) for account_id in ids]
     latest_ids = union_all(*selects).subquery()
     jobs = BackgroundJob.query.filter(BackgroundJob.id.in_(select(latest_ids.c[0]))).all()
-    return {job.get_result().get('account_id'): public_job(job) for job in jobs}
+    account_by_id = {
+        account.id: account for account in (accounts or [])
+        if account.seller_id == seller_id and account.id in ids
+        and account.marketplace and account.marketplace.code == 'ozon'
+    }
+    failed_ids = {
+        job.get_result().get('account_id') for job in jobs
+        if job.status == 'failed'
+    }
+    missing_ids = [
+        account_id for account_id in failed_ids
+        if isinstance(account_id, int) and not isinstance(account_id, bool)
+        and account_id in ids and account_id not in account_by_id
+    ]
+    if missing_ids:
+        account_by_id.update({
+            account.id: account
+            for account in SellerMarketplaceAccount.query.join(Marketplace).filter(
+                SellerMarketplaceAccount.seller_id == seller_id,
+                SellerMarketplaceAccount.id.in_(missing_ids),
+                Marketplace.code == 'ozon',
+            ).all()
+        })
+    return {
+        job.get_result().get('account_id'): public_job(
+            job, account=account_by_id.get(job.get_result().get('account_id')),
+        )
+        for job in jobs
+    }
 
 
 def get_account_job(*, seller_id, account_id):
-    _owned_account(seller_id, account_id)
-    return public_job(_job_query(seller_id, account_id).order_by(BackgroundJob.id.desc()).first())
+    account = _owned_account(seller_id, account_id)
+    job = _job_query(seller_id, account_id).order_by(BackgroundJob.id.desc()).first()
+    return public_job(job, account=account)
 
 
 def enqueue_account_sync(*, seller_id, account_id, check_connection=False, force_restart=False):
@@ -196,7 +255,7 @@ def enqueue_account_sync(*, seller_id, account_id, check_connection=False, force
         raise MarketplaceAccountValidationError(MESSAGES['connection_required'])
     existing = _job_query(seller_id, account_id).filter(BackgroundJob.status.in_(ACTIVE)).first()
     if existing and existing.get_progress().get('credential_fingerprint') == _fingerprint(account):
-        return public_job(existing)
+        return public_job(existing, account=account)
     claim = _try_operation_lock('ozon-account-sync', account_id)
     if claim is None:
         raise MarketplaceAccountConflict(MESSAGES['account_busy'])
@@ -208,23 +267,18 @@ def enqueue_account_sync(*, seller_id, account_id, check_connection=False, force
         existing = _job_query(seller_id, account_id).filter(BackgroundJob.status.in_(ACTIVE)).first()
         if existing:
             if existing.get_progress().get('credential_fingerprint') == _fingerprint(account):
-                return public_job(existing)
+                return public_job(existing, account=account)
             old_state = existing.get_progress()
             old_state.update(phase='failed', account_id=account_id)
             existing.status = 'failed'
             _public_result(existing, old_state, 'credentials_changed')
         previous = _job_query(seller_id, account_id).order_by(BackgroundJob.id.desc()).first()
-        if previous is not None and previous.status == 'failed':
-            previous_state = previous.get_progress()
-            not_before = previous_state.get('auto_retry_not_before')
-            if (previous_state.get('credential_fingerprint') == _fingerprint(account)
-                    and isinstance(not_before, str)
-                    and not_before > datetime.utcnow().isoformat() + 'Z'):
-                error = MarketplaceAccountConflict(
-                    'Ozon запросил паузу. Дождитесь указанного времени следующей попытки.'
-                )
-                error.code = 'ozon_catalog_cooldown'
-                raise error
+        if _manual_retry_at(account, previous):
+            error = MarketplaceAccountConflict(
+                'Ozon запросил паузу. Дождитесь указанного времени следующей попытки.'
+            )
+            error.code = 'ozon_catalog_cooldown'
+            raise error
         latest = _latest_run(seller_id, account_id)
         state = {
             'account_id': account_id, 'phase': 'check' if check_connection else 'catalog',
@@ -241,7 +295,7 @@ def enqueue_account_sync(*, seller_id, account_id, check_connection=False, force
         _public_result(job, state, 'queued' if check_connection else 'catalog_queued')
         db.session.add(job)
         db.session.commit()
-        return public_job(job)
+        return public_job(job, account=account)
     except Exception:
         db.session.rollback()
         raise

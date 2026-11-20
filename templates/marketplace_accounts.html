@@ -159,7 +159,12 @@
                 <p class="text-xs mt-2" style="color:var(--text-muted)" v-show="count({{ aid }}) > 0">
                     Получено товаров: <span v-text="count({{ aid }})"></span>
                 </p>
-                <p v-cloak v-show="retryTime({{ aid }})" v-text="retryTime({{ aid }})" class="text-xs mt-1" style="color:var(--text-muted)"></p>
+                <p v-cloak v-if="cooldownAt({{ aid }})" class="text-xs mt-1" style="color:var(--text-muted)" role="status" aria-live="polite">
+                    Ozon попросил паузу. Повторная загрузка доступна после
+                    <time :datetime="cooldownAt({{ aid }})" v-text="formattedCooldownAt({{ aid }})"></time>.
+                </p>
+                <p v-cloak v-else-if="retryTime({{ aid }})" v-text="retryTime({{ aid }})" class="text-xs mt-1" style="color:var(--text-muted)" role="status" aria-live="polite"></p>
+                <button v-cloak v-if="cooldownAt({{ aid }})" type="button" class="sh-btn sh-btn--secondary sh-btn--sm mt-1" @click="refresh()">Проверить статус</button>
                 <p class="text-xs mt-2" style="color:var(--text-muted)">
                     Последняя полная загрузка:
                     <time v-if="completedAt({{ aid }})" data-catalog-completed-at :datetime="completedAt({{ aid }})" v-text="formattedCompletedAt({{ aid }})"></time>
@@ -176,15 +181,15 @@
             {% if ozon_enabled and account.has_credentials %}
             <div class="flex flex-wrap gap-2 mt-3">
                 <form method="post" action="{{ url_for('marketplace_accounts.connect_existing', account_id=aid) }}"
-                      data-account-id="{{ aid }}" @submit.prevent="submit($event)" v-show="!connected({{ aid }})">
+                      data-account-id="{{ aid }}" data-manual-cooldown="true" @submit.prevent="submit($event)" v-show="!connected({{ aid }})">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button class="sh-btn sh-btn--primary" :disabled="busy[{{ aid }}] || active({{ aid }})" type="submit">Проверить и загрузить каталог</button>
+                    <button class="sh-btn sh-btn--primary" :disabled="busy[{{ aid }}] || active({{ aid }}) || coolingDown({{ aid }})" type="submit">Проверить и загрузить каталог</button>
                 </form>
                 <form method="post" action="{{ url_for('marketplace_listings.sync_account', account_id=aid) }}"
-                      data-account-id="{{ aid }}" @submit.prevent="submit($event)" v-show="connected({{ aid }})">
+                      data-account-id="{{ aid }}" data-manual-cooldown="true" data-catalog-sync="true" @submit.prevent="submit($event)" v-show="connected({{ aid }})">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="force_restart" value="1">
-                    <button class="sh-btn sh-btn--secondary" :disabled="busy[{{ aid }}] || active({{ aid }})" type="submit"
+                    <button class="sh-btn sh-btn--secondary" :disabled="busy[{{ aid }}] || active({{ aid }}) || coolingDown({{ aid }})" type="submit"
                             v-text="active({{ aid }}) ? 'Загрузка идёт…' : ((jobs[{{ aid }}] || {}).status === 'failed' ? 'Загрузить заново' : 'Обновить каталог')"></button>
                 </form>
                 <a class="sh-btn sh-btn--secondary" href="{{ url_for('ozon_bulk_uploads.index', account_id=aid) }}">Результаты загрузок</a>

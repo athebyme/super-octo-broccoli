@@ -245,6 +245,7 @@ def classic():
         onboarding_jobs = latest_account_jobs(
             seller_id=seller_id,
             account_ids=ozon_account_ids,
+            accounts=accounts,
         )
     except (MarketplaceListingError, ValueError) as exc:
         return _error_response(exc)
@@ -307,6 +308,7 @@ def index():
     onboarding_jobs = latest_account_jobs(
         seller_id=seller_id,
         account_ids=ozon_account_ids,
+        accounts=accounts,
     )
     accounts_payload = []
     for account in accounts:
