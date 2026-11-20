@@ -97,7 +97,9 @@
 .ode-attribute .ode-help { margin-bottom: 10px; }
 .ode-value-input + .ode-value-input { margin-top: 8px; }
 .ode-value-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
-.ode-value-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; font-size: 12px; color: var(--text); background: var(--bg-hover); border: 1px solid var(--border); border-radius: 4px; overflow-wrap: anywhere; }
+.ode-value-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; flex-wrap: wrap; padding: 5px 9px; font-size: 12px; color: var(--text); background: var(--bg-hover); border: 1px solid var(--border); border-radius: 4px; overflow-wrap: anywhere; }
+.ode-value-chip-label { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
+.ode-dictionary-id { min-width: 0; flex: 1 0 100%; color: var(--text-secondary); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
 .ode-value-chip button { border: 0; background: transparent; color: var(--text-secondary); padding: 0 3px; font-size: 17px; }
 .ode-text-button { border: 0; padding: 7px 0; font-size: 11px !important; color: var(--accent-text); background: transparent; text-align: left; }
 .ode-attribute > .ode-text-button { margin-right: 14px; }
@@ -151,9 +153,12 @@
 .ode-impact-list span { min-width: 0; white-space: pre-wrap; }
 .ode-impact-confirm { margin-top: 16px; }
 .ode-dictionary-results { margin-top: 16px; }
-.ode-dictionary-results button { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 16px; border: 0; border-bottom: 1px solid var(--border); padding: 12px 6px; background: transparent; text-align: left; font-size: 13px; color: var(--text); }
+.ode-dictionary-results button { display: flex; align-items: flex-start; justify-content: space-between; width: 100%; min-width: 0; gap: 12px; border: 0; border-bottom: 1px solid var(--border); padding: 12px 6px; background: transparent; text-align: left; font-size: 13px; color: var(--text); }
 .ode-dictionary-results button:hover { background: var(--bg-hover); }
-.ode-dictionary-results button span { color: var(--accent-text); }
+.ode-dictionary-result-copy { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; gap: 3px; overflow-wrap: anywhere; }
+.ode-dictionary-result-copy > span { min-width: 0; overflow-wrap: anywhere; }
+.ode-dictionary-result-copy .ode-dictionary-id { flex: initial; }
+.ode-dictionary-results button > span[aria-hidden="true"] { flex: 0 0 auto; color: var(--accent-text); }
 .ode-loading { display: grid; grid-template-columns: 280px 1fr; gap: 36px; min-height: 380px; }
 .ode-loading p { color: var(--text-muted); font-size: 13px; margin-top: 30px; }
 .ode-skeleton { background: var(--bg-hover); border-radius: 6px; height: 280px; }

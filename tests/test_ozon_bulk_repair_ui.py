@@ -15,14 +15,16 @@ let transport=async()=>{throw Error('Unexpected fetch')},calls=[];
 vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),{window,URL,URLSearchParams,TextEncoder,AbortController,
   setTimeout,clearTimeout,fetch:async(url,options)=>{calls.push({url,method:options.method||'GET',body:options.body?.toString(),headers:options.headers});return transport(url,options);}});
 const core=window.ozonBulkRepair;
-const field=(id,type='String',dictionary=false)=>({external_id:id,name:'Поле '+id,value:'',dictionary_value_id:'',
+const field=(id,type='String',dictionary=false,value='',dictionary_value_id='')=>({external_id:id,name:'Поле '+id,value,dictionary_value_id,
   editable:true,dictionary,dictionary_fresh:true,data_type:type,is_collection:false,max_values:1});
-const row=(id,attrs=[])=>({draft_id:id,draft_version:1,imported_product_id:id,offer_id:'offer-'+id,title:'Товар '+id,
-  action:'ИСПРАВИТЬ',product_type_id:1,product_type_name:'Тип 1',price_rub:'100',description:'Описание',
+const row=(id,attrs=[],productTypeId=1)=>({draft_id:id,draft_version:1,imported_product_id:id,offer_id:'offer-'+id,title:'Товар '+id,
+  action:'ИСПРАВИТЬ',product_type_id:productTypeId,product_type_name:'Тип '+productTypeId,price_rub:'100',description:'Описание',
   package_width_mm:'',package_height_mm:'',package_depth_mm:'',package_weight_g:'',attributes:attrs,cleanup_candidates:[],
   schema_cleanup:false,status:'needs_input',validation_errors:[],type_change_impact:{attributes:0,complex_groups:0,removals:0}});
 const editor=()=>({job_uid:'synthetic-run',account_id:1,groups:[{id:'g1',source_category:'Категория',rows:[
-  row(1,[field('10','Boolean'),field('20','String',true)]),row(2,[field('10'),field('20','String',true)]),row(3,[])]}],
+  row(1,[field('10','Boolean'),field('20','String',true)]),
+  row(2,[field('10'),field('20','String',true,'Официальное','700001')]),
+  row(3,[field('20','String',true)],2)]}],
   bulk_fields:[{key:'price_rub',label:'Цена продавца'}]});
 const config={editor:editor(),enabled:true,csrf:'synthetic',urls:{read:'/read',apply:'/apply',types:'/types',dictionaries:'/dict/'}};
 function state(doc=editor()){
@@ -37,10 +39,35 @@ const ok=data=>({status:200,ok:true,redirected:false,json:async()=>({...data,csr
   let s=state();s.rows.forEach(r=>r.selected=true);
   let plan=core.planBulk(s.rows,'attribute:10',[{value:'false'}],s.rows[0].attributes[0]);
   assert.equal(plan.items.length,1);assert.equal(plan.skipped.length,2);assert.equal(plan.items[0].after[0].value,'false');
-  plan=core.planBulk(s.rows,'attribute:20',[{value:'Официальное',dictionary_value_id:'999'}],s.rows[0].attributes[1]);
-  assert.equal(plan.items.length,2);assert.equal(plan.items[0].after[0].dictionary_value_id,undefined);
+  const exact={value:'Официальное',dictionary_value_id:'700002'};
+  s.bulkKey='attribute:20';s.bulkMode='value';s.bulkValues=[exact];s.previewBulk();
+  plan=s.bulkPlan;
+  assert.equal(plan.items.map(item=>item.id).join(','),'1,2,3');
+  assert.equal(plan.items[0].after[0].dictionary_value_id,'700002','Value mode keeps the exact ID for the same saved type');
+  assert.equal(plan.items[1].after[0].dictionary_value_id,'700002','Same label with a different ID is an actual same-type change');
+  assert.equal(plan.items[2].after[0].dictionary_value_id,undefined,'Mixed-type values remain label-only for target re-resolution');
+  assert.equal(s.dictionaryIdentities(plan.items[0].after)[0],'ID 700002 в справочнике Ozon');
+  s.rows[1].attributes[1].values[0].dictionary_value_id='';
+  plan=core.planBulk([s.rows[1]],'attribute:20',[exact],s.rows[0].attributes[1],1);
+  assert.equal(plan.items.length,1,'Same label without an ID must receive the explicit ID');
+  s.rows[1].attributes[1].values[0].dictionary_value_id='700002';
+  plan=core.planBulk([s.rows[1]],'attribute:20',[exact],s.rows[0].attributes[1],1);
+  assert.equal(plan.items.length,0);assert.equal(plan.skipped[0].reason,'Значение уже совпадает','Exact label and ID is a no-op');
+
+  s=state();s.rows.forEach(r=>r.selected=true);s.bulkKey='attribute:20';s.bulkMode='copy';s.bulkSource=2;
+  s.previewBulk();plan=s.bulkPlan;
+  assert.equal(plan.items.find(item=>item.id===1).after[0].dictionary_value_id,'700001','Copy mode keeps the source ID for same saved type');
+  assert.equal(plan.items.find(item=>item.id===3).after[0].dictionary_value_id,undefined,'Copy mode re-resolves mixed types by label');
+  s.rows[1].product_type_id=9;
+  s.previewBulk();plan=s.bulkPlan;
+  assert.equal(plan.items.find(item=>item.id===1).after[0].dictionary_value_id,undefined,'A staged source type cannot authorize its old ID');
   s.rows[0].attributes[0].values=[{value:'false'}];
   assert.equal(core.serialize([s.rows[0]],'csrf').get('row_1_attribute_10'),'false');
+  s.rows[0].attributes[1].values=[exact];
+  assert.equal(core.serialize([s.rows[0]],'csrf').get('row_1_attribute_value_id_20'),'700002','A singleton dictionary ID reaches the existing form field');
+  s.rows[0].attributes[1].is_collection=true;s.rows[0].attributes[1].max_values=2;
+  s.rows[0].attributes[1].values=[exact,{value:'Второе',dictionary_value_id:'700003'}];
+  assert.equal(core.serialize([s.rows[0]],'csrf').get('row_1_attribute_value_id_20'),'','Multi-value ID transport remains unsupported');
   s.rows[0].product_type_id=2;
   assert.equal(core.serialize([s.rows[0]],'csrf').get('row_1_attribute_10'),'');
   assert.equal(s.rows[0].attributes[0].values[0].value,'false','Changing type keeps staged input until explicit save');

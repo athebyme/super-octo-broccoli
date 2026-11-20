@@ -4,6 +4,11 @@
     const clone = value => JSON.parse(JSON.stringify(value));
     const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     const identity = item => String(item.attribute_id) + ':' + String(item.complex_id || '0');
+    function tnvedDictionaryIdentity(attributeId, dictionaryValueId) {
+        if (String(attributeId) !== '22232' || dictionaryValueId === undefined ||
+            dictionaryValueId === null || dictionaryValueId === '') return '';
+        return 'ID ' + String(dictionaryValueId) + ' в справочнике Ozon';
+    }
     const empty = value => value === '' || value === null || value === undefined;
     const decimal = value => typeof value === 'string' && /^\d+,\d+$/.test(value.trim()) ? value.trim().replace(',', '.') : value;
     function cleanObject(value) { return Object.fromEntries(Object.entries(value || {}).filter(([, v]) => !empty(v))); }
@@ -201,12 +206,13 @@
             change(index, value) { const next = clone(this.values); next[index] = {value:/^decimal$/i.test(this.definition.data_type) ? decimal(value) : value}; this.$emit('change', next); },
             remove(index) { const next = clone(this.values); next.splice(index, 1); this.$emit(next.length ? 'change' : 'remove', next); },
             add() { this.$emit('change', [...clone(this.values), {value: ''}]); },
+            dictionaryValueIdentity(value) { return tnvedDictionaryIdentity(this.definition.id, value?.dictionary_value_id); },
         },
         template: `<div class="ode-attribute" :data-attribute="definition.id" :data-complex-group-index="groupIndex" :class="{'ode-attribute--ai':aiStatus === 'proposed'}">
             <div class="ode-field-heading"><span>{{ definition.name }} <span v-if="definition.required" class="ode-required" aria-label="Обязательное поле">*</span></span><small v-if="aiStatus === 'proposed'" class="ode-ai-field-badge">Предложено AI · проверьте ниже</small><small v-else-if="aiStatus === 'accepted'" class="ode-ai-field-badge">Принято вами</small><small v-else-if="!definition.editable">Недоступно для изменения</small></div>
             <p v-if="definition.description" class="ode-help">{{ definition.description }}</p>
             <template v-if="definition.dictionary">
-                <div class="ode-value-chips"><span v-for="(value, index) in values" :key="index" class="ode-value-chip">{{ value.value }}<button v-if="!locked" type="button" @click="remove(index)" :aria-label="'Убрать значение ' + value.value">×</button></span><span v-if="!values.length" class="ode-muted">Значение не выбрано</span></div>
+                <div class="ode-value-chips"><span v-for="(value, index) in values" :key="index" class="ode-value-chip"><span class="ode-value-chip-label">{{ value.value }}</span><button v-if="!locked" type="button" @click="remove(index)" :aria-label="'Убрать значение ' + value.value + (dictionaryValueIdentity(value) ? ', ' + dictionaryValueIdentity(value) : '')">×</button><small v-if="dictionaryValueIdentity(value)" class="ode-dictionary-id">{{ dictionaryValueIdentity(value) }}</small></span><span v-if="!values.length" class="ode-muted">Значение не выбрано</span></div>
                 <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="locked || !definition.dictionary_fresh" data-issue-input @click="$emit('dictionary')">Выбрать из справочника</button>
                 <p v-if="!definition.dictionary_fresh" class="ode-help">Справочник требует обновления или проверки администратором. Сохранённые значения остаются в карточке.</p>
             </template>
@@ -454,6 +460,11 @@
                         (focusable(control) ? control : target)?.focus?.();
                     });
                 },
+                dictionaryValueLabel(value) {
+                    const identity = tnvedDictionaryIdentity(this.dictionary.definition?.id, value?.id);
+                    return 'Выбрать значение ' + String(value?.value ?? '') + (identity ? ', ' + identity : '');
+                },
+                dictionaryValueId(value) { return tnvedDictionaryIdentity(this.dictionary.definition?.id, value?.id); },
                 valuesFor(def, groupIndex = null) { const rows = groupIndex === null ? this.form.attributes : this.form.complex_attributes[groupIndex].attributes; return rows.find(row => identity(row) === def.id + ':' + def.complex_id)?.values || []; },
                 setValues(def, values, groupIndex = null) {
                     const rows = groupIndex === null ? this.form.attributes : this.form.complex_attributes[groupIndex].attributes;

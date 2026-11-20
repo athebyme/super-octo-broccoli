@@ -30,6 +30,8 @@
             before:row.base[key], after:current[key],
             beforeLabel:key==='product_type_id' ? row.baseTypeName || 'Не выбран' : display(row.base[key]),
             afterLabel:key==='product_type_id' ? row.product_type_name || 'Не выбран' : display(current[key]),
+            beforeIdentities:dictionaryIdentities(row.base[key]),
+            afterIdentities:dictionaryIdentities(current[key]),
         }));
     }
     function definition(field) {
@@ -42,6 +44,12 @@
         if (value === 'ИСКЛЮЧИТЬ') return 'Исключить из повтора';
         if (value === 'ИСПРАВИТЬ') return 'Исправить';
         return asText(value) || 'Не заполнено';
+    }
+    function dictionaryIdentities(value) {
+        if (!Array.isArray(value)) return [];
+        return value.map(item => item?.dictionary_value_id)
+            .filter(id => typeof id === 'string' && id !== '')
+            .map(id => 'ID '+id+' в справочнике Ozon');
     }
     function serialize(rows, csrf) {
         const form = new URLSearchParams();
@@ -62,7 +70,7 @@
         }
         return form;
     }
-    function planBulk(rows, key, value, sourceField) {
+    function planBulk(rows, key, value, sourceField, sourceTypeId=null) {
         const items = [], skipped = [];
         for (const row of rows) {
             let reason = row.action === 'ИСКЛЮЧИТЬ' ? 'Карточка исключается из повтора' : row.server ? 'Сначала разрешите конфликт' : '';
@@ -76,9 +84,20 @@
             } else if (!reason && key==='schema_cleanup' && !row.cleanup_candidates.length) reason='Нет характеристик для очистки';
             else if (!reason && !fixed.includes(key) && key!=='schema_cleanup' && !key.startsWith('attribute:')) reason='Поле недоступно';
             if (reason) { skipped.push({id:row.draft_id,title:row.title,reason}); continue; }
-            const next = Array.isArray(value) ? value.map(v => ({value:v.value})) : value;
+            const preserveExactDictionaryId = !!field?.dictionary && !!sourceField?.dictionary &&
+                Number.isSafeInteger(sourceTypeId) && sourceTypeId > 0 &&
+                row.base.product_type_id === sourceTypeId &&
+                Array.isArray(value) && value.length === 1 &&
+                typeof value[0]?.dictionary_value_id === 'string' && value[0].dictionary_value_id !== '';
+            const next = Array.isArray(value) ? value.map(v => ({value:v.value,
+                ...(preserveExactDictionaryId ? {dictionary_value_id:value[0].dictionary_value_id} : {})})) : value;
             const before = field ? field.values : row[key];
-            if (equal(before,next) || field?.dictionary && equal(before.map(v=>v.value),next.map(v=>v.value))) { skipped.push({id:row.draft_id,title:row.title,reason:'Значение уже совпадает'}); continue; }
+            const exactValuesMatch = equal(before,next);
+            const dictionaryValueMatches = field?.dictionary && Array.isArray(before) && Array.isArray(next) &&
+                (preserveExactDictionaryId
+                    ? exactValuesMatch
+                    : equal(before.map(v=>v.value),next.map(v=>v.value)));
+            if (exactValuesMatch || dictionaryValueMatches) { skipped.push({id:row.draft_id,title:row.title,reason:'Значение уже совпадает'}); continue; }
             items.push({id:row.draft_id,title:row.title,before:clone(before),after:clone(next)});
         }
         return {key,items,skipped};
@@ -119,7 +138,7 @@
                 loginUrl() { return '/login?next='+encodeURIComponent(global.location.pathname+global.location.search); },
             },
             methods:{
-                display,definition,changes,
+                display,dictionaryIdentities,definition,changes,
                 status(row) { return row.server ? 'Конфликт изменений' : row.error || row.repair_error ? 'Не сохранено' :
                     row.action==='ИСКЛЮЧИТЬ' ? 'Исключена из повтора' : changes(row).length ? 'Есть изменения' :
                     row.status==='ready_to_retry' ? 'Проверена локально' : 'Нужно исправить'; },
@@ -198,14 +217,17 @@
                 previewBulk() {
                     let value=this.bulkKey.startsWith('attribute:') ? this.bulkValues : this.bulkKey==='schema_cleanup' ? this.bulkValue==='true' : this.bulkValue;
                     let sourceField=this.bulkField;
+                    let sourceRow=this.selected.find(r=>sourceField && r.attributes.includes(sourceField));
                     if(this.bulkMode==='copy') {
-                        const row=this.selected.find(r=>r.draft_id===Number(this.bulkSource));
-                        sourceField=row?.attributes.find(f=>'attribute:'+f.external_id===this.bulkKey);
-                        value=sourceField ? sourceField.values : row?.[this.bulkKey];
+                        sourceRow=this.selected.find(r=>r.draft_id===Number(this.bulkSource));
+                        sourceField=sourceRow?.attributes.find(f=>'attribute:'+f.external_id===this.bulkKey);
+                        value=sourceField ? sourceField.values : sourceRow?.[this.bulkKey];
                     }
                     if(value==null || value==='' || Array.isArray(value) && (!value.length || value.some(v=>v.value===''))) {this.error='Сначала задайте значение или выберите заполненную строку.';return;}
                     if(this.bulkKey==='schema_cleanup' && this.bulkMode!=='copy' && !['true','false'].includes(this.bulkValue)){this.error='Выберите действие для очистки.';return;}
-                    this.error='';this.bulkPlan=planBulk(this.selected,this.bulkKey,value,sourceField);
+                    const sourceTypeId=sourceRow && sourceRow.product_type_id===sourceRow.base.product_type_id
+                        ? sourceRow.base.product_type_id : null;
+                    this.error='';this.bulkPlan=planBulk(this.selected,this.bulkKey,value,sourceField,sourceTypeId);
                 },
                 applyBulk() {
                     if(!this.bulkPlan || this.locked)return;

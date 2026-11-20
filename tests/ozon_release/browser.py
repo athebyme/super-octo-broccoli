@@ -45,9 +45,11 @@ requests.sessions.Session.request = forbid_network
 socket.create_connection = forbid_network
 
 from seller_platform import app
-from models import (db, BackgroundJob, MarketplaceAttributeDefinition, MarketplaceCatalogSync,
-                    MarketplaceListing, MarketplaceListingSnapshot, MarketplaceOperation,
-                    MarketplaceProductDraft, SellerMarketplaceAccount)
+from models import (
+    db, BackgroundJob, MarketplaceAttributeDefinition, MarketplaceAttributeValue,
+    MarketplaceCatalogSync, MarketplaceListing, MarketplaceListingSnapshot,
+    MarketplaceOperation, MarketplaceProductDraft, SellerMarketplaceAccount,
+)
 from services.ozon_quality_queue import run_quality_tick
 from tests.ozon_release.seed import seed, USERNAME, PASSWORD, PHOTO, CATEGORIES
 
@@ -136,6 +138,17 @@ def layout(name, widths=(1440,390,320)):
             REPORT['layouts'].append({'name':name,'theme':theme,'width':width})
             if width in (1440,390):
                 page.screenshot(path=str(OUT/f'{name}-{theme}-{width}.png'),animations='disabled')
+    page.set_viewport_size({'width':1440,'height':1000})
+    page.evaluate('document.documentElement.dataset.theme="light"')
+
+
+def dictionary_dialog_fit():
+    for theme in ('light', 'dark'):
+        page.set_viewport_size({'width':320,'height':1000})
+        page.evaluate('(theme)=>document.documentElement.dataset.theme=theme',theme)
+        dialog = page.locator('dialog[open]')
+        assert dialog.evaluate('(element)=>element.scrollWidth<=element.clientWidth+1'), ('dictionary dialog overflow',theme)
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1'), ('dictionary root overflow',theme)
     page.set_viewport_size({'width':1440,'height':1000})
     page.evaluate('document.documentElement.dataset.theme="light"')
 
@@ -400,15 +413,111 @@ try:
         assert response.status==404 and 'Foreign private title' not in page.content()
         passed('foreign_listing_denied_without_data_leak')
 
+        with app.app_context():
+            draft = db.session.get(MarketplaceProductDraft, fixture['draft_id'])
+            original_attributes_json = draft.attributes_json
+            now = datetime.utcnow()
+            tnved = MarketplaceAttributeDefinition(
+                marketplace_id=draft.marketplace_id, product_type_id=draft.product_type_id,
+                external_attribute_id='22232', name='ТН ВЭД коды ЕАЭС', data_type='String',
+                is_required=True, dictionary_id='synthetic-tnved-22232', max_value_count=1,
+                is_available=True, is_enabled=True, last_seen_at=now,
+                values_synced_at=now, values_sync_status='success',
+                values_snapshot_hash='synthetic-tnved-duplicate-values', values_count=2,
+            )
+            marking = MarketplaceAttributeDefinition(
+                marketplace_id=draft.marketplace_id, product_type_id=draft.product_type_id,
+                external_attribute_id='23536', name='Маркировка', data_type='Boolean',
+                is_required=True, max_value_count=1, is_available=True, is_enabled=True,
+                last_seen_at=now,
+            )
+            db.session.add_all([tnved, marking]); db.session.flush()
+            duplicate_value = 'SYNTHETIC-22232-DUPLICATE'
+            db.session.add_all([
+                MarketplaceAttributeValue(
+                    marketplace_id=draft.marketplace_id, product_type_id=draft.product_type_id,
+                    attribute_id=tnved.id, external_value_id='700001', value=duplicate_value,
+                    value_normalized=duplicate_value.casefold(), is_available=True, last_seen_at=now,
+                ),
+                MarketplaceAttributeValue(
+                    marketplace_id=draft.marketplace_id, product_type_id=draft.product_type_id,
+                    attribute_id=tnved.id, external_value_id='700002', value=duplicate_value,
+                    value_normalized=duplicate_value.casefold(), is_available=True, last_seen_at=now,
+                ),
+            ])
+            db.session.commit()
+
         goto('/marketplaces/drafts/'+str(fixture['draft_id']), '#ozon-draft-editor:not([v-cloak])')
         page.locator('#ode-name').wait_for()
+        page.locator('.ode-tabs button').filter(has_text='Характеристики').click()
+        tnved_field = page.locator('.ode-attribute[data-attribute="22232"]')
+        marking_field = page.locator('.ode-attribute[data-attribute="23536"]')
+        expect(tnved_field).to_be_visible()
+        expect(marking_field).to_be_visible()
+        expect(tnved_field).to_contain_text('Значение не выбрано')
+        tnved_trigger = tnved_field.locator('[data-issue-input]')
+        tnved_trigger.focus()
+        page.keyboard.press('Enter')
+        dictionary_dialog = page.locator('dialog[open]')
+        results = dictionary_dialog.locator('.ode-dictionary-results button')
+        expect(results).to_have_count(2)
+        first_name = 'Выбрать значение SYNTHETIC-22232-DUPLICATE, ID 700001 в справочнике Ozon'
+        chosen_name = 'Выбрать значение SYNTHETIC-22232-DUPLICATE, ID 700002 в справочнике Ozon'
+        expect(page.get_by_role('button', name=first_name, exact=True)).to_be_visible()
+        expect(page.get_by_role('button', name=chosen_name, exact=True)).to_be_visible()
+        assert results.nth(0).inner_text() == (
+            'SYNTHETIC-22232-DUPLICATE\nID 700001 в справочнике Ozon\n+'
+        )
+        assert results.nth(1).inner_text() == (
+            'SYNTHETIC-22232-DUPLICATE\nID 700002 в справочнике Ozon\n+'
+        )
+        layout('tnved-dictionary-identity-dialog', widths=(390,320))
+        dictionary_dialog_fit()
+        page.keyboard.press('Tab')
+        page.keyboard.press('Tab')
+        assert page.evaluate('document.activeElement?.getAttribute("aria-label")') == chosen_name
+        assert results.nth(1).evaluate('(element)=>element===document.activeElement&&element.getBoundingClientRect().height>=44&&getComputedStyle(element).outlineStyle!=="none"')
+        page.keyboard.press('Enter')
+        expect(dictionary_dialog).to_have_count(0)
+        assert page.evaluate('document.activeElement?.matches(".ode-attribute[data-attribute=\\\"22232\\\"] [data-issue-input]")')
+        expect(tnved_field.locator('.ode-dictionary-id')).to_have_text('ID 700002 в справочнике Ozon')
+        marking_field.locator('select[aria-label="Маркировка"]').select_option('false')
+        layout('tnved-dictionary-identity-selected', widths=(390,320))
+        page.locator('.ode-tabs button').filter(has_text='Основное').click()
         page.locator('#ode-name').fill('Проверенный синтетический черновик')
         page.get_by_role('button',name='Сохранить',exact=True).click()
         page.get_by_text('Все изменения сохранены',exact=True).wait_for()
+        with app.app_context():
+            draft = db.session.get(MarketplaceProductDraft, fixture['draft_id'])
+            saved_attributes = json.loads(draft.attributes_json)
+            saved_tnved = next(row for row in saved_attributes if row['attribute_id'] == '22232')
+            saved_marking = next(row for row in saved_attributes if row['attribute_id'] == '23536')
+            assert saved_tnved['values'] == [{'dictionary_value_id':'700002', 'value':duplicate_value}]
+            assert saved_marking['values'] == [{'value':'false'}]
         page.reload();page.locator('#ode-name').wait_for()
         assert page.locator('#ode-name').input_value()=='Проверенный синтетический черновик'
+        page.locator('.ode-tabs button').filter(has_text='Характеристики').click()
+        expect(page.locator('.ode-attribute[data-attribute="22232"] .ode-dictionary-id')).to_have_text('ID 700002 в справочнике Ozon')
+        assert page.locator('.ode-attribute[data-attribute="23536"] select[aria-label="Маркировка"]').input_value() == 'false'
         assert page.get_by_role('button',name='Отправить в Ozon',exact=False).is_disabled()
-        layout('draft-editor');passed('real_draft_save_csrf_reload_and_publication_gate')
+        page.locator('.ode-tabs button').filter(has_text='Основное').click()
+        layout('draft-editor');passed('duplicate_tnved_dictionary_identity_manual_choice_and_marking_false')
+        passed('real_draft_save_csrf_reload_and_publication_gate')
+        with app.app_context():
+            draft = db.session.get(MarketplaceProductDraft, fixture['draft_id'])
+            tnved = MarketplaceAttributeDefinition.query.filter_by(
+                marketplace_id=draft.marketplace_id, product_type_id=draft.product_type_id,
+                external_attribute_id='22232',
+            ).one()
+            marking = MarketplaceAttributeDefinition.query.filter_by(
+                marketplace_id=draft.marketplace_id, product_type_id=draft.product_type_id,
+                external_attribute_id='23536',
+            ).one()
+            MarketplaceAttributeValue.query.filter_by(attribute_id=tnved.id).delete(synchronize_session=False)
+            db.session.delete(tnved)
+            db.session.delete(marking)
+            draft.attributes_json = original_attributes_json
+            db.session.commit()
 
         goto('/marketplaces/quality?account_id='+str(aid), '#oqw-app:not([v-cloak])')
         quality_loaded();assert page.locator('article.oqw-row').count()==25

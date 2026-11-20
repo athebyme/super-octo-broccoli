@@ -34,9 +34,11 @@ def no_network(*args,**kwargs):
 requests.sessions.Session.request=no_network
 socket.create_connection=no_network
 from seller_platform import app
-from models import db,MarketplaceProductDraft,MarketplaceOperation
+from models import (db,BackgroundJob,MarketplaceAttributeDefinition,MarketplaceAttributeValue,
+                    MarketplaceProductDraft,MarketplaceOperation)
 from tests.ozon_release.bulk_repair_seed import bulk_seed
 from tests.ozon_release.seed import USERNAME,PASSWORD
+from services.ozon_bulk_upload import OzonBulkUploadService
 
 app.config.update(TESTING=True,WTF_CSRF_ENABLED=True,SESSION_COOKIE_SECURE=False)
 fixture=bulk_seed(app)
@@ -44,6 +46,8 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 server=make_server('127.0.0.1',0,app,threaded=True);base='http://127.0.0.1:'+str(server.server_port)
 worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
 path='/marketplaces/ozon/uploads/'+fixture['repair_job']+'/repair'
+tnved_job_uid='ozon-upload-'+'c'*32
+tnved_path='/marketplaces/ozon/uploads/'+tnved_job_uid+'/repair'
 manifest=json.loads((ASSETS/'manifest.json').read_text())
 for item in manifest.values():assert hashlib.sha256((ASSETS/item['file']).read_bytes()).hexdigest()==item['sha256']
 svg=b'<svg xmlns="http://www.w3.org/2000/svg" width="360" height="480"><rect width="360" height="480" fill="#eee9df"/><rect x="80" y="85" width="200" height="300" rx="12" fill="#678b9e"/><circle cx="180" cy="235" r="60" fill="#faf9f7"/></svg>'
@@ -54,8 +58,8 @@ def bridge(route):
     request=route.request;u=urlsplit(request.url)
     if u.hostname=='127.0.0.1' and u.port==server.server_port:
         if request.method not in ('GET','HEAD'):
-            assert u.path in ('/login',path+'/apply'),u.path
-            if u.path==path+'/apply':report['posts']+=1
+            assert u.path in ('/login',path+'/apply',tnved_path+'/apply'),u.path
+            if u.path in (path+'/apply',tnved_path+'/apply'):report['posts']+=1
         if u.path==path and request.headers.get('accept')=='application/json':
             if fault['mode']=='offline':route.abort();return
             if fault['mode']=='session':route.fulfill(status=401,json={'success':False,'error':'Expired'});return
@@ -242,6 +246,84 @@ try:
             saved=db.session.get(MarketplaceProductDraft,fixture['repair_drafts'][2])
             assert json.loads(saved.content_json)['description']=='Правка сохранится после повторного входа.'
         passed('real_relogin_refreshes_csrf_preserves_dirty_input_and_saves')
+        with app.app_context():
+            draft_ids=[fixture['repair_drafts'][0],fixture['repair_drafts'][6]]
+            source_draft=db.session.get(MarketplaceProductDraft,draft_ids[0])
+            product_type=source_draft.product_type
+            target_draft=db.session.get(MarketplaceProductDraft,draft_ids[1])
+            assert product_type is not None and target_draft.product_type_id==source_draft.product_type_id
+            tnved=MarketplaceAttributeDefinition(
+                marketplace_id=product_type.marketplace_id,
+                product_type_id=product_type.id,
+                external_attribute_id='22232',
+                name='ТН ВЭД',
+                data_type='String',
+                is_required=True,
+                dictionary_id='synthetic-duplicate-tnved',
+                max_value_count=1,
+                is_available=True,
+                is_enabled=True,
+                restriction_value_ids_json=json.dumps(['700001','700002']),
+                last_seen_at=datetime.utcnow(),
+                values_synced_at=datetime.utcnow(),
+                values_sync_status='success',
+                values_snapshot_hash='synthetic-duplicate-tnved-values',
+                values_version=1,
+                values_count=2,
+            )
+            db.session.add(tnved);db.session.flush()
+            for external_id in ('700001','700002'):
+                db.session.add(MarketplaceAttributeValue(
+                    marketplace_id=product_type.marketplace_id,
+                    product_type_id=product_type.id,
+                    attribute_id=tnved.id,
+                    external_value_id=external_id,
+                    value='3304990000',
+                    value_normalized='3304990000',
+                    is_available=True,
+                    last_seen_at=datetime.utcnow(),
+                ))
+            now=datetime.utcnow().isoformat()
+            run=BackgroundJob(job_uid=tnved_job_uid,seller_id=fixture['seller_id'],
+                job_type=OzonBulkUploadService.JOB_TYPE,status='completed',total=len(draft_ids))
+            progress={'version':OzonBulkUploadService.DOCUMENT_VERSION,'source':'products',
+                'account_id':fixture['account_id'],'account_label':'Synthetic TN VED','created_at':now,
+                'updated_at':now,'items':[]}
+            for draft_id in draft_ids:
+                draft=db.session.get(MarketplaceProductDraft,draft_id)
+                progress['items'].append({'imported_product_id':draft.imported_product_id,'draft_id':draft.id,
+                    'offer_id':draft.offer_id,'title':draft.imported_product.title,'action':'create',
+                    'status':'needs_input','code':'required_attribute_missing',
+                    'message':'Выберите точное значение ТН ВЭД.','updated_at':now})
+            OzonBulkUploadService._store_progress(run,progress)
+            db.session.add(run);db.session.flush();OzonBulkUploadService._persist(run,progress)
+            db.session.commit()
+        page.goto(base+tnved_path);page.locator('#ozon-bulk-repair:not([v-cloak]) article').first.wait_for()
+        for draft_id in draft_ids:
+            page.locator('article[data-draft="'+str(draft_id)+'"]').get_by_role('checkbox').check()
+        page.get_by_role('button',name='Заполнить поле',exact=True).click()
+        dialog=page.get_by_role('dialog');dialog.get_by_label('Поле',exact=True).select_option('attribute:22232')
+        dialog.get_by_role('button',name='Выбрать из справочника',exact=True).click()
+        options=dialog.locator('.orb-inline-picker .orb-picker-results button')
+        options.first.wait_for();assert options.count()==2
+        assert 'ID 700001 в справочнике Ozon' in options.nth(0).inner_text()
+        assert 'ID 700002 в справочнике Ozon' in options.nth(1).inner_text()
+        options.nth(1).click();dialog.get_by_role('button',name='Посмотреть изменения',exact=True).click()
+        assert 'Будет заполнено: 2' in dialog.inner_text()
+        assert dialog.locator('.orb-review-list').inner_text().count('ID 700002 в справочнике Ozon')==2
+        dialog.get_by_role('button',name='Заполнить в форме',exact=True).click()
+        page.get_by_role('button',name='Проверить изменения',exact=True).click()
+        review=page.get_by_role('dialog')
+        assert 'ID 700002 в справочнике Ozon' in review.inner_text()
+        before_posts=report['posts'];review.get_by_role('button',name='Сохранить и проверить',exact=True).click()
+        page.wait_for_function("document.querySelector('#ozon-bulk-repair section[aria-busy]')?.getAttribute('aria-busy')==='false'")
+        assert report['posts']==before_posts+1
+        with app.app_context():
+            for draft_id in draft_ids:
+                saved=db.session.get(MarketplaceProductDraft,draft_id)
+                attrs={item['attribute_id']:item['values'] for item in json.loads(saved.attributes_json)}
+                assert attrs['22232']==[{'dictionary_value_id':'700002','value':'3304990000'}]
+        passed('same_type_tnved_bulk_keeps_explicit_duplicate_label_id_through_local_save')
         with app.app_context():assert MarketplaceOperation.query.count()==0
         assert report['provider_attempts']==0 and not report['unexpected_http'] and not report['external']
         report['status']='passed';browser.close()

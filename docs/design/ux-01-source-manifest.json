@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-20T12:25:51.834638+00:00",
+  "generated_at": "2026-11-20T12:56:36.182710+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "4380301cbfe961b33b8db7c1e1f35cbd1e4d7e2e10d339c83783c10571d8745e"
+      "sha256": "5c65900ef15c24af72cc61df137455de951e417618c6550fbee4543926a182fe"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -433,7 +433,7 @@
     },
     {
       "path": "docs/design/ozon-fulfillment-write-contracts.md",
-      "sha256": "92b1113eb11305b1074fb1e1b440c6dc160cd25c4b9eca3bb6c39058f6d6a9ed"
+      "sha256": "6592501fedb4b4c0a1405eaa654e7b79e4b00d2b45c73d02b3b46f79f8a2bbb3"
     },
     {
       "path": "docs/design/ozon-inbox-durable-refresh.md",
@@ -449,7 +449,7 @@
     },
     {
       "path": "docs/design/ozon-prices.md",
-      "sha256": "06496c4dbe74b52b926630389a1f490a209de44fe8ccea20d573b75901584779"
+      "sha256": "1a440422cae92de7280d7b4ab53076b0040d3e1fd732b98046bec41badcc3823"
     },
     {
       "path": "docs/design/ozon-quality-workspace.md",
@@ -2609,7 +2609,7 @@
     },
     {
       "path": "static/ozon-bulk-repair-vue.js",
-      "sha256": "8bf4c0afecbb4cd62f59aedcc84061b780cef0ed7ea0b0375c049f243f9455a8"
+      "sha256": "1ae808479f51e7cec415675c470e4dbc126eda58ae62e7bc19da5a17048a7866"
     },
     {
       "path": "static/ozon-bulk-repair.css",
@@ -2641,11 +2641,11 @@
     },
     {
       "path": "static/ozon-draft-editor.css",
-      "sha256": "946ff0e126912ae1b0af259eb9dd3eee69bcb0b5ff2fd9ea6ba96be0e989dbe3"
+      "sha256": "2cefca1bc11afb61e39f3e653afdecec4a35cff8a6b7a8d15b688795b84afb15"
     },
     {
       "path": "static/ozon-draft-editor.js",
-      "sha256": "9deb9b136b1589e7f5a2ee16651f967e804965a0050d2aa645af4d2f10582642"
+      "sha256": "11c67ed4b845d0ee7c4c5bb0e82e186231379f8a3862fdf36e0ac00955bfa195"
     },
     {
       "path": "static/ozon-drafts-vue.js",
@@ -3121,7 +3121,7 @@
     },
     {
       "path": "templates/marketplace_draft_detail.html",
-      "sha256": "4b5f4da9280b38078e5c46253e582f23b5922c872c457da17664d924c1679734"
+      "sha256": "b61090053d792b380097d8bb07e4266697213f224eac68fdc2ee43451cec8542"
     },
     {
       "path": "templates/marketplace_draft_detail_classic.html",
@@ -3217,7 +3217,7 @@
     },
     {
       "path": "templates/ozon_bulk_repair.html",
-      "sha256": "1b4a95fe657e7d049d8a682b5a4d1ca35c4e336feee5baad68d520121c879d14"
+      "sha256": "d8ca9aaff1ca6a11dba23b9ed283b0f79e244b03d80de7b7f384a8030c0da7ae"
     },
     {
       "path": "templates/ozon_bulk_repair_classic.html",
@@ -3605,11 +3605,11 @@
     },
     {
       "path": "tests/ozon_release/browser.py",
-      "sha256": "cac79adeab5b11043cd1f4738f687ffdba8877a62ed85bb01eb6d7905e330f79"
+      "sha256": "f7f793d92d04c8443801e33ee60aedbe803a3baf363d77e794583e2feb1d5fdd"
     },
     {
       "path": "tests/ozon_release/bulk_repair_browser.py",
-      "sha256": "4f3b7cf5b395337970346b5245eda74b14ef5be6a197f77dcc5cab16194664ac"
+      "sha256": "c1082e5d0e3d51faf116d96cddec56b776207bd6ef3a6c2a7902887577d95944"
     },
     {
       "path": "tests/ozon_release/bulk_repair_seed.py",
@@ -4381,7 +4381,7 @@
     },
     {
       "path": "tests/test_ozon_bulk_repair_ui.py",
-      "sha256": "932f74df3b1f1f715849ea4bfd671df845e14d93cba3bf9720dc77b700cf06c4"
+      "sha256": "80ba523b3dcbc27636650349f5cae02ede4e41488c586b0d12f65115713d5c46"
     },
     {
       "path": "tests/test_ozon_bulk_repair_workspace.py",
@@ -5020,5 +5020,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "d8b11b799652c6cfe0b1d0cb7cb1d135d040277c5dc86456c1897e7d5aabb59e"
+  "aggregate_sha256": "bb8890f89d9499301a570505e0616a7c2c34a74ce6e3433361a8004283f83bf7"
 }
