@@ -73,6 +73,7 @@ from services.ozon_product_state import (
     OzonProductStateContract,
     OzonProductStateError,
 )
+from services.ozon_reference_service import OzonReferenceService
 from services import ozon_write_quarantine as write_quarantine
 from services.ozon_quarantine_scope import incoming_scope
 from services.ozon_catalog_operation_fence import (
@@ -1649,6 +1650,176 @@ class MarketplacePublicationService:
         return None if errors else rollback_payload
 
     @classmethod
+    def validate_update_rollback_current_schema(
+        cls,
+        operation: MarketplaceOperation,
+        *,
+        payload: Optional[dict] = None,
+        now: Optional[datetime] = None,
+    ) -> dict:
+        """Check the exact saved body against current local Ozon references."""
+        def conflict(message: str, errors: Optional[list] = None) -> dict:
+            return {
+                "valid": False,
+                "code": "update_rollback_schema_conflict",
+                "message": message,
+                "errors": errors or [],
+            }
+
+        if operation is None or operation.operation_kind not in {
+            "product_update", "product_update_rollback",
+        }:
+            return conflict("Для операции нет full-state update rollback")
+
+        parent = (
+            operation if operation.operation_kind == "product_update"
+            else operation.parent_operation
+        )
+        if (
+            parent is None
+            or parent.operation_kind != "product_update"
+            or parent.snapshot is None
+            or parent.draft is None
+            or parent.listing is None
+        ):
+            return conflict("Rollback snapshot или точная карточка отсутствует")
+
+        try:
+            rollback_state = json.loads(parent.snapshot.rollback_state_json or "")
+            if not isinstance(rollback_state, dict):
+                return conflict("Rollback snapshot повреждён")
+            stored_payload = rollback_state.get("payload")
+            parent_summary = cls._operation_summary(parent)
+            if payload is None:
+                payload = (
+                    cls._submitted_payload(operation)
+                    if operation.operation_kind == "product_update_rollback"
+                    else stored_payload
+                )
+            canonical_payload = OzonProductStateContract.canonical_payload(payload)
+            if operation.operation_kind == "product_update":
+                if canonical_payload != OzonProductStateContract.canonical_payload(
+                    stored_payload
+                ):
+                    return conflict(
+                        "Rollback payload отличается от exact prior-state snapshot"
+                    )
+        except (
+            MarketplacePublicationError, OzonProductStateError,
+            OzonProductImportPayloadError, TypeError, ValueError,
+        ):
+            return conflict("Rollback snapshot, identity или payload повреждены")
+
+        draft = parent.draft
+        listing = parent.listing
+        item = canonical_payload["items"][0]
+        expected_product_id = rollback_state.get("product_id")
+        expected_offer_id = rollback_state.get("offer_id")
+        expected_type_id = parent_summary.get("product_type_id")
+        if (
+            not isinstance(expected_product_id, (str, int))
+            or str(expected_product_id) != listing.external_product_id
+            or not isinstance(expected_offer_id, str)
+            or expected_offer_id != listing.offer_id
+            or item.get("offer_id") != expected_offer_id
+            or not isinstance(expected_type_id, int)
+            or isinstance(expected_type_id, bool)
+            or str(parent_summary.get("external_product_id"))
+            != listing.external_product_id
+            or draft.seller_id != parent.seller_id
+            or draft.account_id != parent.account_id
+            or draft.marketplace_id != parent.marketplace_id
+            or draft.product_type_id != expected_type_id
+            or (
+                operation is not parent
+                and (
+                    operation.parent_operation_id != parent.id
+                    or operation.seller_id != parent.seller_id
+                    or operation.account_id != parent.account_id
+                    or operation.draft_id != parent.draft_id
+                    or operation.listing_id != parent.listing_id
+                )
+            )
+            or listing.seller_id != parent.seller_id
+            or listing.account_id != parent.account_id
+            or listing.marketplace_id != parent.marketplace_id
+            or listing.id != parent_summary.get("listing_id")
+        ):
+            return conflict("Rollback identity карточки или типа изменилась")
+
+        with db.session.no_autoflush:
+            product_type = db.session.query(MarketplaceProductType).options(
+                joinedload(MarketplaceProductType.category),
+                joinedload(MarketplaceProductType.marketplace),
+            ).filter_by(
+                id=expected_type_id,
+            ).first()
+            if product_type is None:
+                return conflict("Точный Ozon product type больше не доступен")
+
+            category = product_type.category
+            marketplace = product_type.marketplace
+            if (
+                marketplace is None
+                or marketplace.code != "ozon"
+                or product_type.marketplace_id != parent.marketplace_id
+                or category is None
+                or category.marketplace_id != parent.marketplace_id
+                or not category.is_available
+                or not product_type.is_available
+                or str(item.get("type_id")) != product_type.external_type_id
+                or str(item.get("description_category_id"))
+                != category.external_category_id
+            ):
+                return conflict(
+                    "Текущая Ozon schema больше не совпадает с точным type/category "
+                    "сохранённого rollback"
+                )
+            if not OzonReferenceService.reference_is_fresh(
+                product_type,
+                now=now,
+            ):
+                return conflict(
+                    "Актуальная Ozon schema устарела; синхронизируйте category/type "
+                    "и schema перед rollback"
+                )
+
+            try:
+                documents = OzonProductStateContract.draft_documents(
+                    canonical_payload
+                )
+                errors: list[dict] = []
+                MarketplaceDraftService._validate_attributes(
+                    product_type=product_type,
+                    attributes=documents["attributes"],
+                    complex_groups=documents["complex_attributes"],
+                    errors=errors,
+                )
+            except (
+                OzonProductStateError, OzonProductImportPayloadError,
+                KeyError, TypeError, ValueError,
+            ):
+                return conflict(
+                    "Rollback payload невозможно проверить по текущей Ozon schema"
+                )
+
+        if errors:
+            bounded_errors = [
+                {
+                    "code": cls._safe_text(error.get("code"), maximum=80),
+                    "field": cls._safe_text(error.get("field"), maximum=160),
+                }
+                for error in errors[:8]
+                if isinstance(error, dict)
+            ]
+            return conflict(
+                "Сохранённое rollback-состояние не проходит текущую official "
+                "Ozon schema; проверьте обязательные поля и справочники",
+                bounded_errors,
+            )
+        return {"valid": True, "code": None, "message": None, "errors": []}
+
+    @classmethod
     def _mark_update_already_current(
         cls,
         operation: MarketplaceOperation,
@@ -2060,6 +2231,24 @@ class MarketplacePublicationService:
                 now=now,
             )
             return False
+
+        if operation.operation_kind == "product_update_rollback":
+            # _live_preflight committed its before-state. Quota read does not
+            # mutate ORM rows, so the schema check can refresh current refs
+            # without discarding pending operation changes.
+            db.session.expire_all()
+            schema_validation = cls.validate_update_rollback_current_schema(
+                operation,
+                now=now,
+            )
+            if not schema_validation["valid"]:
+                cls._mark_failed(
+                    operation,
+                    code=schema_validation["code"],
+                    message=schema_validation["message"],
+                    now=now,
+                )
+                return False
 
         locally_reserved = db.session.query(
             func.coalesce(func.sum(MarketplaceOperation.quota_reserved), 0)
@@ -3320,28 +3509,6 @@ class MarketplacePublicationService:
             raise MarketplacePublicationConflict(
                 "Для этой операции нет доступного full-state rollback"
             )
-        try:
-            rollback_state = json.loads(parent.snapshot.rollback_state_json)
-        except (TypeError, json.JSONDecodeError):
-            rollback_state = None
-        if not isinstance(rollback_state, dict):
-            raise MarketplacePublicationConflict("Rollback snapshot повреждён")
-        payload = rollback_state.get("payload")
-        expected_live_fingerprint = rollback_state.get(
-            "expected_live_fingerprint"
-        )
-        if (
-            not isinstance(payload, dict)
-            or not isinstance(expected_live_fingerprint, str)
-            or len(expected_live_fingerprint) != 64
-        ):
-            raise MarketplacePublicationConflict("Rollback snapshot повреждён")
-        try:
-            OzonProductStateContract.canonical_payload(payload)
-        except OzonProductStateError as exc:
-            raise MarketplacePublicationConflict(
-                "Rollback full payload больше не проходит contract validation"
-            ) from exc
 
         current_time = now or datetime.utcnow()
         account_id = parent.account_id
@@ -3371,6 +3538,38 @@ class MarketplacePublicationService:
                 raise MarketplacePublicationConflict(
                     "Rollback state изменился параллельно"
                 )
+            try:
+                rollback_state = json.loads(
+                    parent.snapshot.rollback_state_json or ""
+                )
+            except (TypeError, json.JSONDecodeError):
+                rollback_state = None
+            if not isinstance(rollback_state, dict):
+                raise MarketplacePublicationConflict(
+                    "Rollback snapshot повреждён"
+                )
+            payload = rollback_state.get("payload")
+            expected_live_fingerprint = rollback_state.get(
+                "expected_live_fingerprint"
+            )
+            if (
+                not isinstance(payload, dict)
+                or not isinstance(expected_live_fingerprint, str)
+                or len(expected_live_fingerprint) != 64
+            ):
+                raise MarketplacePublicationConflict("Rollback snapshot повреждён")
+            schema_validation = cls.validate_update_rollback_current_schema(
+                parent,
+                payload=payload,
+                now=current_time,
+            )
+            if not schema_validation["valid"]:
+                error = MarketplacePublicationConflict(
+                    schema_validation["message"]
+                )
+                error.code = schema_validation["code"]
+                error.validation = {"errors": schema_validation["errors"]}
+                raise error
             _, resolved_adapter, resolved_credentials = (
                 cls._account_adapter_credentials(
                     seller_id=seller_id,

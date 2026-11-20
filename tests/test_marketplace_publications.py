@@ -4778,6 +4778,13 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
         self.assertEqual(json.loads(listing.stock_summary_json), {"preserve": True})
         self.assertEqual(listing.title, "Безопасный товар")
 
+        # A newer official schema version may leave the exact payload valid.
+        # Do not bind rollback solely to its parent's old schema version/hash.
+        self.product_type.attributes_version += 1
+        self.product_type.attributes_schema_hash = "schema-hash-v4"
+        self.product_type.attributes_synced_at = datetime.utcnow()
+        db.session.commit()
+
         rollback = MarketplacePublicationService.start_update_rollback(
             seller_id=self.seller.id,
             operation_id=completed.id,
@@ -4806,6 +4813,80 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
         db.session.refresh(completed.snapshot)
         self.assertEqual(completed.snapshot.rollback_status, "succeeded")
         self.assertEqual(len(adapter.submitted_payloads), 2)
+
+    def test_update_rollback_revalidates_schema_after_quota_read(self):
+        prior = self.prior_payload()
+        self.attach_listing(prior)
+        adapter = SyntheticFullStateAdapter(prior)
+        completed = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=self.start_update(
+                adapter,
+                key="product-update-key-rollback-schema-race",
+            ).id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+        )
+        self.assertEqual(completed.status, "succeeded")
+        self.assertEqual(completed.snapshot.rollback_status, "available")
+        writes_before_rollback = len(adapter.submitted_payloads)
+
+        original_limits = adapter.get_operation_limits
+        schema_change_applied = False
+
+        def get_limits_then_change_schema(credentials):
+            nonlocal schema_change_applied
+            response = original_limits(credentials)
+            if schema_change_applied:
+                return response
+            schema_change_applied = True
+            now = datetime.utcnow()
+            definition = MarketplaceAttributeDefinition(
+                marketplace_id=self.marketplace.id,
+                product_type_id=self.product_type.id,
+                external_attribute_id="22601",
+                name="Новый обязательный признак",
+                data_type="String",
+                is_required=True,
+                dictionary_id="dictionary-22601",
+                max_value_count=1,
+                is_collection=False,
+                is_available=True,
+                is_enabled=True,
+                last_seen_at=now,
+                values_synced_at=now,
+                values_sync_status="success",
+                values_snapshot_hash="values-22601-v2",
+                values_version=2,
+                values_count=1,
+            )
+            db.session.add(definition)
+            self.product_type.attributes_version += 1
+            self.product_type.attributes_schema_hash = "schema-hash-v2"
+            self.product_type.attributes_count += 1
+            self.product_type.required_attributes_count += 1
+            self.product_type.attributes_synced_at = now
+            db.session.commit()
+            return response
+
+        adapter.get_operation_limits = get_limits_then_change_schema
+        rollback = MarketplacePublicationService.start_update_rollback(
+            seller_id=self.seller.id,
+            operation_id=completed.id,
+            expected_version=completed.version,
+            idempotency_key="product-update-rollback-schema-race",
+            created_by_user_id=self.user.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+        )
+
+        self.assertTrue(schema_change_applied)
+        self.assertEqual(rollback.status, "failed")
+        self.assertEqual(rollback.attempt_count, 0)
+        self.assertEqual(rollback.error_code, "update_rollback_schema_conflict")
+        self.assertEqual(len(adapter.submitted_payloads), writes_before_rollback)
+        db.session.refresh(completed.snapshot)
+        self.assertEqual(completed.snapshot.rollback_status, "conflict")
 
     def test_update_rollback_drift_fails_before_second_write(self):
         prior = self.prior_payload()

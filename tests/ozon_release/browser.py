@@ -45,8 +45,9 @@ requests.sessions.Session.request = forbid_network
 socket.create_connection = forbid_network
 
 from seller_platform import app
-from models import (db, BackgroundJob, MarketplaceCatalogSync, MarketplaceOperation,
-                    MarketplaceListing, MarketplaceProductDraft, SellerMarketplaceAccount)
+from models import (db, BackgroundJob, MarketplaceAttributeDefinition, MarketplaceCatalogSync,
+                    MarketplaceListing, MarketplaceListingSnapshot, MarketplaceOperation,
+                    MarketplaceProductDraft, SellerMarketplaceAccount)
 from services.ozon_quality_queue import run_quality_tick
 from tests.ozon_release.seed import seed, USERNAME, PASSWORD, PHOTO, CATEGORIES
 
@@ -141,6 +142,81 @@ def layout(name, widths=(1440,390,320)):
 
 def quality_loaded():
     page.wait_for_function("document.querySelector('#oqw-app:not([v-cloak]) section[aria-busy]')?.getAttribute('aria-busy')==='false'")
+
+
+def exercise_product_rollback_review():
+    with app.app_context():
+        draft = db.session.get(MarketplaceProductDraft, fixture['draft_id'])
+        listing = db.session.get(MarketplaceListing, fixture['listing_ids'][0])
+        draft.published_listing_id = listing.id
+        scope = {'seller_id': listing.seller_id, 'marketplace_id': listing.marketplace_id,
+                 'account_id': listing.account_id, 'draft_id': draft.id, 'listing_id': listing.id}
+        summary = json.dumps({'offer_id': listing.offer_id, 'listing_id': listing.id,
+                              'product_type_id': listing.product_type_id,
+                              'external_product_id': listing.external_product_id})
+        parent = MarketplaceOperation(**scope, operation_kind='product_update', status='succeeded',
+                                      request_fingerprint='a' * 64, contract_version='fixture',
+                                      idempotency_key='synthetic-checked-rollback-parent',
+                                      request_summary_json=summary, draft_version=draft.version)
+        db.session.add(parent)
+        db.session.flush()
+        item = {'offer_id': listing.offer_id, 'name': 'Сохранённое название',
+                'description_category_id': int(listing.external_category_id),
+                'type_id': int(listing.external_type_id), 'price': '1000', 'vat': '0.2',
+                'currency_code': 'RUB', 'width': 100, 'height': 120, 'depth': 80,
+                'weight': 300, 'dimension_unit': 'mm', 'weight_unit': 'g', 'images': [PHOTO],
+                'attributes': [{'id': 4191, 'complex_id': 0, 'values': [{'value': 'Сохранённое описание'}]}],
+                'complex_attributes': []}
+        snapshot = MarketplaceListingSnapshot(
+            **scope, operation_id=parent.id, snapshot_kind='product_update',
+            rollback_status='available', submitted_fingerprint='a' * 64, confirmed_fingerprint='a' * 64,
+            source_fingerprint=draft.source_fact_hash, submitted_state_json='{}',
+            rollback_state_json=json.dumps({'payload': {'items': [item]}, 'expected_live_fingerprint': 'a' * 64,
+                                            'offer_id': listing.offer_id, 'product_id': listing.external_product_id}))
+        db.session.add(snapshot)
+        db.session.commit()
+        operation_id, type_id = parent.id, listing.product_type_id
+
+    mutation_count = len(REPORT['mutations'])
+    app.config['MARKETPLACE_OZON_PUBLICATION_ENABLED'] = True
+    path = f'/marketplaces/operations/{operation_id}'
+    goto(path, 'main h1')
+    restore = page.get_by_role('button', name='Восстановить предыдущее состояние', exact=True)
+    expect(restore).to_be_visible()
+    with app.app_context():
+        db.session.add(MarketplaceAttributeDefinition(
+            marketplace_id=scope['marketplace_id'], product_type_id=type_id,
+            external_attribute_id='22232', name='ТН ВЭД коды ЕАЭС', data_type='String',
+            is_required=True, max_value_count=1, is_available=True, is_enabled=True))
+        db.session.commit()
+    goto(path, 'main h1')
+    expect(restore).to_have_count(0)
+    rollback_section = page.get_by_role('heading', name='Снимок состояния и откат').locator('..').locator('..')
+    expect(rollback_section).to_contain_text(re.compile('требовани|схем', re.IGNORECASE))
+    layout('product-rollback-schema-changed', widths=(1440, 320))
+    with app.app_context():
+        parent = db.session.get(MarketplaceOperation, operation_id)
+        assert parent.snapshot.rollback_status == 'available'
+        assert MarketplaceOperation.query.count() == 1
+        child = MarketplaceOperation(**scope, parent_operation_id=parent.id,
+                                     operation_kind='product_update_rollback', status='submitted',
+                                     request_fingerprint='b' * 64, contract_version='fixture',
+                                     idempotency_key='synthetic-checked-rollback-child', request_summary_json=summary)
+        db.session.add(child)
+        db.session.flush()
+        parent.snapshot.rollback_status = 'pending'
+        parent.snapshot.rollback_operation_id = child.id
+        child_id = child.id
+        db.session.commit()
+    goto(path, 'main h1')
+    child_link = rollback_section.locator(f'a[href="/marketplaces/operations/{child_id}"]')
+    expect(child_link).to_be_visible()
+    child_link.focus()
+    page.keyboard.press('Enter')
+    page.wait_for_url(f'**/marketplaces/operations/{child_id}')
+    assert len(REPORT['mutations']) == mutation_count
+    app.config['MARKETPLACE_OZON_PUBLICATION_ENABLED'] = False
+    passed('product_rollback_review_uses_current_schema_and_links_existing_child')
 
 
 def exercise_catalog_freshness():
@@ -409,11 +485,12 @@ try:
             finally:
                 api.dispose()
         passed('real_csrf_login_rejects_external_and_browser_normalized_redirects')
-        exercise_catalog_freshness()
         with app.app_context():
             assert MarketplaceOperation.query.count()==0
             for row in MarketplaceListing.query.filter_by(account_id=aid):
                 assert json.loads(row.price_summary_json)['values']=={'old_price':'1500','price':'1000','marketing_seller_price':'900'}
+        exercise_product_rollback_review()
+        exercise_catalog_freshness()
         assert not REPORT['unexpected_http'] and not REPORT['unexpected_external'], REPORT
         assert REPORT['provider_attempts']==0
         assert sum(r['path']=='/marketplaces/api/quality/refresh' for r in REPORT['mutations'])==1

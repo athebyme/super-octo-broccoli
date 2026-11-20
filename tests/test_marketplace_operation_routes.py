@@ -10,10 +10,12 @@ from unittest.mock import patch
 from flask import Flask
 from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect
+from jinja2 import ChoiceLoader, DictLoader
 
 from models import (
     ImportedProduct,
     Marketplace,
+    MarketplaceListing,
     MarketplaceListingSnapshot,
     MarketplaceOperation,
     MarketplaceProductDraft,
@@ -42,6 +44,21 @@ class MarketplaceOperationRoutesTest(unittest.TestCase):
         LoginManager(self.app)
         CSRFProtect(self.app)
         register_marketplace_operation_routes(self.app)
+        self.app.jinja_loader = ChoiceLoader([
+            DictLoader({
+                "base.html": (
+                    "{% block extra_head %}{% endblock %}"
+                    "{% block content %}{% endblock %}"
+                ),
+                "partials/operations_workspace_history_nav.html": "",
+            }),
+            self.app.jinja_loader,
+        ])
+        self.app.add_url_rule(
+            "/drafts/<int:draft_id>",
+            endpoint="marketplace_drafts.detail",
+            view_func=lambda draft_id: "",
+        )
         self.client = self.app.test_client()
         with self.app.app_context():
             db.create_all()
@@ -473,6 +490,132 @@ class MarketplaceOperationRoutesTest(unittest.TestCase):
                 },
             )
         self.assertEqual(foreign.status_code, 404)
+
+    def _make_available_update(self):
+        with self.app.app_context():
+            operation = db.session.get(
+                MarketplaceOperation,
+                self.own_operation_id,
+            )
+            operation.operation_kind = "product_update"
+            operation.status = "succeeded"
+            operation.snapshot.snapshot_kind = "product_update"
+            operation.snapshot.rollback_status = "available"
+            db.session.commit()
+            return operation.id
+
+    def test_update_rollback_review_hides_confirmation_when_current_schema_blocks(self):
+        operation_id = self._make_available_update()
+        validation = {
+            "valid": False,
+            "code": "update_rollback_schema_conflict",
+            "message": "Текущая схема требует обязательные характеристики.",
+            "errors": [{"private_value": "must not reach the page"}],
+        }
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch, patch.object(
+            MarketplacePublicationService,
+            "validate_update_rollback_current_schema",
+            return_value=validation,
+            create=True,
+        ) as validate:
+            response = self.client.get(
+                f"/marketplaces/operations/{operation_id}",
+            )
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Статус отката: Недоступен", html)
+        self.assertIn(validation["message"], html)
+        self.assertIn("отдельное проверенное обновление", html.lower())
+        self.assertNotIn("Восстановить предыдущее состояние", html)
+        self.assertNotIn("must not reach the page", html)
+        self.assertNotIn('name="confirm_write"', html)
+        validate.assert_called_once()
+        self.assertEqual(validate.call_args.args[0].id, operation_id)
+        self.assertEqual(validate.call_args.kwargs, {})
+
+    def test_update_rollback_review_keeps_confirmation_when_current_schema_allows(self):
+        operation_id = self._make_available_update()
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch, patch.object(
+            MarketplacePublicationService,
+            "validate_update_rollback_current_schema",
+            return_value={"valid": True, "code": "ok", "message": ""},
+            create=True,
+        ) as validate:
+            response = self.client.get(
+                f"/marketplaces/operations/{operation_id}",
+            )
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Восстановить предыдущее состояние", html)
+        self.assertIn('name="confirm_write"', html)
+        validate.assert_called_once()
+
+    def test_parent_detail_links_to_existing_same_scope_rollback_child(self):
+        with self.app.app_context():
+            parent = db.session.get(MarketplaceOperation, self.own_operation_id)
+            parent.operation_kind = "product_import"
+            parent.status = "succeeded"
+            listing = MarketplaceListing(
+                seller_id=parent.seller_id,
+                marketplace_id=parent.marketplace_id,
+                account_id=parent.account_id,
+                offer_id="own-route-offer",
+                external_product_id="route-product-001",
+                sync_fingerprint="e" * 64,
+            )
+            db.session.add(listing)
+            db.session.flush()
+            parent.listing_id = listing.id
+            parent.snapshot.listing_id = listing.id
+            child = MarketplaceOperation(
+                seller_id=parent.seller_id,
+                marketplace_id=parent.marketplace_id,
+                account_id=parent.account_id,
+                listing_id=listing.id,
+                parent_operation=parent,
+                operation_kind="product_import_rollback",
+                status="succeeded",
+                idempotency_key="route-rollback-child-0001",
+                request_fingerprint="d" * 64,
+                contract_version="synthetic-contract",
+            )
+            db.session.add(child)
+            db.session.flush()
+            parent.snapshot.rollback_status = "pending"
+            parent.snapshot.rollback_operation_id = child.id
+            db.session.commit()
+            parent_id = parent.id
+            child_id = child.id
+
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch:
+            response = self.client.get(
+                f"/marketplaces/operations/{parent_id}",
+            )
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(f'href="/marketplaces/operations/{child_id}"', html)
+        self.assertIn("Результат отката:", html)
+        self.assertIn(f"операция #{child_id}", html)
+
+        with self.app.app_context():
+            child = db.session.get(MarketplaceOperation, child_id)
+            child.listing_id = None
+            db.session.commit()
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch:
+            mismatched = self.client.get(
+                f"/marketplaces/operations/{parent_id}",
+            )
+        self.assertNotIn(
+            f'href="/marketplaces/operations/{child_id}"',
+            mismatched.get_data(as_text=True),
+        )
 
 
 if __name__ == "__main__":

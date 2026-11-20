@@ -149,6 +149,87 @@ def _operation_document(operation) -> dict:
     return result
 
 
+def _rollback_current_schema_review(operation) -> Optional[dict]:
+    """Recheck a successful update's saved rollback payload using local state."""
+    if (
+        operation.operation_kind != "product_update"
+        or operation.status != "succeeded"
+        or operation.snapshot is None
+        or operation.snapshot.rollback_status != "available"
+    ):
+        return None
+
+    try:
+        result = MarketplacePublicationService.validate_update_rollback_current_schema(
+            operation,
+        )
+    except Exception as exc:
+        current_app.logger.warning(
+            "Ozon product rollback schema review failed seller_id=%s operation_id=%s exception=%s",
+            operation.seller_id,
+            operation.id,
+            type(exc).__name__,
+        )
+        return {
+            "valid": False,
+            "message": (
+                "Текущую схему Ozon проверить не удалось. Повторите просмотр, "
+                "когда локальные справочники будут доступны."
+            ),
+        }
+
+    valid = isinstance(result, dict) and result.get("valid") is True
+    message = result.get("message") if isinstance(result, dict) else None
+    if not isinstance(message, str) or not message.strip():
+        message = (
+            "Сохранённое состояние не проходит текущую схему карточки Ozon."
+            if not valid
+            else ""
+        )
+    return {
+        "valid": valid,
+        # The helper may return detailed errors for its caller. The page needs
+        # only a bounded explanation; it must never expose its errors payload.
+        "message": message.strip()[:500],
+    }
+
+
+def _rollback_child_for_detail(operation):
+    """Return the persisted rollback child only when its relation and scope match."""
+    expected_child_kind = {
+        "product_import": "product_import_rollback",
+        "product_update": "product_update_rollback",
+    }.get(operation.operation_kind)
+    if (
+        expected_child_kind is None
+        or operation.snapshot is None
+        or operation.listing_id is None
+    ):
+        return None
+
+    child = operation.snapshot.rollback_operation
+    if child is None:
+        return None
+    if (
+        operation.snapshot.operation_id != operation.id
+        or operation.snapshot.rollback_operation_id != child.id
+        or operation.snapshot.seller_id != operation.seller_id
+        or operation.snapshot.account_id != operation.account_id
+        or operation.snapshot.marketplace_id != operation.marketplace_id
+        or operation.snapshot.listing_id != operation.listing_id
+        or child.operation_kind != expected_child_kind
+        or child.parent_operation_id != operation.id
+        or child.parent_operation is None
+        or child.parent_operation.id != operation.id
+        or child.seller_id != operation.seller_id
+        or child.account_id != operation.account_id
+        or child.marketplace_id != operation.marketplace_id
+        or child.listing_id != operation.listing_id
+    ):
+        return None
+    return child
+
+
 def _error_response(
     error: Exception,
     status_code: Optional[int] = None,
@@ -271,10 +352,13 @@ def _get_operation_response(operation_id: int, *, force_json: bool = False):
     document = _operation_document(operation)
     if force_json or _wants_json():
         return jsonify({"success": True, "operation": document})
+    rollback_schema_review = _rollback_current_schema_review(operation)
     return render_template(
         "marketplace_operation_detail.html",
         operation=operation,
         operation_data=document,
+        rollback_schema_review=rollback_schema_review,
+        rollback_child_operation=_rollback_child_for_detail(operation),
         can_submit_queued=(
             _commercial_enabled()
             if operation.operation_kind in MarketplaceCommercialService.COMMERCIAL_OPERATION_KINDS

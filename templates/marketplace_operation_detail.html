@@ -187,9 +187,22 @@
     <section class="sh-card p-4 mt-4">
         <div class="flex flex-wrap items-start justify-between gap-3"><h2 class="font-semibold" style="color:var(--text)">Снимок состояния и откат</h2>
         {% if is_commercial and operation.operation_kind in ['price_update', 'stock_update'] and operation.status == 'succeeded' and operation_data.snapshot.rollback_status == 'available' %}<form method="post" action="{{ url_for('marketplace_commercial.create_rollback', operation_id=operation.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="sh-btn sh-btn--secondary" type="submit">Создать заявку на откат</button></form>{% endif %}</div>
-        <p class="mt-2 text-sm" style="color:var(--text-secondary)">Статус отката: {{ rollback_status_labels.get(operation_data.snapshot.rollback_status, 'Неизвестный статус') }}</p>
+        <p class="mt-2 text-sm" style="color:var(--text-secondary)">Статус отката: {% if rollback_schema_review and not rollback_schema_review.valid %}Недоступен{% else %}{{ rollback_status_labels.get(operation_data.snapshot.rollback_status, 'Неизвестный статус') }}{% endif %}</p>
         {% if operation_data.snapshot.rollback_error_message %}<details class="operations-technical-details mt-2"><summary>Техническая причина ошибки отката</summary><p class="mt-2">{{ operation_data.snapshot.rollback_error_message }}</p></details>{% endif %}
+        {% if rollback_schema_review and not rollback_schema_review.valid %}
+        <div class="mt-4 rounded-md border px-4 py-3 text-sm" role="status" style="border-color:var(--danger);color:var(--text)">
+            {% if rollback_schema_review.message %}<p class="mt-2" style="color:var(--text-secondary)">{{ rollback_schema_review.message }}</p>{% endif %}
+            <p class="mt-2" style="color:var(--text-secondary)">Если появились новые обязательные поля, подготовьте отдельное проверенное обновление.</p>
+        </div>
+        {% endif %}
+        {% if rollback_child_operation %}
+        <p class="mt-3 text-sm" style="color:var(--text-secondary)">
+            Результат отката:
+            <a class="font-medium" style="color:var(--accent-text)" aria-label="Открыть результат отката, операция #{{ rollback_child_operation.id }}" href="{{ url_for('marketplace_operations.detail', operation_id=rollback_child_operation.id) }}">операция #{{ rollback_child_operation.id }} · {{ status_labels.get(rollback_child_operation.status, 'Неизвестный статус') }}</a>
+        </p>
+        {% endif %}
         {% if not is_commercial and operation.operation_kind in ['product_import', 'product_update'] and operation.status == 'succeeded' and operation_data.snapshot.rollback_status == 'available' %}
+        {% if operation.operation_kind != 'product_update' or (rollback_schema_review and rollback_schema_review.valid) %}
         <form class="mt-4 rounded border p-3" style="border-color:var(--border)" method="post" action="{{ url_for('marketplace_operations.rollback', operation_id=operation.id) }}" onsubmit="return confirm('Создать отдельную операцию отката в Ozon? Перед отправкой текущее состояние в Ozon будет проверено ещё раз.')">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="expected_version" value="{{ operation.version }}">
@@ -197,6 +210,7 @@
             <label class="flex items-start gap-2 text-sm" style="color:var(--text-secondary)"><input type="checkbox" name="confirm_write" value="1" required><span>{% if operation.operation_kind == 'product_import' %}Понимаю: созданная этой операцией карточка будет перемещена в архив, если её данные не менялись.{% else %}Понимаю: текущая карточка будет полностью заменена предыдущим состоянием из снимка.{% endif %}</span></label>
             <button class="sh-btn sh-btn--secondary mt-3" type="submit">{{ 'Архивировать созданную карточку' if operation.operation_kind == 'product_import' else 'Восстановить предыдущее состояние' }}</button>
         </form>
+        {% endif %}
         {% endif %}
     </section>
     {% endif %}
