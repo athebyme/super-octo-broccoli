@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-20T13:17:53.906666+00:00",
+  "generated_at": "2026-11-20T14:28:39.706534+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "2b920c8409cd298d027b6e16f2f7357d1842ace146c522139f8fe52cb558ee17"
+      "sha256": "66b5928dc5aea67696cfa8892434239f2f06a8c57d8bbdb43999f75306f420f7"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -1517,7 +1517,7 @@
     },
     {
       "path": "scripts/check_ozon_release.py",
-      "sha256": "49d4d5cfe4fb5659e418d7b0b5c121c09672ddc0a8a380d5b568b04b72d404de"
+      "sha256": "ff0edc6f60cb4040df5830afd5e0872b6b7bc1251a08e5057637c8c3bd3487e3"
     },
     {
       "path": "scripts/check_ozon_release.sh",
@@ -1725,7 +1725,7 @@
     },
     {
       "path": "seller_platform.py",
-      "sha256": "f03912006e7a8463b195c9ae9a13877f19afd7a29db8fda15028a71bc43f89b1"
+      "sha256": "5d339c97e787a92cb8c9a1f86851f27210905409530cf40c392e93c8f446fe8a"
     },
     {
       "path": "services/__init__.py",
@@ -4924,6 +4924,10 @@
       "sha256": "232d0fbfe0c131ed86d16224e2e06b7e4a9a04208bb77ec6c7946b6c050f04b3"
     },
     {
+      "path": "tests/test_wb_catalog_persistence.py",
+      "sha256": "e67c00d4715af9aa3b26f2401dc42ada77746caf69c420a6ea4c75615a6a5250"
+    },
+    {
       "path": "tests/test_wb_characteristic_dictionary_validation.py",
       "sha256": "e30fbaa738cc1c0fea5337d586b95d20dc729ca0b71ec4715a330f8789eb4f02"
     },
@@ -5020,5 +5024,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "06fb931324722261b68b9af69bde45acab4621359b7e596095bff54bbc64887c"
+  "aggregate_sha256": "f9cb0b6418d9ae0c8b4c624905b1328a3fd3506c20765eca8030bee91ffbd8e2"
 }

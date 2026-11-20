@@ -2189,6 +2189,69 @@ def _perform_product_sync_task(seller_id: int, flask_app):
         flask_app: Экземпляр Flask приложения для контекста
     """
     with flask_app.app_context():
+        import sqlite3
+        from sqlalchemy.exc import SQLAlchemyError
+
+        local_persistence_error = (
+            'Не удалось сохранить полный каталог WB в базе данных. '
+            'Последняя подтверждённая синхронизация и её счётчики сохранены, '
+            'повторите попытку позже.'
+        )
+
+        class ProductSyncPersistenceError(RuntimeError):
+            """A worker-owned catalogue transaction did not persist."""
+
+        def rollback_worker_session():
+            try:
+                db.session.rollback()
+            except Exception:
+                db.session.remove()
+
+        def commit_worker_state():
+            """Commit one bounded worker unit of work exactly once.
+
+            Retrying ``session.commit()`` after a rollback can commit an empty
+            transaction. The caller must stop and let the next normal sync
+            replay data from its next complete provider read.
+            """
+            try:
+                db.session.commit()
+            except Exception as exc:
+                rollback_worker_session()
+                raise ProductSyncPersistenceError from exc
+
+        def record_worker_error(status, message):
+            """Persist attempt status without changing last-success facts."""
+            rollback_worker_session()
+            try:
+                failed_seller = Seller.query.get(seller_id)
+                if failed_seller:
+                    failed_seller.api_sync_status = status
+                    sync_settings = failed_seller.product_sync_settings
+                    if sync_settings:
+                        sync_settings.last_sync_status = status
+                        sync_settings.last_sync_error = (message or '')[:500]
+                    # Do not touch api_last_sync, last_sync_at, or successful
+                    # counters here: they describe the last confirmed apply.
+                    db.session.commit()
+            except Exception as status_error:
+                rollback_worker_session()
+                app.logger.error(
+                    'Could not persist WB product sync error status (%s)',
+                    type(status_error).__name__,
+                )
+
+        def notify_after_success(**kwargs):
+            try:
+                create_notification(**kwargs)
+            except Exception as notification_error:
+                rollback_worker_session()
+                app.logger.info(
+                    'WB product sync notification not persisted (%s)',
+                    type(notification_error).__name__,
+                )
+
+        catalogue_committed = False
         try:
             # Получаем продавца из БД
             seller = Seller.query.get(seller_id)
@@ -2197,7 +2260,7 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                 return
 
             seller.api_sync_status = 'syncing'
-            db_commit_with_retry(db.session)
+            commit_worker_state()
 
             start_time = time.time()
 
@@ -2235,59 +2298,35 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     app.logger.warning(f"⚠️ Failed to fetch prices from Prices API: {price_error}")
                     prices_by_nm_id = {}
 
-                # Deduplicate existing products before sync
-                try:
-                    from sqlalchemy import func
-                    dupes = (
-                        db.session.query(Product.nm_id, func.count(Product.id).label('cnt'))
-                        .filter(Product.seller_id == seller.id, Product.nm_id > 0)
-                        .group_by(Product.nm_id)
-                        .having(func.count(Product.id) > 1)
-                        .all()
-                    )
-                    if dupes:
-                        app.logger.warning(f"🔧 Found {len(dupes)} duplicate nm_ids, deduplicating...")
-                        for nm_id_val, cnt in dupes:
-                            products = (
-                                Product.query
-                                .filter_by(seller_id=seller.id, nm_id=nm_id_val)
-                                .order_by(Product.id.asc())
-                                .all()
-                            )
-                            # Keep the first (oldest), delete the rest
-                            for dup in products[1:]:
-                                db.session.delete(dup)
-                        db_commit_with_retry(db.session)
-                        app.logger.info(f"✅ Deduplication complete, removed duplicates for {len(dupes)} nm_ids")
-                except Exception as dedup_err:
-                    app.logger.warning(f"Deduplication failed (non-critical): {dedup_err}")
-                    try:
-                        db.session.rollback()
-                    except Exception:
-                        db.session.remove()
-
-                # Legacy placeholders keep their canonical links and audit
-                # history. They are not confirmed WB cards and become inactive.
-                try:
-                    from services.wb_catalog_lifecycle import deactivate_unconfirmed_products
-                    deactivated = deactivate_unconfirmed_products(seller.id)
-                    if deactivated:
-                        db_commit_with_retry(db.session)
-                        app.logger.info(
-                            "Deactivated %s unconfirmed WB products; history and links preserved",
-                            deactivated,
+                # Deduplicate existing products before sync. Keep the oldest
+                # Product identity so existing links and history stay stable.
+                # If this local repair step cannot be committed, stop before
+                # applying cards or reporting a successful catalogue sweep.
+                from sqlalchemy import func
+                dupes = (
+                    db.session.query(Product.nm_id, func.count(Product.id).label('cnt'))
+                    .filter(Product.seller_id == seller.id, Product.nm_id > 0)
+                    .group_by(Product.nm_id)
+                    .having(func.count(Product.id) > 1)
+                    .all()
+                )
+                if dupes:
+                    app.logger.warning(f"🔧 Found {len(dupes)} duplicate nm_ids, deduplicating...")
+                    for nm_id_val, cnt in dupes:
+                        products = (
+                            Product.query
+                            .filter_by(seller_id=seller.id, nm_id=nm_id_val)
+                            .order_by(Product.id.asc())
+                            .all()
                         )
-                    else:
-                        db.session.rollback()
-                except Exception as cleanup_err:
-                    app.logger.warning(
-                        "Unconfirmed WB product deactivation failed: %s",
-                        type(cleanup_err).__name__,
-                    )
-                    try:
-                        db.session.rollback()
-                    except Exception:
-                        db.session.remove()
+                        # Keep the first (oldest), delete the rest
+                        for dup in products[1:]:
+                            db.session.delete(dup)
+                    commit_worker_state()
+                    app.logger.info(f"✅ Deduplication complete, removed duplicates for {len(dupes)} nm_ids")
+                else:
+                    # Release the read transaction before bounded card writes.
+                    db.session.rollback()
 
                 # Статистика
                 created_count = 0
@@ -2414,73 +2453,37 @@ def _perform_product_sync_task(seller_id: int, flask_app):
 
                     # Batch commit для избежания длинных транзакций
                     if processed_in_batch >= batch_size:
-                        try:
-                            db_commit_with_retry(db.session)
-                            app.logger.info(f"💾 Batch saved: {processed_in_batch} products ({created_count} new, {updated_count} updated so far)")
-                            processed_in_batch = 0
-                        except Exception as commit_error:
-                            app.logger.warning(f"Batch commit failed, rolling back: {commit_error}")
-                            try:
-                                db.session.rollback()
-                            except Exception:
-                                db.session.remove()
-                            # Продолжаем со следующей batch
+                        commit_worker_state()
+                        app.logger.info(f"💾 Batch saved: {processed_in_batch} products ({created_count} new, {updated_count} updated so far)")
+                        processed_in_batch = 0
 
                 # Сохраняем оставшиеся изменения
-                try:
-                    db_commit_with_retry(db.session)
-                    if processed_in_batch > 0:
-                        app.logger.info(f"Final batch saved: {processed_in_batch} products")
-                except Exception as commit_error:
-                    app.logger.warning(f"Final commit failed: {commit_error}")
-                    try:
-                        db.session.rollback()
-                    except Exception:
-                        db.session.remove()
+                if processed_in_batch > 0:
+                    commit_worker_state()
+                    app.logger.info(f"Final batch saved: {processed_in_batch} products")
 
-                app.logger.info(f"💾 Background sync saved: {created_count} new, {updated_count} updated")
-
-                # ============ ОТКЛЮЧЕНИЕ КАРТОЧЕК, ПРОПАВШИХ С WB ============
-                # Если карточка была у нас активной, но WB API её не вернул —
-                # значит она удалена/скрыта на WB. Отключаем в нашей системе.
+                # Only a fully applied provider result can establish absence.
+                # Keep both deactivation passes with success metadata below in
+                # one short final transaction, after all card batches commit.
                 disabled_count = 0
-                try:
-                    if seen_nm_ids:  # Только если синк вернул хотя бы одну карточку
-                        local_active = Product.query.filter(
-                            Product.seller_id == seller.id,
-                            Product.is_active == True,
-                            Product.nm_id > 0
-                        ).all()
+                if seen_nm_ids:  # Keep the nonempty provider-result guard.
+                    local_active = Product.query.filter(
+                        Product.seller_id == seller.id,
+                        Product.is_active == True,
+                        Product.nm_id > 0,
+                    ).all()
 
-                        for product in local_active:
-                            if product.nm_id not in seen_nm_ids:
-                                product.is_active = False
-                                disabled_count += 1
+                    for product in local_active:
+                        if product.nm_id not in seen_nm_ids:
+                            product.is_active = False
+                            disabled_count += 1
 
-                        if disabled_count > 0:
-                            db_commit_with_retry(db.session)
-                            app.logger.info(
-                                f"🔒 Disabled {disabled_count} products not found on WB "
-                                f"(out of {len(local_active)} active, WB returned {len(seen_nm_ids)})"
-                            )
-                except Exception as disable_err:
-                    app.logger.warning(f"⚠️ Failed to disable missing products: {disable_err}")
-                    try:
-                        db.session.rollback()
-                    except Exception:
-                        db.session.remove()
-
-                # Остатки имеют отдельный durable read-контур и свой статус.
-                # Каталог не ждёт лимиты Analytics и не стирает stock на miss.
-                try:
-                    from services.wb_stock_sync import enqueue_stock_sync
-                    enqueue_stock_sync(seller.id)
-                except Exception as stock_error:
-                    db.session.rollback()
-                    app.logger.info("WB stock refresh not queued: %s", type(stock_error).__name__)
+                from services.wb_catalog_lifecycle import deactivate_unconfirmed_products
+                unconfirmed_deactivated = deactivate_unconfirmed_products(seller.id)
 
                 # Обновляем статус синхронизации
-                seller.api_last_sync = datetime.utcnow()
+                completed_at = datetime.utcnow()
+                seller.api_last_sync = completed_at
                 seller.api_sync_status = 'success'
 
                 elapsed = time.time() - start_time
@@ -2488,7 +2491,7 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                 # Обновляем статистику в ProductSyncSettings
                 sync_settings = seller.product_sync_settings
                 if sync_settings:
-                    sync_settings.last_sync_at = datetime.utcnow()
+                    sync_settings.last_sync_at = completed_at
                     sync_settings.last_sync_status = 'success'
                     sync_settings.last_sync_duration = elapsed
                     sync_settings.products_synced = len(all_cards)
@@ -2496,27 +2499,49 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     sync_settings.products_updated = updated_count
                     sync_settings.last_sync_error = None
 
-                db_commit_with_retry(db.session)
-
-                # Логируем успешный запрос
-                APILog.log_request(
+                # Keep the successful read record in the same transaction as
+                # the final catalogue status/freshness and absence updates.
+                db.session.add(APILog(
                     seller_id=seller.id,
                     endpoint='/content/v2/get/cards/list',
                     method='POST',
                     status_code=200,
                     response_time=elapsed,
-                    success=True
-                )
+                    success=True,
+                ))
+                commit_worker_state()
+                catalogue_committed = True
+
+                if unconfirmed_deactivated:
+                    app.logger.info(
+                        "Deactivated %s unconfirmed WB products; history and links preserved",
+                        unconfirmed_deactivated,
+                    )
+                if disabled_count > 0:
+                    app.logger.info(
+                        f"🔒 Disabled {disabled_count} products not found on WB "
+                        f"(WB returned {len(seen_nm_ids)})"
+                    )
 
                 app.logger.info(
                     f"✅ Background sync completed in {elapsed:.1f}s: "
                     f"{created_count} new, {updated_count} updated, {disabled_count} disabled"
                 )
+                app.logger.info(f"💾 Background sync saved: {created_count} new, {updated_count} updated")
+
+                # Stocks have an independent durable read worker. Enqueue only
+                # after catalogue success; queue failure cannot reverse it.
+                try:
+                    from services.wb_stock_sync import enqueue_stock_sync
+                    enqueue_stock_sync(seller_id)
+                except Exception as stock_error:
+                    rollback_worker_session()
+                    app.logger.info("WB stock refresh not queued: %s", type(stock_error).__name__)
 
                 # Уведомляем о новых товарах и отключённых карточках
                 if disabled_count > 0:
-                    create_notification(
-                        seller_id=seller.id,
+                    notify_after_success(
+                        seller_id=seller_id,
                         category='info',
                         title=f'Синхронизация: {disabled_count} карточек отключено',
                         message=(
@@ -2527,8 +2552,8 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     )
 
                 if created_count > 0:
-                    create_notification(
-                        seller_id=seller.id,
+                    notify_after_success(
+                        seller_id=seller_id,
                         category='success',
                         title=f'Синхронизация: +{created_count} новых товаров',
                         message=(
@@ -2541,7 +2566,7 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                 # Проверяем товары без фотографий — не чаще 1 раза в 24ч
                 try:
                     no_photo_products = Product.query.filter(
-                        Product.seller_id == seller.id,
+                        Product.seller_id == seller_id,
                         Product.is_active == True,
                         db.or_(
                             Product.photos_json.is_(None),
@@ -2558,7 +2583,7 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                         from datetime import timedelta
                         recent_cutoff = datetime.utcnow() - timedelta(hours=24)
                         already_sent = Notification.query.filter(
-                            Notification.seller_id == seller.id,
+                            Notification.seller_id == seller_id,
                             Notification.title.like('%без фотографий%'),
                             Notification.created_at >= recent_cutoff,
                         ).first()
@@ -2569,8 +2594,8 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                             if count > 5:
                                 examples_text += f" и ещё {count - 5}"
 
-                            create_notification(
-                                seller_id=seller.id,
+                            notify_after_success(
+                                seller_id=seller_id,
                                 category='warning',
                                 title=f'{count} товар(ов) без фотографий',
                                 message=(
@@ -2583,45 +2608,37 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                         )
                         app.logger.info(f"⚠️ {count} products without photos for seller_id={seller_id}")
                 except Exception as photo_check_error:
+                    rollback_worker_session()
                     app.logger.warning(f"⚠️ Photo check failed: {photo_check_error}")
 
-        except WBAuthException as e:
-            with flask_app.app_context():
-                seller = Seller.query.get(seller_id)
-                if seller:
-                    seller.api_sync_status = 'auth_error'
-                    # Обновляем статистику ошибки
-                    sync_settings = seller.product_sync_settings
-                    if sync_settings:
-                        sync_settings.last_sync_status = 'auth_error'
-                        sync_settings.last_sync_error = str(e)
-                    db_commit_with_retry(db.session)
-                app.logger.error(f"❌ Background sync auth error: {str(e)}")
-
-        except WBAPIException as e:
-            with flask_app.app_context():
-                seller = Seller.query.get(seller_id)
-                if seller:
-                    seller.api_sync_status = 'error'
-                    # Обновляем статистику ошибки
-                    sync_settings = seller.product_sync_settings
-                    if sync_settings:
-                        sync_settings.last_sync_status = 'error'
-                        sync_settings.last_sync_error = str(e)
-                    db_commit_with_retry(db.session)
-                app.logger.error(f"❌ Background sync API error: {str(e)}")
-
         except Exception as e:
-            with flask_app.app_context():
-                seller = Seller.query.get(seller_id)
-                if seller:
-                    seller.api_sync_status = 'error'
-                    # Обновляем статистику ошибки
-                    sync_settings = seller.product_sync_settings
-                    if sync_settings:
-                        sync_settings.last_sync_status = 'error'
-                        sync_settings.last_sync_error = str(e)
-                    db_commit_with_retry(db.session)
+            if catalogue_committed:
+                rollback_worker_session()
+                app.logger.error(
+                    'WB product sync post-commit cleanup failed (%s)',
+                    type(e).__name__,
+                )
+            elif isinstance(e, WBAuthException):
+                record_worker_error('auth_error', str(e))
+                app.logger.error(f"❌ Background sync auth error: {str(e)}")
+            elif isinstance(e, WBAPIException):
+                record_worker_error('error', str(e))
+                app.logger.error(f"❌ Background sync API error: {str(e)}")
+            elif isinstance(e, ProductSyncPersistenceError):
+                record_worker_error('error', local_persistence_error)
+                cause = e.__cause__
+                app.logger.error(
+                    '❌ Background sync local persistence failure (%s)',
+                    type(cause).__name__ if cause is not None else type(e).__name__,
+                )
+            elif isinstance(e, (SQLAlchemyError, sqlite3.Error)):
+                record_worker_error('error', local_persistence_error)
+                app.logger.error(
+                    '❌ Background sync database failure (%s)',
+                    type(e).__name__,
+                )
+            else:
+                record_worker_error('error', str(e) or local_persistence_error)
                 app.logger.exception(f"❌ Background sync unexpected error: {str(e)}")
 
 
