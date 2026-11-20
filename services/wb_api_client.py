@@ -98,6 +98,12 @@ class WBAPIException(Exception):
     pass
 
 
+class WBContentProtocolException(WBAPIException):
+    """WB Content API returned an incomplete or inconsistent catalog page."""
+
+    code = 'wb_content_protocol_error'
+
+
 class WBAuthException(WBAPIException):
     """Ошибка аутентификации"""
     pass
@@ -782,10 +788,25 @@ class WildberriesAPIClient:
 
         Note:
             API v2 использует cursor-based пагинацию вместо offset
-            retry_rate_limited_pages opts the complete read into a bounded
-            per-page 429 retry policy. It is off by default because this helper
-            is also used by request-time import recovery paths.
+            retry_rate_limited_pages opts the complete read into strict
+            cursor/page validation and a bounded per-page 429 retry policy. It
+            is off by default because this helper is also used by request-time
+            import recovery paths.
         """
+        strict_full_sweep = bool(retry_rate_limited_pages)
+        if strict_full_sweep:
+            if type(batch_size) is not int or batch_size <= 0:
+                raise WBContentProtocolException(
+                    'Некорректный размер страницы каталога WB. '
+                    'Проверьте размер запроса и повторите синхронизацию.'
+                )
+            # get_cards_list clamps the provider request to WB's documented
+            # maximum of 100 cards, so completeness is measured against that
+            # effective limit rather than the caller's larger value.
+            effective_limit = min(batch_size, 100)
+            seen_nm_ids = set()
+            requested_cursors = {(None, None)}
+
         all_cards = []
         cursor_updated_at = None
         cursor_nm_id = None
@@ -829,6 +850,96 @@ class WildberriesAPIClient:
                     rate_limit_wait_seconds += retry_after
                     time.sleep(retry_after)
 
+            if strict_full_sweep:
+                if not isinstance(data, dict):
+                    raise WBContentProtocolException(
+                        'Ответ WB со списком карточек имеет неверный формат. '
+                        'Проверьте доступность API и повторите синхронизацию.'
+                    )
+
+                cards = data.get('cards')
+                if not isinstance(cards, list):
+                    raise WBContentProtocolException(
+                        'Список карточек WB имеет неверный формат. '
+                        'Проверьте доступность API и повторите синхронизацию.'
+                    )
+                if any(not isinstance(card, dict) for card in cards):
+                    raise WBContentProtocolException(
+                        'В ответе WB обнаружена карточка неверного формата. '
+                        'Проверьте доступность API и повторите синхронизацию.'
+                    )
+
+                cursor = data.get('cursor')
+                if not isinstance(cursor, dict):
+                    raise WBContentProtocolException(
+                        'В ответе WB отсутствуют данные страницы каталога. '
+                        'Проверьте доступность API и повторите синхронизацию.'
+                    )
+                total = cursor.get('total')
+                if type(total) is not int or total < 0 or total > effective_limit:
+                    raise WBContentProtocolException(
+                        'WB вернул некорректное количество карточек страницы. '
+                        'Проверьте доступность API и повторите синхронизацию.'
+                    )
+                if total != len(cards):
+                    raise WBContentProtocolException(
+                        'Количество карточек WB не совпадает с метаданными страницы. '
+                        'Повторите синхронизацию после проверки доступности API.'
+                    )
+
+                # nmID is the stable card identity for this unfiltered seller
+                # sweep. Invalid identities make the snapshot unsafe to apply.
+                for card in cards:
+                    nm_id = card.get('nmID')
+                    if type(nm_id) is not int or nm_id <= 0:
+                        raise WBContentProtocolException(
+                            'У карточки WB отсутствует корректный nmID. '
+                            'Проверьте доступность API и повторите синхронизацию.'
+                        )
+                    if nm_id in seen_nm_ids:
+                        raise WBContentProtocolException(
+                            'В каталоге WB повторяется nmID. '
+                            'Проверьте каталог в кабинете WB перед повторной синхронизацией.'
+                        )
+                    seen_nm_ids.add(nm_id)
+
+                all_cards.extend(cards)
+                logger.info(f'Loaded {len(all_cards)} cards so far...')
+
+                # WB signals completion when cursor.total is below the
+                # requested limit, including an empty terminal page.
+                if total < effective_limit:
+                    logger.info(
+                        f'Pagination complete. Total cards: {len(all_cards)}'
+                    )
+                    break
+
+                next_updated_at = cursor.get('updatedAt')
+                next_nm_id = cursor.get('nmID')
+                if (
+                    not isinstance(next_updated_at, str)
+                    or not next_updated_at.strip()
+                    or type(next_nm_id) is not int
+                    or next_nm_id <= 0
+                ):
+                    raise WBContentProtocolException(
+                        'В полной странице каталога WB отсутствует корректный курсор. '
+                        'Проверьте доступность API и повторите синхронизацию.'
+                    )
+
+                next_cursor = (next_updated_at, next_nm_id)
+                if next_cursor in requested_cursors:
+                    raise WBContentProtocolException(
+                        'Курсор страниц каталога WB повторился. '
+                        'Проверьте доступность API и повторите синхронизацию.'
+                    )
+                requested_cursors.add(next_cursor)
+                cursor_updated_at, cursor_nm_id = next_cursor
+
+                # Pace only after a validated full page that will be followed.
+                time.sleep(GET_ALL_CARDS_PAGE_INTERVAL_SECONDS)
+                continue
+
             cards = data.get('cards', [])
 
             if not cards:
@@ -859,12 +970,6 @@ class WildberriesAPIClient:
                 prev_cursor_nm_id == cursor_nm_id):
                 logger.warning(f"Cursor not changing, stopping to avoid infinite loop. Total: {len(all_cards)}")
                 break
-
-            if retry_rate_limited_pages:
-                # WB Content permits a 5-request burst with 750ms replenishment.
-                # Pace only when a successful cursor confirms another page;
-                # every request still passes through _make_request's shared caps.
-                time.sleep(GET_ALL_CARDS_PAGE_INTERVAL_SECONDS)
 
         logger.info(f"Total cards loaded: {len(all_cards)}")
         return all_cards

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-20T12:05:38.711089+00:00",
+  "generated_at": "2026-11-20T12:25:51.834638+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "f8b101e5e161e3da6c697889b1795ec74cb12796e7160721f2113256001e612b"
+      "sha256": "4380301cbfe961b33b8db7c1e1f35cbd1e4d7e2e10d339c83783c10571d8745e"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -2377,7 +2377,7 @@
     },
     {
       "path": "services/wb_api_client.py",
-      "sha256": "92317a4e8ad8e107da9ba0e6a35d38e2c4759aa12e4c94da415fbbda9f076218"
+      "sha256": "f81917562c33baaaca1475944a5a65a6d2184292b7045bf1554aeef5c9886379"
     },
     {
       "path": "services/wb_card_audit.py",
@@ -4965,7 +4965,7 @@
     },
     {
       "path": "tests/test_wb_rate_limits.py",
-      "sha256": "53d14534e242f17adbba965b87af7e47f0d2be7f022b53346d86e40b62f20ed7"
+      "sha256": "479f5bb19eec03e7d9913389edb70c41ace0306723ad623beada3ec8c837fe67"
     },
     {
       "path": "tests/test_wb_stock_contracts.py",
@@ -5020,5 +5020,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "0c4aef8526cf31ec62ac70ca78b238ee7dc8469d63dc144e0985bec73d442648"
+  "aggregate_sha256": "d8b11b799652c6cfe0b1d0cb7cb1d135d040277c5dc86456c1897e7d5aabb59e"
 }

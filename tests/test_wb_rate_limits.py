@@ -23,7 +23,7 @@ import requests
 from services.brand_cache import BrandCache
 from services.wb_api_client import (
     WildberriesAPIClient, WBAPIException, WBRateLimitException,
-    WBTransportUncertainException,
+    WBTransportUncertainException, WBContentProtocolException,
 )
 
 
@@ -190,39 +190,77 @@ class TestRateLimit429RetryAfter(unittest.TestCase):
 
 class TestGetAllCardsBoundedRateLimitRetry(unittest.TestCase):
     @staticmethod
-    def _page(nm_id, cursor=None):
+    def _page(nm_ids, cursor=None):
+        if type(nm_ids) is int:
+            nm_ids = [nm_ids]
+        cards = [{'nmID': nm_id} for nm_id in nm_ids]
+        if cursor is None:
+            cursor = (
+                {
+                    'updatedAt': f'2026-11-20T00:00:{cards[-1]["nmID"]:02d}Z',
+                    'nmID': cards[-1]['nmID'],
+                    'total': len(cards),
+                }
+                if cards else {'total': 0}
+            )
+        else:
+            cursor = dict(cursor)
+            cursor.setdefault('total', len(cards))
         return {
-            'cards': [{'nmID': nm_id}],
+            'cards': cards,
             'cursor': cursor,
         }
 
     @staticmethod
-    def _cursor(nm_id):
+    def _cursor(nm_id, total):
         return {
             'updatedAt': f'2026-11-20T00:00:{nm_id:02d}Z',
             'nmID': nm_id,
+            'total': total,
         }
 
     def test_opt_in_retries_same_page_after_short_429_and_keeps_prior_page(self):
         client = WildberriesAPIClient('catalog-retry-token')
-        cursor = self._cursor(101)
+        cursor = self._cursor(102, 2)
         client.get_cards_list = MagicMock(side_effect=[
-            self._page(101, cursor),
+            self._page([101, 102], cursor),
             WBRateLimitException('429', retry_after=1),
-            self._page(102),
+            self._page([103]),
         ])
 
         with patch('services.wb_api_client.time.sleep') as sleep:
-            cards = client.get_all_cards(retry_rate_limited_pages=True)
+            cards = client.get_all_cards(
+                batch_size=2,
+                retry_rate_limited_pages=True,
+            )
 
-        self.assertEqual(cards, [{'nmID': 101}, {'nmID': 102}])
+        self.assertEqual(cards, [
+            {'nmID': 101}, {'nmID': 102}, {'nmID': 103},
+        ])
         self.assertEqual(client.get_cards_list.call_args_list, [
-            call(limit=100, cursor_updated_at=None, cursor_nm_id=None),
-            call(limit=100, cursor_updated_at=cursor['updatedAt'], cursor_nm_id=101),
-            call(limit=100, cursor_updated_at=cursor['updatedAt'], cursor_nm_id=101),
+            call(limit=2, cursor_updated_at=None, cursor_nm_id=None),
+            call(limit=2, cursor_updated_at=cursor['updatedAt'], cursor_nm_id=102),
+            call(limit=2, cursor_updated_at=cursor['updatedAt'], cursor_nm_id=102),
         ])
         sleep.assert_has_calls([call(0.75), call(1)])
         self.assertEqual(sleep.call_count, 2)
+
+    def test_default_importer_read_keeps_legacy_partial_result_behavior(self):
+        client = WildberriesAPIClient('catalog-default-partial-token')
+        client.get_cards_list = MagicMock(return_value={
+            'cards': [{'nmID': 1}, {'nmID': 2}],
+        })
+
+        with patch('services.wb_api_client.time.sleep') as sleep:
+            cards = client.get_all_cards(batch_size=2)
+
+        self.assertEqual(cards, [{'nmID': 1}, {'nmID': 2}])
+        client.get_cards_list.assert_called_once_with(
+            limit=2,
+            cursor_updated_at=None,
+            cursor_nm_id=None,
+        )
+        sleep.assert_not_called()
 
     def test_default_catalog_read_does_not_add_request_path_waits(self):
         client = WildberriesAPIClient('catalog-default-token')
@@ -259,16 +297,19 @@ class TestGetAllCardsBoundedRateLimitRetry(unittest.TestCase):
 
     def test_page_is_retried_at_most_once(self):
         client = WildberriesAPIClient('catalog-page-budget-token')
-        cursor = self._cursor(101)
+        cursor = self._cursor(102, 2)
         client.get_cards_list = MagicMock(side_effect=[
-            self._page(101, cursor),
+            self._page([101, 102], cursor),
             WBRateLimitException('429', retry_after=1),
             WBRateLimitException('429 again', retry_after=1),
         ])
 
         with patch('services.wb_api_client.time.sleep') as sleep:
             with self.assertRaisesRegex(WBRateLimitException, '429 again'):
-                client.get_all_cards(retry_rate_limited_pages=True)
+                client.get_all_cards(
+                    batch_size=2,
+                    retry_rate_limited_pages=True,
+                )
 
         self.assertEqual(client.get_cards_list.call_count, 3)
         sleep.assert_has_calls([call(0.75), call(1)])
@@ -276,18 +317,24 @@ class TestGetAllCardsBoundedRateLimitRetry(unittest.TestCase):
 
     def test_fetch_stops_after_aggregate_retry_attempt_budget(self):
         client = WildberriesAPIClient('catalog-attempt-budget-token')
-        side_effects = [self._page(1, self._cursor(1))]
-        for nm_id, delay in enumerate((1, 2, 3, 4), start=2):
+        side_effects = [self._page([1, 2], self._cursor(2, 2))]
+        for first_nm_id, delay in zip((3, 5, 7, 9), (1, 2, 3, 4)):
             side_effects.extend([
                 WBRateLimitException('429', retry_after=delay),
-                self._page(nm_id, self._cursor(nm_id)),
+                self._page(
+                    [first_nm_id, first_nm_id + 1],
+                    self._cursor(first_nm_id + 1, 2),
+                ),
             ])
         side_effects.append(WBRateLimitException('fifth 429', retry_after=1))
         client.get_cards_list = MagicMock(side_effect=side_effects)
 
         with patch('services.wb_api_client.time.sleep') as sleep:
             with self.assertRaisesRegex(WBRateLimitException, 'fifth 429'):
-                client.get_all_cards(retry_rate_limited_pages=True)
+                client.get_all_cards(
+                    batch_size=2,
+                    retry_rate_limited_pages=True,
+                )
 
         self.assertEqual(client.get_cards_list.call_count, 10)
         self.assertEqual(
@@ -297,12 +344,12 @@ class TestGetAllCardsBoundedRateLimitRetry(unittest.TestCase):
 
     def test_fetch_stops_when_provider_directed_wait_budget_would_exceed_ten_seconds(self):
         client = WildberriesAPIClient('catalog-wait-budget-token')
-        cursor = self._cursor(101)
-        next_cursor = self._cursor(102)
+        cursor = self._cursor(102, 2)
+        next_cursor = self._cursor(104, 2)
         client.get_cards_list = MagicMock(side_effect=[
-            self._page(101, cursor),
+            self._page([101, 102], cursor),
             WBRateLimitException('429', retry_after=10),
-            self._page(102, next_cursor),
+            self._page([103, 104], next_cursor),
             WBRateLimitException('would exceed total wait budget', retry_after=1),
         ])
 
@@ -311,13 +358,156 @@ class TestGetAllCardsBoundedRateLimitRetry(unittest.TestCase):
                 WBRateLimitException,
                 'would exceed total wait budget',
             ):
-                client.get_all_cards(retry_rate_limited_pages=True)
+                client.get_all_cards(
+                    batch_size=2,
+                    retry_rate_limited_pages=True,
+                )
 
         self.assertEqual(client.get_cards_list.call_count, 4)
         self.assertEqual(
             [entry.args[0] for entry in sleep.call_args_list],
             [0.75, 10, 0.75],
         )
+
+    def test_full_page_without_cursor_fails_instead_of_returning_partial_sweep(self):
+        client = WildberriesAPIClient('catalog-missing-cursor-token')
+        client.get_cards_list = MagicMock(return_value={
+            'cards': [{'nmID': 1}, {'nmID': 2}],
+        })
+
+        with patch('services.wb_api_client.time.sleep'):
+            with self.assertRaises(WBContentProtocolException) as ctx:
+                client.get_all_cards(
+                    batch_size=2,
+                    retry_rate_limited_pages=True,
+                )
+
+        self.assertEqual(ctx.exception.code, 'wb_content_protocol_error')
+        client.get_cards_list.assert_called_once()
+
+    def test_repeated_continuation_cursor_fails_instead_of_returning_partial_sweep(self):
+        client = WildberriesAPIClient('catalog-looping-cursor-token')
+        repeated_cursor = self._cursor(2, 2)
+        client.get_cards_list = MagicMock(side_effect=[
+            self._page([1, 2], repeated_cursor),
+            self._page([3, 4], repeated_cursor),
+        ])
+
+        with patch('services.wb_api_client.time.sleep'):
+            with self.assertRaisesRegex(
+                WBContentProtocolException,
+                'Курсор страниц',
+            ):
+                client.get_all_cards(
+                    batch_size=2,
+                    retry_rate_limited_pages=True,
+                )
+
+        self.assertEqual(client.get_cards_list.call_count, 2)
+
+    def test_full_page_with_malformed_continuation_cursor_fails_closed(self):
+        client = WildberriesAPIClient('catalog-malformed-cursor-token')
+        client.get_cards_list = MagicMock(return_value={
+            'cards': [{'nmID': 1}, {'nmID': 2}],
+            'cursor': {'total': 2},
+        })
+
+        with patch('services.wb_api_client.time.sleep'):
+            with self.assertRaisesRegex(
+                WBContentProtocolException,
+                'отсутствует корректный курсор',
+            ):
+                client.get_all_cards(
+                    batch_size=2,
+                    retry_rate_limited_pages=True,
+                )
+
+        client.get_cards_list.assert_called_once()
+
+    def test_malformed_cards_after_a_valid_page_fails_closed(self):
+        client = WildberriesAPIClient('catalog-malformed-cards-token')
+        client.get_cards_list = MagicMock(side_effect=[
+            self._page([1, 2], self._cursor(2, 2)),
+            {'cards': 'not-a-list', 'cursor': {'total': 2}},
+        ])
+
+        with patch('services.wb_api_client.time.sleep'):
+            with self.assertRaisesRegex(
+                WBContentProtocolException,
+                'Список карточек',
+            ):
+                client.get_all_cards(
+                    batch_size=2,
+                    retry_rate_limited_pages=True,
+                )
+
+        self.assertEqual(client.get_cards_list.call_count, 2)
+
+    def test_cursor_total_must_match_page_size_and_valid_empty_terminal_is_accepted(self):
+        mismatch = WildberriesAPIClient('catalog-total-mismatch-token')
+        mismatch.get_cards_list = MagicMock(return_value={
+            'cards': [{'nmID': 1}],
+            'cursor': {'updatedAt': '2026-11-20T00:00:01Z', 'nmID': 1, 'total': 2},
+        })
+        with patch('services.wb_api_client.time.sleep'):
+            with self.assertRaisesRegex(
+                WBContentProtocolException,
+                'не совпадает',
+            ):
+                mismatch.get_all_cards(
+                    batch_size=2,
+                    retry_rate_limited_pages=True,
+                )
+
+        empty = WildberriesAPIClient('catalog-empty-terminal-token')
+        empty.get_cards_list = MagicMock(return_value={
+            'cards': [],
+            'cursor': {'total': 0},
+        })
+        with patch('services.wb_api_client.time.sleep') as sleep:
+            self.assertEqual(
+                empty.get_all_cards(
+                    batch_size=2,
+                    retry_rate_limited_pages=True,
+                ),
+                [],
+            )
+        sleep.assert_not_called()
+
+    def test_duplicate_positive_integer_nm_id_fails_closed(self):
+        client = WildberriesAPIClient('catalog-duplicate-nm-token')
+        client.get_cards_list = MagicMock(side_effect=[
+            self._page([1, 2], self._cursor(2, 2)),
+            self._page([2], self._cursor(2, 1)),
+        ])
+
+        with patch('services.wb_api_client.time.sleep'):
+            with self.assertRaisesRegex(
+                WBContentProtocolException,
+                'повторяется nmID',
+            ):
+                client.get_all_cards(
+                    batch_size=2,
+                    retry_rate_limited_pages=True,
+                )
+
+    def test_card_without_positive_integer_nm_id_fails_closed(self):
+        for invalid_nm_id in (None, True, 0, -1, '3'):
+            with self.subTest(nm_id=invalid_nm_id):
+                client = WildberriesAPIClient('catalog-invalid-nm-token')
+                client.get_cards_list = MagicMock(return_value={
+                    'cards': [{'nmID': invalid_nm_id}],
+                    'cursor': {'total': 1},
+                })
+
+                with self.assertRaisesRegex(
+                    WBContentProtocolException,
+                    'корректный nmID',
+                ):
+                    client.get_all_cards(
+                        batch_size=2,
+                        retry_rate_limited_pages=True,
+                    )
 
     def test_product_sync_worker_opts_into_bounded_catalog_retry(self):
         import os
