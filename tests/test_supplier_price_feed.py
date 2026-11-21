@@ -39,9 +39,11 @@ def test_parse_accepts_header_blank_lines_zero_values_and_unused_ninth_column():
         "103;MAIN-103;;;;;;;\n"
     ).encode("utf-8")
 
-    rows = _read(body)
+    parsed = _read(body)
+    rows = parsed.rows
 
     assert set(rows) == {101, 102, 103}
+    assert parsed.conflicting_ids == frozenset()
     assert rows[101] == feed.SupplierPriceRow(
         vendor_code="MAIN-101", price=0.0, quantity=0, status=None,
         additional_vendor_code=None, barcode=None, rrp=0.0,
@@ -64,17 +66,20 @@ def test_read_contract_returns_rows_from_one_mocked_fetch(monkeypatch):
         return body
 
     monkeypatch.setattr(feed, "_fetch_over_pinned_https", fetch)
-    rows = feed.read_supplier_price_feed(
+    parsed = feed.read_supplier_price_feed(
         "https://feed.example/prices.csv", encoding="utf-8", delimiter=";",
     )
 
+    assert isinstance(parsed, feed.SupplierPriceFeed)
+    assert parsed.conflicting_ids == frozenset()
+    rows = parsed.rows
     assert rows[7].price == 3.25
     assert rows[7].quantity == 0
     assert calls == [("feed.example", "/prices.csv", [PUBLIC_IP])]
 
 
 def test_parser_accepts_headerless_rows_and_optional_short_rows():
-    rows = _read(b"7;A;3;1\n8;B;;;\n")
+    rows = _read(b"7;A;3;1\n8;B;;;\n").rows
     assert rows[7].status is None
     assert rows[8].price is None
     assert rows[8].quantity is None
@@ -102,9 +107,44 @@ def test_invalid_required_values_fail_closed_with_short_code(csv_row, expected_c
     assert csv_row not in message
 
 
-def test_duplicate_numeric_source_ids_fail_even_with_leading_zero_alias():
-    code, _message = _error_code(lambda: _read(b"7;A;1;1\n007;B;2;2\n"))
-    assert code == "duplicate_source_id"
+def test_identical_duplicate_numeric_source_ids_coalesce_across_aliases():
+    parsed = _read(b"7;A;1.00;1\n007; A ;1,0;01;;;;\n")
+
+    assert parsed.rows == {
+        7: feed.SupplierPriceRow(
+            vendor_code="A", price=1.0, quantity=1, status=None,
+            additional_vendor_code=None, barcode=None, rrp=None,
+        ),
+    }
+    assert parsed.conflicting_ids == frozenset()
+
+
+def test_conflicting_duplicate_ids_are_quarantined_without_losing_safe_rows():
+    parsed = _read(
+        b"7;A;1;1\n8;SAFE;5;0\n007;A;2;1\n9;OTHER;3;2\n"
+    )
+
+    assert set(parsed.rows) == {8, 9}
+    assert parsed.conflicting_ids == frozenset({7})
+
+
+def test_later_repeat_cannot_restore_a_quarantined_source_id():
+    parsed = _read(b"7;A;1;1\n007;A;2;1\n7;A;1;1\n8;SAFE;3;0\n")
+
+    assert set(parsed.rows) == {8}
+    assert parsed.conflicting_ids == frozenset({7})
+
+
+def test_malformed_later_repeat_still_fails_the_entire_feed():
+    code, _message = _error_code(
+        lambda: _read(b"7;A;1;1\n007;A;2;1\n7;A;NaN;1\n8;SAFE;3;0\n")
+    )
+    assert code == "invalid_price"
+
+
+def test_feed_with_only_conflicting_ids_is_rejected_as_nonusable():
+    code, _message = _error_code(lambda: _read(b"7;A;1;1\n007;A;2;1\n"))
+    assert code == "empty_feed"
 
 
 def test_non_public_or_mixed_dns_answers_fail_before_transport(monkeypatch):
@@ -259,11 +299,11 @@ def test_mocked_https_transport_pins_ip_uses_hostname_and_sends_no_credentials(m
     )
     raw_sockets, tls_sockets, contexts = _install_fake_transport(monkeypatch, response)
 
-    rows = feed.read_supplier_price_feed(
+    parsed = feed.read_supplier_price_feed(
         "https://feed.example/prices.csv", encoding="utf-8", delimiter=";",
     )
 
-    assert rows[11].quantity == 0
+    assert parsed.rows[11].quantity == 0
     assert raw_sockets[0].connected_to == (PUBLIC_IP, 443)
     assert contexts[0].server_hostname == "feed.example"
     request = tls_sockets[0].request
@@ -365,11 +405,11 @@ def test_chunked_response_is_bounded_and_parsed(monkeypatch):
         b"0\r\n\r\n"
     )
     _install_fake_transport(monkeypatch, response)
-    rows = feed.read_supplier_price_feed(
+    parsed = feed.read_supplier_price_feed(
         "https://feed.example/prices.csv", encoding="utf-8", delimiter=";",
     )
-    assert rows[7].price == 3.0
-    assert rows[7].quantity == 0
+    assert parsed.rows[7].price == 3.0
+    assert parsed.rows[7].quantity == 0
 
 
 def test_content_length_and_header_bounds_fail_closed(monkeypatch):

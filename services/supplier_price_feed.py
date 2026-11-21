@@ -60,7 +60,7 @@ _ERROR_CODES = frozenset("""
     redirect_not_allowed http_status headers_invalid headers_too_large
     body_too_large response_too_large content_type_not_allowed invalid_encoding
     invalid_delimiter invalid_csv invalid_row_shape invalid_source_id
-    duplicate_source_id invalid_price invalid_quantity field_too_long empty_feed
+    invalid_price invalid_quantity field_too_long empty_feed
     too_many_rows
 """.split())
 
@@ -84,6 +84,14 @@ class SupplierPriceRow:
     additional_vendor_code: Optional[str]
     barcode: Optional[str]
     rrp: Optional[float]
+
+
+@dataclass(frozen=True)
+class SupplierPriceFeed:
+    """Unambiguous price rows and source IDs quarantined for conflicting data."""
+
+    rows: dict[int, SupplierPriceRow]
+    conflicting_ids: frozenset[int]
 
 
 def _fail(code: str) -> None:
@@ -454,7 +462,7 @@ def _parse_optional_quantity(value: str) -> Optional[int]:
 def _parse_csv(
     body: bytes, *, encoding: str, delimiter: str,
     deadline: Optional[float] = None,
-) -> dict[int, SupplierPriceRow]:
+) -> SupplierPriceFeed:
     if not isinstance(delimiter, str) or len(delimiter) != 1 or delimiter in ("\r", "\n", '"'):
         _fail("invalid_delimiter")
     if not isinstance(encoding, str) or not encoding or len(encoding) > 40:
@@ -467,6 +475,7 @@ def _parse_csv(
     try:
         reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter, strict=True)
         rows: dict[int, SupplierPriceRow] = {}
+        conflicting_ids: set[int] = set()
         header_checked = False
         data_rows = 0
         for fields in reader:
@@ -486,8 +495,6 @@ def _parse_csv(
             if data_rows > MAX_ROWS:
                 _fail("too_many_rows")
             source_id = _parse_source_id(fields[0])
-            if source_id in rows:
-                _fail("duplicate_source_id")
             vendor_code = _text_value(fields[1], _MAX_VENDOR_TEXT)
             price = _parse_optional_price(fields[2], code="invalid_price")
             quantity = _parse_optional_quantity(fields[3])
@@ -500,9 +507,11 @@ def _parse_csv(
                 _parse_optional_price(fields[7], code="invalid_price")
                 if len(fields) > 7 else None
             )
-            # The current feed includes a ninth column unused by the legacy
-            # mapping; later columns are accepted within the same size cap.
-            rows[source_id] = SupplierPriceRow(
+            # Parse every occurrence before duplicate handling, so malformed
+            # values always fail the whole feed. Exact typed duplicates are
+            # harmless; disagreements quarantine the ID and later repeats
+            # cannot make it usable again.
+            parsed_row = SupplierPriceRow(
                 vendor_code=vendor_code,
                 price=price,
                 quantity=quantity,
@@ -511,6 +520,14 @@ def _parse_csv(
                 barcode=barcode,
                 rrp=rrp,
             )
+            previous = rows.get(source_id)
+            if source_id in conflicting_ids:
+                continue
+            if previous is None:
+                rows[source_id] = parsed_row
+            elif previous != parsed_row:
+                del rows[source_id]
+                conflicting_ids.add(source_id)
     except SupplierPriceFeedError:
         raise
     except (csv.Error, UnicodeError, ValueError):
@@ -519,7 +536,7 @@ def _parse_csv(
         _fail("empty_feed")
     if deadline is not None:
         _remaining(deadline)
-    return rows
+    return SupplierPriceFeed(rows=rows, conflicting_ids=frozenset(conflicting_ids))
 
 
 def read_supplier_price_feed(
@@ -527,12 +544,14 @@ def read_supplier_price_feed(
     *,
     encoding: str,
     delimiter: str,
-) -> dict[int, SupplierPriceRow]:
+) -> SupplierPriceFeed:
     """Fetch and parse one bounded public supplier price CSV.
 
     The function performs at most one GET. It never sends cookies, auth
     headers, URL userinfo, or query parameters, and never exposes transport or
-    payload details in exceptions.
+    payload details in exceptions. Identical typed source rows coalesce;
+    conflicting repeated IDs are returned in ``conflicting_ids`` and omitted
+    from ``rows``.
     """
     deadline = time.monotonic() + TOTAL_DEADLINE_SECONDS
     host, path = _prepare_url(url)
@@ -543,6 +562,7 @@ def read_supplier_price_feed(
 
 __all__ = [
     "SupplierPriceFeedError",
+    "SupplierPriceFeed",
     "SupplierPriceRow",
     "read_supplier_price_feed",
 ]
