@@ -22,16 +22,20 @@ API Endpoints:
 """
 
 import ast
+import hashlib
+import hmac
+import json
 import logging
 import operator
 import re
 import math
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import List, Dict, Any, Optional, Tuple
 
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash
+from flask import Blueprint, current_app, render_template, request, jsonify, redirect, url_for, flash
 from flask_login import login_required, current_user
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from models import (
     db, Product, Seller, SafePriceChangeSettings,
@@ -56,6 +60,10 @@ prices_bp = Blueprint('prices', __name__, url_prefix='/prices')
 MAX_EXACT_QUERY_LENGTH = MAX_BULK_PRODUCT_SELECTION * 20 - 1
 MAX_JS_SAFE_PRODUCT_ID = (1 << 53) - 1
 PRICE_WORKSPACE_RETURN_NONCE_RE = re.compile(r'^[a-f0-9]{32}$')
+PRICE_REVIEW_TOKEN_SALT = 'wb-authoritative-price-review-v1'
+PRICE_REVIEW_TOKEN_MAX_AGE_SECONDS = 300
+PRICE_REVIEW_TOKEN_MAX_LENGTH = 4096
+PRICE_REVIEW_WRITE_RECEIPT = 'wb_reviewed_selection_v1'
 
 
 def _price_workspace_return_nonce(form):
@@ -158,13 +166,14 @@ def _price_product_json(product):
         'title': product.title[:80] if product.title else '',
         'brand': product.brand or '',
         'category': product.object_name or '',
-        'price': float(product.price) if product.price else 0,
-        'discount_price': float(product.discount_price) if product.discount_price else None,
-        'supplier_price': float(product.supplier_price) if product.supplier_price else None,
-        'wb_price': float(product.wb_price) if product.wb_price else None,
+        'price': float(product.price) if product.price is not None else None,
+        'discount_price': float(product.discount_price) if product.discount_price is not None else None,
+        'supplier_price': float(product.supplier_price) if product.supplier_price is not None else None,
+        'wb_price': float(product.wb_price) if product.wb_price is not None else None,
         'wb_discount': product.wb_discount,
         'wb_discounted_price': (
-            float(product.wb_discounted_price) if product.wb_discounted_price else None
+            float(product.wb_discounted_price)
+            if product.wb_discounted_price is not None else None
         ),
         'wb_price_synced_at': (
             product.wb_price_synced_at.strftime('%d.%m.%Y %H:%M')
@@ -350,7 +359,7 @@ class FormulaEvaluator:
 
         raise ValueError(f"Недопустимая конструкция в формуле: {type(node).__name__}")
 
-    def evaluate(self) -> float:
+    def evaluate(self, *, strict=False) -> float:
         """Безопасно вычислить формулу через AST-парсер."""
         try:
             if len(self.formula) > self.MAX_FORMULA_LENGTH:
@@ -366,12 +375,18 @@ class FormulaEvaluator:
 
             # Вычисляем через безопасный обход дерева
             result = self._eval_node(tree)
+            if not math.isfinite(float(result)):
+                raise ValueError("Результат формулы не является конечным числом")
             return float(result)
         except (ValueError, TypeError, SyntaxError, ZeroDivisionError) as e:
             logger.warning(f"Formula evaluation error: {type(e).__name__}: {e}")
+            if strict:
+                raise ValueError("Не удалось рассчитать формулу") from e
             return 0.0
         except Exception:
             logger.warning("Unexpected formula evaluation error")
+            if strict:
+                raise ValueError("Не удалось рассчитать формулу") from None
             return 0.0
 
 
@@ -511,6 +526,723 @@ def calculate_price_changes(
     return items, stats
 
 
+def _review_canonical_value(value):
+    """Convert review inputs and observations to stable JSON-safe values."""
+    if isinstance(value, Decimal):
+        return {'decimal': format(value.normalize(), 'f') if value else '0'}
+    if isinstance(value, datetime):
+        return {'datetime': value.isoformat()}
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError('Числовое значение должно быть конечным')
+        return {'float': format(value, '.15g')}
+    if isinstance(value, dict):
+        return {
+            str(key): _review_canonical_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_review_canonical_value(item) for item in value]
+    if isinstance(value, (str, int, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _review_digest(value):
+    encoded = json.dumps(
+        _review_canonical_value(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(',', ':'),
+        allow_nan=False,
+    ).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _review_decimal(value, field_name):
+    if isinstance(value, bool) or value in (None, ''):
+        raise ValueError(f'Укажите корректное значение: {field_name}')
+    try:
+        parsed = Decimal(str(value).strip())
+    except (InvalidOperation, AttributeError, TypeError, ValueError) as exc:
+        raise ValueError(f'Некорректное значение: {field_name}') from exc
+    if not parsed.is_finite():
+        raise ValueError(f'Значение должно быть конечным: {field_name}')
+    return parsed
+
+
+def _review_product_ids(raw_ids):
+    """Parse the regular UI selection without the separate 200-card handoff cap."""
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise ValueError('Выберите хотя бы один товар')
+    ids = []
+    seen = set()
+    for raw in raw_ids:
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            raise ValueError('ID товара должен быть целым положительным числом')
+        if raw <= 0 or raw > MAX_JS_SAFE_PRODUCT_ID:
+            raise ValueError('ID товара выходит за поддерживаемый диапазон')
+        if raw in seen:
+            raise ValueError('В выборе есть повторяющиеся товары')
+        seen.add(raw)
+        ids.append(raw)
+    return ids
+
+
+def _normalize_review_request(data):
+    if not isinstance(data, dict):
+        raise ValueError('Некорректный формат запроса')
+    exact_selection = data.get('exact_selection', False)
+    if not isinstance(exact_selection, bool):
+        raise ValueError('Некорректный режим точного выбора товаров')
+    if exact_selection:
+        product_ids, error = _parse_exact_product_ids(data.get('product_ids', []))
+        if error:
+            raise ValueError(error)
+    else:
+        product_ids = _review_product_ids(data.get('product_ids'))
+
+    change_type = data.get('change_type', 'percent')
+    if not isinstance(change_type, str) or change_type not in {
+        'fixed', 'percent', 'set', 'formula', 'supplier_pricing',
+    }:
+        raise ValueError('Неизвестный тип изменения цены')
+    price_source = data.get('price_source', 'local')
+    if not isinstance(price_source, str) or price_source not in {'local', 'marketplace'}:
+        raise ValueError('Неизвестный источник цены')
+
+    change_value = None
+    if change_type not in {'supplier_pricing', 'formula'}:
+        change_value = _review_decimal(data.get('change_value'), 'значение изменения')
+
+    formula = data.get('formula', '')
+    if not isinstance(formula, str):
+        raise ValueError('Формула должна быть текстом')
+    formula = formula.strip()
+    if change_type == 'formula' and not formula:
+        raise ValueError('Введите формулу расчёта')
+    if len(formula) > FormulaEvaluator.MAX_FORMULA_LENGTH:
+        raise ValueError('Формула слишком длинная')
+
+    raw_variables = data.get('formula_variables', {})
+    if not isinstance(raw_variables, dict):
+        raise ValueError('Переменные формулы должны быть объектом')
+    formula_variables = {}
+    for name, value in raw_variables.items():
+        if (
+            not isinstance(name, str)
+            or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,15}', name)
+            or name == 'P'
+        ):
+            raise ValueError('Формула содержит недопустимую переменную')
+        formula_variables[name] = _review_decimal(value, f'переменная {name}')
+
+    if change_type != 'formula' and formula_variables:
+        raise ValueError('Переменные можно передавать только для формулы')
+
+    normalized = {
+        'change_type': change_type,
+        'change_value': change_value,
+        'formula': formula,
+        'formula_variables': formula_variables,
+        'price_source': price_source,
+        'exact_selection': exact_selection,
+    }
+    return product_ids, normalized
+
+
+def _model_settings_values(model, *, omit_identity=True):
+    if model is None:
+        return None
+    result = {}
+    for column in model.__table__.columns:
+        if omit_identity and column.name in {
+            'id', 'seller_id', 'created_at', 'updated_at',
+        }:
+            continue
+        result[column.name] = getattr(model, column.name, None)
+    return result
+
+
+def _default_price_settings(seller_id):
+    """Build an in-memory settings object using the model's declared defaults."""
+    values = {'seller_id': seller_id}
+    for column in SafePriceChangeSettings.__table__.columns:
+        if column.name in {'id', 'seller_id'} or column.default is None:
+            continue
+        default = column.default.arg
+        if callable(default):
+            try:
+                default = default(None)
+            except TypeError:
+                default = default()
+        values[column.name] = default
+    return SafePriceChangeSettings(**values)
+
+
+def _effective_review_settings(seller_id):
+    settings = SafePriceChangeSettings.query.populate_existing().filter_by(
+        seller_id=seller_id,
+    ).first()
+    if settings is None:
+        settings = _default_price_settings(seller_id)
+    return settings
+
+
+def _load_review_products(seller_id, product_ids, *, exact_selection):
+    if exact_selection:
+        products, problem = _resolve_exact_active_products(seller_id, product_ids)
+        if problem:
+            return None, problem
+        return products, None
+
+    found = {}
+    # Keep the full direct/all selection intact while staying below older
+    # SQLite builds' bind-variable limit.
+    for offset in range(0, len(product_ids), 500):
+        chunk = product_ids[offset:offset + 500]
+        rows = Product.query.populate_existing().filter(
+            Product.seller_id == seller_id,
+            Product.id.in_(chunk),
+        ).all()
+        found.update({row.id: row for row in rows})
+    if len(found) != len(product_ids):
+        return None, 'missing'
+    ordered = [found[product_id] for product_id in product_ids]
+    if any(not product.is_active for product in ordered):
+        return None, 'inactive'
+    return ordered, None
+
+
+def _review_source_observation(product):
+    return {
+        'product_id': product.id,
+        'seller_id': product.seller_id,
+        'is_active': bool(product.is_active),
+        'nm_id': product.nm_id,
+        'local_price': product.price,
+        'local_record_updated_at': product.updated_at,
+        'wb_price': product.wb_price,
+        'wb_price_synced_at': product.wb_price_synced_at,
+        'supplier_price': product.supplier_price,
+        'supplier_price_updated_at': product.supplier_price_updated_at,
+    }
+
+
+def _build_review_snapshot(seller_id, product_ids, normalized, settings):
+    """Calculate the exact reviewed rows from current local observations only."""
+    from models import PricingSettings
+    from services.pricing_engine import calculate_price as calculate_supplier_price
+
+    allow_unlimited = getattr(settings, 'allow_unlimited_batch', True)
+    max_products = getattr(settings, 'max_products_per_batch', 1000)
+    if max_products is None:
+        max_products = 1000
+    if not allow_unlimited and len(product_ids) > max_products:
+        raise ValueError(
+            f'Превышен лимит товаров ({max_products}). Выбрано: {len(product_ids)}. '
+            'Измените настройки массовых операций или сократите выбор.'
+        )
+
+    products, problem = _load_review_products(
+        seller_id, product_ids,
+        exact_selection=normalized['exact_selection'],
+    )
+    if problem:
+        if problem == 'missing':
+            raise LookupError('Один или несколько товаров больше недоступны. Обновите выбор.')
+        if problem == 'inactive':
+            raise LookupError('Один или несколько товаров больше неактивны. Обновите выбор.')
+        status, message = _exact_selection_problem(problem)
+        raise LookupError(message)
+
+    pricing_settings = None
+    if normalized['change_type'] == 'supplier_pricing':
+        pricing_settings = PricingSettings.query.populate_existing().filter_by(
+            seller_id=seller_id,
+        ).first()
+
+    rows = []
+    source_facts = []
+    stats = {
+        'total': 0,
+        'selected_count': len(product_ids),
+        'changed_count': 0,
+        'safe': 0,
+        'warning': 0,
+        'dangerous': 0,
+        'no_op_count': 0,
+        'skipped_count': 0,
+        'invalid_count': 0,
+    }
+
+    for product in products:
+        observation = _review_source_observation(product)
+        source_facts.append(observation)
+        source_kind = None
+        old_price = None
+        source_freshness_at = None
+
+        if normalized['price_source'] == 'marketplace':
+            if product.wb_price is not None:
+                source_kind = 'wb_seller_price'
+                old_price = float(product.wb_price)
+                source_freshness_at = product.wb_price_synced_at
+            elif (
+                normalized['exact_selection']
+                and product.price is not None
+            ):
+                # Existing exact catalog handoff explicitly documents this
+                # local fallback; the broad selection path does not.
+                source_kind = 'local_fallback'
+                old_price = float(product.price)
+        elif product.price is not None:
+            source_kind = 'local_catalog_price'
+            old_price = float(product.price)
+
+        base_row = {
+            'product_id': product.id,
+            'nm_id': product.nm_id,
+            'vendor_code': product.vendor_code or '',
+            'title': product.title or '',
+            'source_kind': source_kind,
+            'source_freshness_at': (
+                source_freshness_at.isoformat() if source_freshness_at else None
+            ),
+            'source_freshness': (
+                'observed' if source_freshness_at else 'not_recorded'
+            ),
+            'supplier_price': (
+                float(product.supplier_price)
+                if product.supplier_price is not None else None
+            ),
+            'supplier_price_updated_at': (
+                product.supplier_price_updated_at.isoformat()
+                if product.supplier_price_updated_at else None
+            ),
+            'old_price': old_price,
+            'new_price': None,
+            'change_amount': None,
+            'change_percent': None,
+            'safety_level': None,
+            'status': None,
+            'reason': None,
+        }
+
+        if not product.nm_id or product.nm_id <= 0:
+            base_row.update(status='invalid', reason='Нет действующего ID карточки WB.')
+            stats['invalid_count'] += 1
+            rows.append(base_row)
+            continue
+        if old_price is None:
+            if normalized['price_source'] == 'marketplace':
+                reason = 'Нет сохранённой цены WB; локальная цена в этом выборе не используется.'
+            else:
+                reason = 'Локальная цена не указана.'
+            base_row.update(status='skipped', reason=reason)
+            stats['skipped_count'] += 1
+            rows.append(base_row)
+            continue
+
+        supplier_price = None
+        if normalized['change_type'] == 'supplier_pricing':
+            if product.supplier_price is None or float(product.supplier_price) <= 0:
+                base_row.update(
+                    status='skipped',
+                    reason='Нет положительной закупочной цены поставщика.',
+                )
+                stats['skipped_count'] += 1
+                rows.append(base_row)
+                continue
+            supplier_price = float(product.supplier_price)
+            if pricing_settings is None:
+                base_row.update(
+                    status='skipped',
+                    reason='Настройки формулы ценообразования не заданы.',
+                )
+                stats['skipped_count'] += 1
+                rows.append(base_row)
+                continue
+
+        try:
+            change_type = normalized['change_type']
+            if change_type == 'supplier_pricing':
+                result = calculate_supplier_price(
+                    supplier_price, pricing_settings, product_id=product.id,
+                )
+                if not result or result.get('final_price') is None:
+                    raise ValueError('Не удалось рассчитать цену по настройкам поставщика')
+                calculated = float(result['final_price'])
+            elif change_type == 'fixed':
+                calculated = old_price + float(normalized['change_value'])
+            elif change_type == 'percent':
+                calculated = old_price * (1 + float(normalized['change_value']) / 100)
+            elif change_type == 'set':
+                calculated = float(normalized['change_value'])
+            else:
+                variables = {'P': old_price}
+                variables.update({
+                    key: float(value)
+                    for key, value in normalized['formula_variables'].items()
+                })
+                calculated = FormulaEvaluator(
+                    normalized['formula'], variables,
+                ).evaluate(strict=True)
+            if not math.isfinite(float(calculated)):
+                raise ValueError('Результат не является конечным числом')
+            new_price = round(max(0, float(calculated)))
+        except (ValueError, TypeError, OverflowError, ZeroDivisionError):
+            base_row.update(
+                status='invalid', reason='Не удалось рассчитать корректную цену.',
+            )
+            stats['invalid_count'] += 1
+            rows.append(base_row)
+            continue
+
+        if new_price <= 0:
+            base_row.update(
+                status='invalid',
+                new_price=new_price,
+                reason='Новая цена должна быть больше нуля.',
+            )
+            stats['invalid_count'] += 1
+            rows.append(base_row)
+            continue
+
+        change_amount = new_price - old_price
+        if old_price > 0:
+            change_percent = (change_amount / old_price) * 100
+        else:
+            change_percent = 100 if new_price > 0 else 0
+        safety_level = settings.classify_change(old_price, new_price)
+        base_row.update(
+            new_price=new_price,
+            change_amount=round(change_amount, 2),
+            change_percent=round(change_percent, 2),
+            safety_level=safety_level,
+        )
+        if new_price == round(old_price):
+            base_row.update(status='no_op', reason='Цена не изменится.')
+            stats['no_op_count'] += 1
+        else:
+            base_row.update(status='changed', reason='Будет добавлено в предложение.')
+            stats['total'] += 1
+            stats['changed_count'] += 1
+            stats[safety_level] += 1
+        rows.append(base_row)
+
+    settings_facts = _model_settings_values(settings)
+    pricing_settings_facts = _model_settings_values(pricing_settings)
+    settings_digest = _review_digest({
+        'safe_price_settings': settings_facts,
+        'supplier_pricing_settings': pricing_settings_facts,
+    })
+    source_digest = _review_digest(source_facts)
+    result_digest = _review_digest(rows)
+    ids_digest = _review_digest(product_ids)
+    input_digest = _review_digest(normalized)
+    combined_digest = _review_digest({
+        'version': 1,
+        'ids': ids_digest,
+        'inputs': input_digest,
+        'settings': settings_digest,
+        'sources': source_digest,
+        'results': result_digest,
+    })
+    guardrail_blocked = (
+        stats['dangerous'] > 0
+        and getattr(settings, 'mode', 'confirm') == 'block'
+    )
+    return {
+        'items': rows,
+        'stats': stats,
+        'can_create': stats['changed_count'] > 0 and not guardrail_blocked,
+        'guardrail_blocked': guardrail_blocked,
+        'digests': {
+            'ids': ids_digest,
+            'inputs': input_digest,
+            'settings': settings_digest,
+            'sources': source_digest,
+            'results': result_digest,
+            'combined': combined_digest,
+        },
+    }
+
+
+def _price_review_serializer():
+    if not current_app.secret_key:
+        raise RuntimeError('Не настроена подпись предпросмотра цен')
+    return URLSafeTimedSerializer(
+        current_app.secret_key,
+        salt=PRICE_REVIEW_TOKEN_SALT,
+    )
+
+
+def _issue_price_review_token(user_id, seller_id, product_ids, snapshot):
+    digests = snapshot['digests']
+    return _price_review_serializer().dumps({
+        'v': 1,
+        'user_id': int(user_id),
+        'seller_id': int(seller_id),
+        'count': len(product_ids),
+        **digests,
+    })
+
+
+def _load_price_review_token(token, *, user_id, seller_id):
+    if not isinstance(token, str) or not token or len(token) > PRICE_REVIEW_TOKEN_MAX_LENGTH:
+        raise ValueError('Проверка цены отсутствует. Рассчитайте изменения снова.')
+    try:
+        payload = _price_review_serializer().loads(
+            token,
+            max_age=PRICE_REVIEW_TOKEN_MAX_AGE_SECONDS,
+        )
+    except SignatureExpired as exc:
+        raise ValueError('Предпросмотр устарел. Рассчитайте изменения снова.') from exc
+    except BadSignature as exc:
+        raise ValueError('Подпись предпросмотра неверна. Рассчитайте изменения снова.') from exc
+    digest_names = {'ids', 'inputs', 'settings', 'sources', 'results', 'combined'}
+    if (
+        not isinstance(payload, dict)
+        or payload.get('v') != 1
+        or payload.get('user_id') != int(user_id)
+        or payload.get('seller_id') != int(seller_id)
+        or not isinstance(payload.get('count'), int)
+        or payload['count'] <= 0
+        or any(
+            not isinstance(payload.get(key), str)
+            or not re.fullmatch(r'[a-f0-9]{64}', payload[key])
+            for key in digest_names
+        )
+    ):
+        raise ValueError('Предпросмотр относится к другому выбору или продавцу.')
+    return payload
+
+
+def _begin_review_write_transaction():
+    """Take SQLite's writer lock before re-reading any reviewed price inputs."""
+    if db.engine.dialect.name != 'sqlite':
+        raise RuntimeError('Сохранение проверенных цен поддерживается только на SQLite')
+    session = db.session()
+    if session.in_transaction():
+        session.rollback()
+    try:
+        connection = session.connection()
+        raw_connection = connection.connection.driver_connection
+        if getattr(raw_connection, 'in_transaction', False):
+            raise RuntimeError('review_transaction_not_fresh')
+        previous_timeout = raw_connection.execute('PRAGMA busy_timeout').fetchone()[0]
+        raw_connection.execute('PRAGMA busy_timeout = 200')
+        try:
+            connection.exec_driver_sql('BEGIN IMMEDIATE')
+        finally:
+            raw_connection.execute(f'PRAGMA busy_timeout = {int(previous_timeout)}')
+    except Exception:
+        session.rollback()
+        raise RuntimeError('База занята. Повторите проверку и сохранение позже.') from None
+
+
+def _reviewed_price_preview(data, seller):
+    try:
+        product_ids, normalized = _normalize_review_request(data)
+        settings = _effective_review_settings(seller.id)
+        snapshot = _build_review_snapshot(seller.id, product_ids, normalized, settings)
+        token = _issue_price_review_token(
+            current_user.id, seller.id, product_ids, snapshot,
+        )
+    except LookupError as exc:
+        return jsonify({
+            'success': False,
+            'code': 'review_selection_changed',
+            'error': str(exc),
+        }), 409
+    except ValueError as exc:
+        return jsonify({
+            'success': False,
+            'code': 'review_invalid_input',
+            'error': str(exc),
+        }), 400
+    except Exception:
+        logger.exception('Unable to calculate reviewed WB price preview')
+        return jsonify({
+            'success': False,
+            'code': 'review_unavailable',
+            'error': 'Не удалось рассчитать предпросмотр цен. Повторите расчёт.',
+        }), 500
+
+    return jsonify({
+        'success': True,
+        'reviewed': True,
+        'items': snapshot['items'],
+        'stats': snapshot['stats'],
+        'can_create': snapshot['can_create'],
+        'guardrail_blocked': snapshot['guardrail_blocked'],
+        'review_token': token,
+        'review_max_age_seconds': PRICE_REVIEW_TOKEN_MAX_AGE_SECONDS,
+    })
+
+
+def _reviewed_price_create(data, seller):
+    if not isinstance(data, dict):
+        return jsonify({'success': False, 'error': 'Некорректный формат запроса'}), 400
+    name = data.get('name', '')
+    description = data.get('description', '')
+    if not isinstance(name, str) or not isinstance(description, str):
+        return jsonify({'success': False, 'error': 'Название и причина должны быть текстом'}), 400
+    name = name.strip()
+    description = description.strip()
+    if len(name) > 200:
+        return jsonify({'success': False, 'error': 'Название операции слишком длинное'}), 400
+
+    try:
+        product_ids, normalized = _normalize_review_request(data)
+        token_payload = _load_price_review_token(
+            data.get('review_token'),
+            user_id=current_user.id,
+            seller_id=seller.id,
+        )
+        if token_payload['count'] != len(product_ids):
+            raise ValueError('Состав выбора изменился. Рассчитайте изменения снова.')
+        if not hmac.compare_digest(token_payload['ids'], _review_digest(product_ids)):
+            raise ValueError('Состав выбора изменился. Рассчитайте изменения снова.')
+        if not hmac.compare_digest(token_payload['inputs'], _review_digest(normalized)):
+            raise ValueError('Параметры изменились. Рассчитайте изменения снова.')
+    except ValueError as exc:
+        return jsonify({
+            'success': False,
+            'code': 'review_invalid_or_stale',
+            'error': str(exc),
+        }), 409
+
+    try:
+        _begin_review_write_transaction()
+        settings = _effective_review_settings(seller.id)
+        snapshot = _build_review_snapshot(seller.id, product_ids, normalized, settings)
+        for key in ('ids', 'inputs', 'settings', 'sources', 'results', 'combined'):
+            if not hmac.compare_digest(token_payload[key], snapshot['digests'][key]):
+                db.session.rollback()
+                return jsonify({
+                    'success': False,
+                    'code': 'review_stale',
+                    'error': 'Цена, источник или настройки изменились после предпросмотра. Рассчитайте снова.',
+                }), 409
+
+        stats = snapshot['stats']
+        if not stats['changed_count']:
+            db.session.rollback()
+            return jsonify({
+                'success': False,
+                'code': 'review_no_changes',
+                'error': 'В проверенном выборе нет корректных изменений для сохранения.',
+                'stats': stats,
+            }), 409
+        if snapshot['guardrail_blocked']:
+            db.session.rollback()
+            return jsonify({
+                'success': False,
+                'code': 'price_change_blocked',
+                'error': 'Обнаружены опасные изменения. Операция заблокирована настройками безопасности.',
+                'stats': stats,
+            }), 403
+
+        material_rows = [row for row in snapshot['items'] if row['status'] == 'changed']
+        if not material_rows:
+            db.session.rollback()
+            return jsonify({
+                'success': False,
+                'code': 'review_no_changes',
+                'error': 'В проверенном выборе нет корректных изменений для сохранения.',
+            }), 409
+
+        change_type = normalized['change_type']
+        change_value = normalized['change_value']
+        batch = PriceChangeBatch(
+            seller_id=seller.id,
+            name=name or f'Изменение цен ({datetime.now().strftime("%d.%m.%Y %H:%M")})',
+            description=description,
+            change_type=change_type,
+            change_value=(
+                float(change_value)
+                if change_value is not None and change_type != 'formula' else None
+            ),
+            change_formula=normalized['formula'] if change_type == 'formula' else None,
+            total_items=stats['changed_count'],
+            safe_count=stats['safe'],
+            warning_count=stats['warning'],
+            dangerous_count=stats['dangerous'],
+            has_safe_changes=stats['safe'] > 0,
+            has_warning_changes=stats['warning'] > 0,
+            has_dangerous_changes=stats['dangerous'] > 0,
+        )
+        batch.status = (
+            'pending_review'
+            if stats['dangerous'] > 0 and settings.mode == 'confirm'
+            else 'confirmed'
+        )
+        db.session.add(batch)
+        db.session.flush()
+        for row in material_rows:
+            db.session.add(PriceChangeItem(
+                batch_id=batch.id,
+                product_id=row['product_id'],
+                nm_id=row['nm_id'],
+                vendor_code=row['vendor_code'],
+                product_title=row['title'],
+                old_price=row['old_price'],
+                new_price=row['new_price'],
+                price_change_amount=row['change_amount'],
+                price_change_percent=row['change_percent'],
+                safety_level=row['safety_level'],
+            ))
+        db.session.commit()
+        redirect = (
+            url_for('prices.batch_confirm', batch_id=batch.id)
+            if batch.status == 'pending_review'
+            else url_for('prices.batch_detail', batch_id=batch.id)
+        )
+        return jsonify({
+            'success': True,
+            'reviewed_write': True,
+            'reviewed_selection': PRICE_REVIEW_WRITE_RECEIPT,
+            'selected_count': stats['selected_count'],
+            'changed_count': stats['changed_count'],
+            'batch_id': batch.id,
+            'status': batch.status,
+            'stats': stats,
+            'redirect': redirect,
+        })
+    except LookupError as exc:
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'code': 'review_selection_changed',
+            'error': str(exc),
+        }), 409
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'code': 'review_invalid_input',
+            'error': str(exc),
+        }), 400
+    except RuntimeError as exc:
+        db.session.rollback()
+        status = 503 if 'База занята' in str(exc) else 500
+        return jsonify({
+            'success': False,
+            'code': 'review_save_unavailable',
+            'error': str(exc),
+        }), status
+    except Exception:
+        db.session.rollback()
+        logger.exception('Unable to save reviewed WB price batch')
+        return jsonify({
+            'success': False,
+            'code': 'review_save_failed',
+            'error': 'Не удалось сохранить предложение. Рассчитайте изменения снова.',
+        }), 500
+
+
 # ==================== WEB ROUTES ====================
 
 @prices_bp.route('/')
@@ -646,6 +1378,15 @@ def create_batch():
         return jsonify({'error': 'Unauthorized'}), 401
 
     data = request.get_json()
+    if isinstance(data, dict) and 'reviewed_write' in data:
+        if data.get('reviewed_write') is not True:
+            return jsonify({
+                'success': False,
+                'code': 'reviewed_write_flag_invalid',
+                'error': 'Некорректный режим проверенного сохранения.',
+            }), 400
+        return _reviewed_price_create(data, seller)
+
     exact_selection = False
     selected_ids = None
     if isinstance(data, dict) and 'exact_selection' in data:
@@ -1452,6 +2193,15 @@ def api_preview_changes():
         return jsonify({'error': 'No data provided'}), 400
     if not isinstance(data, dict):
         return jsonify({'error': 'Некорректный формат запроса'}), 400
+
+    if 'reviewed_write' in data:
+        if data.get('reviewed_write') is not True:
+            return jsonify({
+                'success': False,
+                'code': 'reviewed_write_flag_invalid',
+                'error': 'Некорректный режим проверенного предпросмотра.',
+            }), 400
+        return _reviewed_price_preview(data, seller)
 
     if isinstance(data, dict) and 'exact_selection' in data and not isinstance(data['exact_selection'], bool):
         return jsonify({'error': 'Некорректный режим точного выбора товаров'}), 400

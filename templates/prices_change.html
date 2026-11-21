@@ -47,7 +47,7 @@
     </div>
     {% endif %}
 
-    <div x-show="requestError" x-cloak class="mb-6 p-4 rounded-xl border border-red-200 bg-red-50 text-sm text-red-800" role="alert">
+    <div data-price-review-error x-show="requestError" x-cloak class="mb-6 p-4 rounded-xl border border-red-200 bg-red-50 text-sm text-red-800" role="alert">
         <p x-text="requestError"></p>
         <a x-show="selectionHandoff" data-price-workspace-return :href="workspaceReturnHref()" class="inline-flex items-center min-h-[44px] mt-2 font-medium underline">Вернуться к товарам</a>
     </div>
@@ -61,7 +61,7 @@
                     <h3 class="font-medium text-gray-900">Выбрано товаров</h3>
                     <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium bg-indigo-100 text-indigo-800" x-text="selectedIds.length"></span>
                 </div>
-                <button x-show="!selectionHandoff" @click="clearSelection" class="text-sm text-red-600 hover:text-red-800">
+                    <button x-show="!selectionHandoff" @click="clearSelection" :disabled="submitting" class="text-sm text-red-600 hover:text-red-800 disabled:opacity-50">
                     Очистить выбор
                 </button>
             </div>
@@ -95,7 +95,7 @@
                         </p>
 
                         <!-- Sync button -->
-                        <button @click="syncWbPrices()" :disabled="syncingWb"
+                        <button @click="syncWbPrices()" :disabled="syncingWb || submitting"
                                 class="w-full px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 text-sm font-medium flex items-center justify-center transition">
                             <template x-if="syncingWb">
                                 <svg class="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">
@@ -135,7 +135,7 @@
                     <label for="name" class="block text-sm font-medium text-gray-700 mb-1">
                         Название операции
                     </label>
-                    <input type="text" id="name" x-model="name"
+                    <input type="text" id="name" x-model="name" :disabled="submitting"
                            placeholder="Например: Новогодняя распродажа"
                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
                 </div>
@@ -149,6 +149,8 @@
                         <label class="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 text-sm"
                                :class="changeType === 'supplier_pricing' ? 'border-emerald-500 bg-emerald-50' : 'border-gray-200'">
                             <input type="radio" value="supplier_pricing" x-model="changeType"
+                                   @change="invalidateReview()"
+                                   :disabled="submitting"
                                    class="h-4 w-4 text-emerald-600 focus:ring-emerald-500 border-gray-300">
                             <div class="ml-3">
                                 <span class="text-gray-900">Текущая цена поставщика</span>
@@ -158,24 +160,32 @@
                         <label class="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 text-sm"
                                :class="changeType === 'percent' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
                             <input type="radio" value="percent" x-model="changeType"
+                                   @change="invalidateReview()"
+                                   :disabled="submitting"
                                    class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
                             <span class="ml-3 text-gray-900">Процент от текущей цены</span>
                         </label>
                         <label class="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 text-sm"
                                :class="changeType === 'fixed' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
                             <input type="radio" value="fixed" x-model="changeType"
+                                   @change="invalidateReview()"
+                                   :disabled="submitting"
                                    class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
                             <span class="ml-3 text-gray-900">Фиксированная сумма (+/-)</span>
                         </label>
                         <label class="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 text-sm"
                                :class="changeType === 'set' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
                             <input type="radio" value="set" x-model="changeType"
+                                   @change="invalidateReview()"
+                                   :disabled="submitting"
                                    class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
                             <span class="ml-3 text-gray-900">Установить цену</span>
                         </label>
                         <label class="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 text-sm"
                                :class="changeType === 'formula' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
                             <input type="radio" value="formula" x-model="changeType"
+                                   @change="invalidateReview()"
+                                   :disabled="submitting"
                                    class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
                             <span class="ml-3 text-gray-900">Формула</span>
                         </label>
@@ -186,7 +196,7 @@
                 <div class="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg" x-show="changeType === 'supplier_pricing'" x-cloak>
                     <p class="text-xs text-emerald-800">
                         Для каждого товара будет взята его закупочная цена от поставщика и рассчитана розничная цена по вашей формуле ценообразования.
-                        Товары без закупочной цены останутся без изменений.
+                        Карточки без цены или расчёта будут отмечены в проверке и не попадут в предложение.
                     </p>
                     <a href="{{ url_for('auto_import_pricing') }}" class="inline-block mt-2 text-xs text-emerald-700 underline hover:text-emerald-900">Настроить формулу</a>
                 </div>
@@ -198,6 +208,8 @@
                     </label>
                     <div class="relative">
                         <input type="number" id="change_value" x-model.number="changeValue"
+                               @input="invalidateReview()"
+                               :disabled="submitting"
                                :step="changeType === 'percent' ? '0.1' : '1'"
                                class="w-full px-3 py-2 pr-12 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
                         <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
@@ -217,7 +229,7 @@
                     <label for="formula" class="block text-sm font-medium text-gray-700 mb-1">
                         Формула расчета
                     </label>
-                    <textarea id="formula" x-model="formula" rows="3"
+                    <textarea id="formula" x-model="formula" @input="invalidateReview()" :disabled="submitting" rows="3"
                               placeholder="Например: P * 1.2 или (P + 100) * 1.15"
                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm font-mono"></textarea>
                     <div class="mt-2 text-xs text-gray-500">
@@ -235,64 +247,99 @@
                     <label for="description" class="block text-sm font-medium text-gray-700 mb-1">
                         Причина изменения
                     </label>
-                    <textarea id="description" rows="2" x-model="description"
+                    <textarea id="description" rows="2" x-model="description" :disabled="submitting"
                               placeholder="Опционально..."
                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm"></textarea>
                 </div>
             </div>
 
             <!-- Предпросмотр -->
-            <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6" x-show="selectedIds.length > 0 && (changeValue || formula || changeType === 'supplier_pricing')">
-                <h2 class="text-lg font-medium text-gray-900 mb-4">Предпросмотр</h2>
-                <p class="pricing-lane-note">Сохранённая цена продавца служит исходным значением. Новая цена рассчитана по выбранным условиям и остаётся предложением до отдельного подтверждения; предпросмотр ничего не отправляет.</p>
+            <div data-price-review-panel class="bg-white rounded-xl border border-gray-200 shadow-sm p-6" x-show="selectedIds.length > 0">
+                <h2 class="text-lg font-medium text-gray-900 mb-2">Проверка перед сохранением</h2>
+                <p class="pricing-lane-note">Сервер рассчитает каждую выбранную карточку по текущим сохранённым ценам и настройкам. Любое изменение выбора, источника или правила сбросит проверку.</p>
 
-                <template x-if="preview">
-                    <div class="space-y-3">
-                        <div class="flex justify-between items-center text-sm">
-                            <span class="text-gray-500">Всего товаров:</span>
-                            <span class="font-medium" x-text="preview.stats.total"></span>
-                        </div>
-                        <div class="flex justify-between items-center text-sm">
-                            <span class="text-green-600 flex items-center">
-                                <span class="w-2 h-2 rounded-full bg-green-500 mr-2"></span>
-                                Безопасных:
-                            </span>
-                            <span class="font-medium text-green-600" x-text="preview.stats.safe"></span>
-                        </div>
-                        <div class="flex justify-between items-center text-sm">
-                            <span class="text-yellow-600 flex items-center">
-                                <span class="w-2 h-2 rounded-full bg-yellow-500 mr-2"></span>
-                                Предупреждений:
-                            </span>
-                            <span class="font-medium text-yellow-600" x-text="preview.stats.warning"></span>
-                        </div>
-                        <div class="flex justify-between items-center text-sm">
-                            <span class="text-red-600 flex items-center">
-                                <span class="w-2 h-2 rounded-full bg-red-500 mr-2"></span>
-                                Опасных:
-                            </span>
-                            <span class="font-medium text-red-600" x-text="preview.stats.dangerous"></span>
-                        </div>
-
-                        <div x-show="preview.stats.dangerous > 0" class="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-xs">
-                            <strong class="text-red-700">Внимание!</strong>
-                            <span class="text-red-600">Потребуется подтверждение.</span>
-                        </div>
-                    </div>
-                </template>
-
-                <button @click="loadPreview" :disabled="previewLoading || (selectionHandoff && !!requestError)"
+                <button data-price-review-run @click="loadPreview" :disabled="previewLoading || submitting || !selectedIds.length || (selectionHandoff && !!requestError)"
                         class="w-full mt-4 px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 disabled:opacity-50 text-sm flex items-center justify-center">
                     <svg x-show="previewLoading" class="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">
                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    <span x-text="previewLoading ? 'Расчет...' : 'Рассчитать изменения'"></span>
+                    <span x-text="previewLoading ? 'Расчёт на сервере...' : 'Рассчитать и проверить изменения'"></span>
                 </button>
+
+                <template x-if="reviewIsCurrent()">
+                    <div class="mt-4 space-y-3">
+                        <div class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                            <span class="text-gray-600">Выбрано карточек</span>
+                            <span class="text-right font-medium" x-text="preview.stats.selected_count"></span>
+                            <span class="text-gray-600">Изменится</span>
+                            <span class="text-right font-medium" x-text="preview.stats.changed_count"></span>
+                            <span class="text-gray-600">Без изменения</span>
+                            <span class="text-right" x-text="preview.stats.no_op_count"></span>
+                            <span class="text-gray-600">Пропущено</span>
+                            <span class="text-right" x-text="preview.stats.skipped_count"></span>
+                            <span class="text-gray-600">Некорректно</span>
+                            <span class="text-right" x-text="preview.stats.invalid_count"></span>
+                            <span class="text-green-700">Безопасные изменения</span>
+                            <span class="text-right text-green-700" x-text="preview.stats.safe"></span>
+                            <span class="text-yellow-700">С предупреждением</span>
+                            <span class="text-right text-yellow-700" x-text="preview.stats.warning"></span>
+                            <span class="text-red-700">Опасные изменения</span>
+                            <span class="text-right text-red-700" x-text="preview.stats.dangerous"></span>
+                        </div>
+
+                        <div x-show="preview.guardrail_blocked" class="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800" role="alert">
+                            Настройки безопасности блокируют опасные изменения. Измените правила или параметры и проверьте выбор снова.
+                        </div>
+                        <div x-show="preview.stats.dangerous > 0 && !preview.guardrail_blocked" class="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800" role="status">
+                            После сохранения опасные изменения потребуют отдельного подтверждения.
+                        </div>
+                        <div x-show="preview.stats.changed_count === 0" class="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900" role="status">
+                            Нет корректных изменений для сохранения.
+                        </div>
+
+                        <div class="overflow-auto max-h-96 border border-gray-200 rounded-lg" role="region" aria-label="Проверенные цены всех выбранных товаров" tabindex="0">
+                            <table data-price-review-table class="min-w-full divide-y divide-gray-200 text-sm">
+                                <thead class="bg-gray-50 sticky top-0">
+                                    <tr>
+                                        <th scope="col" class="px-3 py-2 text-left font-medium text-gray-600">Товар</th>
+                                        <th scope="col" class="px-3 py-2 text-left font-medium text-gray-600">Источник</th>
+                                        <th scope="col" class="px-3 py-2 text-right font-medium text-gray-600">Текущая</th>
+                                        <th scope="col" class="px-3 py-2 text-right font-medium text-gray-600">Новая</th>
+                                        <th scope="col" class="px-3 py-2 text-right font-medium text-gray-600">Результат</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-100">
+                                    <template x-for="row in preview.items" :key="row.product_id">
+                                        <tr data-price-review-row :data-product-id="row.product_id">
+                                            <td class="px-3 py-2 min-w-[180px]">
+                                                <div class="font-medium text-gray-900" x-text="row.vendor_code || ('ID ' + row.product_id)"></div>
+                                                <div class="text-xs text-gray-500 truncate max-w-xs" x-text="row.title"></div>
+                                            </td>
+                                            <td class="px-3 py-2 text-xs text-gray-600">
+                                                <div x-text="sourceLabel(row)"></div>
+                                                <div class="text-gray-400" x-text="sourceFreshnessLabel(row)"></div>
+                                            </td>
+                                            <td class="px-3 py-2 text-right whitespace-nowrap" x-text="formatReviewedPrice(row.old_price)"></td>
+                                            <td class="px-3 py-2 text-right whitespace-nowrap font-medium" x-text="formatReviewedPrice(row.new_price)"></td>
+                                            <td class="px-3 py-2 text-right whitespace-nowrap">
+                                                <span class="inline-flex px-2 py-1 rounded-full text-xs font-medium"
+                                                      :class="reviewStatusClass(row)"
+                                                      data-price-review-status
+                                                      x-text="reviewStatusLabel(row)"></span>
+                                                <div class="text-[11px] text-gray-500 mt-1" x-text="row.reason"></div>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </template>
             </div>
 
             <!-- Кнопка создания батча -->
-            <button @click="createBatch" :disabled="selectedIds.length === 0 || (changeType !== 'supplier_pricing' && !changeValue && !formula) || submitting || (selectionHandoff && !!requestError)"
+            <button data-price-reviewed-save @click="createBatch" :disabled="!canCreateReviewedBatch() || submitting || (selectionHandoff && !!requestError)"
                     class="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium transition flex items-center justify-center">
                 <svg x-show="submitting" class="animate-spin h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -301,7 +348,7 @@
                 <svg x-show="!submitting" class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                 </svg>
-                <span x-text="submitting ? 'Создание...' : `Создать изменение (${selectedIds.length} товаров)`"></span>
+                <span x-text="submitting ? 'Сохранение...' : `Сохранить проверенные изменения (${preview?.stats?.changed_count || 0})`"></span>
             </button>
         </div>
 
@@ -382,6 +429,7 @@
                                 {% if not selection_handoff %}
                                 <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-10">
                                     <input type="checkbox" :checked="isPageSelected()" @change="togglePageSelection()"
+                                           :disabled="submitting"
                                            class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
                                 </th>
                                 {% endif %}
@@ -415,6 +463,7 @@
                                         <input type="checkbox"
                                                :checked="isSelected(product.id)"
                                                @change="toggleProduct(product.id)"
+                                               :disabled="submitting"
                                                class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
                                     </td>
                                     {% endif %}
@@ -444,13 +493,22 @@
                                             <span class="text-gray-900" x-text="product.price != null ? Number(product.price).toLocaleString('ru-RU') + ' ₽' : '—'"></span>
                                         </template>
                                     </td>
-                                    <td class="px-4 py-3 text-right whitespace-nowrap text-sm font-medium"
-                                        :class="getNewPriceClass(getEffectivePrice(product))">
-                                        <span x-text="formatNewPrice(getEffectivePrice(product))"></span>
+                                    <td class="px-4 py-3 text-right whitespace-nowrap text-sm font-medium">
+                                        <template x-if="reviewRowFor(product.id) && ['changed', 'no_op'].includes(reviewRowFor(product.id).status)">
+                                            <span x-text="formatReviewedPrice(reviewRowFor(product.id).new_price)"
+                                                  :class="reviewStatusClass(reviewRowFor(product.id))"></span>
+                                        </template>
+                                        <template x-if="!reviewRowFor(product.id) || !['changed', 'no_op'].includes(reviewRowFor(product.id).status)">
+                                            <span class="text-gray-400 text-xs" x-text="reviewRowFor(product.id)?.reason || 'Рассчитайте проверку' "></span>
+                                        </template>
                                     </td>
-                                    <td class="px-4 py-3 text-right whitespace-nowrap text-sm"
-                                        :class="getChangeClass(getEffectivePrice(product))">
-                                        <span x-text="formatChange(getEffectivePrice(product))"></span>
+                                    <td class="px-4 py-3 text-right whitespace-nowrap text-sm">
+                                        <span x-show="reviewRowFor(product.id)?.status === 'changed'"
+                                              x-text="formatReviewedChange(reviewRowFor(product.id))"
+                                              :class="reviewStatusClass(reviewRowFor(product.id))"></span>
+                                        <span x-show="reviewRowFor(product.id)?.status === 'no_op'" class="text-gray-500">Без изменения</span>
+                                        <span x-show="reviewRowFor(product.id) && !['changed', 'no_op'].includes(reviewRowFor(product.id).status)" class="text-gray-500">—</span>
+                                        <span x-show="!reviewRowFor(product.id)" class="text-gray-400">—</span>
                                     </td>
                                 </tr>
                             </template>
@@ -523,11 +581,25 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
 
         exactBatchResult(data) {
             const batchId = data?.batch_id;
+            const changedCount = data?.stats?.total;
+            const handoffCount = Array.isArray(this.handoffProductIds)
+                ? this.handoffProductIds.length : 0;
+            const legacyFullSet = data?.reviewed_write !== true &&
+                changedCount === handoffCount;
+            const reviewedSubset = data?.reviewed_write === true &&
+                data?.reviewed_selection === 'wb_reviewed_selection_v1' &&
+                Number.isSafeInteger(data?.selected_count) &&
+                data.selected_count === handoffCount &&
+                Number.isSafeInteger(data?.changed_count) &&
+                data.changed_count > 0 &&
+                data.changed_count <= data.selected_count &&
+                data.changed_count === changedCount;
             if (!this.selectionHandoff || data?.success !== true ||
                 !Number.isSafeInteger(batchId) || batchId <= 0 ||
                 !['pending_review', 'confirmed'].includes(data.status) ||
-                !Array.isArray(this.handoffProductIds) || !this.handoffProductIds.length ||
-                !data.stats || data.stats.total !== this.handoffProductIds.length ||
+                !handoffCount ||
+                !data.stats || !Number.isSafeInteger(changedCount) || changedCount <= 0 ||
+                (!legacyFullSet && !reviewedSubset) ||
                 this.selectedIds.length !== this.handoffProductIds.length ||
                 this.selectedIds.some((id, index) => id !== this.handoffProductIds[index])) return null;
 
@@ -587,11 +659,15 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
         // Предпросмотр
         preview: null,
         previewLoading: false,
+        previewInputKey: '',
+        previewRowsById: {},
+        reviewVersion: 0,
 
         // Отправка
         submitting: false,
 
-        // Настройки безопасности
+        // Retain the saved values for the existing page contract; review rows
+        // use server-returned safety levels rather than calculating in JS.
         safeThreshold: {{ settings.safe_threshold_percent }},
         warningThreshold: {{ settings.warning_threshold_percent }},
 
@@ -662,6 +738,7 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
         },
 
         toggleProduct(id) {
+            if (this.submitting) return;
             const idx = this.selectedIds.indexOf(id);
             if (idx > -1) {
                 this.selectedIds.splice(idx, 1);
@@ -669,26 +746,30 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
                 this.selectedIds.push(id);
             }
             this.saveSelection();
-            this.preview = null;
+            this.invalidateReview();
         },
 
         selectAllOnPage() {
+            if (this.submitting) return;
             for (const product of this.products) {
                 if (!this.selectedIds.includes(product.id)) {
                     this.selectedIds.push(product.id);
                 }
             }
             this.saveSelection();
+            this.invalidateReview();
         },
 
         deselectAllOnPage() {
+            if (this.submitting) return;
             const pageIds = this.products.map(p => p.id);
             this.selectedIds = this.selectedIds.filter(id => !pageIds.includes(id));
             this.saveSelection();
+            this.invalidateReview();
         },
 
         async selectAllProducts() {
-            if (this.selectingAll) return;
+            if (this.selectingAll || this.submitting) return;
 
             // Подтверждение для большого количества товаров
             if (this.totalProducts > 100) {
@@ -712,7 +793,7 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
                 if (data.success) {
                     this.selectedIds = data.ids;
                     this.saveSelection();
-                    this.preview = null;
+                    this.invalidateReview();
                 } else {
                     alert('Ошибка: ' + (data.error || 'Не удалось загрузить список товаров'));
                 }
@@ -738,9 +819,10 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
         },
 
         clearSelection() {
+            if (this.submitting) return;
             this.selectedIds = [];
             this.saveSelection();
-            this.preview = null;
+            this.invalidateReview();
         },
 
         saveSelection() {
@@ -750,12 +832,15 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
 
         // Источник цен
         toggleMarketplacePrices() {
+            if (this.submitting) return;
             this.useMarketplacePrices = !this.useMarketplacePrices;
-            this.preview = null;
+            this.invalidateReview();
         },
 
         async syncWbPrices() {
             if (this.selectionHandoff || this.syncingWb) return;
+            if (this.submitting) return;
+            this.invalidateReview();
             this.syncingWb = true;
             this.wbSyncResult = null;
 
@@ -781,88 +866,95 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
             }
         },
 
-        getEffectivePrice(product) {
-            if (this.useMarketplacePrices && product.wb_price) {
-                return product.wb_price;
-            }
-            return product.price || 0;
+        reviewInputKey() {
+            return JSON.stringify({
+                product_ids: this.selectedIds,
+                change_type: this.changeType,
+                change_value: this.changeValue,
+                formula: this.formula,
+                price_source: this.useMarketplacePrices ? 'marketplace' : 'local',
+                exact_selection: this.selectionHandoff,
+            });
         },
 
-        // Расчеты
-        calculateNewPrice(oldPrice, product) {
-            if (!oldPrice && this.changeType !== 'supplier_pricing') return 0;
+        invalidateReview() {
+            this.reviewVersion += 1;
+            this.preview = null;
+            this.previewInputKey = '';
+            this.previewRowsById = {};
+            this.previewLoading = false;
+            this.requestError = '';
+        },
 
+        reviewIsCurrent() {
+            return !!this.preview?.review_token &&
+                this.previewInputKey === this.reviewInputKey();
+        },
+
+        canCreateReviewedBatch() {
+            return this.reviewIsCurrent() &&
+                this.preview.can_create === true &&
+                this.preview.stats?.changed_count > 0;
+        },
+
+        reviewRowFor(productId) {
+            return this.reviewIsCurrent() ? this.previewRowsById[productId] || null : null;
+        },
+
+        formatReviewedPrice(value) {
+            return value === null || value === undefined || !Number.isFinite(Number(value))
+                ? '—'
+                : Number(value).toLocaleString('ru-RU') + ' ₽';
+        },
+
+        formatReviewedChange(row) {
+            if (!row || !Number.isFinite(Number(row.change_percent))) return '—';
+            const amount = Number(row.change_percent);
+            return (amount >= 0 ? '+' : '') + amount.toFixed(1) + '%';
+        },
+
+        sourceLabel(row) {
+            const label = {
+                wb_seller_price: 'Цена продавца из WB',
+                local_fallback: 'Локальная цена каталога',
+                local_catalog_price: 'Цена каталога',
+            }[row?.source_kind] || 'Источник цены недоступен';
+            if (this.changeType === 'supplier_pricing' && row?.supplier_price !== null && row?.supplier_price !== undefined) {
+                return 'Закупка ' + this.formatReviewedPrice(row.supplier_price) + '; база: ' + label;
+            }
+            return label;
+        },
+
+        sourceFreshnessLabel(row) {
             if (this.changeType === 'supplier_pricing') {
-                // Для supplier_pricing на клиенте не пересчитываем — нужен серверный расчёт.
-                // Показываем "..." чтобы пользователь нажал "Рассчитать изменения" для preview.
-                return null;
-            } else if (this.changeType === 'percent' && this.changeValue) {
-                return oldPrice * (1 + this.changeValue / 100);
-            } else if (this.changeType === 'fixed' && this.changeValue) {
-                return oldPrice + this.changeValue;
-            } else if (this.changeType === 'set' && this.changeValue) {
-                return this.changeValue;
-            } else if (this.changeType === 'formula' && this.formula) {
-                try {
-                    const P = oldPrice;
-                    const expr = this.formula.replace(/P/g, P);
-                    return Math.max(0, eval(expr));
-                } catch (e) {
-                    return oldPrice;
-                }
+                const supplierTime = row.supplier_price_updated_at;
+                return supplierTime
+                    ? 'Поставщик: ' + supplierTime.replace('T', ' ')
+                    : 'Дата цены поставщика не записана';
             }
-            return oldPrice;
+            return row.source_freshness_at
+                ? 'WB: ' + row.source_freshness_at.replace('T', ' ')
+                : 'Дата источника не записана';
         },
 
-        calculateChangePercent(oldPrice) {
-            const newPrice = this.calculateNewPrice(oldPrice);
-            if (!oldPrice || oldPrice === 0) return newPrice > 0 ? 100 : 0;
-            return ((newPrice - oldPrice) / oldPrice) * 100;
-        },
-
-        getSafetyLevel(oldPrice) {
-            const changePercent = Math.abs(this.calculateChangePercent(oldPrice));
-            if (changePercent <= this.safeThreshold) return 'safe';
-            if (changePercent <= this.warningThreshold) return 'warning';
-            return 'dangerous';
-        },
-
-        getNewPriceClass(oldPrice) {
-            if (this.changeType === 'supplier_pricing') return 'text-emerald-600';
-            if (!this.changeValue && !this.formula) return 'text-gray-400';
-            const level = this.getSafetyLevel(oldPrice);
+        reviewStatusLabel(row) {
             return {
-                'text-green-600': level === 'safe',
-                'text-yellow-600': level === 'warning',
-                'text-red-600': level === 'dangerous'
-            };
+                changed: row.safety_level === 'dangerous' ? 'Опасно' :
+                    (row.safety_level === 'warning' ? 'Проверить' : 'Изменится'),
+                no_op: 'Без изменения',
+                skipped: 'Пропущено',
+                invalid: 'Ошибка',
+            }[row?.status] || 'Не проверено';
         },
 
-        getChangeClass(oldPrice) {
-            if (this.changeType === 'supplier_pricing') return 'text-gray-400';
-            if (!this.changeValue && !this.formula) return 'text-gray-400';
-            const level = this.getSafetyLevel(oldPrice);
-            return {
-                'text-green-600': level === 'safe',
-                'text-yellow-600': level === 'warning',
-                'text-red-600': level === 'dangerous'
-            };
-        },
-
-        formatNewPrice(oldPrice) {
-            if (this.changeType === 'supplier_pricing') return 'по формуле';
-            if (!this.changeValue && !this.formula) return '—';
-            const newPrice = this.calculateNewPrice(oldPrice);
-            if (newPrice === null) return '...';
-            return Math.round(newPrice).toLocaleString('ru-RU') + ' ₽';
-        },
-
-        formatChange(oldPrice) {
-            if (this.changeType === 'supplier_pricing') return '—';
-            if (!this.changeValue && !this.formula) return '—';
-            const change = this.calculateChangePercent(oldPrice);
-            const sign = change >= 0 ? '+' : '';
-            return sign + change.toFixed(1) + '%';
+        reviewStatusClass(row) {
+            if (!row) return 'text-gray-500';
+            if (row.status === 'invalid') return 'bg-red-100 text-red-800';
+            if (row.status === 'skipped') return 'bg-amber-100 text-amber-800';
+            if (row.status === 'no_op') return 'bg-gray-100 text-gray-700';
+            if (row.safety_level === 'dangerous') return 'bg-red-100 text-red-800';
+            if (row.safety_level === 'warning') return 'bg-yellow-100 text-yellow-800';
+            return 'bg-green-100 text-green-800';
         },
 
         // Пагинация
@@ -880,17 +972,24 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
         async loadPreview() {
             if (this.selectedIds.length === 0) return;
 
+            const requestVersion = ++this.reviewVersion;
+            const inputKey = this.reviewInputKey();
             this.previewLoading = true;
             this.requestError = '';
+            this.preview = null;
+            this.previewInputKey = '';
+            this.previewRowsById = {};
             try {
                 const response = await fetch('{{ url_for("prices.api_preview_changes") }}', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
+                        reviewed_write: true,
                         product_ids: this.selectedIds,
                         change_type: this.changeType,
                         change_value: this.changeValue,
                         formula: this.formula,
+                        formula_variables: {},
                         price_source: this.useMarketplacePrices ? 'marketplace' : 'local',
                         exact_selection: this.selectionHandoff
                     })
@@ -898,45 +997,50 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
 
                 const data = await response.json();
                 if (response.ok && data.success) {
-                    this.preview = data;
-                } else if (this.selectionHandoff) {
-                    this.preview = null;
-                    this.requestError = data.error || 'Состав выбора изменился. Вернитесь в каталог.';
+                    if (requestVersion === this.reviewVersion && inputKey === this.reviewInputKey()) {
+                        this.preview = data;
+                        this.previewInputKey = inputKey;
+                        this.previewRowsById = Object.fromEntries(
+                            (data.items || []).map(row => [row.product_id, row]),
+                        );
+                    }
+                } else if (requestVersion === this.reviewVersion) {
+                    this.requestError = data.error || 'Не удалось проверить цены. Проверьте выбор и параметры.';
                 }
             } catch (error) {
                 console.error('Preview error:', error);
-                if (this.selectionHandoff) {
-                    this.preview = null;
-                    this.requestError = 'Не удалось проверить выбранные товары. Вернитесь в каталог и повторите выбор.';
+                if (requestVersion === this.reviewVersion) {
+                    this.requestError = 'Не удалось рассчитать проверку. Повторите попытку.';
                 }
             } finally {
-                this.previewLoading = false;
+                if (requestVersion === this.reviewVersion) {
+                    this.previewLoading = false;
+                }
             }
         },
 
         // Создание батча
         async createBatch() {
-            if (this.selectedIds.length === 0) {
-                alert('Выберите хотя бы один товар');
-                return;
-            }
-
-            if (this.changeType !== 'supplier_pricing' && !this.changeValue && !this.formula) {
-                alert('Укажите значение изменения');
+            if (!this.canCreateReviewedBatch()) {
+                this.requestError = 'Сначала рассчитайте и проверьте актуальные изменения.';
                 return;
             }
 
             this.submitting = true;
             this.requestError = '';
+            const reviewToken = this.preview.review_token;
             try {
                 const response = await fetch('{{ url_for("prices.create_batch") }}', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
+                        reviewed_write: true,
+                        review_token: reviewToken,
                         product_ids: this.selectedIds,
                         change_type: this.changeType,
                         change_value: this.changeValue,
                         formula: this.formula,
+                        formula_variables: {},
                         name: this.name,
                         description: this.description,
                         price_source: this.useMarketplacePrices ? 'marketplace' : 'local',
@@ -953,6 +1057,7 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
                         const result = this.exactBatchResult(data);
                         if (!result) {
                             this.requestError = 'Партия могла сохраниться, но ответ не содержит точного результата. Проверьте историю цен; повторная отправка заблокирована.';
+                            this.invalidateReview();
                             return;
                         }
                         resultHref = result.href;
@@ -962,18 +1067,16 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
                     this.clearSelection();
                     // Переходим на страницу батча
                     window.location.href = resultHref + returnHash;
-                } else if (this.selectionHandoff) {
-                    this.requestError = data.error || 'Состав выбора изменился. Вернитесь в каталог.';
                 } else {
-                    alert('Ошибка: ' + (data.error || 'Неизвестная ошибка'));
+                    this.requestError = data.error || 'Не удалось сохранить проверенное изменение.';
+                    this.invalidateReview();
+                    this.requestError = data.error || 'Не удалось сохранить проверенное изменение.';
                 }
             } catch (error) {
                 console.error('Create batch error:', error);
-                if (this.selectionHandoff) {
-                    this.requestError = 'Не удалось создать предложение. Проверьте связь и состав выбора, затем вернитесь в каталог.';
-                } else {
-                    alert('Ошибка сети');
-                }
+                this.requestError = 'Не удалось подтвердить сохранение. Проверьте историю цен перед повторной отправкой.';
+                this.invalidateReview();
+                this.requestError = 'Не удалось подтвердить сохранение. Проверьте историю цен перед повторной отправкой.';
             } finally {
                 this.submitting = false;
             }

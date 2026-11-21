@@ -299,6 +299,359 @@ class SafePriceHandoffTest(unittest.TestCase):
         batch = self.db.session.get(PriceChangeBatch, payload['batch_id'])
         self.assertEqual([item.product_id for item in batch.items], [self.second.id])
 
+    def _review_request(self, product_ids, **overrides):
+        payload = {
+            'reviewed_write': True,
+            'product_ids': product_ids,
+            'change_type': 'set',
+            'change_value': 2100,
+            'formula': '',
+            'price_source': 'local',
+            'exact_selection': False,
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_reviewed_preview_is_read_only_authoritative_and_saves_only_changed_rows(self):
+        from models import PriceChangeBatch, PriceChangeItem
+
+        watch = self._watch_db_writes()
+        try:
+            preview = self._request_as_owner(
+                'post', '/prices/api/preview',
+                json=self._review_request(
+                    [self.first.id, self.second.id],
+                    exact_selection=True,
+                    change_value=2000,
+                ),
+            )
+        finally:
+            self._stop_watching_db_writes(watch)
+
+        writes, commits = watch[-2:]
+        self.assertEqual(writes, [])
+        self.assertEqual(commits, [])
+        self.assertEqual(preview.status_code, 200)
+        reviewed = preview.get_json()
+        self.assertTrue(reviewed['reviewed'])
+        self.assertEqual(reviewed['stats']['selected_count'], 2)
+        self.assertEqual(reviewed['stats']['changed_count'], 1)
+        self.assertEqual(reviewed['stats']['no_op_count'], 1)
+        self.assertEqual(reviewed['stats']['total'], 1)
+        self.assertTrue(reviewed['can_create'])
+        self.assertTrue(reviewed['review_token'])
+        self.assertEqual(
+            [row['status'] for row in reviewed['items']],
+            ['changed', 'no_op'],
+        )
+        self.assertEqual(reviewed['items'][0]['old_price'], 1000)
+        self.assertEqual(reviewed['items'][0]['new_price'], 2000)
+
+        create_payload = self._review_request(
+            [self.first.id, self.second.id],
+            exact_selection=True,
+            change_value=2000,
+            review_token=reviewed['review_token'],
+            name='Reviewed subset',
+        )
+        with patch('routes.safe_prices.WildberriesAPIClient', side_effect=AssertionError):
+            response = self._request_as_owner(
+                'post', '/prices/create-batch', json=create_payload,
+            )
+        self.assertEqual(response.status_code, 200)
+        result = response.get_json()
+        self.assertEqual(result['reviewed_selection'], 'wb_reviewed_selection_v1')
+        self.assertEqual(result['selected_count'], 2)
+        self.assertEqual(result['changed_count'], 1)
+        self.assertEqual(result['stats']['total'], 1)
+        batch = self.db.session.get(PriceChangeBatch, result['batch_id'])
+        self.assertEqual(batch.total_items, 1)
+        self.assertEqual(
+            [item.product_id for item in PriceChangeItem.query.filter_by(batch_id=batch.id)],
+            [self.first.id],
+        )
+
+    def test_reviewed_price_states_keep_zero_distinct_from_unknown_and_scope_fallback(self):
+        from datetime import datetime
+
+        self.first.wb_price = Decimal('0')
+        self.first.wb_price_synced_at = datetime(2026, 11, 21, 10, 30)
+        self.second.wb_price = None
+        self.second.wb_price_synced_at = None
+        self.db.session.commit()
+
+        catalog = self._request_as_owner(
+            'get',
+            f'/prices/api/products?product_ids={self.first.id},{self.second.id}',
+        )
+        self.assertEqual(catalog.status_code, 200)
+        catalog_rows = catalog.get_json()['products']
+        self.assertEqual(catalog_rows[0]['wb_price'], 0)
+        self.assertIsNone(catalog_rows[1]['wb_price'])
+
+        ordinary = self._request_as_owner(
+            'post', '/prices/api/preview',
+            json=self._review_request(
+                [self.first.id, self.second.id],
+                price_source='marketplace',
+                change_value=100,
+            ),
+        )
+        self.assertEqual(ordinary.status_code, 200)
+        rows = ordinary.get_json()['items']
+        self.assertEqual(rows[0]['source_kind'], 'wb_seller_price')
+        self.assertEqual(rows[0]['old_price'], 0)
+        self.assertEqual(rows[0]['new_price'], 100)
+        self.assertEqual(rows[0]['status'], 'changed')
+        self.assertEqual(rows[0]['source_freshness_at'], '2026-11-21T10:30:00')
+        self.assertIsNone(rows[1]['old_price'])
+        self.assertEqual(rows[1]['status'], 'skipped')
+
+        exact = self._request_as_owner(
+            'post', '/prices/api/preview',
+            json=self._review_request(
+                [self.second.id],
+                exact_selection=True,
+                price_source='marketplace',
+                change_value=100,
+            ),
+        )
+        self.assertEqual(exact.status_code, 200)
+        exact_row = exact.get_json()['items'][0]
+        self.assertEqual(exact_row['source_kind'], 'local_fallback')
+        self.assertEqual(exact_row['old_price'], 2000)
+        self.assertEqual(exact_row['status'], 'changed')
+
+    def test_reviewed_preview_classifies_noop_skipped_invalid_and_server_formula_errors(self):
+        from models import Product
+
+        no_price = Product(
+            seller_id=self.seller.id,
+            nm_id=770106,
+            vendor_code='unknown-price',
+            title='No local price',
+            is_active=True,
+            price=None,
+        )
+        self.db.session.add(no_price)
+        self.db.session.commit()
+
+        response = self._request_as_owner(
+            'post', '/prices/api/preview',
+            json=self._review_request(
+                [self.first.id, self.second.id, no_price.id],
+                change_type='fixed',
+                change_value=0,
+            ),
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(
+            [row['status'] for row in payload['items']],
+            ['no_op', 'no_op', 'skipped'],
+        )
+        self.assertEqual(payload['stats']['changed_count'], 0)
+        self.assertFalse(payload['can_create'])
+
+        invalid = self._request_as_owner(
+            'post', '/prices/api/preview',
+            json=self._review_request([self.first.id], change_value=0, change_type='set'),
+        )
+        self.assertEqual(invalid.status_code, 200)
+        invalid_row = invalid.get_json()['items'][0]
+        self.assertEqual(invalid_row['status'], 'invalid')
+        self.assertEqual(invalid_row['new_price'], 0)
+
+        bad_formula = self._request_as_owner(
+            'post', '/prices/api/preview',
+            json=self._review_request(
+                [self.first.id], change_type='formula', change_value=None,
+                formula='P ** 11',
+            ),
+        )
+        self.assertEqual(bad_formula.status_code, 200)
+        self.assertEqual(bad_formula.get_json()['items'][0]['status'], 'invalid')
+
+    def test_review_token_rejects_parameter_and_source_drift_before_batch_insert(self):
+        from models import PriceChangeBatch
+
+        request = self._review_request([self.first.id], change_value=1200)
+        preview = self._request_as_owner('post', '/prices/api/preview', json=request)
+        token = preview.get_json()['review_token']
+
+        changed_input = dict(request, change_value=1300, review_token=token)
+        changed = self._request_as_owner(
+            'post', '/prices/create-batch', json=changed_input,
+        )
+        self.assertEqual(changed.status_code, 409)
+        self.assertEqual(PriceChangeBatch.query.count(), 0)
+
+        tampered_token = token[:-1] + ('A' if token[-1] != 'A' else 'B')
+        rejected = self._request_as_owner(
+            'post', '/prices/create-batch',
+            json=dict(request, review_token=tampered_token),
+        )
+        self.assertEqual(rejected.status_code, 409)
+
+        self.first.price = Decimal('1001')
+        self.db.session.commit()
+        drifted = self._request_as_owner(
+            'post', '/prices/create-batch',
+            json=dict(request, review_token=token),
+        )
+        self.assertEqual(drifted.status_code, 409)
+        self.assertEqual(drifted.get_json()['code'], 'review_stale')
+        self.assertEqual(PriceChangeBatch.query.count(), 0)
+
+    def test_review_token_binds_order_owner_settings_and_expiry(self):
+        from models import PriceChangeBatch, SafePriceChangeSettings
+
+        ordered_request = self._review_request(
+            [self.first.id, self.second.id],
+            exact_selection=True,
+            change_value=2500,
+        )
+        preview = self._request_as_owner(
+            'post', '/prices/api/preview', json=ordered_request,
+        )
+        token = preview.get_json()['review_token']
+
+        reordered = self._request_as_owner(
+            'post', '/prices/create-batch',
+            json=dict(
+                ordered_request,
+                product_ids=[self.second.id, self.first.id],
+                review_token=token,
+            ),
+        )
+        self.assertEqual(reordered.status_code, 409)
+
+        with patch('flask_login.utils._get_user', return_value=self.owner), \
+                patch('routes.safe_prices.current_user', SimpleNamespace(
+                    id=self.owner.id + 99,
+                    seller=self.seller,
+                    is_authenticated=True,
+                )), \
+                patch('routes.safe_prices.get_current_seller', return_value=self.seller):
+            wrong_owner = self.client.post(
+                '/prices/create-batch',
+                json=dict(ordered_request, review_token=token),
+            )
+        self.assertEqual(wrong_owner.status_code, 409)
+
+        settings = SafePriceChangeSettings(
+            seller_id=self.seller.id,
+            safe_threshold_percent=5,
+            warning_threshold_percent=10,
+            mode='confirm',
+            allow_unlimited_batch=True,
+            max_products_per_batch=1000,
+        )
+        self.db.session.add(settings)
+        self.db.session.commit()
+        settings_drift = self._request_as_owner(
+            'post', '/prices/create-batch',
+            json=dict(ordered_request, review_token=token),
+        )
+        self.assertEqual(settings_drift.status_code, 409)
+        self.assertEqual(settings_drift.get_json()['code'], 'review_stale')
+
+        fresh = self._request_as_owner(
+            'post', '/prices/api/preview', json=self._review_request(
+                [self.first.id], change_value=1200,
+            ),
+        ).get_json()['review_token']
+        with patch('routes.safe_prices.PRICE_REVIEW_TOKEN_MAX_AGE_SECONDS', -1):
+            expired = self._request_as_owner(
+                'post', '/prices/create-batch',
+                json=self._review_request(
+                    [self.first.id], change_value=1200, review_token=fresh,
+                ),
+            )
+        self.assertEqual(expired.status_code, 409)
+        self.assertIn('устарел', expired.get_json()['error'])
+        self.assertEqual(PriceChangeBatch.query.count(), 0)
+
+    def test_reviewed_guardrail_and_configured_selection_limit_block_save(self):
+        from models import PriceChangeBatch, SafePriceChangeSettings
+
+        settings = SafePriceChangeSettings(
+            seller_id=self.seller.id,
+            mode='block',
+            safe_threshold_percent=10,
+            warning_threshold_percent=20,
+            allow_unlimited_batch=False,
+            max_products_per_batch=1,
+        )
+        self.db.session.add(settings)
+        self.db.session.commit()
+
+        limited = self._request_as_owner(
+            'post', '/prices/api/preview',
+            json=self._review_request(
+                [self.first.id, self.second.id], change_type='fixed', change_value=1,
+            ),
+        )
+        self.assertEqual(limited.status_code, 400)
+        self.assertIn('Превышен лимит', limited.get_json()['error'])
+
+        dangerous_preview = self._request_as_owner(
+            'post', '/prices/api/preview',
+            json=self._review_request(
+                [self.first.id], change_type='set', change_value=2000,
+            ),
+        )
+        self.assertEqual(dangerous_preview.status_code, 200)
+        reviewed = dangerous_preview.get_json()
+        self.assertTrue(reviewed['guardrail_blocked'])
+        self.assertFalse(reviewed['can_create'])
+        blocked = self._request_as_owner(
+            'post', '/prices/create-batch',
+            json=self._review_request(
+                [self.first.id], change_type='set', change_value=2000,
+                review_token=reviewed['review_token'],
+            ),
+        )
+        self.assertEqual(blocked.status_code, 403)
+        self.assertEqual(blocked.get_json()['code'], 'price_change_blocked')
+        self.assertEqual(PriceChangeBatch.query.count(), 0)
+
+    def test_reviewed_lane_preserves_all_selected_ids_above_legacy_handoff_cap(self):
+        from models import Product
+
+        products = [Product(
+            seller_id=self.seller.id,
+            nm_id=780000 + index,
+            vendor_code=f'bulk-{index}',
+            title=f'Bulk {index}',
+            is_active=True,
+            price=Decimal('100'),
+        ) for index in range(605)]
+        self.db.session.add_all(products)
+        self.db.session.commit()
+        ids = [product.id for product in products]
+
+        response = self._request_as_owner(
+            'post', '/prices/api/preview',
+            json=self._review_request(ids, change_type='fixed', change_value=1),
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload['stats']['selected_count'], 605)
+        self.assertEqual(payload['stats']['changed_count'], 605)
+        self.assertEqual([row['product_id'] for row in payload['items']], ids)
+        self.assertLess(len(payload['review_token']), 4096)
+
+    def test_page_requires_review_and_contains_no_browser_formula_evaluator(self):
+        response = self._request_as_owner('get', '/prices/change')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Рассчитать и проверить изменения'.encode(), response.data)
+        self.assertIn(b'canCreateReviewedBatch()', response.data)
+        self.assertIn(b'reviewed_write: true', response.data)
+        self.assertIn('Сохранить проверенные изменения'.encode(), response.data)
+        self.assertNotIn(b'eval(', response.data)
+        self.assertNotIn(b'calculateNewPrice', response.data)
+
     def _pending_review_batch(self, name):
         from models import PriceChangeBatch, PriceChangeItem, SafePriceChangeSettings
 
@@ -468,8 +821,32 @@ for (const redirect of [
 }
 assert.equal(app.exactBatchResult({...data, status:'applied'}), null);
 assert.equal(app.exactBatchResult({...data, stats:{total:1}}), null);
+const reviewedSubset = {
+  ...data,
+  reviewed_write:true,
+  reviewed_selection:'wb_reviewed_selection_v1',
+  selected_count:2,
+  changed_count:1,
+  stats:{total:1},
+};
+assert.equal(app.exactBatchResult(reviewedSubset).href, '/prices/batch/91/confirm');
+assert.equal(app.exactBatchResult({...reviewedSubset, selected_count:1}), null);
+assert.equal(app.exactBatchResult({...reviewedSubset, changed_count:3}), null);
 app.selectedIds = [7002, 7001];
 assert.equal(app.exactBatchResult(data), null);
+
+const normal = context.__priceChangeApp(false, []);
+normal.selectedIds = [8001, 8002];
+normal.changeValue = 10;
+normal.preview = {review_token:'signed', can_create:true, stats:{changed_count:2}};
+normal.previewInputKey = normal.reviewInputKey();
+assert.equal(normal.canCreateReviewedBatch(), true);
+normal.changeValue = 11;
+assert.equal(normal.reviewIsCurrent(), false);
+assert.equal(normal.canCreateReviewedBatch(), false);
+normal.invalidateReview();
+assert.equal(normal.preview, null);
+assert.equal(normal.previewInputKey, '');
 """
         result = subprocess.run(
             [node, '-e', script, str(ROOT / 'templates/prices_change.html')],
