@@ -5,9 +5,11 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import socket
 import tempfile
 import threading
+import time
 from datetime import datetime
 from urllib.parse import parse_qs, urlsplit
 
@@ -72,7 +74,7 @@ fixture = seed(app)
 account_id = fixture["account_id"]
 listing_ids = fixture["listing_ids"]
 
-from models import MarketplaceCommercialProposal, MarketplaceListing, MarketplaceOperation, db
+from models import ImportedProduct, MarketplaceCommercialProposal, MarketplaceListing, MarketplaceOperation, db
 from services.marketplace_adapters.ozon import OzonAdapter
 from services.marketplace_commercial import MarketplaceCommercialService
 
@@ -141,6 +143,21 @@ def forbid_price_write(_self, *_args, **_kwargs):
 
 OzonAdapter.update_prices = forbid_price_write
 
+busy_delay = {"saved_return_confirm": False}
+
+
+def delay_saved_return_confirmation():
+    from flask import request
+
+    if (busy_delay["saved_return_confirm"]
+            and request.method == "POST"
+            and request.path == "/marketplaces/commercial/price-proposals/bulk-confirm"):
+        busy_delay["saved_return_confirm"] = False
+        time.sleep(0.35)
+
+
+app.before_request_funcs.setdefault(None, []).append(delay_saved_return_confirmation)
+
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 server = make_server("127.0.0.1", 0, app, threaded=True)
 thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -192,7 +209,8 @@ def bridge(route):
                     raise AssertionError("Bulk confirmation did not freeze one preview token")
                 tokens = mock_state.get("preview_tokens", [])
                 expected_token = tokens[0] if confirm_attempt == 1 else (
-                    tokens[2] if confirm_attempt in {2, 3} and len(tokens) >= 3 else None
+                    tokens[2] if confirm_attempt in {2, 3} and len(tokens) >= 3 else
+                    tokens[3] if confirm_attempt == 4 and len(tokens) >= 4 else None
                 )
                 if not expected_token or body["preview_token"] != expected_token:
                     raise AssertionError("Bulk confirmation did not use the exact reviewed preview")
@@ -201,7 +219,7 @@ def bridge(route):
                     "confirm_save": body["confirm_save"],
                     "token_matches_reviewed_preview": True,
                 })
-                if confirm_attempt > 3:
+                if confirm_attempt > 4:
                     raise AssertionError("Unexpected extra bulk-confirm request")
             elif path == "/marketplaces/commercial/batch-approve" or path.endswith("/approve"):
                 report["postcounts"][path] = report["postcounts"].get(path, 0) + 1
@@ -241,6 +259,11 @@ def bridge(route):
                 assert summary["eligible_count"] == 1
                 assert summary["statuses"] == ["eligible"]
                 assert report["preview_payloads"][-1]["listing_ids"] == [listing_ids[4]]
+            elif mock_state["preview_number"] == 4:
+                assert summary["selected_count"] == 1
+                assert summary["eligible_count"] == 1
+                assert summary["statuses"] == ["eligible"]
+                assert report["preview_payloads"][-1]["listing_ids"] == [listing_ids[5]]
         elif request.method == "POST" and path == "/marketplaces/commercial/price-proposals/bulk-confirm":
             result = response.json()
             proposal_ids = [item["proposal"]["id"] for item in result["items"]]
@@ -387,6 +410,38 @@ def bridge(route):
                     "saved_proposal_count": 1,
                     "provider_operation_created": False,
                 }
+            elif confirm_attempt == 4:
+                if response.status != 201 or (
+                    result["selected_count"] != 1
+                    or result["created_count"] != 1
+                    or result["saved_count"] != 1
+                    or result["replayed"]
+                    or len(proposal_ids) != 1
+                    or listing_result_ids != [listing_ids[5]]
+                ):
+                    raise AssertionError("Saved return fixture did not create its exact local proposal")
+                with app.app_context():
+                    proposal = db.session.get(MarketplaceCommercialProposal, proposal_ids[0])
+                    if (
+                        proposal is None
+                        or proposal.seller_id != fixture["seller_id"]
+                        or proposal.account_id != account_id
+                        or proposal.listing_id != listing_ids[5]
+                        or proposal.status != "pending_review"
+                        or proposal.operation_id is not None
+                        or MarketplaceCommercialProposal.query.filter_by(
+                            seller_id=fixture["seller_id"],
+                            account_id=account_id,
+                            proposal_kind="price",
+                        ).count() != 3
+                        or MarketplaceOperation.query.count() != 0
+                    ):
+                        raise AssertionError("Saved return fixture was not a local pending proposal")
+                    baseline = json.loads(proposal.baseline_state_json)
+                    proposed = json.loads(proposal.proposed_state_json)
+                    if baseline["price"] != "1000" or proposed["price"] != "1200":
+                        raise AssertionError("Saved return proposal changed the reviewed seller-price values")
+                report["saved_return_proposal_created"] = True
             else:
                 raise AssertionError("Unexpected bulk-confirm response path")
         elif request.method == "GET" and path == "/marketplaces/commercial/" and \
@@ -423,6 +478,14 @@ def bridge(route):
 def passed(name):
     report["checks"].append(name)
     print(json.dumps({"ozon_bulk_price_check": name}), flush=True)
+
+
+def beta_feed_matches(response, expected):
+    parsed = urlsplit(response.url)
+    if parsed.path != "/api/my-products" or response.request.method != "GET":
+        return False
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    return all(query.get(key) == [value] for key, value in expected.items())
 
 
 try:
@@ -545,21 +608,77 @@ try:
         assert report["synthetic_price_reads"] == [listing_ids[:3], [listing_ids[3]]], \
             "The actual preview route read beyond the explicit selected sets"
         preview_reads_before_handoff = len(report["synthetic_price_reads"])
+        handoff_posts_before = dict(report["postcounts"])
         page.goto(base + "/my-products/beta")
+        page.locator("#my-products-app").wait_for(state="visible")
+        source_owner = page.evaluate("JSON.parse(document.querySelector('#mp-bootstrap').textContent).workspaceOwner")
+        source_title = "Тестовый товар для подготовки"
+        with page.expect_response(lambda response: beta_feed_matches(response, {"search": source_title})) as source_search:
+            page.get_by_placeholder("Название, бренд или артикул").fill(source_title)
+        assert source_search.value.status == 200
+        with page.expect_response(lambda response: beta_feed_matches(response, {
+                "search": source_title, "sort": "title",
+        })) as source_sort:
+            page.get_by_label("Сортировка").select_option("title")
+        assert source_sort.value.status == 200
         source_row = page.locator(".mp-row").filter(has_text="Тестовый товар для подготовки")
         source_row.wait_for(state="visible")
         source_row.get_by_role("checkbox", name="Выбрать Тестовый товар для подготовки").check()
         page.get_by_role("button", name="Что сделать", exact=True).click()
+        authorized_navigations = []
+
+        def capture_authorized_navigation(frame):
+            parsed = urlsplit(frame.url)
+            if (frame == page.main_frame and parsed.path == "/marketplaces/commercial/" and
+                    parse_qs(parsed.query) == {
+                        "account_id": [str(account_id)], "bulk_listing_ids": [str(listing_ids[0])],
+                    } and re.fullmatch(r"workspace-return=[a-f0-9]{32}", parsed.fragment)):
+                authorized_navigations.append(frame.url)
+
+        page.on("framenavigated", capture_authorized_navigation)
         page.get_by_role("menuitem", name="Изменить цены Ozon", exact=False).click()
-        page.wait_for_url(lambda value: urlsplit(value).path == "/marketplaces/commercial/" and
-                          parse_qs(urlsplit(value).query).get("account_id") == [str(account_id)] and
-                          parse_qs(urlsplit(value).query).get("bulk_listing_ids") == [str(listing_ids[0])])
+        page.wait_for_function("""() => {
+            const dialog = document.querySelector('.oc-bulk-dialog');
+            return dialog && dialog.open;
+        }""")
+        assert authorized_navigations, "The handoff did not navigate the same tab to the authorized page"
+        authorized_url = urlsplit(authorized_navigations[-1])
+        assert authorized_url.path == "/marketplaces/commercial/"
+        assert parse_qs(authorized_url.query) == {
+            "account_id": [str(account_id)], "bulk_listing_ids": [str(listing_ids[0])],
+        }
+        assert re.fullmatch(r"workspace-return=[a-f0-9]{32}", authorized_url.fragment)
+        price_hash = authorized_url.fragment
         handoff = page.get_by_role("dialog", name="Цены для нескольких товаров")
         handoff.wait_for(state="visible")
         assert handoff.evaluate("node => node.contains(document.activeElement)")
         assert handoff.get_by_text("Выбранный набор передан из «Моих товаров»", exact=False).is_visible()
         assert handoff.get_by_text("Выбрано товаров: 1 из 100", exact=True).is_visible()
         assert handoff.locator(".oc-bulk-selected li").filter(has_text="CI-000").count() == 1
+        header_return = page.locator("a[data-price-workspace-return]")
+        header_href = urlsplit(header_return.get_attribute("href") or "")
+        assert header_href.path == "/my-products/beta" and not header_href.query
+        assert header_href.fragment == price_hash
+        assert handoff.locator("button[data-price-workspace-return-button]").get_attribute("type") == "button"
+        handoff_return = handoff.locator("button[data-price-workspace-return-button]")
+        handoff_return.wait_for(state="visible")
+        assert handoff_return.inner_text().strip() == "Вернуться к товарам"
+        assert page.evaluate("""([expectedOwner, expectedAccount, expectedListing, expectedSource, nonce]) => {
+            const boot = JSON.parse(document.querySelector('#oc-bootstrap').textContent);
+            const capsule = window.SellerHubCommonContent.workspaceReturnFromHash(
+                '#'+nonce, {
+                    owner: boot.workspaceOwner,
+                    priceTarget: {channel: 'ozon', accountId: expectedAccount, ids: [expectedListing]},
+                }
+            );
+            return !!capsule && capsule.v === 2 && capsule.owner === expectedOwner &&
+                boot.workspaceOwner === expectedOwner && capsule.selectionIds.length === 1 &&
+                capsule.selectionIds[0] === expectedSource && capsule.priceTarget.channel === 'ozon' &&
+                capsule.priceTarget.accountId === expectedAccount &&
+                capsule.priceTarget.ids.length === 1 && capsule.priceTarget.ids[0] === expectedListing &&
+                capsule.scope.search === 'Тестовый товар для подготовки' && capsule.scope.sort === 'title';
+        }""", [source_owner, account_id, listing_ids[0], fixture["source_id"], price_hash])
+        page.screenshot(path=OUT / "ozon-workspace-return-authorized-320.png", animations="disabled")
         assert report["postcounts"] == {
             "/marketplaces/commercial/price-proposals/bulk-preview": 2,
             "/marketplaces/commercial/price-proposals/bulk-confirm": 1,
@@ -574,7 +693,34 @@ try:
         handoff.get_by_role("button", name="Закрыть массовую подготовку цен").click()
         assert handoff_close_confirmations and "Выбранный набор" in handoff_close_confirmations[0]
         handoff.wait_for(state="hidden")
+        header_return = page.get_by_role("link", name="Вернуться к товарам", exact=True)
+        header_return.wait_for(state="visible")
+        with page.expect_response(lambda response: beta_feed_matches(response, {
+                "search": source_title, "sort": "title", "per_page": "50",
+        })) as returned_beta_feed:
+            with page.expect_navigation(wait_until="domcontentloaded"):
+                header_return.click()
+        assert returned_beta_feed.value.status == 200
+        page.wait_for_url(lambda value: (
+            urlsplit(str(value)).path == "/my-products/beta" and
+            urlsplit(str(value)).fragment == price_hash
+        ))
+        page.wait_for_function("""([id, search]) => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy && !proxy.loading && proxy.filters.search === search &&
+                proxy.filters.sort === 'title' && proxy.selected.join(',') === String(id);
+        }""", [fixture["source_id"], source_title])
+        assert page.get_by_placeholder("Название, бренд или артикул").input_value() == source_title
+        assert page.locator(".mp-list article.mp-row input[type=checkbox]:checked").evaluate_all(
+            "boxes => boxes.map(box => Number(box.value))"
+        ) == [fixture["source_id"]]
+        assert report["postcounts"] == handoff_posts_before, report["postcounts"]
+        assert len(report["synthetic_price_reads"]) == preview_reads_before_handoff
+        assert report["provider_attempts"] == 0 and report["provider_write_callbacks"] == 0
+        passed("beta_ozon_price_handoff_returns_exact_filtered_marks_without_preview")
 
+        page.goto(base + "/marketplaces/commercial/")
+        page.locator("#ozon-commercial-app").wait_for(state="visible")
         page.get_by_role("button", name="Подготовить цены для нескольких товаров").click()
         dialog = page.get_by_role("dialog", name="Цены для нескольких товаров")
         search = dialog.get_by_placeholder("Найдите товары магазина…")
@@ -595,6 +741,8 @@ try:
             "Ответ на сохранение неизвестен: заявки могли появиться.", exact=False
         )
         unknown_status.wait_for(state="visible")
+        assert page.locator("a[data-price-workspace-return]").count() == 0
+        assert page.locator("button[data-price-workspace-return-button]").count() == 0
         retry = dialog.get_by_role(
             "button", name="Проверить сохранение тем же подтверждением", exact=True
         )
@@ -671,6 +819,155 @@ try:
             ).count() == 2
             assert MarketplaceOperation.query.count() == 0
         passed("same_token_retry_replays_one_existing_pending_proposal")
+
+        # A second real Beta handoff uses a fresh unproposed listing, then
+        # returns from the local saved state without another read or write.
+        saved_return_listing_id = listing_ids[5]
+        with app.app_context():
+            source = db.session.get(ImportedProduct, fixture["source_id"])
+            previous_link = db.session.get(MarketplaceListing, listing_ids[0])
+            saved_return_listing = db.session.get(MarketplaceListing, saved_return_listing_id)
+            if source is None or previous_link is None or saved_return_listing is None:
+                raise AssertionError("Saved return fixture is missing its exact local source or listing")
+            previous_link.imported_product_id = None
+            previous_link.link_status = "unlinked"
+            previous_link.link_source = None
+            previous_link.linked_at = None
+            previous_link.linked_by_user_id = None
+            saved_return_listing.imported_product_id = source.id
+            saved_return_listing.link_status = "linked"
+            saved_return_listing.link_source = "synthetic_browser_fixture"
+            saved_return_listing.linked_at = datetime.utcnow()
+            price_summary = json.loads(saved_return_listing.price_summary_json or "{}")
+            price_summary.update({
+                "available": True,
+                "currency": "RUB",
+                "values": {"price": "1000", "old_price": "1500", "min_price": "500"},
+            })
+            saved_return_listing.price_summary_json = json.dumps(price_summary, ensure_ascii=False)
+            db.session.commit()
+        synthetic_prices[saved_return_listing_id] = ("1000", "1500", "500")
+
+        page.goto(base + "/my-products/beta")
+        page.locator("#my-products-app").wait_for(state="visible")
+        with page.expect_response(lambda response: beta_feed_matches(response, {"search": source_title})) as saved_source_search:
+            page.get_by_placeholder("Название, бренд или артикул").fill(source_title)
+        assert saved_source_search.value.status == 200
+        with page.expect_response(lambda response: beta_feed_matches(response, {
+                "search": source_title, "sort": "title",
+        })) as saved_source_sort:
+            page.get_by_label("Сортировка").select_option("title")
+        assert saved_source_sort.value.status == 200
+        saved_source_row = page.locator(".mp-row").filter(has_text=source_title)
+        saved_source_row.wait_for(state="visible")
+        saved_source_row.get_by_role("checkbox", name="Выбрать Тестовый товар для подготовки").check()
+        page.get_by_role("button", name="Что сделать", exact=True).click()
+        saved_authorized_navigations = []
+
+        def capture_saved_authorized_navigation(frame):
+            parsed = urlsplit(frame.url)
+            if (frame == page.main_frame and parsed.path == "/marketplaces/commercial/" and
+                    parse_qs(parsed.query) == {
+                        "account_id": [str(account_id)],
+                        "bulk_listing_ids": [str(saved_return_listing_id)],
+                    } and re.fullmatch(r"workspace-return=[a-f0-9]{32}", parsed.fragment)):
+                saved_authorized_navigations.append(frame.url)
+
+        page.on("framenavigated", capture_saved_authorized_navigation)
+        page.get_by_role("menuitem", name="Изменить цены Ozon", exact=False).click()
+        page.wait_for_function("""() => {
+            const dialog = document.querySelector('.oc-bulk-dialog');
+            return dialog && dialog.open;
+        }""")
+        assert saved_authorized_navigations
+        saved_authorized_url = urlsplit(saved_authorized_navigations[-1])
+        assert saved_authorized_url.path == "/marketplaces/commercial/"
+        assert parse_qs(saved_authorized_url.query) == {
+            "account_id": [str(account_id)],
+            "bulk_listing_ids": [str(saved_return_listing_id)],
+        }
+        assert re.fullmatch(r"workspace-return=[a-f0-9]{32}", saved_authorized_url.fragment)
+        saved_price_hash = saved_authorized_url.fragment
+        dialog = page.get_by_role("dialog", name="Цены для нескольких товаров")
+        dialog.get_by_text("Выбранный набор передан из «Моих товаров»", exact=False).wait_for()
+        assert page.evaluate("""([expectedOwner, expectedAccount, expectedListing, expectedSource, nonce]) => {
+            const boot = JSON.parse(document.querySelector('#oc-bootstrap').textContent);
+            const capsule = window.SellerHubCommonContent.workspaceReturnFromHash(
+                '#'+nonce, {
+                    owner: boot.workspaceOwner,
+                    priceTarget: {channel: 'ozon', accountId: expectedAccount, ids: [expectedListing]},
+                }
+            );
+            return !!capsule && capsule.v === 2 && boot.workspaceOwner === expectedOwner &&
+                capsule.owner === expectedOwner && capsule.selectionIds.length === 1 &&
+                capsule.selectionIds[0] === expectedSource && capsule.priceTarget.accountId === expectedAccount &&
+                capsule.priceTarget.ids.length === 1 && capsule.priceTarget.ids[0] === expectedListing &&
+                capsule.scope.search === 'Тестовый товар для подготовки' && capsule.scope.sort === 'title';
+        }""", [source_owner, account_id, saved_return_listing_id, fixture["source_id"], saved_price_hash])
+        dialog.locator(".oc-bulk-rule input[type=text]").fill("1200")
+        dialog.get_by_role("button", name="Сравнить выбранные: 1", exact=True).click()
+        dialog.get_by_role("heading", name="Проверка 1 товар").wait_for()
+        assert report["preview_payloads"][3]["listing_ids"] == [saved_return_listing_id]
+        assert report["preview_results"][3]["statuses"] == ["eligible"]
+
+        busy_delay["saved_return_confirm"] = True
+        dialog.get_by_role("button", name="Сохранить 1 заявку", exact=True).click()
+        dialog.get_by_role("button", name="Сохраняем заявки…", exact=True).wait_for(state="visible")
+        assert dialog.locator("button[data-price-workspace-return-button]").count() == 0
+        assert page.evaluate("""() => {
+            const dialog = document.querySelector('.oc-bulk-dialog');
+            const headerReturn = document.querySelector('a[data-price-workspace-return]');
+            return !!dialog && dialog.matches(':modal') && !!headerReturn &&
+                !dialog.contains(headerReturn);
+        }""")
+        dialog.get_by_role("heading", name="Заявки сохранены").wait_for()
+        saved_return_button = dialog.locator("button[data-price-workspace-return-button]")
+        saved_return_button.wait_for(state="visible")
+        assert saved_return_button.inner_text().strip() == "Вернуться к товарам"
+        header_href = urlsplit(page.locator("a[data-price-workspace-return]").get_attribute("href") or "")
+        assert header_href.path == "/my-products/beta" and not header_href.query
+        assert header_href.fragment == saved_price_hash
+        saved_counts_before_return = dict(report["postcounts"])
+        saved_reads_before_return = list(report["synthetic_price_reads"])
+        saved_return_prompts = []
+        page.on("dialog", lambda prompt: (saved_return_prompts.append(prompt.type), prompt.accept()))
+        with page.expect_response(lambda response: beta_feed_matches(response, {
+                "search": source_title, "sort": "title", "per_page": "50",
+        })) as saved_return_feed:
+            with page.expect_navigation(wait_until="domcontentloaded"):
+                saved_return_button.click()
+        assert not saved_return_prompts, "A completed local save should return without another confirmation"
+        assert saved_return_feed.value.status == 200
+        page.wait_for_url(lambda value: (
+            urlsplit(str(value)).path == "/my-products/beta" and
+            urlsplit(str(value)).fragment == saved_price_hash
+        ))
+        page.wait_for_function("""([id, search]) => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy && !proxy.loading && proxy.filters.search === search &&
+                proxy.filters.sort === 'title' && proxy.selected.join(',') === String(id);
+        }""", [fixture["source_id"], source_title])
+        assert page.locator(".mp-list article.mp-row input[type=checkbox]:checked").evaluate_all(
+            "boxes => boxes.map(box => Number(box.value))"
+        ) == [fixture["source_id"]]
+        assert report["postcounts"] == saved_counts_before_return
+        assert report["synthetic_price_reads"] == saved_reads_before_return
+        assert report["provider_attempts"] == 0 and report["provider_write_callbacks"] == 0
+        passed("ozon_saved_dialog_return_restores_exact_beta_marks_without_provider_replay")
+
+        assert report["postcounts"] == {
+            "/marketplaces/commercial/price-proposals/bulk-preview": 4,
+            "/marketplaces/commercial/price-proposals/bulk-confirm": 4,
+        }, report["postcounts"]
+        assert report["synthetic_price_reads"] == [
+            listing_ids[:3], [listing_ids[3]], [listing_ids[4]], [saved_return_listing_id],
+        ]
+        assert report["saved_return_proposal_created"] is True
+        with app.app_context():
+            assert MarketplaceCommercialProposal.query.filter_by(
+                seller_id=fixture["seller_id"], account_id=account_id, proposal_kind="price",
+            ).count() == 3
+            assert MarketplaceOperation.query.count() == 0
         browser.close()
     report["status"] = "passed"
 except Exception as error:

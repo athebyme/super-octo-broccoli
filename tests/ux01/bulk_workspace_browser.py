@@ -251,6 +251,7 @@ def run():
     override_over_limit_initial = False
     over_limit_initial_total = 201
     mock_over_limit_full = False
+    expected_wb_handoff_error = False
 
     def remember_feed_response(query, status, body):
         pagination = body.get("pagination") if isinstance(body, dict) else None
@@ -271,9 +272,19 @@ def run():
         nonlocal refresh_response_override, refresh_response_status
         nonlocal delay_next_full_select, server_delay_next_full_select
         nonlocal override_over_limit_initial, over_limit_initial_total, mock_over_limit_full
+        nonlocal expected_wb_handoff_error
         request = route.request
         parsed = urlsplit(request.url)
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "GET":
+            if parsed.path == "/prices/api/products" and expected_wb_handoff_error:
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                assert query.get("product_ids") == [str(fixture_ids["wb_id"])]
+                expected_wb_handoff_error = False
+                response = route.fetch(max_redirects=0)
+                assert response.status == 409
+                assert response.json().get("code") == "exact_selection_changed"
+                route.fulfill(response=response)
+                return
             if parsed.path == "/api/my-products":
                 query = parse_qs(parsed.query, keep_blank_values=True)
                 # The signed import-batch token is a short-lived capability.
@@ -582,11 +593,38 @@ def run():
         page = context.new_page()
         page.on("pageerror", lambda error: errors.append(str(error)))
         open_products(page)
+        source_owner = page.evaluate("JSON.parse(document.querySelector('#mp-bootstrap').textContent).workspaceOwner")
+        with page.expect_response(lambda response: feed_matches(response, {"search": MAIN_TITLE})) as filtered_feed:
+            page.get_by_placeholder("Название, бренд или артикул").fill(MAIN_TITLE)
+        assert filtered_feed.value.status == 200
+        with page.expect_response(lambda response: feed_matches(response, {
+                "search": MAIN_TITLE, "sort": "title",
+        })) as sorted_feed:
+            page.get_by_label("Сортировка").select_option("title")
+        assert sorted_feed.value.status == 200
         page.evaluate("localStorage.setItem('price_change_selected', '[999999]')")
         page.get_by_role("checkbox", name=f"Выбрать {MAIN_TITLE}").check()
+        assert selected_browser_state(page) == {
+            "selected": [fixture_ids["local_id"]], "ozonIds": [],
+        }
         pick_action(page, "Изменить цены WB")
-        page.wait_for_url("**/prices/change?product_ids=*")
-        assert parse_qs(urlsplit(page.url).query)["product_ids"] == [str(fixture_ids["wb_id"])]
+        page.wait_for_url(lambda value: (
+            urlsplit(str(value)).path == "/prices/change"
+            and re.fullmatch(r"workspace-return=[a-f0-9]{32}", urlsplit(str(value)).fragment)
+        ))
+        price_url = urlsplit(page.url)
+        nonce_hash = price_url.fragment
+        assert parse_qs(price_url.query)["product_ids"] == [str(fixture_ids["wb_id"])]
+        assert page.evaluate("""([owner, importedId, productId, search]) => {
+            const capsule = window.SellerHubCommonContent.workspaceReturnFromHash(
+                window.location.hash, {owner}
+            );
+            return !!capsule && capsule.v === 2 && capsule.owner === owner &&
+                capsule.selectionIds.length === 1 && capsule.selectionIds[0] === importedId &&
+                capsule.priceTarget.channel === 'wb' && capsule.priceTarget.accountId === null &&
+                capsule.priceTarget.ids.length === 1 && capsule.priceTarget.ids[0] === productId &&
+                capsule.scope.search === search;
+        }""", [source_owner, fixture_ids["local_id"], fixture_ids["wb_id"], MAIN_TITLE])
         page.wait_for_function("""(id) => {
             const element = document.querySelector('[x-data^="priceChangeApp("]');
             return element && window.Alpine && Alpine.$data(element).selectedIds?.join(',') === String(id);
@@ -600,10 +638,84 @@ def run():
         }""")
         assert pricing_form.evaluate("element => Alpine.$data(element).useMarketplacePrices")
         assert page.get_by_role("button", name="Синхронизировать с WB").count() == 0
+        checks.append("account_wide_price_sync_only_on_direct_price_route")
+
+        return_link = page.get_by_role("link", name="Вернуться к товарам", exact=True)
+        return_link.wait_for(state="visible")
+        return_href = urlsplit(return_link.get_attribute("href") or "")
+        assert return_href.path == "/my-products/beta" and not return_href.query
+        assert return_href.fragment == nonce_hash
+        assert return_link.inner_text().strip() == "Вернуться к товарам"
+        with page.expect_response(lambda response: feed_matches(response, {
+                "search": MAIN_TITLE, "sort": "title", "per_page": "50",
+        })) as restored_feed:
+            with page.expect_navigation(wait_until="domcontentloaded"):
+                return_link.click()
+        page.wait_for_url(lambda value: urlsplit(str(value)).path == "/my-products/beta")
+        assert restored_feed.value.status == 200
+        page.locator("#my-products-app").wait_for(state="visible")
+        page.wait_for_function("""([id, search]) => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy && !proxy.loading && proxy.filters.search === search &&
+                proxy.filters.sort === 'title' && proxy.selected.join(',') === String(id);
+        }""", arg=[fixture_ids["local_id"], MAIN_TITLE])
+        assert page.get_by_placeholder("Название, бренд или артикул").input_value() == MAIN_TITLE
+        assert page.locator(".mp-list article.mp-row input[type=checkbox]:checked").evaluate_all(
+            "boxes => boxes.map(box => Number(box.value))"
+        ) == [fixture_ids["local_id"]]
+        assert page.evaluate("localStorage.getItem('price_change_selected')") == '[999999]'
+        checks.append("filtered_wb_price_return_restores_exact_owned_marks_and_scope")
+
+        # Re-run the same filtered action, then make that source stop matching
+        # the captured search and its WB product stop being active. This
+        # exercises the in-page error return, then rejects the stale mark.
+        with fixture.app.app_context():
+            stale_product = db.session.get(Product, fixture_ids["wb_id"])
+            stale_product.is_active = False
+            db.session.commit()
+        expected_wb_handoff_error = True
+        pick_action(page, "Изменить цены WB")
+        page.wait_for_url(lambda value: (
+            urlsplit(str(value)).path == "/prices/change"
+            and re.fullmatch(r"workspace-return=[a-f0-9]{32}", urlsplit(str(value)).fragment)
+        ))
+        page.get_by_role("alert").wait_for(state="visible")
+        stale_return = page.locator('[role="alert"] a[data-price-workspace-return]')
+        stale_return.wait_for(state="visible")
+        stale_hash = urlsplit(page.url).fragment
+        error_href = urlsplit(stale_return.get_attribute("href") or "")
+        assert error_href.path == "/my-products/beta" and not error_href.query
+        assert error_href.fragment == stale_hash
+        with fixture.app.app_context():
+            changed_source = db.session.get(ImportedProduct, fixture_ids["local_id"])
+            changed_source.title = "Изменённый товар вне исходного поиска"
+            db.session.commit()
+        with page.expect_response(lambda response: feed_matches(response, {
+                "search": MAIN_TITLE, "sort": "title", "per_page": "50",
+        })) as stale_feed:
+            with page.expect_navigation(wait_until="domcontentloaded"):
+                stale_return.click()
+        page.wait_for_url(lambda value: urlsplit(str(value)).path == "/my-products/beta")
+        assert stale_feed.value.status == 200
+        page.get_by_text("Список изменился. Проверьте его и отметьте товары заново.", exact=True).wait_for()
+        page.wait_for_function("""search => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy && !proxy.loading && proxy.selected.length === 0 &&
+                proxy.filters.search === search &&
+                proxy.filters.sort === 'title';
+        }""", arg=MAIN_TITLE)
+        assert page.locator(".mp-list article.mp-row input[type=checkbox]:checked").count() == 0
+        with fixture.app.app_context():
+            changed_source = db.session.get(ImportedProduct, fixture_ids["local_id"])
+            changed_source.title = MAIN_TITLE
+            stale_product = db.session.get(Product, fixture_ids["wb_id"])
+            stale_product.is_active = True
+            db.session.commit()
+        checks.append("stale_wb_price_return_drops_all_marks_after_feed_change")
         fixture.wait_document(page, "direct_wb_prices", "/prices/change")
+        pricing_form = page.locator('[x-data^="priceChangeApp("]')
         pricing_form.evaluate("element => Alpine.$data(element).toggleMarketplacePrices()")
         page.get_by_role("button", name="Синхронизировать с WB").wait_for()
-        checks.append("account_wide_price_sync_only_on_direct_price_route")
 
         open_products(page)
         page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
