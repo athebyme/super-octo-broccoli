@@ -1,0 +1,61 @@
+.sc-feed-freshness {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+    gap: 10px 16px;
+    min-width: 0;
+}
+
+.sc-feed-freshness--card {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-light);
+}
+
+.sc-feed-freshness--page {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+    margin: 0 0 20px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-card);
+}
+
+.sc-feed-freshness--card .sc-feed-freshness-label,
+.sc-feed-freshness--card .sc-feed-freshness-value,
+.sc-feed-freshness--card .sc-feed-freshness-warning {
+    font-size: 11px;
+}
+
+.sc-feed-freshness--card .sc-feed-freshness-label {
+    line-height: 1.35;
+}
+
+.sc-feed-freshness-item {
+    display: grid;
+    align-content: start;
+    gap: 3px;
+    min-width: 0;
+}
+
+.sc-feed-freshness-label {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.sc-feed-freshness-value,
+.sc-feed-freshness-warning {
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+.sc-feed-freshness time {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+.sc-feed-freshness-warning {
+    color: var(--warn);
+}

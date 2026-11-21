@@ -41,8 +41,11 @@ class SupplierFeedStatusRenderingTest(unittest.TestCase):
         ])
 
     def render_status(self, template_name, source):
-        template = self.app.jinja_env.get_template(template_name)
-        return str(template.module.supplier_feed_freshness(source))
+        template = self.app.jinja_env.get_template(
+            "partials/supplier_feed_freshness.html",
+        )
+        placement = "card" if template_name == TEMPLATES[0] else "page"
+        return str(template.module.supplier_feed_freshness(source, placement))
 
     def test_separate_feed_shows_success_attempt_setting_and_utc_without_private_details(self):
         source = supplier(
@@ -53,9 +56,14 @@ class SupplierFeedStatusRenderingTest(unittest.TestCase):
         for template_name in TEMPLATES:
             with self.subTest(template=template_name):
                 html = self.render_status(template_name, source)
+                self.assertIn(
+                    "sc-feed-freshness--card" if template_name == TEMPLATES[0]
+                    else "sc-feed-freshness--page",
+                    html,
+                )
                 self.assertIn("Каталог", html)
                 self.assertIn("Цены и остатки · отдельный файл", html)
-                self.assertIn("Автообновление: включено", html)
+                self.assertIn("Автообновление включено", html)
                 self.assertIn('datetime="2026-09-21T10:15:00Z"', html)
                 self.assertIn("21.09.2026 10:15 UTC", html)
                 self.assertIn('datetime="2026-09-20T08:30:00Z"', html)
@@ -73,7 +81,7 @@ class SupplierFeedStatusRenderingTest(unittest.TestCase):
             auto_sync_prices=False,
         )
         html = self.render_status(TEMPLATES[0], source)
-        self.assertIn("Автообновление: выключено", html)
+        self.assertIn("Автообновление выключено", html)
         self.assertIn("Успешная загрузка не подтверждена", html)
         self.assertIn("Последняя попытка завершилась ошибкой", html)
         self.assertIn('datetime="2026-09-22T11:45:00Z"', html)
@@ -97,17 +105,16 @@ class SupplierFeedStatusRenderingTest(unittest.TestCase):
             },
         )
         html = self.render_status(TEMPLATES[1], combined)
-        self.assertIn("Цена и остатки · в каталоге", html)
-        self.assertIn("Обновляются вместе с каталогом", html)
-        self.assertIn('datetime="2026-09-21T10:15:00Z"', html)
+        self.assertIn("Цена и остатки поступают вместе с каталогом", html)
+        self.assertEqual(html.count('datetime="2026-09-21T10:15:00Z"'), 1)
         self.assertNotIn('datetime="2026-09-20T08:30:00Z"', html)
-        self.assertNotIn("Автообновление:", html)
+        self.assertNotIn("Автообновление", html)
 
         no_price_feed = supplier(price_file_url=None, csv_column_mapping=None)
         omitted = self.render_status(TEMPLATES[0], no_price_feed)
         self.assertIn("Каталог", omitted)
         self.assertNotIn("Цены и остатки", omitted)
-        self.assertNotIn("Автообновление:", omitted)
+        self.assertNotIn("Автообновление", omitted)
 
 
 if __name__ == "__main__":

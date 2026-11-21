@@ -81,6 +81,14 @@ def seed_supplier_products():
             is_active=True,
         ).one()
         assert seller_supplier
+        supplier = db.session.get(Supplier, supplier_id)
+        assert supplier is not None
+        supplier.last_sync_at = datetime(2026, 9, 21, 10, 15)
+        supplier.last_sync_status = "success"
+        supplier.price_file_url = "https://fixture.invalid/synthetic-price-feed.csv"
+        supplier.auto_sync_prices = True
+        supplier.last_price_sync_at = datetime(2026, 9, 22, 11, 45)
+        supplier.last_price_sync_status = "success"
 
         eligible = []
         for index in range(53):
@@ -144,6 +152,14 @@ def seed_supplier_products():
         )
         db.session.add_all([out_of_stock, not_parsed, other_supplier])
         db.session.flush()
+        db.session.add(ImportedProduct(
+            seller_id=seller_id,
+            supplier_id=supplier_id,
+            supplier_product_id=out_of_stock.id,
+            supplier_content_revision=1,
+            title="R28 existing local supplier copy",
+            import_status="validated",
+        ))
         db.session.add(SellerSupplier(
             seller_id=seller_id,
             supplier_id=other_supplier.id,
@@ -312,12 +328,83 @@ def run():
         normal_path = "/supplier-catalog/{}/products?{}".format(
             fixture_ids["supplier_id"], urlencode(FILTERS),
         )
+        page.set_viewport_size({"width": 320, "height": 900})
+        catalog_response = page.goto(
+            fixture.BASE + "/supplier-catalog",
+            wait_until="domcontentloaded",
+        )
+        assert catalog_response and catalog_response.status == 200
+        page.wait_for_load_state("networkidle")
+        supplier_card = page.locator(".sc-card").filter(
+            has=page.locator(
+                f'a[href="/supplier-catalog/{fixture_ids["supplier_id"]}/products"]',
+            ),
+        )
+        card_freshness = supplier_card.locator(".sc-feed-freshness")
+        assert card_freshness.is_visible()
+        assert card_freshness.locator("time").count() == 2
+        card_times = card_freshness.locator("time")
+        assert card_times.nth(0).get_attribute("datetime") == "2026-09-21T10:15:00Z"
+        assert card_times.nth(0).inner_text() == "21.09.2026 10:15 UTC"
+        assert card_times.nth(1).get_attribute("datetime") == "2026-09-22T11:45:00Z"
+        assert card_times.nth(1).inner_text() == "22.09.2026 11:45 UTC"
+        assert "Автообновление включено" in card_freshness.inner_text()
+        apply_button = supplier_card.locator(".sc-update-btn")
+        assert apply_button.is_visible()
+        assert apply_button.inner_text() == "Применить сохранённые данные"
+        assert "сохранённое состояние каталога" in apply_button.get_attribute("title")
+        apply_confirmation = apply_button.get_attribute("onclick") or ""
+        assert "сохранённые данные каталога поставщика" in apply_confirmation
+        assert "Новая загрузка у поставщика не выполняется" in apply_confirmation
+        assert "Карточки WB и Ozon не изменятся" in apply_confirmation
+        assert posts == [] and fixture.REPORT["writes"] == []
+
         response = page.goto(
             fixture.BASE + normal_path,
             wait_until="domcontentloaded",
         )
         assert response and response.status == 200
         page.wait_for_load_state("networkidle")
+        page_freshness = page.locator(".sc-feed-freshness--page")
+        assert page_freshness.is_visible()
+        assert page_freshness.locator("time").count() == 2
+        page_times = page_freshness.locator("time")
+        assert page_times.nth(0).get_attribute("datetime") == "2026-09-21T10:15:00Z"
+        assert page_times.nth(0).inner_text() == "21.09.2026 10:15 UTC"
+        assert page_times.nth(1).get_attribute("datetime") == "2026-09-22T11:45:00Z"
+        assert page_times.nth(1).inner_text() == "22.09.2026 11:45 UTC"
+        assert "Цены и остатки · отдельный файл" in page_freshness.inner_text()
+        assert "Автообновление включено" in page_freshness.inner_text()
+        freshness_geometry = page_freshness.evaluate("""element => {
+            const rect = element.getBoundingClientRect();
+            return {
+                left: rect.left,
+                right: rect.right,
+                top: rect.top,
+                bottom: rect.bottom,
+                clientWidth: element.clientWidth,
+                scrollWidth: element.scrollWidth,
+                viewportWidth: document.documentElement.clientWidth,
+                documentScrollWidth: document.documentElement.scrollWidth,
+                viewportHeight: window.innerHeight,
+            };
+        }""")
+        assert freshness_geometry["viewportWidth"] == 320
+        assert freshness_geometry["left"] >= 0
+        assert freshness_geometry["right"] <= freshness_geometry["viewportWidth"]
+        assert freshness_geometry["scrollWidth"] <= freshness_geometry["clientWidth"] + 1
+        assert freshness_geometry["documentScrollWidth"] <= freshness_geometry["viewportWidth"] + 1
+        assert freshness_geometry["top"] < freshness_geometry["viewportHeight"]
+        assert freshness_geometry["bottom"] > 0
+        assert posts == [] and fixture.REPORT["writes"] == []
+        freshness_screenshot = "supplier-feed-freshness-dark-320.png"
+        page_freshness.screenshot(
+            path=REPORT_PATH.parent / freshness_screenshot,
+            animations="disabled",
+        )
+        checks.append(
+            "supplier_feed_freshness_separates_catalog_price_and_saved_apply_is_read_only_before_write",
+        )
         cards = page.locator(".grid > div.p-4")
         assert cards.count() == 50, cards.count()
         with fixture.app.app_context():
@@ -960,6 +1047,7 @@ def run():
         "imported_count": imported_count,
         "wb_create": wb_create_report,
         "screenshots": [
+            freshness_screenshot,
             "supplier-filtered-import-batch-dark-320.png",
             wb_create_report["screenshot"] if wb_create_report else None,
         ],

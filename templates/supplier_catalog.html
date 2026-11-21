@@ -1,71 +1,12 @@
 {% extends "base.html" %}
 {% from "partials/preparation_workspace_journey.html" import journey as preparation_journey %}
 {% from "macros/components.html" import page_header, stat_card, stat_grid, badge, card, empty_state, section_title, btn %}
+{% from "partials/supplier_feed_freshness.html" import supplier_feed_freshness %}
 
 {% block title %}Каталог поставщиков - Seller Hub{% endblock %}
 
-{% macro supplier_feed_freshness(supplier) -%}
-{% set mapping = supplier.csv_column_mapping if supplier.csv_column_mapping is mapping else {} %}
-{% set has_catalog_price = 'supplier_price' in mapping %}
-{% set has_catalog_stock = 'supplier_quantity' in mapping %}
-{% set attempt_at = supplier.last_price_sync_attempt_at if supplier.last_price_sync_attempt_at is defined else none %}
-<section class="sc-feed-freshness" aria-label="Свежесть данных поставщика">
-    <div class="sc-feed-freshness-item">
-        <strong class="sc-feed-freshness-label">Каталог</strong>
-        {% if supplier.last_sync_at %}
-        <span class="sc-feed-freshness-value">Последняя успешная загрузка
-            <time datetime="{{ supplier.last_sync_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ supplier.last_sync_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
-        </span>
-        {% else %}
-        <span class="sc-feed-freshness-value">Успешная загрузка не подтверждена</span>
-        {% endif %}
-        {% if supplier.last_sync_status == 'failed' %}
-        <span class="sc-feed-freshness-warning">Последняя попытка завершилась ошибкой</span>
-        {% endif %}
-    </div>
-    {% if supplier.price_file_url %}
-    <div class="sc-feed-freshness-item">
-        <strong class="sc-feed-freshness-label">Цены и остатки · отдельный файл</strong>
-        <span class="sc-feed-freshness-value">Автообновление: {{ 'включено' if supplier.auto_sync_prices else 'выключено' }}</span>
-        {% if supplier.last_price_sync_at %}
-        <span class="sc-feed-freshness-value">Последняя успешная загрузка
-            <time datetime="{{ supplier.last_price_sync_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ supplier.last_price_sync_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
-        </span>
-        {% else %}
-        <span class="sc-feed-freshness-value">Успешная загрузка не подтверждена</span>
-        {% endif %}
-        {% if supplier.last_price_sync_status == 'failed' %}
-            {% if attempt_at %}
-        <span class="sc-feed-freshness-warning">Последняя попытка завершилась ошибкой:
-            <time datetime="{{ attempt_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ attempt_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
-        </span>
-            {% else %}
-        <span class="sc-feed-freshness-warning">Последняя попытка завершилась ошибкой</span>
-            {% endif %}
-        {% elif supplier.last_price_sync_status == 'running' and attempt_at %}
-        <span class="sc-feed-freshness-warning">Результат последней попытки не подтверждён:
-            <time datetime="{{ attempt_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ attempt_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
-        </span>
-        {% endif %}
-    </div>
-    {% elif has_catalog_price or has_catalog_stock %}
-    <div class="sc-feed-freshness-item">
-        <strong class="sc-feed-freshness-label">
-            {% if has_catalog_price and has_catalog_stock %}Цена и остатки{% elif has_catalog_price %}Цена{% else %}Остатки{% endif %} · в каталоге
-        </strong>
-        {% if supplier.last_sync_at %}
-        <span class="sc-feed-freshness-value">Обновляются вместе с каталогом
-            <time datetime="{{ supplier.last_sync_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ supplier.last_sync_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
-        </span>
-        {% else %}
-        <span class="sc-feed-freshness-value">Успешная загрузка не подтверждена</span>
-        {% endif %}
-    </div>
-    {% endif %}
-</section>
-{%- endmacro %}
-
 {% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='supplier-feed-freshness.css', v='20261121-r34') }}">
 <style>
     .sc-grid {
         display: grid;
@@ -222,37 +163,6 @@
     }
     .sc-update-btn:hover { color: #15803d; }
 
-    .sc-feed-freshness {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
-        gap: 10px 16px;
-        margin-top: 14px;
-        padding-top: 12px;
-        border-top: 1px solid var(--border-light);
-    }
-    .sc-feed-freshness-item {
-        display: grid;
-        align-content: start;
-        gap: 3px;
-        min-width: 0;
-    }
-    .sc-feed-freshness-label {
-        color: var(--text-secondary);
-        font-size: 11px;
-        line-height: 1.35;
-    }
-    .sc-feed-freshness-value,
-    .sc-feed-freshness-warning {
-        color: var(--text-muted);
-        font-size: 11px;
-        line-height: 1.45;
-        overflow-wrap: anywhere;
-    }
-    .sc-feed-freshness time {
-        color: var(--text);
-        font-variant-numeric: tabular-nums;
-    }
-    .sc-feed-freshness-warning { color: var(--warn); }
 </style>
 {% endblock %}
 
@@ -303,7 +213,7 @@
                     </div>
                 </div>
 
-                {{ supplier_feed_freshness(s) }}
+                {{ supplier_feed_freshness(s, 'card') }}
             </div>
 
             <div class="sc-card-footer">

@@ -1,0 +1,49 @@
+{% macro supplier_feed_freshness(supplier, placement='page') -%}
+{% set mapping = supplier.csv_column_mapping if supplier.csv_column_mapping is mapping else {} %}
+{% set has_catalog_price = 'supplier_price' in mapping %}
+{% set has_catalog_stock = 'supplier_quantity' in mapping %}
+{% set attempt_at = supplier.last_price_sync_attempt_at if supplier.last_price_sync_attempt_at is defined else none %}
+<section class="sc-feed-freshness sc-feed-freshness--{{ placement }}" aria-label="Свежесть данных поставщика">
+    <div class="sc-feed-freshness-item">
+        <strong class="sc-feed-freshness-label">Каталог</strong>
+        {% if supplier.last_sync_at %}
+        <span class="sc-feed-freshness-value">Последняя успешная загрузка
+            <time datetime="{{ supplier.last_sync_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ supplier.last_sync_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
+        </span>
+        {% else %}
+        <span class="sc-feed-freshness-value">Успешная загрузка не подтверждена</span>
+        {% endif %}
+        {% if supplier.last_sync_status == 'failed' %}
+        <span class="sc-feed-freshness-warning">Последняя попытка завершилась ошибкой</span>
+        {% endif %}
+    </div>
+    {% if supplier.price_file_url %}
+    <div class="sc-feed-freshness-item">
+        <strong class="sc-feed-freshness-label">Цены и остатки · отдельный файл</strong>
+        <span class="sc-feed-freshness-value">Автообновление {{ 'включено' if supplier.auto_sync_prices else 'выключено' }}</span>
+        {% if supplier.last_price_sync_at %}
+        <span class="sc-feed-freshness-value">Последняя успешная загрузка
+            <time datetime="{{ supplier.last_price_sync_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ supplier.last_price_sync_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
+        </span>
+        {% else %}
+        <span class="sc-feed-freshness-value">Успешная загрузка не подтверждена</span>
+        {% endif %}
+        {% if supplier.last_price_sync_status == 'failed' %}
+        <span class="sc-feed-freshness-warning">Последняя попытка завершилась ошибкой</span>
+        {% if attempt_at %}
+        <time class="sc-feed-freshness-value" datetime="{{ attempt_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ attempt_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
+        {% endif %}
+        {% elif supplier.last_price_sync_status == 'running' and attempt_at %}
+        <span class="sc-feed-freshness-warning">Результат последней попытки не подтверждён</span>
+        <time class="sc-feed-freshness-value" datetime="{{ attempt_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ attempt_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
+        {% endif %}
+    </div>
+    {% elif has_catalog_price or has_catalog_stock %}
+    <div class="sc-feed-freshness-item">
+        <strong class="sc-feed-freshness-label">
+            {% if has_catalog_price and has_catalog_stock %}Цена и остатки поступают вместе с каталогом{% elif has_catalog_price %}Цена поступает вместе с каталогом{% else %}Остатки поступают вместе с каталогом{% endif %}
+        </strong>
+    </div>
+    {% endif %}
+</section>
+{%- endmacro %}
