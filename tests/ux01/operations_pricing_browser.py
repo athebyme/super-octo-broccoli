@@ -1351,6 +1351,44 @@ def main() -> None:
                                 and "1\u00a0000 ₽" in positive_price_rows.inner_text(),
                             "scope": "after_acceptance" if SOURCE == "worktree" else "baseline_observation",
                         })
+                        price_headers = page.evaluate("""() => {
+                            const purchase = document.querySelector('[data-price-purchase-header]');
+                            const difference = document.querySelector('[data-price-difference-header]');
+                            const region = document.querySelector('.pricing-table-scroll');
+                            const purchaseHeader = purchase && purchase.closest('th');
+                            const differenceHeader = difference && difference.closest('th');
+                            return {
+                                purchase: purchase && purchase.innerText.trim(),
+                                difference: difference && difference.innerText.trim(),
+                                purchaseWhiteSpace: purchase && getComputedStyle(purchase).whiteSpace,
+                                differenceWhiteSpace: difference && getComputedStyle(difference).whiteSpace,
+                                purchaseAccessibleName: purchaseHeader && purchaseHeader.getAttribute('aria-label'),
+                                differenceAccessibleName: differenceHeader && differenceHeader.getAttribute('aria-label'),
+                                localScrollRegion: !!region && region.getAttribute('role') === 'region'
+                                    && region.tabIndex === 0 && getComputedStyle(region).overflowX === 'auto',
+                                documentFitsViewport: document.documentElement.scrollWidth
+                                    <= document.documentElement.clientWidth + 1,
+                            };
+                        }""")
+                        price_headers_passed = (
+                            price_headers.get("purchase") == "Закупка"
+                            and price_headers.get("difference") == "Разница"
+                            and price_headers.get("purchaseWhiteSpace") == "nowrap"
+                            and price_headers.get("differenceWhiteSpace") == "nowrap"
+                            and price_headers.get("purchaseAccessibleName") == "Закупочная цена у поставщика"
+                            and price_headers.get("differenceAccessibleName") == "Разница между текущей и предлагаемой ценой"
+                            and price_headers.get("localScrollRegion") is True
+                            and price_headers.get("documentFitsViewport") is True
+                        )
+                        REPORT["checks"].append({
+                            "page": label,
+                            "check": "wb_price_table_short_headers_do_not_break_words_and_scroll_locally",
+                            "passed": price_headers_passed,
+                            "details": price_headers,
+                            "scope": "after_acceptance" if SOURCE == "worktree" else "baseline_observation",
+                        })
+                        if SOURCE == "worktree" and not price_headers_passed:
+                            raise AssertionError({"check": "wb_price_table_short_headers", **price_headers})
 
                     pricing_desktop_nav = None
                     for width in WIDTHS:

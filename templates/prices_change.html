@@ -445,8 +445,8 @@
                                 <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                                     Товар
                                 </th>
-                                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase" x-show="changeType === 'supplier_pricing'">
-                                    Закупочная
+                                <th scope="col" aria-label="Закупочная цена у поставщика" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase" x-show="changeType === 'supplier_pricing'">
+                                    <span data-price-purchase-header class="whitespace-nowrap">Закупка</span>
                                 </th>
                                 <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
                                     <span x-show="!useMarketplacePrices">Цена продавца в каталоге</span>
@@ -458,8 +458,8 @@
                                 <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
                                     Предлагаемая цена WB
                                 </th>
-                                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                                    Изменение
+                                <th scope="col" aria-label="Разница между текущей и предлагаемой ценой" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
+                                    <span data-price-difference-header class="whitespace-nowrap">Разница</span>
                                 </th>
                             </tr>
                         </thead>
