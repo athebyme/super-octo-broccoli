@@ -1371,8 +1371,8 @@ def main() -> None:
                             };
                         }""")
                         price_headers_passed = (
-                            price_headers.get("purchase") == "Закупка"
-                            and price_headers.get("difference") == "Разница"
+                            (price_headers.get("purchase") or "").casefold() == "закупка"
+                            and (price_headers.get("difference") or "").casefold() == "разница"
                             and price_headers.get("purchaseWhiteSpace") == "nowrap"
                             and price_headers.get("differenceWhiteSpace") == "nowrap"
                             and price_headers.get("purchaseAccessibleName") == "Закупочная цена у поставщика"
