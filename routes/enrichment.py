@@ -692,6 +692,10 @@ def register_enrichment_routes(app):
         preset = request.form.get('preset', '').strip()
         if preset not in ('characteristics',):
             preset = ''
+        from_supplier_refresh = (
+            preset == 'characteristics'
+            and request.form.getlist('from_supplier_refresh') == ['1']
+        )
 
         return render_template(
             'products_enrich_bulk.html',
@@ -701,6 +705,7 @@ def register_enrichment_routes(app):
             matched_count=matched_count,
             photo_ready_count=photo_ready_count,
             preset=preset,
+            from_supplier_refresh=from_supplier_refresh,
         )
 
     @app.route('/api/products/enrich-bulk/start', methods=['POST'])

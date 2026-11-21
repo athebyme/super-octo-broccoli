@@ -4,6 +4,7 @@
 {% block title %}Массовое обновление {{ 'характеристик' if preset == 'characteristics' else 'фото' }} WB — Seller Hub{% endblock %}
 
 {% block content %}
+{% set supplier_refresh_return = url_for('seller_my_products_beta', _anchor='supplier-refresh-result') if from_supplier_refresh else url_for('products_list') %}
 <style>
   .be-shell { max-width: 1040px; margin: 0 auto; }
   .be-header-meta { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:14px; }
@@ -104,9 +105,9 @@
           {% endif %}
         </div>
       </div>
-      <a href="{{ url_for('products_list') }}" class="sh-btn sh-btn--white-outline sh-btn--md">
+      <a href="{{ supplier_refresh_return }}" class="sh-btn sh-btn--white-outline sh-btn--md">
         <span class="sh-btn-icon">{{ icon('arrow-left', size=16) }}</span>
-        К карточкам
+        {{ 'К итогу обновления поставщика' if from_supplier_refresh else 'К карточкам' }}
       </a>
     </div>
   </div>
@@ -227,7 +228,7 @@
             <span class="sh-btn-icon">{{ icon('check', size=16) }}</span>
             <span x-text="isPhotoOnly ? 'Подтвердить обновление фото' : (isCharacteristicsOnly ? 'Подтвердить отправку характеристик' : 'Запустить обновление')"></span>
           </button>
-          <a href="{{ url_for('products_list') }}" class="sh-btn sh-btn--secondary sh-btn--md">Отмена</a>
+          <a href="{{ supplier_refresh_return }}" class="sh-btn sh-btn--secondary sh-btn--md">{{ 'К итогу обновления' if from_supplier_refresh else 'Отмена' }}</a>
         </div>
         <p class="be-copy" style="margin-top:12px">Задача выполняется в фоне. Страницу можно оставить открытой — прогресс обновляется автоматически.</p>
       </aside>
@@ -252,7 +253,7 @@
           <button type="button" @click="downloadReport()" class="sh-btn sh-btn--secondary sh-btn--md">
             <span class="sh-btn-icon">{{ icon('download', size=16) }}</span>Отчёт CSV
           </button>
-          <a href="{{ url_for('products_list') }}" class="sh-btn sh-btn--primary sh-btn--md">К карточкам</a>
+          <a href="{{ supplier_refresh_return }}" class="sh-btn sh-btn--primary sh-btn--md">{{ 'К итогу обновления' if from_supplier_refresh else 'К карточкам' }}</a>
         </div>
       </div>
 

@@ -24,6 +24,7 @@ MAIN_TITLE = "Карточка WB с обновлением поставщика
 REFRESHED_TITLE = "Обновлённое название из каталога поставщика"
 MANUAL_TITLE = "Внутренний товар без поставщика"
 LOCAL_REFRESH = "/my-products/refresh-from-supplier"
+LOCAL_REFRESH_RESULT = "/api/my-products/supplier-refresh-result"
 LOCAL_OZON_PREPARE = "/marketplaces/ozon/uploads/"
 LOCAL_WB_ENRICH_REVIEW = "/products/enrich-bulk"
 LOCAL_WB_ENRICH_START = "/api/products/enrich-bulk/start"
@@ -174,6 +175,11 @@ def feed_matches(response, expected):
         return False
     query = parse_qs(parsed.query)
     return all(query.get(key) == [value] for key, value in expected.items())
+
+
+def is_supplier_refresh_result(response):
+    parsed = urlsplit(response.url)
+    return parsed.path == LOCAL_REFRESH_RESULT and response.request.method == "GET"
 
 
 def filter_bulk_results(page):
@@ -636,6 +642,12 @@ def run():
         assert posts[2] == {"path": LOCAL_WB_ENRICH_REVIEW, "body": {"selected_ids": [str(fixture_ids["wb_id"])]}}
         page.wait_for_url(fixture.BASE + LOCAL_WB_ENRICH_REVIEW, wait_until="domcontentloaded")
         page.get_by_role("heading", name="Массовое обновление фото").wait_for()
+        assert page.get_by_role(
+            "link", name="К карточкам", exact=True,
+        ).get_attribute("href") == "/products"
+        assert page.get_by_role(
+            "link", name="Отмена", exact=True,
+        ).get_attribute("href") == "/products"
         default_review_fields = page.locator(".be-shell").evaluate("""element =>
             Object.fromEntries(Array.from(element.querySelectorAll('input[x-model^="fields."]'))
                 .map(input => [input.getAttribute('x-model').slice('fields.'.length), input.checked]))
@@ -730,12 +742,27 @@ def run():
         assert not errors, errors
         checks.append("classic_products_after_supplier_import_remains_error_free")
 
-        # A real local refresh uses the same fixture's linked supplier row plus
-        # an unlinked row, so the browser sees both an update and an exact skip.
+        # One real local refresh supplies both downstream channel handoffs.
+        page.evaluate("localStorage.setItem('sh-theme', 'dark')")
+        page.reload(wait_until="domcontentloaded")
         open_products(page)
+        resume_result_requests = []
+
+        def record_resume_result_request(browser_request):
+            parsed = urlsplit(browser_request.url)
+            if browser_request.method == "GET" and parsed.path == LOCAL_REFRESH_RESULT:
+                resume_result_requests.append(True)
+
+        page.on("request", record_resume_result_request)
+        resume_route = page.locator("#mp-bootstrap").evaluate(
+            "element => JSON.parse(element.textContent).urls.supplierRefreshResult"
+        )
+        assert resume_route == LOCAL_REFRESH_RESULT
         page.get_by_role("checkbox", name=f"Выбрать {MAIN_TITLE}").check()
         page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
         pick_action(page, "Обновить из поставщика")
+        refresh_posts_before_success = sum(post["path"] == LOCAL_REFRESH for post in posts)
+        posts_before_mixed_refresh = len(posts)
         with page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_REFRESH
                                   and response.request.method == "POST") as mixed_refresh:
             page.get_by_role("button", name="Обновить", exact=True).click()
@@ -745,6 +772,24 @@ def run():
                 mixed_data["errors"]) == (2, 1, 1, 0), mixed_data
         assert [entry["status"] for entry in mixed_data["items"]].count("updated") == 1
         assert [entry["status"] for entry in mixed_data["items"]].count("skipped") == 1
+        assert mixed_data["wb_ready"] == 1
+        assert mixed_data["wb_targets"] == [{
+            "imported_product_id": fixture_ids["local_id"],
+            "product_id": fixture_ids["wb_id"],
+        }], mixed_data["wb_targets"]
+        assert mixed_data.get("resume_receipt")
+        assert posts[posts_before_mixed_refresh:] == [{
+            "path": LOCAL_REFRESH,
+            "body": {"product_ids": [fixture_ids["local_id"], fixture_ids["manual_id"]]},
+        }]
+        resume_key = "supplier-refresh-resume-v1"
+        resume_receipt = page.evaluate(
+            "key => sessionStorage.getItem(key)", resume_key,
+        )
+        assert isinstance(resume_receipt, str) and 0 < len(resume_receipt) <= 7500, len(resume_receipt or "")
+        assert resume_receipt == mixed_data["resume_receipt"]
+        refresh_posts_after_success = sum(post["path"] == LOCAL_REFRESH for post in posts)
+        assert refresh_posts_after_success == refresh_posts_before_success + 1
         mixed_result = page.locator(".mp-refresh-result")
         mixed_result.get_by_text("В запросе товаров: 2.", exact=False).wait_for()
         mixed_result.get_by_text("Карточки и итог (2)").click()
@@ -757,38 +802,11 @@ def run():
             assert db.session.get(Product, fixture_ids["wb_id"]).title == MAIN_TITLE
         checks.append("supplier_refresh_mixed_local_update_and_skip_are_named")
 
-        # Use a second page so the WB review navigation cannot disturb the
-        # original verified result used by the existing Ozon handoff below.
-        wb_handoff_page = context.new_page()
-        wb_handoff_page.add_init_script("localStorage.setItem('sh-theme', 'dark');")
-        wb_handoff_page.set_viewport_size({"width": 320, "height": 900})
-        wb_handoff_page.on("pageerror", lambda error: errors.append(str(error)))
-        open_products(wb_handoff_page, REFRESHED_TITLE)
-        wb_handoff_page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").check()
-        wb_handoff_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
-        pick_action(wb_handoff_page, "Обновить из поставщика")
-        posts_before_wb_refresh = len(posts)
-        with wb_handoff_page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_REFRESH
-                                               and response.request.method == "POST") as wb_refresh:
-            wb_handoff_page.get_by_role("button", name="Обновить", exact=True).click()
-        assert wb_refresh.value.status == 200
-        wb_refresh_data = wb_refresh.value.json()
-        assert (wb_refresh_data["requested"], wb_refresh_data["updated"],
-                wb_refresh_data["skipped"], wb_refresh_data["errors"]) == (2, 1, 1, 0), wb_refresh_data
-        assert wb_refresh_data["wb_ready"] == 1
-        assert wb_refresh_data["wb_targets"] == [{
-            "imported_product_id": fixture_ids["local_id"],
-            "product_id": fixture_ids["wb_id"],
-        }], wb_refresh_data["wb_targets"]
-        assert posts[posts_before_wb_refresh] == {
-            "path": LOCAL_REFRESH,
-            "body": {"product_ids": [fixture_ids["local_id"], fixture_ids["manual_id"]]},
-        }
-        wb_result = wb_handoff_page.locator(".mp-refresh-result")
+        wb_result = page.locator(".mp-refresh-result")
         wb_result.get_by_role(
             "heading", name="Обновление из поставщика завершено", exact=True,
         ).wait_for()
-        assert wb_handoff_page.evaluate(
+        assert page.evaluate(
             "document.activeElement === document.querySelector('.mp-refresh-result')"
         )
         wb_result.get_by_text("Карточки и итог (2)", exact=True).click()
@@ -802,21 +820,28 @@ def run():
         wb_result.get_by_text(
             "Нет связи с каталогом поставщика. Данные не менялись.", exact=True,
         ).wait_for()
-        wb_cta = refresh_wb_button(wb_handoff_page)
+        wb_cta = refresh_wb_button(page)
         assert wb_cta.count() == 1
-        assert refresh_ozon_button(wb_handoff_page).count() == 1
-        verify_bounds(wb_handoff_page)
+        assert refresh_ozon_button(page).count() == 1
+        verify_bounds(page)
+        page.set_viewport_size({"width": 320, "height": 900})
+        verify_bounds(page)
+        assert page.locator(".main-content").evaluate(
+            "(element) => getComputedStyle(element).marginLeft"
+        ) == "0px"
+        assert wb_result.is_visible()
+        checks.append("seller_workspace_resize_releases_desktop_sidebar_space_immediately")
         wb_cta_bounds = wb_cta.bounding_box()
         assert wb_cta_bounds and wb_cta_bounds["height"] >= 44, wb_cta_bounds
-        wb_handoff_page.screenshot(
+        page.screenshot(
             path=OUTPUT / "supplier-refresh-channel-actions-dark-320.png",
             animations="disabled",
         )
 
         # The result CTA submits only the verified WB Product IDs to the old
         # review route. That POST renders the review; it must not start a job.
-        wb_handoff_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
-        wb_handoff_page.evaluate("window.scrollTo(0, 0)")
+        page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
+        page.evaluate("window.scrollTo(0, 0)")
         wb_cta.focus()
         assert wb_cta.evaluate("element => element === document.activeElement")
         with fixture.app.app_context():
@@ -826,7 +851,7 @@ def run():
         posts_before_wb_review = len(posts)
         starts_before_wb_review = len(wb_enrich_start_posts)
         provider_attempts_before_wb_review = fixture.REPORT["provider_attempts"]
-        with wb_handoff_page.expect_response(
+        with page.expect_response(
             lambda response: urlsplit(response.url).path == LOCAL_WB_ENRICH_REVIEW
             and response.request.method == "POST",
         ) as wb_review:
@@ -837,20 +862,21 @@ def run():
             "body": {
                 "selected_ids": [str(fixture_ids["wb_id"])],
                 "preset": ["characteristics"],
+                "from_supplier_refresh": ["1"],
             },
         }], posts[posts_before_wb_review:]
-        wb_handoff_page.wait_for_url(
+        page.wait_for_url(
             fixture.BASE + LOCAL_WB_ENRICH_REVIEW,
             wait_until="domcontentloaded",
         )
-        wb_handoff_page.get_by_role(
+        page.get_by_role(
             "heading", name="Отправка характеристик на WB", exact=True,
         ).wait_for()
-        wb_handoff_page.get_by_text("Выбрано: 1", exact=False).wait_for()
-        wb_handoff_page.get_by_role(
+        page.get_by_text("Выбрано: 1", exact=False).wait_for()
+        page.get_by_role(
             "button", name="Подтвердить отправку характеристик", exact=True,
         ).wait_for()
-        reviewed_fields = wb_handoff_page.locator(".be-shell").evaluate("""element =>
+        reviewed_fields = page.locator(".be-shell").evaluate("""element =>
             Object.fromEntries(Array.from(element.querySelectorAll('input[x-model^="fields."]'))
                 .map(input => [input.getAttribute('x-model').slice('fields.'.length), input.checked]))
         """)
@@ -858,8 +884,8 @@ def run():
             "photos": False, "title": False, "description": False,
             "characteristics": True, "dimensions": True, "brand": False,
         }, reviewed_fields
-        verify_enrichment_review_bounds(wb_handoff_page)
-        wb_handoff_page.locator(".be-shell").screenshot(
+        verify_enrichment_review_bounds(page)
+        page.locator(".be-shell").screenshot(
             path=OUTPUT / "supplier-refresh-wb-review-dark-320.png",
             animations="disabled",
         )
@@ -872,15 +898,64 @@ def run():
             ).count() == jobs_before_wb_review
         checks.append("supplier_refresh_wb_handoff_posts_exact_owned_ids_to_characteristics_review_only")
         checks.append("supplier_refresh_wb_characteristics_review_fits_320")
-        wb_handoff_page.close()
+        return_url = "/my-products/beta#supplier-refresh-result"
+        assert page.get_by_role(
+            "link", name="К итогу обновления поставщика", exact=True,
+        ).get_attribute("href") == return_url
+        assert page.get_by_role(
+            "link", name="К итогу обновления", exact=True,
+        ).get_attribute("href") == return_url
 
-        page.set_viewport_size({"width": 320, "height": 900})
-        verify_bounds(page)
-        assert page.locator(".main-content").evaluate(
-            "(element) => getComputedStyle(element).marginLeft"
-        ) == "0px"
-        assert mixed_result.is_visible()
-        checks.append("seller_workspace_resize_releases_desktop_sidebar_space_immediately")
+        def assert_resumed_refresh(response):
+            assert response.status == 200
+            assert response.request.headers.get("x-supplier-refresh-receipt") == resume_receipt
+            data = response.json()
+            assert data["success"] is True
+            assert (data["requested"], data["updated"], data["skipped"], data["errors"]) == (2, 1, 1, 0)
+            assert data["items"] == [
+                {"product_id": fixture_ids["local_id"], "status": "updated", "reason": None},
+                {"product_id": fixture_ids["manual_id"], "status": "skipped", "reason": "no_supplier_link"},
+            ]
+            assert data["wb_targets"] == [{
+                "imported_product_id": fixture_ids["local_id"],
+                "product_id": fixture_ids["wb_id"],
+            }]
+            assert data["wb_unavailable"] == 0
+            assert [item["productId"] for item in data["labels"]] == [
+                fixture_ids["local_id"], fixture_ids["manual_id"],
+            ]
+            assert REFRESHED_TITLE in data["labels"][0]["label"]
+            assert MANUAL_TITLE in data["labels"][1]["label"]
+            return data
+
+        wb_return = page.get_by_role(
+            "link", name="К итогу обновления поставщика", exact=True,
+        )
+        with page.expect_response(
+            lambda response: is_supplier_refresh_result(response)
+            and response.request.headers.get("x-supplier-refresh-receipt") == resume_receipt,
+        ) as wb_resumed:
+            wb_return.click()
+        assert_resumed_refresh(wb_resumed.value)
+        page.wait_for_url(fixture.BASE + return_url, wait_until="domcontentloaded")
+        restored_result = page.locator(".mp-refresh-result")
+        restored_result.get_by_role(
+            "heading", name="Сохранённый итог обновления из поставщика", exact=True,
+        ).wait_for()
+        restored_result.get_by_text("В запросе товаров: 2.", exact=False).wait_for()
+        restored_result.get_by_text("Карточки и итог (2)", exact=True).click()
+        restored_result.get_by_text(REFRESHED_TITLE, exact=False).wait_for()
+        restored_result.get_by_text(MANUAL_TITLE, exact=False).wait_for()
+        assert restored_result.locator(".mp-refresh-result-counts dd").all_text_contents() == ["1", "1", "0"]
+        assert refresh_wb_button(page).count() == 1
+        assert refresh_ozon_button(page).count() == 1
+        assert page.get_by_role("alertdialog").count() == 0
+        assert sum(post["path"] == LOCAL_REFRESH for post in posts) == refresh_posts_after_success
+        page.screenshot(
+            path=OUTPUT / "supplier-refresh-restored-after-wb-dark-320.png",
+            animations="disabled",
+        )
+        checks.append("supplier_refresh_wb_return_restores_signed_receipt_without_refresh_post")
 
         # Hand off the verified update from the real local mixed result. The
         # skipped row is selected separately to prove the CTA uses its own
@@ -940,6 +1015,52 @@ def run():
             ).one()
             assert handoff_job.total == 1
         checks.append("supplier_refresh_verified_update_handoff_posts_exact_local_ozon_prepare_key")
+
+        # Ozon's local preparation result returns to the same signed supplier
+        # receipt and preserves the WB handoff derived from that receipt.
+        my_products_link = page.locator(".sh-page-header .sh-page-actions").get_by_role(
+            "link", name="Мои товары", exact=True,
+        )
+        ozon_return_url = "/my-products/beta"
+        assert my_products_link.get_attribute("href") == ozon_return_url
+        refresh_posts_before_ozon_return = sum(post["path"] == LOCAL_REFRESH for post in posts)
+        with page.expect_response(
+            lambda response: is_supplier_refresh_result(response)
+            and response.request.headers.get("x-supplier-refresh-receipt") == resume_receipt,
+        ) as ozon_resumed:
+            my_products_link.click()
+        assert_resumed_refresh(ozon_resumed.value)
+        page.wait_for_url(fixture.BASE + ozon_return_url, wait_until="domcontentloaded")
+        restored_result = page.locator(".mp-refresh-result")
+        restored_result.get_by_role(
+            "heading", name="Сохранённый итог обновления из поставщика", exact=True,
+        ).wait_for()
+        restored_result.get_by_text("Карточки и итог (2)", exact=True).click()
+        restored_result.get_by_text(REFRESHED_TITLE, exact=False).wait_for()
+        restored_result.get_by_text(MANUAL_TITLE, exact=False).wait_for()
+        assert restored_result.locator(".mp-refresh-result-counts dd").all_text_contents() == ["1", "1", "0"]
+        assert refresh_wb_button(page).count() == 1
+        assert refresh_ozon_button(page).count() == 1
+        assert page.get_by_role("alertdialog").count() == 0
+        assert sum(post["path"] == LOCAL_REFRESH for post in posts) == refresh_posts_before_ozon_return
+        checks.append("supplier_refresh_ozon_result_returns_to_same_receipt_and_wb_scope")
+
+        result_gets_before_hide = len(resume_result_requests)
+        refresh_posts_before_hide = sum(post["path"] == LOCAL_REFRESH for post in posts)
+        page.get_by_role("button", name="Скрыть итог обновления", exact=True).click()
+        assert page.locator(".mp-refresh-result").count() == 0
+        assert page.evaluate("key => sessionStorage.getItem(key) === null", resume_key)
+        with page.expect_response(
+            lambda response: urlsplit(response.url).path == "/api/my-products"
+            and response.request.method == "GET",
+        ) as feed_after_hide:
+            page.reload(wait_until="domcontentloaded")
+        assert feed_after_hide.value.status == 200
+        page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").wait_for()
+        assert len(resume_result_requests) == result_gets_before_hide
+        assert sum(post["path"] == LOCAL_REFRESH for post in posts) == refresh_posts_before_hide
+        assert page.locator(".mp-refresh-result").count() == 0
+        checks.append("supplier_refresh_hide_clears_receipt_before_reload_without_restore_or_refresh")
 
         # Start a separate mobile browser context at 320px. Do not resize a
         # desktop page across the shared sidebar breakpoint for this check.
