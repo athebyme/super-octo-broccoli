@@ -268,6 +268,23 @@ class MyProductsPhotoTemplateContractTest(unittest.TestCase):
         self.assertIn('fetchpriority="low"', template)
         self.assertIn('scheduleProductPhotoRetry(this)', template)
 
+    def test_retry_handler_script_precedes_lazy_image_markup(self):
+        template = Path('templates/seller_my_products.html').read_text(
+            encoding='utf-8',
+        )
+
+        helper = template.index('function scheduleProductPhotoRetry(image)')
+        script_open = template.rfind('<script', 0, helper)
+        script_close = template.index('</script>', helper)
+        image_binding = template.index(
+            'onerror="scheduleProductPhotoRetry(this)"',
+        )
+
+        self.assertGreaterEqual(script_open, 0)
+        self.assertLess(script_open, helper)
+        self.assertLess(helper, script_close)
+        self.assertLess(script_close, image_binding)
+
 
 if __name__ == '__main__':
     unittest.main()
