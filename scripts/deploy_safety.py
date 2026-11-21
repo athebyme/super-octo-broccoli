@@ -46,6 +46,48 @@ class ActiveAttempts(DeploySafetyError):
         super().__init__(f"{count} native Flash call(s) are still reserved")
 
 
+class ActiveCatalogRefresh(DeploySafetyError):
+    def __init__(self, count: int):
+        self.count = count
+        super().__init__(f"{count} supplier catalog refresh run(s) are still active")
+
+
+def _catalog_refresh_count(connection: sqlite3.Connection) -> int:
+    definition = connection.execute(
+        "SELECT type FROM sqlite_master WHERE name = 'supplier_catalog_refresh_runs'"
+    ).fetchone()
+    if definition is None:
+        step_journal = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'seller_hub_startup_migration_steps'"
+        ).fetchone()
+        if step_journal and connection.execute(
+            "SELECT 1 FROM seller_hub_startup_migration_steps "
+            "WHERE step_key = 'migrate-add-supplier-catalog-refresh-runs' AND status = 'completed'"
+        ).fetchone():
+            raise DeploySafetyError("supplier catalog refresh schema is missing")
+        return 0  # The first deployment runs against an earlier, valid schema.
+    if definition != ("table",):
+        raise DeploySafetyError("supplier catalog refresh schema is invalid")
+    return connection.execute(
+        "SELECT COUNT(*) FROM supplier_catalog_refresh_runs WHERE status = 'running'"
+    ).fetchone()[0]
+
+
+def _active_gate_error(message: str) -> Optional[DeploySafetyError]:
+    signal, separator, value = message.partition(":")
+    error_type = {"ACTIVE": ActiveAttempts, "CATALOG_ACTIVE": ActiveCatalogRefresh}.get(signal)
+    if not separator or error_type is None:
+        return None
+    try:
+        count = int(value)
+    except ValueError:
+        count = 0
+    if count <= 0:
+        raise DeploySafetyError("database gate returned an invalid count")
+    return error_type(count)
+
+
 @dataclass
 class DatabaseGate:
     process: subprocess.Popen[str]
@@ -69,7 +111,7 @@ class DatabaseGate:
 
 
 def acquire_sqlite_gate(database_path: str) -> sqlite3.Connection:
-    """Acquire the shared writer lock; reject ledger or worker pre-claims."""
+    """Acquire the writer lock and reject active provider or catalog work."""
     uri = "file:" + quote(str(Path(database_path).resolve()), safe="/:") + "?mode=rw"
     connection = sqlite3.connect(uri, uri=True, timeout=0, isolation_level=None)
     try:
@@ -91,6 +133,10 @@ def acquire_sqlite_gate(database_path: str) -> sqlite3.Connection:
         if row[0]:
             connection.rollback()
             raise ActiveAttempts(row[0])
+        active_catalog = _catalog_refresh_count(connection)
+        if active_catalog:
+            connection.rollback()
+            raise ActiveCatalogRefresh(active_catalog)
         return connection
     except Exception:
         if connection.in_transaction:
@@ -104,6 +150,9 @@ def _lock_holder(database_path: str) -> int:
         connection = acquire_sqlite_gate(database_path)
     except ActiveAttempts as error:
         print(f"ACTIVE:{error.count}", flush=True)
+        return 3
+    except ActiveCatalogRefresh as error:
+        print(f"CATALOG_ACTIVE:{error.count}", flush=True)
         return 3
     except sqlite3.OperationalError as error:
         if "locked" in str(error).lower() or "busy" in str(error).lower():
@@ -242,15 +291,13 @@ def _start_database_gate(project_dir: Path, container_id: str) -> DatabaseGate:
     while time.monotonic() < deadline:
         if process.poll() is not None:
             output = process.stdout.read().strip()
-            if output.startswith("ACTIVE:"):
-                try:
-                    raise ActiveAttempts(int(output.split(":", 1)[1]))
-                except ValueError:
-                    raise DeploySafetyError("database gate returned an invalid count") from None
+            active_error = _active_gate_error(output)
+            if active_error is not None:
+                raise active_error
             if output == "BUSY":
                 raise DeploySafetyError("database writer is busy; retrying safely")
             if output.startswith("ERROR:"):
-                raise DeploySafetyError("native Flash database gate failed closed")
+                raise DeploySafetyError("SQLite deployment gate failed closed")
             raise DeploySafetyError("database gate exited before acquiring lock")
         ready, _, _ = select.select([process.stdout], [], [], 0.2)
         if not ready:
@@ -258,14 +305,14 @@ def _start_database_gate(project_dir: Path, container_id: str) -> DatabaseGate:
         line = process.stdout.readline().strip()
         if line == "LOCKED":
             return DatabaseGate(process, container_name)
-        if line.startswith("ACTIVE:"):
-            try:
-                count = int(line.split(":", 1)[1])
-            except ValueError:
-                _discard_gate_process(container_name, process)
-                raise DeploySafetyError("database gate returned an invalid count") from None
+        try:
+            active_error = _active_gate_error(line)
+        except DeploySafetyError:
+            _discard_gate_process(container_name, process)
+            raise
+        if active_error is not None:
             process.wait(timeout=10)
-            raise ActiveAttempts(count)
+            raise active_error
         if line == "BUSY":
             process.wait(timeout=10)
             raise DeploySafetyError("database writer is busy; retrying safely")
@@ -284,12 +331,14 @@ def _acquire_database_gate(project_dir: Path, container_id: str,
             return _start_database_gate(project_dir, container_id)
         except ActiveAttempts as error:
             print(f"Waiting for {error.count} reserved native Flash call(s) to finish", flush=True)
+        except ActiveCatalogRefresh as error:
+            print(f"Waiting for {error.count} supplier catalog refresh run(s) to finish", flush=True)
         except DeploySafetyError as error:
             if str(error) != "database writer is busy; retrying safely":
                 raise
             print("Waiting for SQLite writer transaction to finish", flush=True)
         if time.monotonic() >= deadline:
-            raise DeploySafetyError("native Flash calls did not drain before the deployment deadline")
+            raise DeploySafetyError("active work did not drain before the deployment deadline")
         sleep(GATE_POLL_SECONDS)
 
 

@@ -73,6 +73,47 @@ def test_non_flash_admin_item_does_not_hold_native_flash_drain(tmp_path):
     gate.close()
 
 
+def test_catalog_running_holds_deploy_gate_but_pending_survives(tmp_path):
+    path = tmp_path / "ledger.sqlite"
+    with _ledger(path) as connection:
+        connection.execute(
+            "CREATE TABLE supplier_catalog_refresh_runs "
+            "(id TEXT PRIMARY KEY, status TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO supplier_catalog_refresh_runs VALUES ('started', 'running'), "
+            "('queued', 'pending'), ('finished', 'completed')"
+        )
+    with pytest.raises(deploy_safety.ActiveCatalogRefresh) as error:
+        deploy_safety.acquire_sqlite_gate(str(path))
+    assert error.value.count == 1
+
+    connection.execute(
+        "UPDATE supplier_catalog_refresh_runs SET status = 'interrupted' WHERE id = 'started'"
+    )
+    connection.close()
+    gate = deploy_safety.acquire_sqlite_gate(str(path))
+    assert gate.execute(
+        "SELECT status FROM supplier_catalog_refresh_runs WHERE id = 'queued'"
+    ).fetchone() == ("pending",)
+    gate.rollback()
+    gate.close()
+
+
+def test_catalog_schema_absence_fails_after_completed_migration(tmp_path):
+    path = tmp_path / "ledger.sqlite"
+    connection = _ledger(path)
+    connection.executescript("""
+        CREATE TABLE seller_hub_startup_migration_steps
+            (step_key TEXT PRIMARY KEY, status TEXT NOT NULL);
+        INSERT INTO seller_hub_startup_migration_steps
+            VALUES ('migrate-add-supplier-catalog-refresh-runs', 'completed');
+    """)
+    connection.close()
+    with pytest.raises(deploy_safety.DeploySafetyError, match="catalog refresh schema is missing"):
+        deploy_safety.acquire_sqlite_gate(str(path))
+
+
 def test_database_gate_serializes_reservation_before_physical_call(tmp_path):
     path = tmp_path / "ledger.sqlite"
     connection = _ledger(path)

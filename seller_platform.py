@@ -7667,5 +7667,11 @@ if __name__ == '__main__':
     with app.app_context():
         db.create_all()
         _run_startup_migrations()
+        if db.engine.dialect.name == 'sqlite':
+            from migrations.migrate_add_supplier_catalog_refresh_runs import migrate
+            migrate(db.engine.url.database)
+        else:
+            from services.supplier_catalog_refresh_models import SupplierCatalogRefreshRun
+            SupplierCatalogRefreshRun.__table__.create(db.engine, checkfirst=True)
         _ensure_admin_from_env()
     app.run(debug=os.environ.get('FLASK_DEBUG', '').lower() in ('1', 'true'), host='0.0.0.0', port=int(os.environ.get('PORT', 5001)))

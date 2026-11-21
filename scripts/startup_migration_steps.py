@@ -144,6 +144,11 @@ def migration_steps() -> tuple[MigrationStep, ...]:
         "{database}",
     ))
 
+    steps.append(_python(
+        "migrations/migrate_add_supplier_catalog_refresh_runs.py",
+        "{database}",
+    ))
+
     keys = [step.key for step in steps]
     if len(keys) != len(set(keys)):
         raise RuntimeError("Startup migration plan contains duplicate step keys")

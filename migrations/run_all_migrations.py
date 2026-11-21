@@ -1384,6 +1384,10 @@ def main():
                 migrate as migrate_supplier_catalog_enrichment,
             )
             migrate_supplier_catalog_enrichment(db_path)
+            from migrate_add_supplier_catalog_refresh_runs import (
+                migrate as migrate_supplier_catalog_refresh_runs,
+            )
+            migrate_supplier_catalog_refresh_runs(db_path)
             from migrate_clean_characteristic_dimensions import (
                 migrate as migrate_clean_characteristic_dimensions,
             )

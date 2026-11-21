@@ -346,6 +346,16 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         coalesce=True,
     )
 
+    scheduler.add_job(
+        func=lambda: process_supplier_catalog_refresh_runs(flask_app),
+        trigger=IntervalTrigger(minutes=1),
+        id='supplier_catalog_refresh',
+        name='Process requested supplier catalog refresh',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     from services.supplier_price_sync import run_auto_supplier_price_sync_tick
     scheduler.add_job(
         func=lambda: run_auto_supplier_price_sync_tick(flask_app),
@@ -750,6 +760,12 @@ def process_supplier_catalog_enrichment_runs(flask_app):
             logger.exception('Supplier catalog enrichment scheduler tick failed')
         finally:
             db.session.remove()
+
+
+def process_supplier_catalog_refresh_runs(flask_app):
+    from services.supplier_catalog_refresh import run_catalog_refresh_tick
+
+    run_catalog_refresh_tick(flask_app)
 
 
 def process_wb_supplier_enrichment(flask_app):
