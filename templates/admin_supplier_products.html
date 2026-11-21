@@ -36,7 +36,7 @@
 
     <div class="mb-6">
         <div class="flex flex-col gap-3">
-            <div class="flex flex-wrap items-start gap-2">
+            <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-start">
                 {% if supplier.csv_source_url %}
                 <form method="POST" action="{{ url_for('admin_supplier_sync', supplier_id=supplier.id) }}"
                       onsubmit="return confirm('Обновить каталог поставщика? Новые позиции будут добавлены, данные существующих сверятся с файлом.')"
@@ -58,7 +58,7 @@
                      data-refresh-status-url="{{ catalog_refresh_status_url or '' }}"
                      data-refresh-latest-run-id="{{ catalog_refresh_latest_id }}"
                      data-refresh-latest-active="{{ 'true' if catalog_refresh_latest_active else 'false' }}"
-                     class="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
+                     class="scroll-mt-20 w-full min-w-0 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm sm:flex-1">
                     <p data-testid="catalog-refresh-headline" class="text-sm font-semibold text-gray-900">
                         {{ catalog_refresh_view.headline }}
                     </p>
@@ -66,16 +66,16 @@
                         {{ catalog_refresh_view.detail }}
                     </p>
                     <div data-testid="catalog-refresh-counts" {% if not catalog_refresh_view.show_counts %}hidden{% endif %}
-                     class="mt-2 text-xs text-gray-700">
-                    <div class="flex flex-wrap gap-x-4 gap-y-1">
-                        <span>Строк: <strong data-refresh-field="total">{{ catalog_refresh_view.counts.get('total', '') }}</strong></span>
-                        <span>Добавлено: <strong data-refresh-field="added">{{ catalog_refresh_view.counts.get('added', '') }}</strong></span>
-                        <span>Существующих обработано: <strong data-refresh-field="updated">{{ catalog_refresh_view.counts.get('updated', '') }}</strong></span>
-                        <span data-refresh-field-wrap="postprocess-errors"
-                              {% if catalog_refresh_view.postprocess_errors is none %}hidden{% endif %}>
-                            Ошибки проверок: <strong data-refresh-field="postprocess-errors">{{ catalog_refresh_view.postprocess_errors if catalog_refresh_view.postprocess_errors is not none else '' }}</strong>
-                        </span>
-                    </div>
+                         class="mt-2 text-xs text-gray-700">
+                        <div class="flex flex-wrap gap-x-4 gap-y-1">
+                            <span>Строк: <strong data-refresh-field="total">{{ catalog_refresh_view.counts.get('total', '') }}</strong></span>
+                            <span>Добавлено: <strong data-refresh-field="added">{{ catalog_refresh_view.counts.get('added', '') }}</strong></span>
+                            <span>Существующих обработано: <strong data-refresh-field="updated">{{ catalog_refresh_view.counts.get('updated', '') }}</strong></span>
+                            <span data-refresh-field-wrap="postprocess-errors"
+                                  {% if catalog_refresh_view.postprocess_errors is none %}hidden{% endif %}>
+                                Ошибки проверок: <strong data-refresh-field="postprocess-errors">{{ catalog_refresh_view.postprocess_errors if catalog_refresh_view.postprocess_errors is not none else '' }}</strong>
+                            </span>
+                        </div>
                     </div>
                     <p data-testid="catalog-refresh-price" {% if not catalog_refresh_view.price_status %}hidden{% endif %}
                        class="mt-2 text-xs text-gray-600">

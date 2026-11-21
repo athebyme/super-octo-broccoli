@@ -17,6 +17,7 @@
   const MAX_POLLS = 90;
   const MAX_DURATION_MS = 12 * 60 * 1000;
   const FETCH_TIMEOUT_MS = 8000;
+  let lastSemanticPayloadKey = null;
 
   function readJson(element) {
     try {
@@ -83,6 +84,24 @@
     }
 
     const rawCommitted = typeof payload.raw_committed_at === 'string' && payload.raw_committed_at.length > 0;
+    const semanticPayloadKey = JSON.stringify([
+      payload.id,
+      payload.status,
+      rawCommitted,
+      safeCount(payload.total),
+      safeCount(payload.added),
+      safeCount(payload.updated),
+      safeCount(payload.postprocess_errors),
+      payload.price_status ?? null,
+      safeCount(payload.price_conflicts),
+      payload.error_code ?? null,
+    ]);
+    if (semanticPayloadKey === lastSemanticPayloadKey) {
+      updateButtonState(payload.status, runId);
+      return true;
+    }
+    lastSemanticPayloadKey = semanticPayloadKey;
+
     panel.dataset.refreshState = payload.status;
     panel.dataset.refreshRawCommitted = String(rawCommitted);
     const key = copyKey(payload.status, rawCommitted);
