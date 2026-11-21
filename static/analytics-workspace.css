@@ -79,17 +79,6 @@
     line-height: 1.5;
 }
 
-.analytics-workspace .analytics-data-scope {
-    margin: 0 0 24px;
-    padding: 12px 16px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--bg);
-    color: var(--text-secondary);
-    font-size: 13px;
-    line-height: 1.5;
-}
-
 .analytics-workspace .sh-stat-grid,
 .analytics-workspace .analytics-chart-row,
 .analytics-workspace .analytics-bottom-row {

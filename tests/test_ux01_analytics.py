@@ -50,14 +50,20 @@ const assert = require('node:assert/strict');
 
     def test_loaded_summary_discloses_product_scope_separately_from_daily_history(self):
         loaded_data = self.template.split('<template x-if="hasData">', 1)[1]
-        scope_start = loaded_data.index('class="analytics-data-scope"')
+        scope_start = loaded_data.index(
+            'class="analytics-period-context analytics-data-scope"')
         kpi_start = loaded_data.index('sh-stat-grid sh-stat-grid--4')
         scope_note = loaded_data[scope_start:kpi_start]
 
         self.assertLess(scope_start, kpi_start)
-        self.assertIn('до 50 товаров', scope_note)
-        self.assertIn('не итог по всему кабинету', scope_note)
-        self.assertIn('График по дням загружается отдельно', scope_note)
+        self.assertIn(
+            'Охват сводки и таблицы — до 50 товаров WB с наибольшей суммой заказов.',
+            scope_note,
+        )
+        self.assertIn(
+            'Данные для графика по дням загружаются отдельно.',
+            scope_note,
+        )
         self.assertIn('displayedPeriodMessage()', loaded_data[:scope_start])
 
     def test_successful_zero_summary_is_real_data_and_keeps_kpi_visible(self):
