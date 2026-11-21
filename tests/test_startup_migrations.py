@@ -23,13 +23,17 @@ def _write(root: Path, relative: str, body: str) -> Path:
 
 def test_new_schema_steps_are_appended_after_existing_plan():
     steps = migration_steps()
-    assert len(steps) == 82
-    assert [(step.key, step.script) for step in steps[-3:]] == [
+    assert len(steps) == 83
+    assert [(step.key, step.script) for step in steps[-4:]] == [
         ("migrate-add-imported-content-overrides", "migrations/migrate_add_imported_content_overrides.py"),
         ("migrate-add-wb-bulk-review-key", "migrations/migrate_add_wb_bulk_review_key.py"),
         (
             "migrate-add-supplier-catalog-refresh-runs",
             "migrations/migrate_add_supplier_catalog_refresh_runs.py",
+        ),
+        (
+            "migrate-add-wb-price-review-receipt",
+            "migrations/migrate_add_wb_price_review_receipt.py",
         ),
     ]
     assert len({step.key for step in steps}) == len(steps)
