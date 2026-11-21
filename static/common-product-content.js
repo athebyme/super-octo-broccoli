@@ -6,8 +6,11 @@
     var WORKSPACE_RETURN_MAX_BYTES = 16 * 1024;
     var WORKSPACE_RETURN_MAX_BATCH_BYTES = 8192;
     var workspaceReturnEncoder = null;
-    var WORKSPACE_RETURN_CAPSULE_KEYS = [
+    var WORKSPACE_RETURN_V1_CAPSULE_KEYS = [
         'v', 'nonce', 'owner', 'expiresAt', 'editorIds', 'selectionIds', 'scope', 'batch',
+    ];
+    var WORKSPACE_RETURN_V2_CAPSULE_KEYS = [
+        'v', 'nonce', 'owner', 'expiresAt', 'priceTarget', 'selectionIds', 'scope', 'batch',
     ];
 
     function workspaceReturnNow(options) {
@@ -68,20 +71,47 @@
         }
     }
 
+    function workspaceReturnOwnerValid(owner) {
+        return typeof owner === 'string' && owner.length <= 256 && /^[0-9]+:[0-9]+$/.test(owner);
+    }
+
+    function workspaceReturnPriceTargetValid(target) {
+        if (!workspaceReturnPlainObject(target)) return false;
+        var keys = Object.keys(target).sort();
+        if (keys.length !== 3 || keys[0] !== 'accountId' || keys[1] !== 'channel' || keys[2] !== 'ids') {
+            return false;
+        }
+        if (target.channel === 'wb') {
+            return target.accountId === null && workspaceReturnIdList(target.ids, 200);
+        }
+        return target.channel === 'ozon' &&
+            Number.isSafeInteger(target.accountId) && target.accountId > 0 &&
+            workspaceReturnIdList(target.ids, 100);
+    }
+
+    function workspaceReturnPriceTargetsEqual(left, right) {
+        return workspaceReturnPriceTargetValid(left) &&
+            workspaceReturnPriceTargetValid(right) &&
+            left.channel === right.channel &&
+            left.accountId === right.accountId &&
+            workspaceReturnSameOrderedIds(left.ids, right.ids);
+    }
+
     function workspaceReturnCapsuleValid(capsule) {
         try {
-            if (!workspaceReturnPlainObject(capsule) ||
-                Object.keys(capsule).length !== WORKSPACE_RETURN_CAPSULE_KEYS.length ||
-                !WORKSPACE_RETURN_CAPSULE_KEYS.every(function (key) {
+            if (!workspaceReturnPlainObject(capsule)) return false;
+            var expectedKeys = capsule.v === 1
+                ? WORKSPACE_RETURN_V1_CAPSULE_KEYS
+                : capsule.v === 2 ? WORKSPACE_RETURN_V2_CAPSULE_KEYS : null;
+            if (!expectedKeys || Object.keys(capsule).length !== expectedKeys.length ||
+                !expectedKeys.every(function (key) {
                     return Object.prototype.hasOwnProperty.call(capsule, key);
                 })) return false;
 
-            return capsule.v === 1 &&
+            var commonValid =
                 typeof capsule.nonce === 'string' && /^[a-f0-9]{32}$/.test(capsule.nonce) &&
-                typeof capsule.owner === 'string' && capsule.owner.length <= 256 &&
-                /^[0-9]+:[0-9]+$/.test(capsule.owner) &&
+                workspaceReturnOwnerValid(capsule.owner) &&
                 Number.isSafeInteger(capsule.expiresAt) && capsule.expiresAt >= 0 &&
-                workspaceReturnIdList(capsule.editorIds, 50) &&
                 workspaceReturnIdList(capsule.selectionIds, 200, true) &&
                 workspaceReturnPlainObject(capsule.scope) &&
                 (capsule.batch === null || (
@@ -90,6 +120,12 @@
                     capsule.batch.length <= WORKSPACE_RETURN_MAX_BATCH_BYTES &&
                     /^[A-Za-z0-9_.-]+$/.test(capsule.batch)
                 ));
+            if (!commonValid) return false;
+            return capsule.v === 1
+                ? workspaceReturnIdList(capsule.editorIds, 50)
+                : workspaceReturnPriceTargetValid(capsule.priceTarget) &&
+                    capsule.selectionIds.length > 0 &&
+                    capsule.selectionIds.length === capsule.priceTarget.ids.length;
         } catch (_) {
             return false;
         }
@@ -104,6 +140,8 @@
         if (!Number.isSafeInteger(expiresAt)) return null;
         var nonce = workspaceReturnNonce(options);
         if (!nonce || !/^[a-f0-9]{32}$/.test(nonce)) return null;
+        var hasPriceTarget = Object.prototype.hasOwnProperty.call(payload, 'priceTarget');
+        if (hasPriceTarget && !workspaceReturnPriceTargetValid(payload.priceTarget)) return null;
         var capsule = {
             v: 1,
             nonce: nonce,
@@ -114,6 +152,11 @@
             scope: payload.scope,
             batch: payload.batch === undefined ? null : payload.batch,
         };
+        if (hasPriceTarget) {
+            capsule.v = 2;
+            delete capsule.editorIds;
+            capsule.priceTarget = payload.priceTarget;
+        }
         if (!workspaceReturnCapsuleValid(capsule)) return null;
         try {
             var encoded = JSON.stringify(capsule);
@@ -163,25 +206,53 @@
     function workspaceReturnFromHash(hash, options) {
         if (typeof hash !== 'string' || hash.length > 64) return null;
         var match = hash.match(/^#workspace-return=([a-f0-9]{32})$/);
-        if (!match || !options || typeof options.owner !== 'string' ||
-            !options.owner || options.owner.length > 256 ||
-            (options.editorIds !== undefined && !workspaceReturnIdList(options.editorIds, 50))) return null;
+        if (!match || !options || !workspaceReturnOwnerValid(options.owner)) return null;
 
         var storage = workspaceReturnStorage(options);
         var capsule = workspaceReturnReadStored(storage);
         if (!capsule || capsule.nonce !== match[1]) return null;
+        var hasEditorIds = Object.prototype.hasOwnProperty.call(options, 'editorIds');
+        var hasPriceTarget = Object.prototype.hasOwnProperty.call(options, 'priceTarget');
         var now = workspaceReturnNow(options);
         if (!Number.isSafeInteger(now) || now < 0 ||
             !Number.isSafeInteger(now + WORKSPACE_RETURN_TTL_MS) ||
             capsule.expiresAt <= now ||
             capsule.expiresAt > now + WORKSPACE_RETURN_TTL_MS ||
             capsule.owner !== options.owner ||
-            (options.editorIds !== undefined &&
-                !workspaceReturnSameOrderedIds(capsule.editorIds, options.editorIds))) {
+            (hasEditorIds && hasPriceTarget) ||
+            (hasEditorIds && !workspaceReturnIdList(options.editorIds, 50)) ||
+            (hasPriceTarget && !workspaceReturnPriceTargetValid(options.priceTarget)) ||
+            (hasEditorIds &&
+                (capsule.v !== 1 ||
+                    !workspaceReturnSameOrderedIds(capsule.editorIds, options.editorIds))) ||
+            (hasPriceTarget &&
+                (capsule.v !== 2 ||
+                    !workspaceReturnPriceTargetsEqual(capsule.priceTarget, options.priceTarget)))) {
             consumeWorkspaceReturn(match[1], options);
             return null;
         }
         return capsule;
+    }
+
+    function priceWorkspaceReturnHref(hash, payload, options) {
+        if (!workspaceReturnPlainObject(payload) || payload.workspaceUrl !== '/my-products/beta' ||
+            !workspaceReturnOwnerValid(payload.owner)) return '';
+        var returnCapsule = workspaceReturnFromHash(hash, Object.assign({}, options || {}, {
+            owner: payload.owner,
+            priceTarget: payload.priceTarget,
+        }));
+        if (!returnCapsule) return '';
+        try {
+            var query = new URLSearchParams();
+            if (returnCapsule.batch !== null) {
+                query.set('import_batch', returnCapsule.batch);
+            }
+            var search = query.toString();
+            return '/my-products/beta' + (search ? '?' + search : '') +
+                '#workspace-return=' + returnCapsule.nonce;
+        } catch (_) {
+            return '';
+        }
     }
 
     function selectionUrl(base, productIds) {
@@ -251,6 +322,7 @@
         module.exports = {
             storeWorkspaceReturn: storeWorkspaceReturn,
             workspaceReturnFromHash: workspaceReturnFromHash,
+            priceWorkspaceReturnHref: priceWorkspaceReturnHref,
             consumeWorkspaceReturn: consumeWorkspaceReturn,
             WORKSPACE_RETURN_SESSION_KEY: WORKSPACE_RETURN_SESSION_KEY,
             selectionUrl: selectionUrl,
@@ -264,6 +336,7 @@
         global.SellerHubCommonContent = global.SellerHubCommonContent || {};
         global.SellerHubCommonContent.storeWorkspaceReturn = storeWorkspaceReturn;
         global.SellerHubCommonContent.workspaceReturnFromHash = workspaceReturnFromHash;
+        global.SellerHubCommonContent.priceWorkspaceReturnHref = priceWorkspaceReturnHref;
         global.SellerHubCommonContent.consumeWorkspaceReturn = consumeWorkspaceReturn;
         global.SellerHubCommonContent.selectionUrl = selectionUrl;
         global.SellerHubCommonContent.serializeFieldChange = serializeFieldChange;

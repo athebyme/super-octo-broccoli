@@ -33,6 +33,9 @@
 <dialog ref="bulkPriceDialog" class="oc-dialog oc-dialog-wide oc-bulk-dialog" aria-labelledby="oc-bulk-title" @cancel.prevent="closeBulkPrice">
     <div class="oc-dialog-head"><div><h2 id="oc-bulk-title">Цены для нескольких товаров</h2><p v-if="bulkStage === 'select'">Выберите товары одного магазина и задайте общее правило.</p><p v-else-if="bulkStage === 'preview'">Проверьте каждую цену перед локальным сохранением.</p><p v-else>Заявки сохранены и ждут отдельного подтверждения.</p></div><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy" @click="closeBulkPrice" aria-label="Закрыть массовую подготовку цен">✕</button></div>
     <div class="oc-dialog-body">
+        <div v-if="priceWorkspaceReturnHref && !busy && !bulkConfirmUnknown" class="mb-4">
+            <button type="button" class="sh-btn sh-btn--secondary" data-price-workspace-return-button @click="returnToPriceWorkspace">Вернуться к товарам</button>
+        </div>
         <template v-if="bulkStage === 'select'">
             <p v-if="bulkHandoffUsed" class="oc-notice" role="status">Выбранный набор передан из «Моих товаров» и проверен для этого магазина. Вы можете удалить отдельные товары или добавить новые.</p>
             <p v-if="bulkHandoffError" class="oc-alert" role="alert">{{ bulkHandoffError }}</p>

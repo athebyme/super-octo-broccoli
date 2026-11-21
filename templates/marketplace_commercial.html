@@ -4,13 +4,13 @@
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}"><link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='ozon-commercial.css', v='20261121-ozon-bulk-prices') }}">{% endblock %}
 {% block content %}
-<script type="application/json" id="oc-bootstrap">{{ {'mode':'list', 'filters':filters, 'base':url_for('marketplace_commercial.index'), 'catalog':url_for('marketplace_listings.index'), 'writeEnabled':write_enabled, 'bulkSelection':bulk_selection|default(none)} | tojson }}</script>
+<script type="application/json" id="oc-bootstrap">{{ {'mode':'list', 'filters':filters, 'base':url_for('marketplace_commercial.index'), 'catalog':url_for('marketplace_listings.index'), 'writeEnabled':write_enabled, 'bulkSelection':bulk_selection|default(none), 'workspaceOwner':(current_user.id|string) ~ ':' ~ (current_user.seller.id|string), 'workspaceUrl':url_for('seller_my_products_beta')} | tojson }}</script>
 <div class="oc-fallback" id="oc-fallback">Загружаем цены и остатки… <a href="{{ url_for('marketplace_commercial.classic', account_id=filters.account_id) }}">Открыть упрощённую версию</a></div>
 <div id="ozon-commercial-app" class="oc-page pricing-workspace" v-cloak>
     {% set pricing_workspace_current = 'ozon-proposals' %}
     {% include 'partials/pricing_workspace_nav.html' %}
     {% include 'partials/pricing_workspace_ozon_facts.html' %}
-    <header class="oc-header"><div><h1>Цены и остатки</h1><p>Изменения в Ozon с проверкой и вашим подтверждением.</p></div><div class="oc-header-actions"><button type="button" class="sh-btn sh-btn--primary" @click="openCreate">{{ icon('plus',18) }} Изменить цену или остаток</button><button type="button" ref="bulkLaunchButton" class="sh-btn sh-btn--secondary" :disabled="loading || busy || sessionEnded || !accounts.some(a=>a.is_active)" @click="openBulkPrice">Подготовить цены для нескольких товаров</button></div></header>
+    <header class="oc-header"><div><h1>Цены и остатки</h1><p>Изменения в Ozon с проверкой и вашим подтверждением.</p></div><div class="oc-header-actions"><a v-if="priceWorkspaceReturnHref" data-price-workspace-return class="sh-btn sh-btn--secondary" :href="priceWorkspaceReturnHref">Вернуться к товарам</a><button type="button" class="sh-btn sh-btn--primary" @click="openCreate">{{ icon('plus',18) }} Изменить цену или остаток</button><button type="button" ref="bulkLaunchButton" class="sh-btn sh-btn--secondary" :disabled="loading || busy || sessionEnded || !accounts.some(a=>a.is_active)" @click="openBulkPrice">Подготовить цены для нескольких товаров</button></div></header>
     {% if config.get('MARKETPLACE_OZON_ENABLED', false) %}
     <nav class="oc-nav" aria-label="Связанные разделы">
         <a href="{{ url_for('marketplace_listings.index', marketplace='ozon', account_id=filters.account_id) }}">Каталог Ozon</a>
@@ -21,6 +21,7 @@
     {% raw %}
     <p v-if="!writeEnabled" class="oc-notice">Изменения можно подготовить и сохранить. Отправка в Ozon временно выключена администратором.</p>
     <div v-if="error" class="oc-alert" role="alert"><p>{{ error }}</p><button type="button" class="sh-btn sh-btn--secondary" :disabled="loading || busy || sessionEnded" @click="loadList()">Обновить данные</button><a v-if="sessionEnded" href="/login">Войти снова</a></div>
+    <div v-if="bulkHandoffError" class="oc-alert" role="alert"><p>{{ bulkHandoffError }}</p><a :href="workspaceUrl">Вернуться к товарам</a></div>
     <p v-if="notice" class="oc-notice" role="status">{{ notice }}</p>
     <form class="oc-filters" @submit.prevent="applyFilters">
         <label>Магазин<select name="account_id" v-model="filters.account_id" :disabled="busy || loading"><option value="">Все магазины Ozon</option><option v-for="a in accounts" :key="a.id" :value="String(a.id)">{{ a.label }}{{ a.is_active ? '' : ' · отключён' }}</option></select></label>

@@ -132,6 +132,29 @@
             left.every(function (id, index) { return id === right[index]; });
     }
 
+    function storePriceWorkspaceReturn(app, priceTarget, selectionIds, scope) {
+        if (!scope || !Array.isArray(selectionIds)) return null;
+        var helpers = window.SellerHubCommonContent || {};
+        if (typeof helpers.storeWorkspaceReturn !== 'function') return null;
+        try {
+            return helpers.storeWorkspaceReturn({
+                owner: boot.workspaceOwner,
+                priceTarget: priceTarget,
+                selectionIds: selectionIds.slice(),
+                scope: scope,
+                batch: app.importBatchMode ? app.importBatch : null,
+            });
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function workspaceReturnHash(nonce) {
+        return typeof nonce === 'string' && /^[a-f0-9]{32}$/.test(nonce)
+            ? '#workspace-return=' + nonce
+            : '';
+    }
+
     function orderedProductIds(items) {
         if (!Array.isArray(items)) return null;
         var ids = [];
@@ -1406,6 +1429,12 @@
                     );
                     return false;
                 }
+                var returnScope = this.buildWorkspaceReturnScope();
+                var returnNonce = storePriceWorkspaceReturn(this, {
+                    channel: 'ozon',
+                    ids: freshChoice.listing_ids.slice(),
+                    accountId: accountId,
+                }, review.imported_product_ids, returnScope);
                 try {
                     if (typeof this.urls.ozonCommercial !== 'string' ||
                         !this.urls.ozonCommercial) throw new Error('missing URL');
@@ -1413,7 +1442,8 @@
                     if (target.origin !== window.location.origin) throw new Error('foreign URL');
                     target.searchParams.set('account_id', String(accountId));
                     target.searchParams.set('bulk_listing_ids', freshChoice.listing_ids.join(','));
-                    window.location.assign(target.pathname + target.search);
+                    target.hash = workspaceReturnHash(returnNonce).replace(/^#/, '');
+                    window.location.assign(target.pathname + target.search + target.hash);
                     return true;
                 } catch (_) {
                     this.closeOzonPriceHandoff();
@@ -1528,7 +1558,14 @@
                         this.error = 'Для изменения цены выберите до 200 карточек WB и проверьте подключение кабинета.';
                         return;
                     }
-                    window.location.assign(this.urls.wbPriceChange + '?product_ids=' + encodeURIComponent(priceIds.join(',')));
+                    var returnScope = this.buildWorkspaceReturnScope();
+                    var returnNonce = storePriceWorkspaceReturn(this, {
+                        channel: 'wb',
+                        ids: priceIds.slice(),
+                        accountId: null,
+                    }, selectionIds, returnScope);
+                    window.location.assign(this.urls.wbPriceChange + '?product_ids=' +
+                        encodeURIComponent(priceIds.join(',')) + workspaceReturnHash(returnNonce));
                     return;
                 }
                 if (action.key === 'ozon_prices') {

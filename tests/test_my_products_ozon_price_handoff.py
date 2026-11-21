@@ -14,9 +14,13 @@ NODE_CASES = r"""
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const plain = value => JSON.parse(JSON.stringify(value));
 
 let component;
 const assigned = [];
+const storedPriceReturns = [];
+const returnNonce = '0123456789abcdef0123456789abcdef';
+let returnStorageAvailable = true;
 const location = {
   origin: 'https://seller.test',
   assign(value) { assigned.push(value); },
@@ -25,8 +29,16 @@ const document = {activeElement: {focus() {}}};
 const context = {
   window: {
     location,
+    SellerHubCommonContent: {
+      storeWorkspaceReturn(payload) {
+        storedPriceReturns.push(payload);
+        return returnStorageAvailable ? returnNonce : null;
+      },
+    },
     shVue: {
-      bootstrapData() { return {ozonEnabled: true, ozonAccounts: [], urls: {}}; },
+      bootstrapData() { return {
+        workspaceOwner: '7:9', ozonEnabled: true, ozonAccounts: [], urls: {},
+      }; },
       mount(_selector, options) { component = options; },
     },
   },
@@ -86,6 +98,9 @@ function makeApp(items, accounts, selected = items.map(row => row.id)) {
     ozonPriceDialogError: '',
     ozonPriceAccountId: '',
     ozonPriceHandoffReview: null,
+    importBatchMode: false,
+    importBatch: '',
+    returnScopeBuildCount: 0,
     $fmt: {plural() { return 'товаров'; }, money() { return ''; }},
     $refs: {
       ozonDialog: {
@@ -107,16 +122,22 @@ function makeApp(items, accounts, selected = items.map(row => row.id)) {
     },
   });
   Object.assign(app, component.methods);
+  const buildWorkspaceReturnScope = app.buildWorkspaceReturnScope;
+  app.buildWorkspaceReturnScope = function () {
+    this.returnScopeBuildCount += 1;
+    return buildWorkspaceReturnScope.call(this);
+  };
   app.itemsScope = app.feedScopeKey();
   return app;
 }
-function assertHandoffUrl(accountId, listingIds) {
+function assertHandoffUrl(accountId, listingIds, withReturnFragment = true) {
   assert.equal(assigned.length, 1);
   const target = new URL(assigned[0], location.origin);
   assert.equal(target.origin, location.origin);
   assert.equal(target.pathname, '/marketplaces/commercial/');
   assert.equal(target.searchParams.get('account_id'), String(accountId));
   assert.equal(target.searchParams.get('bulk_listing_ids'), listingIds.join(','));
+  assert.equal(target.hash, withReturnFragment ? '#workspace-return=' + returnNonce : '');
   assert.equal(target.searchParams.has('preview'), false);
   assert.equal(target.searchParams.has('confirm'), false);
 }
@@ -139,6 +160,17 @@ assigned.length = 0;
 const directApp = makeApp(bothShops, [accounts[0]]);
 directApp.startAction({key: 'ozon_prices'});
 assertHandoffUrl(11, [1001, 1002]);
+assert.equal(directApp.returnScopeBuildCount, 1, 'Ozon return scope is captured once per launch');
+assert.deepEqual(plain(storedPriceReturns.at(-1)), {
+  owner: '7:9',
+  priceTarget: {channel: 'ozon', ids: [1001, 1002], accountId: 11},
+  selectionIds: [101, 102],
+  scope: {
+    activeTab: '', search: '', supplier: '', has_photos: '',
+    stock: '', sort: '', visibleCount: 2,
+  },
+  batch: null,
+});
 
 // Multiple complete shops require a native choice and capture both exact sets.
 assigned.length = 0;
@@ -150,6 +182,9 @@ assert.deepEqual(chooserApp.ozonPriceHandoffReview.imported_product_ids, [101, 1
 chooserApp.ozonPriceAccountId = '12';
 chooserApp.continueOzonPriceHandoff();
 assertHandoffUrl(12, [2001, 2002]);
+assert.equal(chooserApp.returnScopeBuildCount, 1, 'cabinet choice creates one return scope');
+assert.equal(storedPriceReturns.at(-1).priceTarget.accountId, 12);
+assert.deepEqual(plain(storedPriceReturns.at(-1).priceTarget.ids), [2001, 2002]);
 
 // A changed row/listing after review closes the chooser without navigation.
 assigned.length = 0;
@@ -160,6 +195,52 @@ staleApp.items[1].ozon.listings[1].id = 9999;
 staleApp.continueOzonPriceHandoff();
 assert.equal(assigned.length, 0);
 assert.match(staleApp.ozonPriceError, /изменились после проверки/);
+
+// A signed import-batch return capsule preserves the internal selected IDs
+// and chosen cabinet while targeting only the exact Ozon listing IDs.
+assigned.length = 0;
+const batchApp = makeApp(bothShops, [accounts[0]]);
+batchApp.importBatchMode = true;
+batchApp.importBatch = 'signed-import-batch-token';
+batchApp.itemsScope = batchApp.feedScopeKey();
+batchApp.startAction({key: 'ozon_prices'});
+assertHandoffUrl(11, [1001, 1002]);
+assert.equal(storedPriceReturns.at(-1).batch, 'signed-import-batch-token');
+assert.deepEqual(plain(storedPriceReturns.at(-1).selectionIds), [101, 102]);
+
+// If session storage is unavailable, the established provider/read target
+// still opens unchanged, without a return fragment.
+assigned.length = 0;
+returnStorageAvailable = false;
+const fallbackApp = makeApp(bothShops, [accounts[0]]);
+fallbackApp.startAction({key: 'ozon_prices'});
+assertHandoffUrl(11, [1001, 1002], false);
+assert.equal(fallbackApp.returnScopeBuildCount, 1);
+returnStorageAvailable = true;
+
+// WB handoff stores imported-product selection separately from its Product IDs.
+assigned.length = 0;
+const wbRow = product(301, []);
+wbRow.wb = {product_id: 4301};
+const wbApp = makeApp([wbRow], accounts);
+wbApp.urls.wbPriceChange = '/prices/change';
+wbApp.startAction({key: 'wb_prices'});
+assert.equal(assigned.length, 1);
+assert.equal(wbApp.returnScopeBuildCount, 1, 'WB return scope is captured once per launch');
+const wbTarget = new URL(assigned[0], location.origin);
+assert.equal(wbTarget.pathname, '/prices/change');
+assert.equal(wbTarget.searchParams.get('product_ids'), '4301');
+assert.equal(wbTarget.hash, '#workspace-return=' + returnNonce);
+assert.deepEqual(plain(storedPriceReturns.at(-1)), {
+  owner: '7:9',
+  priceTarget: {channel: 'wb', ids: [4301], accountId: null},
+  selectionIds: [301],
+  scope: {
+    activeTab: '', search: '', supplier: '', has_photos: '',
+    stock: '', sort: '', visibleCount: 1,
+  },
+  batch: null,
+});
 
 // Missing or invalid rows are never silently dropped to make a partial batch.
 const partial = [

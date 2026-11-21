@@ -2,7 +2,7 @@
 
 {% block title %}Изменить цены - Seller Hub{% endblock %}
 
-{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}">{% if selection_handoff and not selection_error %}<script src="{{ url_for('static', filename='common-product-content.js', v='20261121-price-workspace-return-r39') }}"></script>{% endif %}{% endblock %}
 
 {% block content %}
 {% if selection_error %}
@@ -12,14 +12,14 @@
     </header>
     <div class="bg-red-50 border border-red-200 rounded-xl p-5" role="alert">
         <p class="text-sm text-red-800">{{ selection_error }}</p>
-        <a href="{{ url_for('seller_my_products_beta') }}" class="inline-flex mt-4 px-4 py-2 rounded-lg bg-white border border-red-300 text-sm font-medium text-red-800 hover:bg-red-100">
-            Вернуться в «Мои товары»
+        <a data-price-workspace-return href="{{ url_for('seller_my_products_beta') }}" class="inline-flex items-center min-h-[44px] mt-4 px-4 py-2 rounded-lg bg-white border border-red-300 text-sm font-medium text-red-800 hover:bg-red-100">
+            Вернуться к товарам
         </a>
     </div>
 </div>
 {% else %}
 <div class="pricing-workspace max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
-     x-data="priceChangeApp({{ selection_handoff|default(false)|tojson }}, {{ selected_product_ids|default([])|tojson }})">
+     x-data='priceChangeApp({{ selection_handoff|default(false)|tojson }}, {{ selected_product_ids|default([])|tojson }}, {owner: {{ ((current_user.id|string) ~ ':' ~ (current_user.seller.id|string))|tojson }}, workspaceUrl: {{ url_for('seller_my_products_beta')|tojson }}})'>
     {% set pricing_workspace_current = 'wb-change' %}
     {% include 'partials/pricing_workspace_nav.html' %}
 
@@ -43,13 +43,13 @@
     {% if selection_handoff %}
     <div class="mb-6 p-4 rounded-xl border border-indigo-200 bg-indigo-50 text-sm text-indigo-900" role="status">
         Выбор закреплён: {{ selected_product_ids|length }} товаров из «Мои товары».
-        <a href="{{ url_for('seller_my_products_beta') }}" class="font-medium underline">Вернуться в каталог</a>
+        <a data-price-workspace-return :href="workspaceReturnHref()" class="inline-flex items-center min-h-[44px] font-medium underline">Вернуться к товарам</a>
     </div>
     {% endif %}
 
     <div x-show="requestError" x-cloak class="mb-6 p-4 rounded-xl border border-red-200 bg-red-50 text-sm text-red-800" role="alert">
         <p x-text="requestError"></p>
-        <a x-show="selectionHandoff" href="{{ url_for('seller_my_products_beta') }}" class="inline-flex mt-2 font-medium underline">Вернуться в «Мои товары»</a>
+        <a x-show="selectionHandoff" data-price-workspace-return :href="workspaceReturnHref()" class="inline-flex items-center min-h-[44px] mt-2 font-medium underline">Вернуться к товарам</a>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -497,11 +497,29 @@
 </div>
 
 <script>
-function priceChangeApp(selectionHandoff = false, handoffProductIds = []) {
+function priceChangeApp(selectionHandoff = false, handoffProductIds = [], workspaceReturn = {}) {
     return {
         selectionHandoff,
         handoffProductIds,
+        workspaceReturn,
         requestError: '',
+
+        workspaceReturnHref() {
+            const fallback = this.workspaceReturn.workspaceUrl || '/my-products/beta';
+            if (!this.selectionHandoff) return fallback;
+            const helpers = window.SellerHubCommonContent || {};
+            if (typeof helpers.priceWorkspaceReturnHref !== 'function') return fallback;
+            const href = helpers.priceWorkspaceReturnHref(window.location.hash, {
+                owner: this.workspaceReturn.owner,
+                priceTarget: {
+                    channel: 'wb',
+                    ids: this.handoffProductIds,
+                    accountId: null,
+                },
+                workspaceUrl: fallback,
+            });
+            return href || fallback;
+        },
 
         // Источник цен (маркетплейс / локальная БД)
         useMarketplacePrices: false,

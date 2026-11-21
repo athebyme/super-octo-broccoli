@@ -6,6 +6,8 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from sqlalchemy import event
+
 
 class SafePriceHandoffTest(unittest.TestCase):
     @classmethod
@@ -126,6 +128,29 @@ class SafePriceHandoffTest(unittest.TestCase):
                 patch('routes.safe_prices.get_current_seller', return_value=self.seller):
             return getattr(self.client, method)(path, **kwargs)
 
+    def _watch_db_writes(self):
+        writes = []
+        commits = []
+
+        def on_sql(_conn, _cursor, statement, _parameters, _context, _executemany):
+            first_word = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else ''
+            if first_word in {'INSERT', 'UPDATE', 'DELETE', 'REPLACE'}:
+                writes.append(statement)
+
+        def on_commit(_session):
+            commits.append(True)
+
+        engine = self.db.engine
+        session_class = self.db.session.session_factory.class_
+        event.listen(engine, 'before_cursor_execute', on_sql)
+        event.listen(session_class, 'after_commit', on_commit)
+        return engine, session_class, on_sql, on_commit, writes, commits
+
+    def _stop_watching_db_writes(self, watch):
+        engine, session_class, on_sql, on_commit, _writes, _commits = watch
+        event.remove(engine, 'before_cursor_execute', on_sql)
+        event.remove(session_class, 'after_commit', on_commit)
+
     def test_invalid_handoff_stops_before_price_settings_or_fallback(self):
         too_many_ids = ','.join(str(value) for value in range(1, 202))
         cases = (
@@ -154,25 +179,43 @@ class SafePriceHandoffTest(unittest.TestCase):
 
     def test_valid_handoff_page_and_product_read_are_exact_and_account_scoped(self):
         ids = [self.second.id, self.first.id]
-        direct = self._request_as_owner('get', '/prices/change')
+        self.assertEqual(self.settings_model.query.count(), 0)
+        watch = self._watch_db_writes()
+        try:
+            direct = self._request_as_owner('get', '/prices/change')
+            exact = self._request_as_owner(
+                'get', f'/prices/change?product_ids={ids[0]},{ids[1]}',
+            )
+            products = self._request_as_owner(
+                'get', f'/prices/api/products?product_ids={ids[0]},{ids[1]}',
+            )
+        finally:
+            self._stop_watching_db_writes(watch)
+
+        writes, commits = watch[-2:]
+        self.assertEqual(writes, [])
+        self.assertEqual(commits, [])
+        self.assertEqual(self.settings_model.query.count(), 0)
+
         self.assertEqual(direct.status_code, 200)
         self.assertIn('Синхронизировать с WB'.encode(), direct.data)
+        self.assertIn(b'safeThreshold: 10.0', direct.data)
+        self.assertIn(b'warningThreshold: 20.0', direct.data)
 
-        response = self._request_as_owner(
-            'get', f'/prices/change?product_ids={ids[0]},{ids[1]}',
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertIn('Выбор закреплён: 2 товаров из «Мои товары»'.encode(), response.data)
-        self.assertIn(f'priceChangeApp(true, [{ids[0]}, {ids[1]}])'.encode(), response.data)
-        self.assertNotIn('Синхронизировать с WB'.encode(), response.data)
-        self.assertNotIn('Сначала синхронизируйте цены'.encode(), response.data)
-        self.assertIn('if (this.selectionHandoff || this.syncingWb) return;'.encode(), response.data)
+        self.assertEqual(exact.status_code, 200)
+        self.assertIn('Выбор закреплён: 2 товаров из «Мои товары»'.encode(), exact.data)
+        self.assertIn(f'priceChangeApp(true, [{ids[0]}, {ids[1]}]'.encode(), exact.data)
+        self.assertIn(b'data-price-workspace-return', exact.data)
+        self.assertIn('Вернуться к товарам'.encode(), exact.data)
+        self.assertIn(b'common-product-content.js?v=20261121-price-workspace-return-r39', exact.data)
+        self.assertNotIn('Синхронизировать с WB'.encode(), exact.data)
+        self.assertNotIn('Сначала синхронизируйте цены'.encode(), exact.data)
+        self.assertIn('if (this.selectionHandoff || this.syncingWb) return;'.encode(), exact.data)
+        self.assertIn(b'safeThreshold: 10.0', exact.data)
+        self.assertIn(b'warningThreshold: 20.0', exact.data)
 
-        response = self._request_as_owner(
-            'get', f'/prices/api/products?product_ids={ids[0]},{ids[1]}',
-        )
-        self.assertEqual(response.status_code, 200)
-        payload = response.get_json()
+        self.assertEqual(products.status_code, 200)
+        payload = products.get_json()
         self.assertTrue(payload['exact_selection'])
         self.assertEqual([row['id'] for row in payload['products']], ids)
         self.assertEqual(payload['total'], 2)

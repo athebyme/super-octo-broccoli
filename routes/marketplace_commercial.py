@@ -297,7 +297,12 @@ def _document(proposal) -> dict:
     return data
 
 
-def _error_response(error: Exception, *, force_json: bool = False):
+def _error_response(
+    error: Exception,
+    *,
+    force_json: bool = False,
+    workspace_return_fallback: bool = False,
+):
     if isinstance(error, (MarketplaceCommercialError, MarketplaceWarehouseError, warehouse_reads.WarehouseReadError)):
         status_code = error.status_code
         code = error.code
@@ -322,6 +327,7 @@ def _error_response(error: Exception, *, force_json: bool = False):
         error=str(error),
         code=code,
         write_quarantine=hold if code == "ozon_write_quarantined" else None,
+        workspace_return_fallback=workspace_return_fallback,
     ), status_code
 
 
@@ -349,6 +355,7 @@ def index():
     seller_id = _seller_id()
     if seller_id is None:
         return "Seller account required", 403
+    workspace_return_fallback = "bulk_listing_ids" in request.args
     try:
         _require_feature()
         account_id = _integer(
@@ -441,7 +448,7 @@ def index():
             ) if account_id is not None else None
         )
     except (MarketplaceCommercialError, MarketplaceWarehouseError) as exc:
-        return _error_response(exc)
+        return _error_response(exc, workspace_return_fallback=workspace_return_fallback)
     proposal_docs = {item.id: _document(item) for item in pagination.items}
     if _wants_json():
         return jsonify({

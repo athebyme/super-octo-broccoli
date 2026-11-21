@@ -158,7 +158,7 @@ def test_workspace_return_capsule_is_single_slot_bounded_and_identity_bound():
 const assert = require('node:assert/strict');
 const {
     storeWorkspaceReturn, workspaceReturnFromHash, consumeWorkspaceReturn,
-    WORKSPACE_RETURN_SESSION_KEY,
+    priceWorkspaceReturnHref, WORKSPACE_RETURN_SESSION_KEY,
 } = require('./static/common-product-content.js');
 
 function storage() {
@@ -265,6 +265,117 @@ assert.equal(workspaceReturnFromHash('#workspace-return=not-a-nonce', {
 }), null);
 assert.equal(storeWorkspaceReturn(payload, { storage: storage(), crypto: {}, now }), null,
     'nonce generation must use cryptographic randomness');
+
+const wbTarget = {channel: 'wb', ids: [4401, 4402], accountId: null};
+const pricePayload = {
+    owner,
+    priceTarget: wbTarget,
+    selectionIds: [7, 14],
+    scope: {
+        activeTab: '', search: 'coat', supplier: 3,
+        has_photos: 'yes', stock: '', sort: 'title', visibleCount: 50,
+    },
+    batch: 'signed-import-batch-token',
+};
+const priceStorage = storage();
+const priceOptions = {...options, storage: priceStorage};
+const priceNonce = storeWorkspaceReturn(pricePayload, priceOptions);
+assert.match(priceNonce, /^[a-f0-9]{32}$/);
+assert.equal(priceStorage.values.size, 1, 'price and editor capsules share the existing single slot');
+const priceCapsule = JSON.parse(priceStorage.getItem(WORKSPACE_RETURN_SESSION_KEY));
+assert.equal(priceCapsule.v, 2);
+assert.equal(Object.hasOwn(priceCapsule, 'editorIds'), false);
+assert.deepEqual(priceCapsule.priceTarget, wbTarget);
+assert.deepEqual(priceCapsule.selectionIds, [7, 14]);
+assert.deepEqual(priceCapsule.scope, pricePayload.scope);
+assert.equal(priceCapsule.batch, pricePayload.batch);
+assert.deepEqual(workspaceReturnFromHash('#workspace-return=' + priceNonce, {
+    ...priceOptions, owner,
+}), priceCapsule, 'the Beta landing accepts both capsule variants without a target argument');
+assert.deepEqual(workspaceReturnFromHash('#workspace-return=' + priceNonce, {
+    ...priceOptions, owner, priceTarget: wbTarget,
+}), priceCapsule, 'the exact channel and ordered target IDs validate');
+
+const priceHref = priceWorkspaceReturnHref(
+    '#workspace-return=' + priceNonce,
+    {owner, priceTarget: wbTarget, workspaceUrl: '/my-products/beta'},
+    priceOptions,
+);
+const parsedPriceHref = new URL(priceHref, 'https://seller.test');
+assert.equal(parsedPriceHref.origin, 'https://seller.test');
+assert.equal(parsedPriceHref.pathname, '/my-products/beta');
+assert.equal(parsedPriceHref.searchParams.getAll('import_batch').length, 1);
+assert.equal(parsedPriceHref.searchParams.get('import_batch'), pricePayload.batch);
+assert.equal(parsedPriceHref.hash, '#workspace-return=' + priceNonce);
+assert.ok(priceStorage.getItem(WORKSPACE_RETURN_SESSION_KEY),
+    'building a return link does not consume the one-time capsule before Beta re-reads it');
+assert.equal(priceWorkspaceReturnHref(
+    '#workspace-return=' + priceNonce,
+    {owner, priceTarget: wbTarget, workspaceUrl: 'https://outside.test/my-products/beta'},
+    priceOptions,
+), '', 'return path is fixed to the exact same-site Beta route');
+
+const targetMismatch = storage();
+const mismatchNonce = storeWorkspaceReturn(pricePayload, {...options, storage: targetMismatch});
+assert.equal(workspaceReturnFromHash('#workspace-return=' + mismatchNonce, {
+    ...options, storage: targetMismatch, owner,
+    priceTarget: {channel: 'wb', ids: [4402, 4401], accountId: null},
+}), null, 'price target order is part of the bound handoff');
+assert.equal(targetMismatch.getItem(WORKSPACE_RETURN_SESSION_KEY), null,
+    'a same-nonce target mismatch discards the capsule');
+
+const wrongChannel = storage();
+const wrongChannelNonce = storeWorkspaceReturn(pricePayload, {...options, storage: wrongChannel});
+assert.equal(priceWorkspaceReturnHref(
+    '#workspace-return=' + wrongChannelNonce,
+    {owner, priceTarget: {channel: 'ozon', ids: [4401, 4402], accountId: 9}, workspaceUrl: '/my-products/beta'},
+    {...options, storage: wrongChannel},
+), '', 'the return helper rejects a different channel');
+assert.equal(wrongChannel.getItem(WORKSPACE_RETURN_SESSION_KEY), null,
+    'the mismatched price return consumes the matching nonce');
+
+const ozonTarget = {channel: 'ozon', ids: [9101, 9102], accountId: 32};
+const ozonStorage = storage();
+const ozonNonce = storeWorkspaceReturn({...pricePayload, priceTarget: ozonTarget}, {
+    ...options, storage: ozonStorage,
+});
+const ozonHref = priceWorkspaceReturnHref(
+    '#workspace-return=' + ozonNonce,
+    {owner, priceTarget: ozonTarget, workspaceUrl: '/my-products/beta'},
+    {...options, storage: ozonStorage},
+);
+assert.equal(new URL(ozonHref, 'https://seller.test').pathname, '/my-products/beta');
+assert.equal(workspaceReturnFromHash('#workspace-return=' + ozonNonce, {
+    ...options, storage: ozonStorage, owner,
+    priceTarget: {channel: 'ozon', ids: [9101, 9102], accountId: 33},
+}), null, 'the selected Ozon account is part of the exact return target');
+assert.equal(ozonStorage.getItem(WORKSPACE_RETURN_SESSION_KEY), null);
+
+assert.equal(storeWorkspaceReturn({...pricePayload, priceTarget: {
+    channel: 'wb', ids: [1], accountId: 9,
+}}, options), null, 'WB target cannot carry an Ozon account');
+assert.equal(storeWorkspaceReturn({...pricePayload, priceTarget: {
+    channel: 'ozon', ids: [1], accountId: null,
+}}, options), null, 'Ozon target must bind a positive account ID');
+assert.equal(storeWorkspaceReturn({...pricePayload, priceTarget: {
+    channel: 'ozon', ids: Array.from({length: 101}, (_, i) => i + 1), accountId: 9,
+}}, options), null, 'Ozon price target is bounded to 100 listings');
+assert.equal(storeWorkspaceReturn({...pricePayload, selectionIds: [7], priceTarget: wbTarget}, options), null,
+    'one-to-one price returns reject a selection whose count differs from the target count');
+assert.equal(storeWorkspaceReturn({...pricePayload, selectionIds: [], priceTarget: wbTarget}, options), null,
+    'a price return cannot restore an empty original selection');
+const malformedPriceStorage = storage();
+malformedPriceStorage.setItem(WORKSPACE_RETURN_SESSION_KEY, JSON.stringify({
+    ...priceCapsule,
+    priceTarget: {...wbTarget, ignored: true},
+}));
+assert.equal(workspaceReturnFromHash('#workspace-return=' + priceNonce, {
+    ...priceOptions, storage: malformedPriceStorage, owner,
+}), null, 'malformed copied price-target keys fail stored-capsule validation');
+assert.equal(storeWorkspaceReturn({...pricePayload, batch: 'x'.repeat(8193)}, options), null,
+    'the signed batch capability keeps the existing 8192-byte bound');
+assert.equal(storeWorkspaceReturn(pricePayload, {storage: storage(), crypto: {}, now}), null,
+    'price returns also require a cryptographic nonce');
 """
     result = subprocess.run(
         [node, "-e", script],

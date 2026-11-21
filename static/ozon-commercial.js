@@ -4,6 +4,24 @@
   const boot = document.getElementById('oc-bootstrap');
   if (!host || !boot || !window.Vue || !window.mcatShared) return;
   const config = JSON.parse(boot.textContent);
+  const priceWorkspaceReturnHref = (() => {
+    const selection = config.bulkSelection;
+    if (!selection) return '';
+    const workspaceUrl = config.workspaceUrl || '/my-products/beta';
+    const items = Array.isArray(selection.items) ? selection.items : [];
+    const helper = window.SellerHubCommonContent?.priceWorkspaceReturnHref;
+    if (typeof helper !== 'function') return workspaceUrl;
+    const href = helper(window.location.hash, {
+      owner: config.workspaceOwner,
+      priceTarget: {
+        channel: 'ozon',
+        ids: items.map(item => item && item.id),
+        accountId: selection.account_id,
+      },
+      workspaceUrl,
+    });
+    return href || workspaceUrl;
+  })();
   const initialListingId = new URLSearchParams(location.search).get('listing_id');
   const requests = new Set();
   const statuses = {pending_review:'Ждёт решения', approved:'Подтверждено', applying:'Проверяем Ozon',
@@ -14,6 +32,7 @@
   const app = Vue.createApp({
     components: {'ozon-prices': window.mcatShared.ozonPrices},
     data: () => ({mode:config.mode, base:config.base, catalog:config.catalog, writeEnabled:config.writeEnabled,
+      priceWorkspaceReturnHref, workspaceUrl:config.workspaceUrl || '/my-products/beta',
       statuses, accounts:[], warehouses:[], items:[], proposal:null, loading:false, busy:false, error:'', notice:'',
       sessionEnded:false, stopped:false, actionBlocked:false, confirmed:false, rejectNote:'', errorQuarantine:null,
       filters:{account_id:String(initial.account_id || ''), proposal_kind:initial.proposal_kind || '', status:initial.status || ''},
@@ -295,15 +314,25 @@
         }
         return {account_id:raw.account_id,items};
       },
-      closeBulkPrice() {
+      confirmBulkPriceExit() {
         if (this.busy) return;
         if (this.bulkConfirmUnknown) {
           if (!window.confirm('Ответ на сохранение неизвестен: заявки могли сохраниться. Закрыть окно? Пока эта страница открыта, можно повторить только то же защищённое подтверждение или снова открыть проверку.')) return;
           this._allowBulkUnknownExit = true;
         } else if (this.bulkStage !== 'saved' && (this.bulkSelected.length || this.bulkAmount || this.bulkPreview) &&
             !window.confirm('Закрыть массовую подготовку? Выбранный набор и введённые условия будут сброшены.')) return;
+        return true;
+      },
+      closeBulkPrice() {
+        if (!this.confirmBulkPriceExit()) return;
         ++this.bulkSearchRevision; ++this.bulkActionRevision;
         this.bulkOpen = false; this.$refs.bulkPriceDialog.close(); this._bulkTrigger?.focus();
+      },
+      returnToPriceWorkspace() {
+        if (!this.priceWorkspaceReturnHref || this.busy || this.bulkConfirmUnknown) return;
+        if (!this.confirmBulkPriceExit()) return;
+        ++this.bulkSearchRevision; ++this.bulkActionRevision;
+        window.location.assign(this.priceWorkspaceReturnHref);
       },
       bulkUnknownProposalsUrl() {
         if (!this.bulkConfirmUnknown || !this.bulkAccount) return '';

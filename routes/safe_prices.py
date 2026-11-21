@@ -74,6 +74,20 @@ def get_or_create_settings(seller_id: int) -> SafePriceChangeSettings:
     return settings
 
 
+def _settings_for_change_page(seller_id: int) -> SafePriceChangeSettings:
+    """Read saved settings or render model defaults without persisting them."""
+    settings = SafePriceChangeSettings.query.filter_by(seller_id=seller_id).first()
+    if settings is not None:
+        return settings
+
+    columns = SafePriceChangeSettings.__table__.c
+    return SafePriceChangeSettings(
+        seller_id=seller_id,
+        safe_threshold_percent=columns.safe_threshold_percent.default.arg,
+        warning_threshold_percent=columns.warning_threshold_percent.default.arg,
+    )
+
+
 def _parse_exact_product_ids(raw_ids, *, from_query=False):
     """Parse the bounded explicit product handoff without accepting a fallback."""
     try:
@@ -570,7 +584,7 @@ def prices_change():
             status_code, message = _exact_selection_problem(problem, handoff=True)
             return _render_price_selection_error(message, status_code)
 
-    settings = get_or_create_settings(seller.id)
+    settings = _settings_for_change_page(seller.id)
 
     if selection_handoff:
         brands = []
