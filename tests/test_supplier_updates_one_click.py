@@ -275,11 +275,12 @@ class MyProductsSupplierUpdatesViewContractTest(unittest.TestCase):
         ).read_text(encoding='utf-8')
 
         self.assertIn('name="updates" value="1"', template)
-        self.assertIn(
-            "url_for('my_products_refresh_from_supplier', **page_args)",
-            template,
+        self.assertEqual(
+            template.count("url_for('my_products_refresh_review_handoff', **page_args)"),
+            2,
         )
-        self.assertIn('Применить в мои карточки', template)
+        self.assertNotIn("url_for('my_products_refresh_from_supplier',", template)
+        self.assertIn('Проверить применение в мои карточки', template)
         self.assertIn('{% if not updates_filter %}', template)
         self.assertIn('WB и Ozon на этом шаге не меняются', template)
 
