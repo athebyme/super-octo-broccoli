@@ -1106,12 +1106,17 @@ const app = context.__priceChangeApp(true, [7001, 7002], {
   owner:'7:9', workspaceUrl:'/my-products/beta',
 });
 app.selectedIds = [7001, 7002];
+app.pendingReviewSubmission = {product_ids:[7001, 7002]};
+app.pendingReviewScope = [7001, 7002];
 const data = {
-  success:true, batch_id:91, status:'pending_review', stats:{total:2},
-  redirect:'/prices/batch/91/confirm',
+  success:true, reviewed_write:true,
+  reviewed_selection:'wb_reviewed_selection_v1', replayed:false,
+  selected_count:2, changed_count:2, batch_id:91,
+  status:'confirmed', stats:{total:2}, redirect:'/prices/batch/91',
 };
-const exact = app.exactBatchResult(data);
-assert.equal(exact.href, '/prices/batch/91/confirm');
+assert.equal(app.pendingReviewMatchesRoute(), true);
+const exact = app.reviewedBatchResult(data, app.pendingReviewScope);
+assert.equal(exact.href, '/prices/batch/91');
 assert.equal(exact.canonicalRedirect, true);
 assert.equal(app.bindExactBatchReturn(data, exact.canonicalRedirect), hash);
 assert.equal(received.value, hash);
@@ -1121,34 +1126,53 @@ assert.deepEqual(JSON.parse(JSON.stringify(received.payload)), {
   priceResult:{channel:'wb', batchId:91},
 });
 
+app.pendingReviewScope = [7002, 7001];
+assert.equal(app.pendingReviewMatchesRoute(), false);
+app.pendingReviewScope = [7001, 7002];
+
 for (const redirect of [
-  'https://outside.test/prices/batch/91/confirm',
-  '//outside.test/prices/batch/91/confirm',
-  '/prices/batch/92/confirm',
-  '/prices/batch/91/confirm?next=/outside',
-  '/prices/batch/91/confirm#other',
+  'https://outside.test/prices/batch/91',
+  '//outside.test/prices/batch/91',
+  '/prices/batch/92',
+  '/prices/batch/91?next=/outside',
+  '/prices/batch/91#other',
 ]) {
   const changed = {...data, redirect};
-  const candidate = app.exactBatchResult(changed);
-  assert.equal(candidate.href, '/prices/batch/91/confirm');
-  assert.equal(candidate.canonicalRedirect, false);
-  assert.equal(app.bindExactBatchReturn(changed, candidate.canonicalRedirect), '');
+  const candidate = app.reviewedBatchResult(changed, app.pendingReviewScope);
+  assert.equal(candidate, null);
+  assert.equal(app.bindExactBatchReturn(changed, candidate?.canonicalRedirect), '');
 }
-assert.equal(app.exactBatchResult({...data, status:'applied'}), null);
-assert.equal(app.exactBatchResult({...data, stats:{total:1}}), null);
-const reviewedSubset = {
+assert.equal(app.reviewedBatchResult({...data, batch_id:'91'}, app.pendingReviewScope), null);
+assert.equal(app.reviewedBatchResult({...data, selected_count:1}, app.pendingReviewScope), null);
+assert.equal(app.reviewedBatchResult({...data, replayed:'false'}, app.pendingReviewScope), null);
+assert.equal(app.reviewedBatchResult({...data, changed_count:0, stats:{total:0}}, app.pendingReviewScope), null);
+assert.equal(app.reviewedBatchResult({...data, changed_count:3}, app.pendingReviewScope), null);
+assert.equal(app.reviewedBatchResult({...data, stats:{total:1}}, app.pendingReviewScope), null);
+assert.equal(app.reviewedBatchResult({...data, reviewed_write:false}, app.pendingReviewScope), null);
+assert.equal(app.reviewedBatchResult({...data, status:'unknown'}, app.pendingReviewScope), null);
+
+const appliedReplay = {
   ...data,
-  reviewed_write:true,
-  reviewed_selection:'wb_reviewed_selection_v1',
-  selected_count:2,
+  replayed:true,
+  status:'applied',
   changed_count:1,
   stats:{total:1},
+  redirect:'/prices/batch/91',
 };
-assert.equal(app.exactBatchResult(reviewedSubset).href, '/prices/batch/91/confirm');
-assert.equal(app.exactBatchResult({...reviewedSubset, selected_count:1}), null);
-assert.equal(app.exactBatchResult({...reviewedSubset, changed_count:3}), null);
-app.selectedIds = [7002, 7001];
-assert.equal(app.exactBatchResult(data), null);
+assert.equal(app.reviewedBatchResult(appliedReplay, app.pendingReviewScope).href, '/prices/batch/91');
+assert.equal(app.bindExactBatchReturn(appliedReplay, true), hash);
+assert.deepEqual(JSON.parse(JSON.stringify(received.payload)), {
+  owner:'7:9',
+  priceTarget:{channel:'wb', ids:[7001, 7002], accountId:null},
+  priceResult:{channel:'wb', batchId:91},
+});
+
+const pendingReview = {
+  ...data,
+  status:'pending_review',
+  redirect:'/prices/batch/91/confirm',
+};
+assert.equal(app.reviewedBatchResult(pendingReview, app.pendingReviewScope).href, '/prices/batch/91/confirm');
 
 const normal = context.__priceChangeApp(false, [], {
   owner:'7:9', workspaceUrl:'/my-products/beta',

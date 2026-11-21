@@ -725,35 +725,6 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
             return {href: path, canonicalRedirect: true};
         },
 
-        exactBatchResult(data) {
-            const batchId = data?.batch_id;
-            const changedCount = data?.stats?.total;
-            const handoffCount = Array.isArray(this.handoffProductIds)
-                ? this.handoffProductIds.length : 0;
-            const legacyFullSet = data?.reviewed_write !== true &&
-                changedCount === handoffCount;
-            const reviewedSubset = data?.reviewed_write === true &&
-                data?.reviewed_selection === 'wb_reviewed_selection_v1' &&
-                Number.isSafeInteger(data?.selected_count) &&
-                data.selected_count === handoffCount &&
-                Number.isSafeInteger(data?.changed_count) &&
-                data.changed_count > 0 &&
-                data.changed_count <= data.selected_count &&
-                data.changed_count === changedCount;
-            if (!this.selectionHandoff || data?.success !== true ||
-                !Number.isSafeInteger(batchId) || batchId <= 0 ||
-                !['pending_review', 'confirmed'].includes(data.status) ||
-                !handoffCount ||
-                !data.stats || !Number.isSafeInteger(changedCount) || changedCount <= 0 ||
-                (!legacyFullSet && !reviewedSubset) ||
-                this.selectedIds.length !== this.handoffProductIds.length ||
-                this.selectedIds.some((id, index) => id !== this.handoffProductIds[index])) return null;
-
-            const suffix = data.status === 'pending_review' ? '/confirm' : '';
-            const path = '/prices/batch/' + batchId + suffix;
-            return {href: path, canonicalRedirect: data.redirect === path};
-        },
-
         bindExactBatchReturn(data, canonicalRedirect) {
             if (!canonicalRedirect || !this.selectionHandoff) return '';
             const helper = window.SellerHubCommonContent?.bindPriceWorkspaceResult;
@@ -1247,7 +1218,7 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
             } catch (error) {
                 // A lost response can follow a committed write. Retain the exact
                 // serialized request for an explicit retry, without logging it.
-                this.requestError = 'Не удалось подтвердить сохранение. Повторите тот же запрос; он вернёт исходную партию, если она уже создана.';
+                this.requestError = 'Не удалось подтвердить сохранение. Повторите тот же запрос. Если партия уже создана, повтор вернёт её.';
             } finally {
                 this.submitting = false;
             }
