@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-21T04:59:30.861993+00:00",
+  "generated_at": "2026-11-21T05:56:27.113525+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "1d830591101b54a4a11ceaea9ac55ec695da1937b55443b0127fc5a768552c73"
+      "sha256": "0b05375e672e426dc47e817ad606bb2f5d453ffe790207f586adf604277e891f"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -481,7 +481,7 @@
     },
     {
       "path": "docs/design/seller-bulk-workspace-2026-11-20.md",
-      "sha256": "d6ff6d72f0bdaf3491b7b214fcc6405ec01f81b9a04f0563bad8655a326a979f"
+      "sha256": "ebd601085524b25196ba4aa35059da6e06237b8e5df324d1345eef1686e7a86e"
     },
     {
       "path": "docs/design/startup-migration-performance.md",
@@ -1345,7 +1345,7 @@
     },
     {
       "path": "routes/enrichment.py",
-      "sha256": "d3734ec5a7c6f23d4f823c03eb2214888af82ab1c96b3e574d962580481849a7"
+      "sha256": "f33c111296f9d574afdcef0fa0f88638ff375ef60a264cbe691488f5356a83c6"
     },
     {
       "path": "routes/finance_detail.py",
@@ -1485,7 +1485,7 @@
     },
     {
       "path": "routes/suppliers.py",
-      "sha256": "4e5d5f3dcd6e77f6092d019e7dc8a5da5ec6a15f481cfc19cedd29886377e502"
+      "sha256": "b4f49675f3e84b71159865bbcfe48af53f9844d8ea42de924f7238bc8d90db4a"
     },
     {
       "path": "routes/telegram_alerts.py",
@@ -2569,11 +2569,11 @@
     },
     {
       "path": "static/my-products-beta.css",
-      "sha256": "42fd4cf8e48cdf89d23100c0c24609dcd9b24533aa38e1f7bbbfa9848a39e84f"
+      "sha256": "0adbd79857c38acbdc70835093463c17bb2877fa615ec2443e60c16385210150"
     },
     {
       "path": "static/my-products-beta.js",
-      "sha256": "345033d0ab7fb9bde9eb052d2a2f23ee301819362320ec474202676b3cef73bf"
+      "sha256": "727836b07a56837f102b36e06c207b9a1c89d43401628a857443e5431d8aa447"
     },
     {
       "path": "static/operations-workspace.css",
@@ -3209,7 +3209,7 @@
     },
     {
       "path": "templates/my_products_beta.html",
-      "sha256": "bf676cfa4b0cb707907a880c4ee72cd16766fd53a3c86836d153f857bbf58f56"
+      "sha256": "3393dcc304090045c1a5771815f86d9f50aacf82e86b2068b49fc717fa2d8650"
     },
     {
       "path": "templates/notifications.html",
@@ -3229,7 +3229,7 @@
     },
     {
       "path": "templates/ozon_bulk_upload_detail.html",
-      "sha256": "d2b4a3ff0ffefa690d3aa91b2e9c6a796440591b36cc5d57c72ccf74c189f77e"
+      "sha256": "19e5e2216881e87f27bb638f358444435727f7ba8dc938fe4c11ae094b16d714"
     },
     {
       "path": "templates/ozon_bulk_uploads.html",
@@ -3413,7 +3413,7 @@
     },
     {
       "path": "templates/products_enrich_bulk.html",
-      "sha256": "b0549bb6779035ebb2b6f8bfae261da4cc604ba8b323823e969f708edcd37cf8"
+      "sha256": "a175b113bb3be0c426fb0c5310f467055caf377f285aabf052b1b207b75025fb"
     },
     {
       "path": "templates/products_merge.html",
@@ -4369,7 +4369,7 @@
     },
     {
       "path": "tests/test_my_products_supplier_refresh_handoff.py",
-      "sha256": "d688fc1850bc113849833ce07adb73d44a75f07d0a93b439865c0ccccfafb911"
+      "sha256": "acb9f3581e7898f47bfbf64de6551a6ae9a78abb27bbd6bb53ffbad7fdc09f4e"
     },
     {
       "path": "tests/test_orchestrator.py",
@@ -4789,7 +4789,7 @@
     },
     {
       "path": "tests/test_supplier_bulk_exact_refresh.py",
-      "sha256": "21c2d3c4e5108e5c03bb4d095b37535149c15caaceec5dc56d568d939ae83a7c"
+      "sha256": "2fda109c0e94f6de55b1fc422ed4cec8209b0e8929cf367ce1332828c2000f0c"
     },
     {
       "path": "tests/test_supplier_catalog_bulk_import_selection.py",
@@ -5053,7 +5053,7 @@
     },
     {
       "path": "tests/ux01/bulk_workspace_browser.py",
-      "sha256": "66e722bf87bc55c4ce9b6936ea1d8ba8326940358d1c34785d2f35c23bfd6da5"
+      "sha256": "266ced77270532aef6986eebb1d7e741faefc66eda92f93fcc24017ba4440efc"
     },
     {
       "path": "tests/ux01/common_content_browser.py",
@@ -5092,5 +5092,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "25670f590f6e58dd5894a626c0a0aa69bd3429ab6160ea33ecfa08f475b88add"
+  "aggregate_sha256": "5c2ea9ed81d1055a94de90fb92166663a17d9323041181cd80dc3afa5562cbbd"
 }
