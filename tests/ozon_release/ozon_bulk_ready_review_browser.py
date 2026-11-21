@@ -1071,6 +1071,10 @@ def run_recovery_browser_journey(page, browser, context):
     assert len(expected_ids) == 2 and len(excluded_ids) == 3
     assert "Без изменений" in page.locator(".max-w-7xl").inner_text()
     assert "Требуют внимания" in page.locator(".max-w-7xl").inner_text()
+    summary_bounds = page.locator("[data-reviewed-result-summary]").bounding_box()
+    guide_bounds = page.locator("[data-reviewed-result-guide]").bounding_box()
+    assert summary_bounds and 0 <= summary_bounds["y"] < 780, summary_bounds
+    assert guide_bounds and guide_bounds["y"] > summary_bounds["y"] + summary_bounds["height"], guide_bounds
     result_bounds = recovery_cta.bounding_box()
     assert result_bounds and result_bounds["height"] >= 44 and result_bounds["width"] >= 44, result_bounds
     assert result_bounds["x"] >= 0 and result_bounds["x"] + result_bounds["width"] <= 320
@@ -1277,6 +1281,7 @@ def run_recovery_browser_journey(page, browser, context):
         "narrow_keyboard_cta_activation": True,
         "classic_mobile_no_horizontal_overflow": True,
         "result_cta_bounds_320": result_bounds,
+        "result_summary_before_workflow_guide": True,
     })
     passed("reviewed_result_recovery_returns_exact_current_rows_read_only_and_queues_only_confirmed_subset")
 

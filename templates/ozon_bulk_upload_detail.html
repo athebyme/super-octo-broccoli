@@ -25,7 +25,7 @@
 <div class="sh-page-header">
     <div class="sh-page-header-content">
         <div>
-            <p class="text-xs uppercase tracking-widest" style="color:var(--accent-text)">{{ 'Локальная подготовка' if local_only else 'Отправка проверенных версий' }} · Ozon</p>
+            {% if local_only %}<p class="text-xs uppercase tracking-widest" style="color:var(--accent-text)">Локальная подготовка · Ozon</p>{% endif %}
             <h1 class="sh-page-title">
                 {% if local_only %}
                     {% if summary.outcome == 'running' %}Подготавливаем черновики
@@ -35,11 +35,11 @@
                 {% else %}
                     {% if summary.outcome == 'running' %}Проверенные карточки в работе
                     {% elif summary.outcome == 'success' %}Отправка завершена
-                    {% elif summary.outcome == 'partial' %}Часть карточек требует внимания
+                    {% elif summary.outcome == 'partial' %}Частичный результат отправки
                     {% else %}Проверьте результат отправки{% endif %}
                 {% endif %}
             </h1>
-            <p class="sh-page-subtitle">{{ run.account_label or ('Магазин #' ~ run.account_id) }} · {{ 'Подготовка не отправляет данные в Ozon. Готовые карточки можно проверить и отправить отдельно, не дожидаясь остальных.' if local_only else 'Каждая строка привязана к просмотренной версии черновика и отдельной операции Ozon.' }}</p>
+            <p class="sh-page-subtitle">{{ run.account_label or ('Магазин #' ~ run.account_id) }}{% if local_only %} · Подготовка не отправляет данные в Ozon. Готовые карточки можно проверить и отправить отдельно, не дожидаясь остальных.{% endif %}</p>
         </div>
         <div class="sh-page-actions">
             {% if local_only and run.status != 'running' and repair_drafts.ids %}
@@ -77,10 +77,13 @@
     </div>
 </div>
 <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    {% set result_journey %}
     {{ preparation_journey('result', run.account_label or ('Магазин #' ~ run.account_id), 'запуск ' ~ run.mode ~ ' · ' ~ run.job_uid, ('Локальная подготовка завершилась без отправки; исправьте нужные черновики, затем проверьте версии перед отправкой.' if local_only else 'Сверьте статус каждой строки и связанной операции; неопределённый итог сначала читают, не повторяют.'), internal_url=(url_for('seller_my_products_beta', account_id=run.account_id) if local_only else url_for('seller_my_products', account_id=run.account_id)), draft_url=url_for('marketplace_drafts.index', account_id=run.account_id), review_url=url_for('ozon_bulk_uploads.review', account_id=run.account_id, draft_ids=review_drafts.ids|join(','), parent_prepare_job_uid=run.job_uid) if local_only and review_drafts.ids else false, result_url=url_for('ozon_bulk_uploads.index', account_id=run.account_id), listing_url=url_for('marketplace_listings.index', marketplace='ozon', account_id=run.account_id), channel='Ozon') }}
+    {% endset %}
+    {% if local_only %}{{ result_journey }}{% endif %}
     {% set result_config = {'kind': 'run', 'initial': run, 'url': url_for('ozon_bulk_uploads.detail_api', job_uid=run.job_uid)} %}
     {% include 'partials/ozon_result_status.html' %}
-    <div class="sh-card p-5">
+    <div class="sh-card p-5" {% if not local_only %}data-reviewed-result-summary{% endif %}>
         <div class="flex flex-wrap gap-x-8 gap-y-3">
             <div><span class="block text-xs" style="color:var(--text-muted)">Всего</span><strong class="text-2xl">{{ summary.total or 0 }}</strong></div>
             {% if local_only %}
@@ -97,10 +100,11 @@
             {% endif %}
             <div><span class="block text-xs" style="color:var(--text-muted)">В работе</span><strong class="text-2xl">{{ summary.active or 0 }}</strong></div>
         </div>
-        <p class="mt-4 text-sm" style="color:var(--text-secondary)">
-            {% if local_only %}Готовность означает локальный черновик, а не публикацию. Откройте проверку, исправьте нужные строки и отдельно подтвердите отправку выбранных версий.
-            {% else %}Если результат Ozon неизвестен, откройте связанную операцию для чтения состояния. Не отправляйте ту же карточку повторно вслепую.{% endif %}
-        </p>
+        {% if local_only %}
+        <p class="mt-4 text-sm" style="color:var(--text-secondary)">Откройте проверку, исправьте нужные черновики и отдельно подтвердите отправку выбранных версий.</p>
+        {% elif summary.status_counts.uncertain %}
+        <p class="mt-4 text-sm" style="color:var(--text-secondary)">Откройте связанную операцию, чтобы узнать состояние карточки с неизвестным результатом.</p>
+        {% endif %}
     </div>
     <div class="mt-5 space-y-3">
         {% set phase_labels = {
@@ -135,6 +139,7 @@
         </article>
         {% endfor %}
     </div>
+    {% if not local_only %}<div class="mt-6" data-reviewed-result-guide>{{ result_journey }}</div>{% endif %}
 </div>
 {% else %}
 {% set status_labels = {
