@@ -16,7 +16,10 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.ux01 import journey_browser as fixture
-from models import BackgroundJob, EnrichmentJob, ImportedProduct, Product, Seller, SupplierProduct, db
+from models import (
+    BackgroundJob, EnrichmentJob, ImportedProduct, PriceChangeBatch,
+    PriceChangeItem, Product, Seller, SupplierProduct, db,
+)
 
 
 OUTPUT = Path(os.environ.get("BULK_WORKSPACE_ARTIFACTS", "/artifacts/bulk-workspace"))
@@ -30,6 +33,7 @@ LOCAL_OZON_PREPARE = "/marketplaces/ozon/uploads/"
 LOCAL_WB_ENRICH_REVIEW = "/products/enrich-bulk"
 LOCAL_WB_ENRICH_START = "/api/products/enrich-bulk/start"
 LOCAL_SUPPLIER_IMPORT = "/supplier-catalog/import"
+LOCAL_PRICE_CREATE = "/prices/create-batch"
 
 
 def seed_bulk_selection():
@@ -38,9 +42,33 @@ def seed_bulk_selection():
         seller = db.session.get(Seller, seller_id)
         seller.wb_api_key = "synthetic-wb-key-for-bulk-workspace-only"
         wb_product = Product(id=4419902, seller_id=seller_id, nm_id=4419901, vendor_code="BULK-WB-001",
-                             title=MAIN_TITLE, is_active=True, wb_price=600)
+                             title=MAIN_TITLE, is_active=True, price=1000, wb_price=600)
         db.session.add(wb_product)
         db.session.flush()
+        unrelated_price_batch = PriceChangeBatch(
+            seller_id=seller_id,
+            name="Unrelated price batch for return binding",
+            change_type="set",
+            change_value=900,
+            status="confirmed",
+            total_items=1,
+            safe_count=1,
+            has_safe_changes=True,
+        )
+        db.session.add(unrelated_price_batch)
+        db.session.flush()
+        db.session.add(PriceChangeItem(
+            batch_id=unrelated_price_batch.id,
+            product_id=wb_product.id,
+            nm_id=wb_product.nm_id,
+            vendor_code=wb_product.vendor_code,
+            product_title=wb_product.title,
+            old_price=1000,
+            new_price=900,
+            price_change_amount=-100,
+            price_change_percent=-10,
+            safety_level="safe",
+        ))
         supplier_item = db.session.get(SupplierProduct, fixture.FIXTURE["supplier_product_id"])
         supplier_item.content_revision = 2
         supplier_item.title = REFRESHED_TITLE
@@ -102,6 +130,7 @@ def seed_bulk_selection():
         return {"wb_id": wb_product.id, "local_id": original.id,
                 "manual_id": manual.id, "import_id": new_source.id,
                 "refresh_source_id": supplier_item.id,
+                "unrelated_price_batch_id": unrelated_price_batch.id,
                 "bulk_ids": [row.id for row in bulk_rows]}
 
 
@@ -217,6 +246,31 @@ def feed_matches(response, expected):
     return all(query.get(key) == [value] for key, value in expected.items())
 
 
+def begin_domain_write_watch():
+    """Track app database writes only for a browser navigation window."""
+    from sqlalchemy import event
+
+    with fixture.app.app_context():
+        engine = db.engine
+    writes = []
+
+    def observe(_conn, _cursor, statement, _parameters, _context, _executemany):
+        command = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else ""
+        if command in {"INSERT", "UPDATE", "DELETE", "REPLACE"}:
+            writes.append(command)
+
+    event.listen(engine, "before_cursor_execute", observe)
+    return engine, observe, writes
+
+
+def end_domain_write_watch(watch):
+    from sqlalchemy import event
+
+    engine, observe, writes = watch
+    event.remove(engine, "before_cursor_execute", observe)
+    return writes
+
+
 def is_supplier_refresh_result(response):
     parsed = urlsplit(response.url)
     return parsed.path == LOCAL_REFRESH_RESULT and response.request.method == "GET"
@@ -280,6 +334,9 @@ def run():
     refresh_preview_posts = []
     refresh_apply_tokens = []
     wb_enrich_start_posts = []
+    price_create_posts = []
+    price_create_receipts = []
+    price_decisions = []
     errors = []
     feed_gets = []
     feed_responses = []
@@ -380,6 +437,49 @@ def run():
                     route.fulfill(status=204, body=b"")
                     return
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "POST":
+            if parsed.path == LOCAL_PRICE_CREATE:
+                body = request.post_data_json
+                if not isinstance(body, dict) or body.get("exact_selection") is not True or \
+                        body.get("product_ids") != [fixture_ids["wb_id"]]:
+                    raise AssertionError("WB price batch did not use the exact transferred Product ID set")
+                if set(body) != {
+                    "product_ids", "change_type", "change_value", "formula", "name",
+                    "description", "price_source", "exact_selection",
+                }:
+                    raise AssertionError("WB price batch sent unexpected fields")
+                price_create_posts.append({
+                    "product_ids": body["product_ids"],
+                    "exact_selection": body["exact_selection"],
+                    "change_type": body["change_type"],
+                    "change_value": body["change_value"],
+                })
+                response = route.fetch(max_redirects=0)
+                if response.status != 200:
+                    raise AssertionError(("Actual WB price batch create failed", response.status,
+                                          response.text()[:300]))
+                receipt = response.json()
+                if receipt.get("success") is not True or not isinstance(receipt.get("batch_id"), int):
+                    raise AssertionError("WB price create returned no exact batch receipt")
+                price_create_receipts.append(receipt)
+                route.fulfill(response=response)
+                return
+            if parsed.path.startswith("/prices/batch/") and parsed.path.endswith("/confirm"):
+                match = re.fullmatch(r"/prices/batch/(\d+)/confirm", parsed.path)
+                values = parse_qs(request.post_data or "", keep_blank_values=True)
+                action = values.get("action", [""])[0]
+                nonce_values = values.get("workspace_return", [])
+                if not match or action not in {"confirm", "reject"} or len(nonce_values) != 1:
+                    raise AssertionError("WB dangerous-price decision omitted its result-bound return marker")
+                price_decisions.append({
+                    "batch_id": int(match.group(1)),
+                    "action": action,
+                    "workspace_return": nonce_values[0],
+                })
+                response = route.fetch(max_redirects=0)
+                if response.status not in {302, 303}:
+                    raise AssertionError(("Actual WB decision did not redirect", response.status))
+                route.fulfill(response=response)
+                return
             if parsed.path == LOCAL_WB_ENRICH_START:
                 wb_enrich_start_posts.append(request.post_data_json)
                 route.fulfill(status=409, content_type="application/json",
@@ -749,6 +849,191 @@ def run():
         pricing_form = page.locator('[x-data^="priceChangeApp("]')
         pricing_form.evaluate("element => Alpine.$data(element).toggleMarketplacePrices()")
         page.get_by_role("button", name="Синхронизировать с WB").wait_for()
+
+        # A successful exact batch binds the existing tab capsule to one
+        # seller-owned result. Its return is navigation-only and restores the
+        # original ImportedProduct set after a fresh feed read.
+        page.goto(fixture.BASE + "/my-products/beta")
+        page.locator("#my-products-app").wait_for(state="visible")
+        with page.expect_response(lambda response: feed_matches(response, {"search": MAIN_TITLE})) as price_search:
+            page.get_by_placeholder("Название, бренд или артикул").fill(MAIN_TITLE)
+        assert price_search.value.status == 200
+        with page.expect_response(lambda response: feed_matches(response, {
+                "search": MAIN_TITLE, "sort": "title",
+        })) as price_sort:
+            page.get_by_label("Сортировка").select_option("title")
+        assert price_sort.value.status == 200
+        page.get_by_role("checkbox", name=f"Выбрать {MAIN_TITLE}").check()
+
+        def open_exact_wb_price_form():
+            page.wait_for_function("""(id) => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                return proxy && !proxy.loading && proxy.selected.join(',') === String(id);
+            }""", arg=fixture_ids["local_id"])
+            pick_action(page, "Изменить цены WB")
+            page.wait_for_url(lambda value: (
+                urlsplit(str(value)).path == "/prices/change"
+                and re.fullmatch(r"workspace-return=[a-f0-9]{32}", urlsplit(str(value)).fragment)
+            ))
+            assert parse_qs(urlsplit(page.url).query).get("product_ids") == [str(fixture_ids["wb_id"])]
+            return urlsplit(page.url).fragment
+
+        def create_exact_wb_batch(change_type, change_value):
+            nonce_hash = open_exact_wb_price_form()
+            page.locator(f'input[type="radio"][value="{change_type}"]').check()
+            page.locator("#change_value").fill(str(change_value))
+            with page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_PRICE_CREATE
+                                      and response.request.method == "POST") as create_response:
+                page.get_by_role("button", name="Создать изменение (1 товаров)").click()
+            response = create_response.value
+            assert response.status == 200
+            receipt = response.json()
+            assert receipt.get("success") is True
+            assert len(price_create_posts) == len(price_create_receipts)
+            assert price_create_posts[-1] == {
+                "product_ids": [fixture_ids["wb_id"]],
+                "exact_selection": True,
+                "change_type": change_type,
+                "change_value": change_value,
+            }, price_create_posts[-1]
+            batch_id = receipt.get("batch_id")
+            assert isinstance(batch_id, int) and batch_id > 0
+            page.wait_for_url(lambda value: (
+                urlsplit(str(value)).path in {
+                    f"/prices/batch/{batch_id}",
+                    f"/prices/batch/{batch_id}/confirm",
+                }
+                and urlsplit(str(value)).fragment == nonce_hash
+            ))
+            return batch_id, nonce_hash, receipt
+
+        def assert_exact_result_capsule(batch_id, nonce_hash):
+            assert page.evaluate("""([owner, expectedBatch, sourceId]) => {
+                const capsule = window.SellerHubCommonContent.workspaceReturnFromHash(
+                    window.location.hash, {owner}
+                );
+                return !!capsule && capsule.v === 3 && capsule.owner === owner &&
+                    capsule.priceResult.channel === 'wb' &&
+                    capsule.priceResult.batchId === expectedBatch &&
+                    capsule.selectionIds.length === 1 &&
+                    capsule.selectionIds[0] === sourceId;
+            }""", [source_owner, batch_id, fixture_ids["local_id"]])
+            assert urlsplit(page.url).fragment == nonce_hash
+            return_link = page.locator("a[data-price-workspace-return]")
+            return_link.wait_for(state="visible")
+            href = urlsplit(return_link.get_attribute("href") or "")
+            assert href.path == "/my-products/beta" and href.fragment == nonce_hash
+            assert return_link.inner_text().strip() == "Вернуться к товарам"
+            return return_link
+
+        def return_from_exact_wb_result(return_link, nonce_hash):
+            posts_before = (len(price_create_posts), len(price_decisions), len(posts))
+            provider_attempts_before = fixture.REPORT["provider_attempts"]
+            watch = begin_domain_write_watch()
+            try:
+                with page.expect_response(lambda response: feed_matches(response, {
+                        "search": MAIN_TITLE, "sort": "title", "per_page": "50",
+                })) as returned:
+                    with page.expect_navigation(wait_until="domcontentloaded"):
+                        return_link.click()
+                assert returned.value.status == 200
+            finally:
+                domain_writes = end_domain_write_watch(watch)
+            page.wait_for_url(lambda value: urlsplit(str(value)).path == "/my-products/beta")
+            page.wait_for_function("""([id, search]) => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                return proxy && !proxy.loading && proxy.filters.search === search &&
+                    proxy.filters.sort === 'title' && proxy.selected.join(',') === String(id);
+            }""", arg=[fixture_ids["local_id"], MAIN_TITLE])
+            assert page.locator(".mp-list article.mp-row input[type=checkbox]:checked").evaluate_all(
+                "boxes => boxes.map(box => Number(box.value))"
+            ) == [fixture_ids["local_id"]]
+            assert page.evaluate("localStorage.getItem('price_change_selected')") == '[999999]'
+            assert domain_writes == [], domain_writes
+            assert (len(price_create_posts), len(price_decisions), len(posts)) == posts_before
+            assert fixture.REPORT["provider_attempts"] == provider_attempts_before == 0
+            assert nonce_hash not in page.url
+
+        safe_batch_id, safe_hash, safe_receipt = create_exact_wb_batch("percent", 5)
+        assert safe_receipt["status"] == "confirmed", safe_receipt
+        assert page.get_by_text("Готово к применению", exact=True).is_visible()
+        safe_row = page.locator("tbody tr").filter(has_text=MAIN_TITLE)
+        assert safe_row.count() == 1
+        assert safe_row.get_by_text("Безопасно", exact=True).is_visible()
+        safe_return = assert_exact_result_capsule(safe_batch_id, safe_hash)
+        assert len(price_create_posts) == len(price_create_receipts) == 1
+        assert price_create_receipts[-1]["batch_id"] == safe_batch_id
+
+        # A copied nonce on another owned batch is not enough to expose the
+        # result return link. Probe it in a separate tab so the original
+        # one-time tab capsule remains available for the real return.
+        capsule_key = "seller-hub-common-content-workspace-return-v1"
+        encoded_capsule = page.evaluate("key => sessionStorage.getItem(key)", capsule_key)
+        assert encoded_capsule
+        probe_page = context.new_page()
+        probe_page.goto(fixture.BASE + "/my-products/beta")
+        probe_page.locator("#my-products-app").wait_for(state="visible")
+        probe_page.evaluate("([key, value]) => sessionStorage.setItem(key, value)",
+                            [capsule_key, encoded_capsule])
+        unrelated_watch = begin_domain_write_watch()
+        try:
+            probe_page.goto(
+                fixture.BASE + f"/prices/batch/{fixture_ids['unrelated_price_batch_id']}#{safe_hash}"
+            )
+            probe_page.locator("h1").first.wait_for(state="visible")
+        finally:
+            unrelated_writes = end_domain_write_watch(unrelated_watch)
+        assert probe_page.locator("a[data-price-workspace-return]:visible").count() == 0
+        assert unrelated_writes == [], unrelated_writes
+        probe_page.close()
+        assert_exact_result_capsule(safe_batch_id, safe_hash)
+        return_from_exact_wb_result(safe_return, safe_hash)
+        checks.append("wb_exact_safe_batch_return_restores_source_rows_without_io_or_writes")
+        checks.append("wb_same_nonce_on_unrelated_owned_batch_does_not_show_return")
+
+        warning_batch_id, warning_hash, warning_receipt = create_exact_wb_batch("percent", 15)
+        assert warning_receipt["status"] == "confirmed", warning_receipt
+        assert warning_receipt["stats"]["warning"] == 1
+        assert page.get_by_text("Готово к применению", exact=True).is_visible()
+        warning_row = page.locator("tbody tr").filter(has_text=MAIN_TITLE)
+        assert warning_row.get_by_text("Внимание", exact=True).is_visible()
+        warning_return = assert_exact_result_capsule(warning_batch_id, warning_hash)
+        return_from_exact_wb_result(warning_return, warning_hash)
+        checks.append("wb_warning_price_batch_is_visible_and_returns_exact_selection")
+
+        rejected_batch_id, rejected_hash, rejected_receipt = create_exact_wb_batch("percent", 25)
+        assert rejected_receipt["status"] == "pending_review", rejected_receipt
+        assert urlsplit(page.url).path == f"/prices/batch/{rejected_batch_id}/confirm"
+        assert page.get_by_text("Требуется подтверждение опасных изменений цен", exact=True).is_visible()
+        confirm_return = assert_exact_result_capsule(rejected_batch_id, rejected_hash)
+        assert page.locator('input[name="workspace_return"]').input_value() == rejected_hash.removeprefix("workspace-return=")
+        page.get_by_role("button", name="Отклонить изменения").click()
+        page.wait_for_url(lambda value: (
+            urlsplit(str(value)).path == f"/prices/batch/{rejected_batch_id}"
+            and urlsplit(str(value)).fragment == rejected_hash
+        ))
+        assert page.get_by_text("Отменено", exact=True).is_visible()
+        confirm_return = assert_exact_result_capsule(rejected_batch_id, rejected_hash)
+        return_from_exact_wb_result(confirm_return, rejected_hash)
+        assert price_decisions[-1]["action"] == "reject"
+        checks.append("wb_dangerous_price_rejection_keeps_exact_return_context")
+
+        accepted_batch_id, accepted_hash, accepted_receipt = create_exact_wb_batch("percent", 25)
+        assert accepted_receipt["status"] == "pending_review", accepted_receipt
+        assert urlsplit(page.url).path == f"/prices/batch/{accepted_batch_id}/confirm"
+        page.locator("#comment").fill("Синтетическое основание подтверждения")
+        page.locator('input[type="checkbox"][required]').check()
+        page.get_by_role("button", name="Подтвердить изменения").click()
+        page.wait_for_url(lambda value: (
+            urlsplit(str(value)).path == f"/prices/batch/{accepted_batch_id}"
+            and urlsplit(str(value)).fragment == accepted_hash
+        ))
+        assert page.get_by_text("Готово к применению", exact=True).is_visible()
+        accepted_return = assert_exact_result_capsule(accepted_batch_id, accepted_hash)
+        return_from_exact_wb_result(accepted_return, accepted_hash)
+        assert [item["action"] for item in price_decisions] == ["reject", "confirm"]
+        assert all(item["workspace_return"] for item in price_decisions)
+        checks.append("wb_dangerous_price_confirmation_keeps_exact_return_context")
 
         open_products(page)
         page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
