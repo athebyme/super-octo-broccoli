@@ -372,6 +372,12 @@
 .mp-refresh-result-wb:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
 .mp-refresh-result-reload { margin-top:10px; color:var(--accent-text); }
 
+#my-products-app .shk-job-close:focus-visible,
+#my-products-app .shk-job-result > .sh-btn:focus-visible {
+    outline:2px solid var(--focus-outline);
+    outline-offset:2px;
+}
+
 /* ---------- Мобильный ---------- */
 @media (max-width: 1000px) {
     .mp-row { grid-template-columns: 24px 48px minmax(0, 1fr) auto 24px; }
