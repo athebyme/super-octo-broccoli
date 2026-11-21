@@ -10,12 +10,16 @@
 {% set review_recovery_draft_ids = run.review_recovery_draft_ids|default([], true) %}
 {% set review_drafts = namespace(ids=[]) %}
 {% set repair_drafts = namespace(ids=[]) %}
+{% set reconciliation = namespace(stopped=0) %}
 {% for item in run['items'] %}
     {% if local_only and item.draft_id and item.draft_id not in review_drafts.ids %}
         {% set review_drafts.ids = review_drafts.ids + [item.draft_id] %}
     {% endif %}
     {% if local_only and item.status in ['prepared', 'needs_input'] and item.draft_id and item.draft_id not in repair_drafts.ids %}
         {% set repair_drafts.ids = repair_drafts.ids + [item.draft_id] %}
+    {% endif %}
+    {% if not local_only and item.status == 'uncertain' and item.reconciliation_stopped is sameas true %}
+        {% set reconciliation.stopped = reconciliation.stopped + 1 %}
     {% endif %}
 {% endfor %}
 <div class="sh-page-header">
@@ -85,7 +89,10 @@
             {% else %}
             <div><span class="block text-xs" style="color:var(--text-muted)">Создано</span><strong class="text-2xl" style="color:var(--ok)">{{ summary.created or 0 }}</strong></div>
             <div><span class="block text-xs" style="color:var(--text-muted)">Обновлено</span><strong class="text-2xl" style="color:var(--ok)">{{ summary.updated or 0 }}</strong></div>
-            <div><span class="block text-xs" style="color:var(--text-muted)">Требуют внимания</span><strong class="text-2xl" style="color:var(--warn)">{{ (summary.needs_input or 0) + (summary.needs_manual_reconciliation or 0) + (summary.failed or 0) }}</strong></div>
+            {% if summary.status_counts.already_current %}
+            <div><span class="block text-xs" style="color:var(--text-muted)">Без изменений</span><strong class="text-2xl">{{ summary.status_counts.already_current }}</strong></div>
+            {% endif %}
+            <div><span class="block text-xs" style="color:var(--text-muted)">Требуют внимания</span><strong class="text-2xl" style="color:var(--warn)">{{ (summary.needs_input or 0) + (summary.needs_manual_reconciliation or 0) + (summary.failed or 0) + reconciliation.stopped }}</strong></div>
             {% endif %}
             <div><span class="block text-xs" style="color:var(--text-muted)">В работе</span><strong class="text-2xl">{{ summary.active or 0 }}</strong></div>
         </div>
