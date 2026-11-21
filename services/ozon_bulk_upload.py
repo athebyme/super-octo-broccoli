@@ -22,7 +22,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Sequence
 
 from flask import current_app
-from sqlalchemy import case, func
+from sqlalchemy import case, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -30,6 +30,8 @@ from models import (
     BackgroundJob,
     ImportedProduct,
     MarketplaceAttributeDefinition,
+    MarketplaceListing,
+    MarketplaceListingSnapshot,
     MarketplaceOperation,
     MarketplaceProductDraft,
     OzonBulkUploadItem,
@@ -53,6 +55,11 @@ from services.marketplace_product_links import (
     MarketplaceProductLinkService,
 )
 from services.ozon_reference_service import OzonReferenceService
+from services.ozon_catalog_operation_fence import (
+    ACTIVE_CATALOG_STATUSES,
+    CATALOG_OPERATION_KINDS,
+)
+from services.ozon_product_import import OzonProductImportContract
 
 
 logger = logging.getLogger(__name__)
@@ -272,6 +279,7 @@ class OzonBulkUploadService:
         cls, *, seller_id: int, account_id: int, draft_ids: Any,
         expected_versions: Any, request_key: str,
         parent_prepare_job_uid: Optional[str] = None,
+        result_job_uid: Optional[str] = None,
         created_by_user_id: Optional[int] = None,
     ) -> UploadRunAcceptance:
         seller_id = cls._positive_integer(seller_id, "seller_id")
@@ -296,15 +304,29 @@ class OzonBulkUploadService:
             or not cls.JOB_UID_PATTERN.fullmatch(parent_prepare_job_uid)
         ):
             raise OzonBulkUploadValidationError("Некорректный исходный запуск")
+        if result_job_uid is not None and (
+            not isinstance(result_job_uid, str)
+            or not cls.JOB_UID_PATTERN.fullmatch(result_job_uid)
+        ):
+            raise OzonBulkUploadValidationError("Некорректный исходный результат")
+        if parent_prepare_job_uid is not None and result_job_uid is not None:
+            raise OzonBulkUploadValidationError(
+                "Укажите только один исходный запуск"
+            )
         key_hash = cls._request_identity(
             seller_id=seller_id, request_key=request_key,
         )
-        fingerprint = cls._run_fingerprint({
+        fingerprint_document = {
             "version": 3, "mode": "reviewed_drafts", "account_id": account_id,
             "draft_ids": normalized_ids,
             "expected_versions": expected_versions,
             "parent_prepare_job_uid": parent_prepare_job_uid,
-        })
+        }
+        # Omitting result_job_uid preserves replay fingerprints from existing
+        # ordinary reviews. A recovery review is bound to its exact source.
+        if result_job_uid is not None:
+            fingerprint_document["result_job_uid"] = result_job_uid
+        fingerprint = cls._run_fingerprint(fingerprint_document)
         try:
             account = MarketplaceAccountService.get_owned_account(
                 seller_id=seller_id, account_id=account_id,
@@ -345,6 +367,13 @@ class OzonBulkUploadService:
             )
             error.code = "draft_version_conflict"
             raise error
+        if result_job_uid is not None:
+            cls.validate_review_recovery_scope(
+                seller_id=seller_id,
+                account_id=account_id,
+                result_job_uid=result_job_uid,
+                requested_draft_ids=normalized_ids,
+            )
         parent_id = None
         if parent_prepare_job_uid is not None:
             parent_job = BackgroundJob.query.filter_by(
@@ -482,7 +511,327 @@ class OzonBulkUploadService:
     )
 
     @classmethod
-    def _v3_document(cls, *, job: BackgroundJob, run: OzonBulkUploadRun) -> dict:
+    def _task_rejection_is_proven(
+        cls, *, operation: MarketplaceOperation, snapshot,
+    ) -> bool:
+        """Require the exact durable Ozon task readback before retrying a write."""
+        if (
+            operation.status != "failed"
+            or operation.error_code != "ozon_import_failed"
+            or operation.operation_kind not in {"product_import", "product_update"}
+            or not isinstance(operation.external_task_id, str)
+            or not operation.external_task_id.strip()
+            or operation.attempt_count < 1
+            or operation.poll_count < 1
+            or operation.submitted_at is None
+            or operation.last_polled_at is None
+            or operation.completed_at is None
+            or snapshot is None
+            or snapshot.seller_id != operation.seller_id
+            or snapshot.account_id != operation.account_id
+            or snapshot.marketplace_id != operation.marketplace_id
+            or snapshot.draft_id != operation.draft_id
+            or snapshot.snapshot_kind != operation.operation_kind
+            or not snapshot.confirmed_fingerprint
+            or len(snapshot.confirmed_state_json or "") > 512 * 1024
+            or len(operation.item_results_json or "") > 512 * 1024
+            or len(operation.request_summary_json or "") > 128 * 1024
+        ):
+            return False
+        try:
+            confirmed = json.loads(snapshot.confirmed_state_json or "")
+            request_summary = json.loads(operation.request_summary_json or "")
+            operation_items = json.loads(operation.item_results_json or "")
+        except (TypeError, json.JSONDecodeError):
+            return False
+        if not isinstance(confirmed, dict) or confirmed.get("source") != "task_status":
+            return False
+        confirmed_at = confirmed.get("confirmed_at")
+        if not isinstance(confirmed_at, str) or not confirmed_at.strip():
+            return False
+        try:
+            datetime.fromisoformat(confirmed_at.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        result = confirmed.get("result")
+        if (
+            not isinstance(result, dict)
+            or result.get("total") != 1
+            or result.get("aggregate_status") != "failed"
+            or not isinstance(result.get("items"), list)
+            or len(result["items"]) != 1
+            or operation_items != result["items"]
+            or not isinstance(request_summary, dict)
+        ):
+            return False
+        result_item = result["items"][0]
+        offer_id = request_summary.get("offer_id")
+        if (
+            not isinstance(result_item, dict)
+            or result_item.get("status") not in {"failed", "skipped"}
+            or not isinstance(offer_id, str)
+            or not offer_id
+            or result_item.get("offer_id") != offer_id
+        ):
+            return False
+        try:
+            fingerprint = OzonProductImportContract.fingerprint(result)
+        except (TypeError, ValueError):
+            return False
+        return snapshot.confirmed_fingerprint == fingerprint
+
+    @classmethod
+    def _review_recovery_candidates(
+        cls, *, run: OzonBulkUploadRun, rows: Sequence[OzonBulkUploadItem],
+        operations: dict, items: Sequence[dict],
+    ) -> list[int]:
+        """Return exact, current draft/product pairs with a safe review path."""
+        if run.mode != "reviewed_drafts":
+            return []
+        public_items = {
+            item.get("operation_id"): item
+            for item in items
+            if isinstance(item.get("operation_id"), int)
+        }
+        local_draft_ids = set()
+        task_operations = {}
+        for row in rows:
+            draft_id = row.reviewed_draft_id
+            if (
+                type(draft_id) is not int
+                or draft_id <= 0
+                or row.draft_id != draft_id
+            ):
+                continue
+            if row.operation_id is None:
+                if row.phase in {"needs_input", "failed_local"}:
+                    local_draft_ids.add(draft_id)
+                continue
+            if row.phase != "operation_linked":
+                continue
+            operation = operations.get(row.operation_id)
+            if (
+                operation is None
+                or operation.draft_id != draft_id
+                or operation.status != "failed"
+                or operation.operation_kind not in {"product_import", "product_update"}
+                or public_items.get(operation.id, {}).get("status") == "already_current"
+            ):
+                continue
+            no_physical_attempt = (
+                operation.attempt_count == 0
+                and operation.poll_count == 0
+                and not operation.external_task_id
+                and operation.submitted_at is None
+                and operation.last_polled_at is None
+                and operation.error_code != "ozon_import_failed"
+            )
+            if no_physical_attempt:
+                local_draft_ids.add(draft_id)
+            elif operation.error_code == "ozon_import_failed":
+                task_operations[operation.id] = (draft_id, operation)
+
+        draft_ids = local_draft_ids | {
+            draft_id for draft_id, _operation in task_operations.values()
+        }
+        if not draft_ids:
+            return []
+
+        # One bounded projection query proves each row still points to its
+        # current seller-owned source product. Historical item IDs alone are
+        # not sufficient after a draft is rebound or its source is removed.
+        current_drafts = MarketplaceProductDraft.query.with_entities(
+            MarketplaceProductDraft.id,
+            MarketplaceProductDraft.imported_product_id,
+            MarketplaceProductDraft.published_listing_id,
+            MarketplaceProductDraft.marketplace_id,
+        ).join(
+            ImportedProduct,
+            ImportedProduct.id == MarketplaceProductDraft.imported_product_id,
+        ).filter(
+            MarketplaceProductDraft.seller_id == run.seller_id,
+            MarketplaceProductDraft.account_id == run.account_id,
+            MarketplaceProductDraft.id.in_(draft_ids),
+            ImportedProduct.seller_id == run.seller_id,
+        ).all()
+        current_by_id = {draft.id: draft for draft in current_drafts}
+        expected_products = {
+            row.reviewed_draft_id: row.imported_product_id
+            for row in rows
+            if row.reviewed_draft_id in draft_ids
+            and row.draft_id == row.reviewed_draft_id
+        }
+        exact_ids = {
+            draft_id for draft_id, draft in current_by_id.items()
+            if expected_products.get(draft_id) == draft.imported_product_id
+        }
+        if not exact_ids:
+            return []
+
+        active_draft_ids = set(MarketplaceOperation.query.with_entities(
+            MarketplaceOperation.draft_id,
+        ).filter(
+            MarketplaceOperation.seller_id == run.seller_id,
+            MarketplaceOperation.account_id == run.account_id,
+            MarketplaceOperation.draft_id.in_(exact_ids),
+            MarketplaceOperation.status.in_(MarketplacePublicationService.ACTIVE_STATUSES),
+        ).all())
+        active_draft_ids = {row[0] for row in active_draft_ids}
+        source_ids = set(expected_products.values())
+        active_batch_rows = db.session.query(
+            OzonBulkUploadItem.draft_id,
+            OzonBulkUploadItem.imported_product_id,
+        ).join(
+            OzonBulkUploadRun,
+            OzonBulkUploadRun.id == OzonBulkUploadItem.run_id,
+        ).filter(
+            OzonBulkUploadRun.seller_id == run.seller_id,
+            OzonBulkUploadRun.account_id == run.account_id,
+            OzonBulkUploadItem.phase.in_(
+                {"pending", "preparing", "waiting_reference", "reviewed"}
+            ),
+            or_(
+                OzonBulkUploadItem.draft_id.in_(exact_ids),
+                OzonBulkUploadItem.imported_product_id.in_(source_ids),
+            ),
+        ).distinct().all()
+        active_batch_draft_ids = {
+            draft_id for draft_id, product_id in active_batch_rows
+            if draft_id in exact_ids
+            and expected_products.get(draft_id) == product_id
+        }
+        active_batch_products = {
+            product_id for _draft_id, product_id in active_batch_rows
+            if product_id in source_ids
+        }
+        active_batch_draft_ids.update(
+            draft_id for draft_id, product_id in expected_products.items()
+            if product_id in active_batch_products
+        )
+        listing_rows = [
+            draft for draft in current_by_id.values()
+            if draft.id in exact_ids and draft.published_listing_id is not None
+        ]
+        active_listing_ids = set()
+        if listing_rows:
+            listing_ids = {draft.published_listing_id for draft in listing_rows}
+            marketplace_ids = {draft.marketplace_id for draft in listing_rows}
+            active_listing_ids = set(db.session.query(
+                MarketplaceOperation.listing_id,
+            ).join(
+                MarketplaceListing,
+                MarketplaceListing.id == MarketplaceOperation.listing_id,
+            ).filter(
+                MarketplaceOperation.seller_id == run.seller_id,
+                MarketplaceOperation.account_id == run.account_id,
+                MarketplaceOperation.marketplace_id.in_(marketplace_ids),
+                MarketplaceOperation.listing_id.in_(listing_ids),
+                MarketplaceOperation.operation_kind.in_(CATALOG_OPERATION_KINDS),
+                MarketplaceOperation.status.in_(ACTIVE_CATALOG_STATUSES),
+                MarketplaceListing.seller_id == run.seller_id,
+                MarketplaceListing.account_id == run.account_id,
+                MarketplaceListing.marketplace_id == MarketplaceOperation.marketplace_id,
+            ).distinct().all())
+            active_listing_ids = {row[0] for row in active_listing_ids}
+        active_listing_by_draft = {
+            draft.id for draft in listing_rows
+            if draft.published_listing_id in active_listing_ids
+        }
+
+        proven_task_ids = set()
+        if task_operations:
+            task_ids = set(task_operations)
+            snapshot_rows = MarketplaceListingSnapshot.query.with_entities(
+                MarketplaceListingSnapshot.operation_id,
+                MarketplaceListingSnapshot.seller_id,
+                MarketplaceListingSnapshot.marketplace_id,
+                MarketplaceListingSnapshot.account_id,
+                MarketplaceListingSnapshot.draft_id,
+                MarketplaceListingSnapshot.snapshot_kind,
+                MarketplaceListingSnapshot.confirmed_fingerprint,
+                MarketplaceListingSnapshot.confirmed_state_json,
+            ).filter(
+                MarketplaceListingSnapshot.seller_id == run.seller_id,
+                MarketplaceListingSnapshot.account_id == run.account_id,
+                MarketplaceListingSnapshot.operation_id.in_(task_ids),
+                MarketplaceListingSnapshot.confirmed_fingerprint.isnot(None),
+                func.length(MarketplaceListingSnapshot.confirmed_state_json)
+                <= 512 * 1024,
+            ).all()
+            snapshots = {row.operation_id: row for row in snapshot_rows}
+            proven_task_ids = {
+                task_operations[operation_id][0]
+                for operation_id, (_draft_id, operation) in task_operations.items()
+                if cls._task_rejection_is_proven(
+                    operation=operation,
+                    snapshot=snapshots.get(operation_id),
+                )
+            }
+        eligible = (local_draft_ids | proven_task_ids) & exact_ids
+        eligible -= active_draft_ids | active_listing_by_draft | active_batch_draft_ids
+        ordered = []
+        for row in rows:
+            draft_id = row.reviewed_draft_id
+            if draft_id in eligible and draft_id not in ordered:
+                ordered.append(draft_id)
+        return ordered
+
+    @classmethod
+    def validate_review_recovery_scope(
+        cls, *, seller_id: int, account_id: int, result_job_uid: str,
+        requested_draft_ids: Sequence[int],
+    ) -> list[int]:
+        """Validate a bounded subset against one fully settled owned result."""
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        account_id = cls._positive_integer(account_id, "account_id")
+        if (
+            not isinstance(result_job_uid, str)
+            or not cls.JOB_UID_PATTERN.fullmatch(result_job_uid)
+        ):
+            raise OzonBulkUploadValidationError("Некорректный исходный результат")
+        job = BackgroundJob.query.filter_by(
+            seller_id=seller_id, job_uid=result_job_uid, job_type=cls.JOB_TYPE,
+        ).first()
+        run = (
+            OzonBulkUploadRun.query.filter_by(
+                job_id=job.id, seller_id=seller_id, account_id=account_id,
+                mode="reviewed_drafts",
+            ).first()
+            if job is not None else None
+        )
+        if run is None:
+            raise OzonBulkUploadNotFound("Исходный результат недоступен")
+        observed = cls._v3_document(
+            job=job, run=run, include_recovery=True,
+        )
+        if observed["summary"]["active"] != 0:
+            error = OzonBulkUploadConflict(
+                "Дождитесь завершения всех карточек исходного результата"
+            )
+            error.code = "upload_result_not_settled"
+            raise error
+        eligible = observed.get("review_recovery_draft_ids", [])
+        if (
+            not isinstance(requested_draft_ids, Sequence)
+            or isinstance(requested_draft_ids, (str, bytes))
+            or not requested_draft_ids
+            or any(
+                type(value) is not int or not 0 < value <= 2**63 - 1
+                for value in requested_draft_ids
+            )
+            or len(set(requested_draft_ids)) != len(requested_draft_ids)
+            or not set(requested_draft_ids) <= set(eligible)
+        ):
+            raise OzonBulkUploadNotFound(
+                "Черновик не относится к доступным карточкам этого результата"
+            )
+        return eligible
+
+    @classmethod
+    def _v3_document(
+        cls, *, job: BackgroundJob, run: OzonBulkUploadRun,
+        include_recovery: bool = False,
+    ) -> dict:
         """Derive the public result from exact item→operation links only."""
         rows = OzonBulkUploadItem.query.filter_by(run_id=run.id).order_by(
             OzonBulkUploadItem.ordinal,
@@ -575,7 +924,15 @@ class OzonBulkUploadService:
             ),
             "job_uid": job.job_uid,
         }
-        return {"items": items, "summary": summary}
+        document = {"items": items, "summary": summary}
+        if include_recovery and run.mode == "reviewed_drafts":
+            document["review_recovery_draft_ids"] = (
+                cls._review_recovery_candidates(
+                    run=run, rows=rows, operations=operations, items=items,
+                )
+                if summary["active"] == 0 else []
+            )
+        return document
 
     @classmethod
     def _reconcile_v3(
@@ -2001,9 +2358,19 @@ class OzonBulkUploadService:
         job_uid: str,
         reconcile: bool = True,
     ) -> BackgroundJob:
-        if reconcile:
-            return cls.reconcile_run(seller_id=seller_id, job_uid=job_uid)
-        return cls._owned_job(seller_id=seller_id, job_uid=job_uid)
+        job = cls._owned_job(seller_id=seller_id, job_uid=job_uid)
+        if not reconcile:
+            return job
+        # V3 result pages derive their live view from the durable run/item/
+        # operation rows. Only the scheduler is allowed to persist that
+        # summary; a seller GET remains read-only. Legacy runs retain their
+        # historical on-read reconciliation behavior.
+        run = OzonBulkUploadRun.query.filter_by(
+            job_id=job.id, seller_id=seller_id,
+        ).first()
+        if run is not None:
+            return job
+        return cls.reconcile_run(seller_id=seller_id, job_uid=job_uid)
 
     @classmethod
     def retry_run(
@@ -2095,7 +2462,9 @@ class OzonBulkUploadService:
             job_id=job.id, seller_id=job.seller_id,
         ).first()
         if run is not None:
-            observed = cls._v3_document(job=job, run=run)
+            observed = cls._v3_document(
+                job=job, run=run, include_recovery=detail,
+            )
             summary = observed["summary"]
             previous_summary = job.get_result()
             account_label = (
@@ -2114,6 +2483,10 @@ class OzonBulkUploadService:
             }
             if detail:
                 document["items"] = observed["items"]
+                if run.mode == "reviewed_drafts":
+                    document["review_recovery_draft_ids"] = observed.get(
+                        "review_recovery_draft_ids", [],
+                    )
             return document
         progress = cls._load_progress(job)
         if not progress:

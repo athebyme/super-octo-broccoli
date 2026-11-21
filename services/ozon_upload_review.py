@@ -25,7 +25,11 @@ class OzonUploadReviewService:
 
     @classmethod
     def document(cls, *, seller_id, account_id, draft_ids, page=1,
-                 parent_prepare_job_uid=None):
+                 parent_prepare_job_uid=None, result_job_uid=None):
+        if parent_prepare_job_uid is not None and result_job_uid is not None:
+            raise OzonBulkUploadValidationError(
+                "Укажите только один исходный запуск"
+            )
         if (not isinstance(draft_ids, list) or not 1 <= len(draft_ids) <= cls.MAX_ITEMS
                 or any(type(pk) is not int or not 0 < pk <= 2**63-1 for pk in draft_ids)
                 or len(set(draft_ids)) != len(draft_ids)):
@@ -43,6 +47,15 @@ class OzonUploadReviewService:
         ).all()
         if {row.id for row in owned} != set(draft_ids):
             raise OzonBulkUploadNotFound("Выбранные черновики недоступны в этом кабинете")
+
+        if result_job_uid is not None:
+            from services.ozon_bulk_upload import OzonBulkUploadService
+            OzonBulkUploadService.validate_review_recovery_scope(
+                seller_id=seller_id,
+                account_id=account_id,
+                result_job_uid=result_job_uid,
+                requested_draft_ids=draft_ids,
+            )
 
         if parent_prepare_job_uid is not None:
             parent = OzonBulkUploadRun.query.join(
@@ -140,7 +153,7 @@ class OzonUploadReviewService:
                                for key in ("width", "height", "depth", "dimension_unit", "weight", "weight_unit")},
                 "photos_count": len({value for value in photos if isinstance(value, str) and value}),
             })
-        return {
+        document = {
             "account_id": account_id, "account_label": account_label,
             "draft_ids": draft_ids, "parent_prepare_job_uid": parent_prepare_job_uid,
             "items": items, "publication_enabled": enabled,
@@ -148,3 +161,6 @@ class OzonUploadReviewService:
             "pagination": {"page": page, "per_page": cls.PAGE_SIZE,
                            "pages": pages, "total": len(draft_ids)},
         }
+        if result_job_uid is not None:
+            document["result_job_uid"] = result_job_uid
+        return document

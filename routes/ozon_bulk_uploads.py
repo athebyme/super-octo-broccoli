@@ -11,6 +11,7 @@ from flask import (
     current_app,
     flash,
     jsonify,
+    make_response,
     redirect,
     render_template,
     request,
@@ -457,7 +458,10 @@ def create_from_drafts():
         return jsonify({"success": False, "error": "Seller account required"}), 403
     try:
         data = _request_payload(
-            {"account_id", "draft_ids", "expected_versions", "confirm_write", "request_key", "parent_prepare_job_uid"},
+            {
+                "account_id", "draft_ids", "expected_versions", "confirm_write",
+                "request_key", "parent_prepare_job_uid", "result_job_uid",
+            },
             list_fields={"draft_ids"},
         )
         _require_write_confirmation(data.get("confirm_write"))
@@ -466,6 +470,18 @@ def create_from_drafts():
         parent_uid = data.get("parent_prepare_job_uid") or None
         if parent_uid is not None and (not isinstance(parent_uid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", parent_uid)):
             raise OzonBulkUploadValidationError("Некорректный parent_prepare_job_uid")
+        result_uid = (
+            data.get("result_job_uid") if "result_job_uid" in data else None
+        )
+        if "result_job_uid" in data and (
+            not isinstance(result_uid, str)
+            or not re.fullmatch(r"ozon-upload-[0-9a-f]{32}", result_uid)
+        ):
+            raise OzonBulkUploadValidationError("Некорректный result_job_uid")
+        if parent_uid is not None and result_uid is not None:
+            raise OzonBulkUploadValidationError(
+                "Укажите только один исходный запуск"
+            )
         acceptance = OzonBulkUploadService.accept_reviewed_publish(
             seller_id=seller_id,
             account_id=_integer(data.get("account_id"), "account_id"),
@@ -473,6 +489,7 @@ def create_from_drafts():
             expected_versions=expected_versions,
             request_key=_request_key(data.get("request_key")),
             parent_prepare_job_uid=parent_uid,
+            result_job_uid=result_uid,
             created_by_user_id=getattr(current_user, "id", None),
         )
     except OzonBulkUploadError as exc:
@@ -517,11 +534,15 @@ def _detail_response(job_uid: str, *, force_json: bool = False):
             }), exc.status_code
         return _error_response(exc)
     if force_json or _wants_json():
-        return jsonify({"success": True, "run": document})
-    return render_template(
-        "ozon_bulk_upload_detail.html",
-        run=document,
-    )
+        response = jsonify({"success": True, "run": document})
+    else:
+        response = make_response(render_template(
+            "ozon_bulk_upload_detail.html",
+            run=document,
+        ))
+    if document.get("mode") in {"source_prepare", "reviewed_drafts"}:
+        response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @ozon_bulk_uploads_bp.route("/<job_uid>", methods=["GET"])
@@ -889,7 +910,10 @@ def review():
     if seller_id is None:
         return jsonify({"success": False, "error": "Seller account required"}), 403
     try:
-        allowed = {"account_id", "draft_ids", "parent_prepare_job_uid", "page"}
+        allowed = {
+            "account_id", "draft_ids", "parent_prepare_job_uid",
+            "result_job_uid", "page",
+        }
         if set(request.args) - allowed or any(len(request.args.getlist(key)) != 1 for key in request.args):
             raise OzonBulkUploadValidationError("Неизвестный или повторяющийся параметр просмотра")
         raw_ids = request.args.get("draft_ids", "")
@@ -899,18 +923,31 @@ def review():
         parent_uid = request.args.get("parent_prepare_job_uid") or None
         if parent_uid is not None and not re.fullmatch(r"ozon-upload-[0-9a-f]{32}", parent_uid):
             raise OzonBulkUploadValidationError("Некорректный запуск подготовки")
+        result_uid = (
+            request.args.get("result_job_uid")
+            if "result_job_uid" in request.args else None
+        )
+        if "result_job_uid" in request.args and (
+            not isinstance(result_uid, str)
+            or not re.fullmatch(r"ozon-upload-[0-9a-f]{32}", result_uid)
+        ):
+            raise OzonBulkUploadValidationError("Некорректный исходный результат")
+        if parent_uid is not None and result_uid is not None:
+            raise OzonBulkUploadValidationError(
+                "Укажите только один исходный запуск"
+            )
         document = OzonUploadReviewService.document(
             seller_id=seller_id,
             account_id=_integer(request.args.get("account_id"), "account_id"),
             draft_ids=draft_ids,
             page=_integer(request.args.get("page", "1"), "page"),
             parent_prepare_job_uid=parent_uid,
+            result_job_uid=result_uid,
         )
         document["csrf_token"] = generate_csrf()
         if as_json:
             response = jsonify({"success": True, "review": document})
         else:
-            from flask import make_response
             document["request_key"] = secrets.token_urlsafe(24)
             document["expected_versions"] = {
                 str(item["draft_id"]): item["version"] for item in document["items"]

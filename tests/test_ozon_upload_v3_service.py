@@ -18,6 +18,7 @@ from services.ozon_bulk_upload import (
 from services.ozon_upload_queue import (
     ItemAdvanceResult, OzonUploadLeaseLost, OzonUploadQueueService,
 )
+from services.ozon_product_import import OzonProductImportContract
 from tests.test_marketplace_publications import OzonPublicationFixture
 
 
@@ -46,6 +47,101 @@ class OzonUploadV3ServiceTest(OzonPublicationFixture, unittest.TestCase):
             expected_versions={str(self.draft.id): self.draft.version},
             request_key=key, created_by_user_id=self.user.id,
         )
+
+    def _linked_reviewed_operation(self):
+        accepted = self._reviewed()
+        run = OzonBulkUploadRun.query.filter_by(job_id=accepted.job.id).one()
+        item = OzonBulkUploadItem.query.filter_by(run_id=run.id).one()
+        claim = OzonUploadQueueService.claim_due_run(
+            now=datetime.utcnow(), exclude_run_ids=set(),
+        )
+        with patch.object(
+            MarketplaceDraftService, "_build_validation_result",
+            side_effect=lambda draft: self.validation_result(),
+        ):
+            operation = MarketplacePublicationService.enqueue_reviewed_upload_item(
+                seller_id=self.seller.id, account_id=self.account.id,
+                draft_id=self.draft.id, expected_version=self.draft.version,
+                run_item_id=item.id, lease_token=claim[1],
+                created_by_user_id=self.user.id, now=datetime.utcnow(),
+            )
+        db.session.refresh(item)
+        return accepted, run, item, operation, operation.snapshot
+
+    def test_review_recovery_accepts_terminal_failure_without_physical_attempt_only(self):
+        accepted, _run, item, operation, _snapshot = self._linked_reviewed_operation()
+        operation.status = "failed"
+        operation.error_code = "upload_local_preflight_failed"
+        operation.attempt_count = 0
+        operation.poll_count = 0
+        operation.external_task_id = None
+        operation.submitted_at = None
+        operation.last_polled_at = None
+        operation.completed_at = datetime.utcnow()
+        db.session.commit()
+
+        document = OzonBulkUploadService.public_document(accepted.job, detail=True)
+        self.assertEqual(document["summary"]["active"], 0)
+        self.assertEqual(document["review_recovery_draft_ids"], [self.draft.id])
+
+        # An external task identity contradicts the no-attempt branch and must
+        # fail closed even when attempt_count remains zero.
+        operation.external_task_id = "unexpected-task"
+        db.session.commit()
+        document = OzonBulkUploadService.public_document(accepted.job, detail=True)
+        self.assertEqual(document["review_recovery_draft_ids"], [])
+
+        operation.external_task_id = None
+        operation.error_code = "product_update_no_change"
+        operation.operation_kind = "product_update"
+        db.session.commit()
+        document = OzonBulkUploadService.public_document(accepted.job, detail=True)
+        self.assertEqual(item.phase, "operation_linked")
+        self.assertEqual(document["items"][0]["status"], "already_current")
+        self.assertEqual(document["review_recovery_draft_ids"], [])
+
+    def test_review_recovery_requires_exact_settled_task_readback_proof(self):
+        accepted, _run, _item, operation, snapshot = self._linked_reviewed_operation()
+        now = datetime.utcnow()
+        result = {
+            "total": 1,
+            "aggregate_status": "failed",
+            "items": [{
+                "offer_id": self.draft.offer_id,
+                "product_id": "12345",
+                "status": "failed",
+                "errors": [],
+            }],
+        }
+        operation.status = "failed"
+        operation.error_code = "ozon_import_failed"
+        operation.attempt_count = 1
+        operation.poll_count = 1
+        operation.external_task_id = "synthetic-task-1"
+        operation.submitted_at = now - timedelta(seconds=10)
+        operation.last_polled_at = now
+        operation.completed_at = now
+        operation.item_results_json = json.dumps(result["items"])
+        snapshot.confirmed_state_json = json.dumps({
+            "source": "task_status", "result": result,
+            "confirmed_at": now.isoformat(),
+        })
+        snapshot.confirmed_fingerprint = OzonProductImportContract.fingerprint(result)
+        db.session.commit()
+
+        document = OzonBulkUploadService.public_document(accepted.job, detail=True)
+        self.assertEqual(document["review_recovery_draft_ids"], [self.draft.id])
+
+        snapshot.confirmed_fingerprint = "0" * 64
+        db.session.commit()
+        document = OzonBulkUploadService.public_document(accepted.job, detail=True)
+        self.assertEqual(document["review_recovery_draft_ids"], [])
+
+        snapshot.confirmed_fingerprint = OzonProductImportContract.fingerprint(result)
+        operation.status = "partial"
+        db.session.commit()
+        document = OzonBulkUploadService.public_document(accepted.job, detail=True)
+        self.assertEqual(document["review_recovery_draft_ids"], [])
 
     def test_source_acceptance_is_local_even_when_publication_disabled(self):
         self.app.config["MARKETPLACE_OZON_PUBLICATION_ENABLED"] = False

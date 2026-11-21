@@ -141,6 +141,130 @@ class OzonUploadV3RoutesTest(OzonPublicationFixture, unittest.TestCase):
                 self.assertEqual(response.status_code, 409, response.get_json())
         self.assertEqual((BackgroundJob.query.count(), MarketplaceOperation.query.count()), (0,0))
 
+    def _reviewed_local_result(self, key="o" * 24, phase="needs_input"):
+        acceptance = OzonBulkUploadService.accept_reviewed_publish(
+            seller_id=self.seller.id, account_id=self.account.id,
+            draft_ids=[self.draft.id],
+            expected_versions={str(self.draft.id): self.draft.version},
+            request_key=key, created_by_user_id=self.user.id,
+        )
+        run = OzonBulkUploadRun.query.filter_by(job_id=acceptance.job.id).one()
+        item = OzonBulkUploadItem.query.filter_by(run_id=run.id).one()
+        item.phase = phase
+        db.session.commit()
+        return acceptance.job, run, item
+
+    def test_reviewed_result_recovery_scope_is_read_only_and_replayable(self):
+        job, run, item = self._reviewed_local_result()
+        # Queue state can lag the item projection; only observed item/operation
+        # state decides whether the whole result is settled.
+        self.assertEqual(run.state, "active")
+        with patch.object(
+            OzonBulkUploadService, "reconcile_run",
+            side_effect=AssertionError("V3 result GET must not reconcile"),
+        ):
+            result = self.client.get(
+                f"/marketplaces/ozon/uploads/{job.job_uid}",
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(result.status_code, 200, result.get_json())
+        self.assertEqual(result.json["run"]["summary"]["active"], 0)
+        self.assertEqual(result.json["run"]["review_recovery_draft_ids"], [self.draft.id])
+        self.assertIn("no-store", result.headers["Cache-Control"])
+        with patch("routes.ozon_bulk_uploads.render_template", return_value="result html"):
+            html_result = self.client.get(
+                f"/marketplaces/ozon/uploads/{job.job_uid}",
+                headers={"Accept": "text/html"},
+            )
+        self.assertEqual(html_result.status_code, 200)
+        self.assertIn("no-store", html_result.headers["Cache-Control"])
+        db.session.refresh(job)
+        self.assertEqual(job.status, "running")  # read did not persist the projection
+
+        review_url = (
+            f"/marketplaces/ozon/uploads/api/review?account_id={self.account.id}"
+            f"&draft_ids={self.draft.id}&result_job_uid={job.job_uid}"
+        )
+        review = self.client.get(review_url)
+        self.assertEqual(review.status_code, 200, review.get_json())
+        self.assertEqual(review.json["review"]["result_job_uid"], job.job_uid)
+        self.assertEqual(review.json["review"]["draft_ids"], [self.draft.id])
+
+        payload = {
+            "account_id": self.account.id,
+            "draft_ids": [self.draft.id],
+            "expected_versions": {str(self.draft.id): self.draft.version},
+            "confirm_write": True,
+            "request_key": self.key,
+            "result_job_uid": job.job_uid,
+        }
+        accepted = self.client.post(
+            "/marketplaces/ozon/uploads/from-drafts", json=payload,
+        )
+        self.assertEqual(accepted.status_code, 202, accepted.get_json())
+        fingerprint = OzonBulkUploadRun.query.filter_by(
+            job_id=BackgroundJob.query.filter_by(
+                job_uid=accepted.json["run"]["job_uid"],
+            ).one().id,
+        ).one().request_fingerprint
+        self.assertNotEqual(fingerprint, run.request_fingerprint)
+
+        # A newly accepted active result suppresses a second new request from
+        # the stale source, while the original idempotency key still replays.
+        replay = self.client.post(
+            "/marketplaces/ozon/uploads/from-drafts", json=payload,
+        )
+        self.assertEqual(replay.status_code, 202, replay.get_json())
+        self.assertTrue(replay.json["replayed"])
+        payload["request_key"] = "z" * 24
+        stale = self.client.post(
+            "/marketplaces/ozon/uploads/from-drafts", json=payload,
+        )
+        self.assertEqual(stale.status_code, 404, stale.get_json())
+
+    def test_reviewed_result_recovery_waits_for_observed_items_not_run_state(self):
+        job, run, item = self._reviewed_local_result(phase="reviewed")
+        run.state = "completed"
+        run.next_due_at = None
+        db.session.commit()
+        document = OzonBulkUploadService.public_document(job, detail=True)
+        self.assertEqual(document["summary"]["active"], 1)
+        self.assertEqual(document["review_recovery_draft_ids"], [])
+        result = self.client.get(
+            f"/marketplaces/ozon/uploads/api/review?account_id={self.account.id}"
+            f"&draft_ids={self.draft.id}&result_job_uid={job.job_uid}"
+        )
+        self.assertEqual(result.status_code, 409, result.get_json())
+        self.assertEqual(result.json["code"], "upload_result_not_settled")
+
+    def test_result_job_uid_rejects_empty_and_mutually_exclusive_origins(self):
+        job, _run, _item = self._reviewed_local_result()
+        base = f"account_id={self.account.id}&draft_ids={self.draft.id}"
+        empty_get = self.client.get(
+            f"/marketplaces/ozon/uploads/api/review?{base}&result_job_uid="
+        )
+        self.assertEqual(empty_get.status_code, 400)
+        conflict_get = self.client.get(
+            f"/marketplaces/ozon/uploads/api/review?{base}"
+            f"&result_job_uid={job.job_uid}&parent_prepare_job_uid={job.job_uid}"
+        )
+        self.assertEqual(conflict_get.status_code, 400)
+        post = {
+            "account_id": self.account.id, "draft_ids": [self.draft.id],
+            "expected_versions": {str(self.draft.id): self.draft.version},
+            "confirm_write": True, "request_key": self.key,
+            "result_job_uid": "", "parent_prepare_job_uid": job.job_uid,
+        }
+        empty_post = self.client.post(
+            "/marketplaces/ozon/uploads/from-drafts", json=post,
+        )
+        self.assertEqual(empty_post.status_code, 400)
+        post["result_job_uid"] = job.job_uid
+        conflict_post = self.client.post(
+            "/marketplaces/ozon/uploads/from-drafts", json=post,
+        )
+        self.assertEqual(conflict_post.status_code, 400)
+
     def test_classic_review_posts_only_checked_versions(self):
         acceptance = SimpleNamespace(job=SimpleNamespace(job_uid="ozon-upload-"+"a"*32), replayed=False)
         with patch.object(OzonBulkUploadService, "accept_reviewed_publish", return_value=acceptance) as accept, \
@@ -171,6 +295,7 @@ class OzonUploadV3RoutesTest(OzonPublicationFixture, unittest.TestCase):
                 account_id=self.account.id, draft_ids=[self.draft.id])
         finally:
             event.remove(db.engine, "before_cursor_execute", capture)
+        self.assertNotIn("result_job_uid", document)
         row = document["items"][0]
         self.assertFalse(row["selectable"])
         self.assertIn("source_facts_stale", {error["code"] for error in row["errors"]})
