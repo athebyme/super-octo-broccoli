@@ -1031,6 +1031,12 @@ class OzonBulkRepairService:
                         )
                     ),
                 }
+            row_status = item.get("status")
+            if document.get("mode") == "source_prepare":
+                if item.get("phase") == "needs_input" or (
+                    item.get("phase") == "prepared" and errors
+                ):
+                    row_status = "needs_input"
             editor_row = {
                 "draft_id": draft.id,
                 "draft_version": draft.version,
@@ -1041,7 +1047,7 @@ class OzonBulkRepairService:
                     if draft.imported_product is not None
                     else item.get("title") or ""
                 ),
-                "status": item.get("status"),
+                "status": row_status,
                 "message": item.get("message") or "",
                 "repair_error": item.get("repair_error") or "",
                 "action": action,
