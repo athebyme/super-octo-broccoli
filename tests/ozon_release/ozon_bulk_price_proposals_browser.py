@@ -709,7 +709,7 @@ try:
             const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
             return proxy && !proxy.loading && proxy.filters.search === search &&
                 proxy.filters.sort === 'title' && proxy.selected.join(',') === String(id);
-        }""", [fixture["source_id"], source_title])
+        }""", arg=[fixture["source_id"], source_title])
         assert page.get_by_placeholder("Название, бренд или артикул").input_value() == source_title
         assert page.locator(".mp-list article.mp-row input[type=checkbox]:checked").evaluate_all(
             "boxes => boxes.map(box => Number(box.value))"
@@ -946,7 +946,7 @@ try:
             const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
             return proxy && !proxy.loading && proxy.filters.search === search &&
                 proxy.filters.sort === 'title' && proxy.selected.join(',') === String(id);
-        }""", [fixture["source_id"], source_title])
+        }""", arg=[fixture["source_id"], source_title])
         assert page.locator(".mp-list article.mp-row input[type=checkbox]:checked").evaluate_all(
             "boxes => boxes.map(box => Number(box.value))"
         ) == [fixture["source_id"]]
