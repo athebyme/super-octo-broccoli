@@ -107,6 +107,9 @@
 
     var MAX_BULK_SELECTION = 200;
     var MAX_OZON_PRICE_HANDOFF = 100;
+    var WORKSPACE_RETURN_SCOPE_KEYS = [
+        'activeTab', 'search', 'supplier', 'has_photos', 'stock', 'sort', 'visibleCount',
+    ];
     function exactWbProductIds(items) {
         if (!Array.isArray(items) || !items.length) return null;
         var ids = items.map(function (item) {
@@ -140,6 +143,18 @@
             ids.push(id);
         }
         return ids;
+    }
+
+    function exactWorkspaceFeedPage(data, perPage) {
+        var pagination = data && data.pagination;
+        var ids = data && orderedProductIds(data.items);
+        if (!data || data.success !== true || !Array.isArray(data.items) || !ids ||
+            !pagination || pagination.page !== 1 || pagination.per_page !== perPage ||
+            !Number.isSafeInteger(pagination.total) || pagination.total < 0 ||
+            pagination.pages !== Math.ceil(pagination.total / perPage) ||
+            pagination.has_next !== (pagination.total > perPage) ||
+            data.items.length !== Math.min(pagination.total, perPage)) return null;
+        return { ids: ids, pagination: pagination };
     }
 
     function exactImportBatchPage(data) {
@@ -456,6 +471,85 @@
         { key: 'updates', label: 'Обновления поставщика', countKey: 'supplier_updates' },
     ];
 
+    function validWorkspaceReturnScope(scope) {
+        if (!scope || typeof scope !== 'object' || Array.isArray(scope)) return false;
+        var keys = Object.keys(scope).sort();
+        var expectedKeys = WORKSPACE_RETURN_SCOPE_KEYS.slice().sort();
+        if (keys.length !== expectedKeys.length ||
+            !keys.every(function (key, index) { return key === expectedKeys[index]; })) return false;
+        var supplierIsActive = scope.supplier === '' || (
+            Number.isSafeInteger(scope.supplier) && scope.supplier > 0 &&
+            Array.isArray(boot.suppliers) && boot.suppliers.some(function (supplier) {
+                return supplier && supplier.id === scope.supplier;
+            })
+        );
+        return TABS.some(function (tab) { return tab.key === scope.activeTab; }) &&
+            typeof scope.search === 'string' && scope.search.length <= 200 &&
+            scope.search.trim() === scope.search && supplierIsActive &&
+            ['', 'yes', 'no'].indexOf(scope.has_photos) !== -1 &&
+            ['', 'in_stock', 'out_of_stock'].indexOf(scope.stock) !== -1 &&
+            ['', 'oldest', 'price_asc', 'price_desc', 'title'].indexOf(scope.sort) !== -1 &&
+            Number.isSafeInteger(scope.visibleCount) &&
+            scope.visibleCount >= 1 && scope.visibleCount <= 200;
+    }
+
+    function defaultWorkspaceReturnScope(scope) {
+        return scope.activeTab === '' && scope.search === '' && scope.supplier === '' &&
+            scope.has_photos === '' && scope.stock === '' && scope.sort === '';
+    }
+
+    function commonContentSelectionUrl(base, productIds, helpers) {
+        if (helpers && typeof helpers.selectionUrl === 'function') {
+            return helpers.selectionUrl(base, productIds);
+        }
+        if (typeof base !== 'string' || base.charAt(0) !== '/' || base.indexOf('//') === 0 ||
+            base.indexOf('?') !== -1 || base.indexOf('#') !== -1 ||
+            !Array.isArray(productIds) || !productIds.length || productIds.length > 50) {
+            throw new TypeError('A valid same-site selection URL is required.');
+        }
+        var ids = new Set();
+        var query = new URLSearchParams();
+        productIds.forEach(function (id) {
+            if (!Number.isSafeInteger(id) || id <= 0 || ids.has(id)) {
+                throw new TypeError('Product IDs must be unique positive integers.');
+            }
+            ids.add(id);
+            query.append('product_id', String(id));
+        });
+        return base + '?' + query.toString();
+    }
+
+    var workspaceReturnCapsule = null;
+    var workspaceReturnScopeSeed = null;
+    var workspaceReturnSetupNote = '';
+    var workspaceHelpers = window.SellerHubCommonContent || {};
+    if (window.location && typeof window.location.hash === 'string' &&
+        typeof workspaceHelpers.workspaceReturnFromHash === 'function') {
+        try {
+            workspaceReturnCapsule = workspaceHelpers.workspaceReturnFromHash(
+                window.location.hash, { owner: boot.workspaceOwner }
+            );
+        } catch (_) {
+            workspaceReturnCapsule = null;
+        }
+    }
+    if (workspaceReturnCapsule) {
+        var expectedWorkspaceBatch = importBatchMode && !importBatchInvalid
+            ? importBatchToken : null;
+        var batchMatches = importBatchMode
+            ? !importBatchInvalid && workspaceReturnCapsule.batch === expectedWorkspaceBatch
+            : workspaceReturnCapsule.batch === null;
+        var scopeIsValid = validWorkspaceReturnScope(workspaceReturnCapsule.scope);
+        var batchScopeIsValid = !workspaceReturnCapsule.batch || (
+            scopeIsValid && defaultWorkspaceReturnScope(workspaceReturnCapsule.scope)
+        );
+        if (batchMatches && scopeIsValid && batchScopeIsValid) {
+            workspaceReturnScopeSeed = workspaceReturnCapsule.scope;
+        } else {
+            workspaceReturnSetupNote = 'Условия списка изменились. Выбор не восстановлен; проверьте список и отметьте товары снова.';
+        }
+    }
+
     window.shVue.mount('#my-products-app', {
         data: function () {
             var savedOzon = readOzonPending();
@@ -477,11 +571,17 @@
                 loadingMore: false,
                 selectAllLoading: false,
                 error: '',
+                workspaceReturnNote: workspaceReturnSetupNote,
+                workspaceReturnPending: !!workspaceReturnScopeSeed,
 
-                activeTab: '',
-                searchInput: '',
+                activeTab: workspaceReturnScopeSeed ? workspaceReturnScopeSeed.activeTab : '',
+                searchInput: workspaceReturnScopeSeed ? workspaceReturnScopeSeed.search : '',
                 filters: {
-                    search: '', supplier: '', has_photos: '', stock: '', sort: '',
+                    search: workspaceReturnScopeSeed ? workspaceReturnScopeSeed.search : '',
+                    supplier: workspaceReturnScopeSeed ? workspaceReturnScopeSeed.supplier : '',
+                    has_photos: workspaceReturnScopeSeed ? workspaceReturnScopeSeed.has_photos : '',
+                    stock: workspaceReturnScopeSeed ? workspaceReturnScopeSeed.stock : '',
+                    sort: workspaceReturnScopeSeed ? workspaceReturnScopeSeed.sort : '',
                 },
                 selected: [],
                 ozonIds: [],
@@ -756,7 +856,12 @@
             this._supplierRefreshReturnAnchor = !!(window.location &&
                 window.location.hash === '#supplier-refresh-result');
             if (!this.importBatchMode) this.restoreSupplierRefreshResult();
-            this.load();
+            if (workspaceReturnCapsule && workspaceReturnScopeSeed) {
+                this.load();
+            } else {
+                if (workspaceReturnCapsule) this.consumeWorkspaceReturn(workspaceReturnCapsule.nonce);
+                this.load();
+            }
             if (!this.importBatchMode) this.loadFacets();
         },
         beforeUnmount: function () {
@@ -785,6 +890,98 @@
                 else if (this.activeTab) params.status = this.activeTab;
                 return params;
             },
+            consumeWorkspaceReturn: function (nonce) {
+                this.workspaceReturnPending = false;
+                if (typeof workspaceHelpers.consumeWorkspaceReturn === 'function') {
+                    try { workspaceHelpers.consumeWorkspaceReturn(nonce); } catch (_) {}
+                }
+            },
+            workspaceReturnChanged: function () {
+                this.selected = [];
+                this.workspaceReturnNote = 'Условия списка изменились. Выбор не восстановлен; проверьте список и отметьте товары снова.';
+                if (workspaceReturnCapsule) this.consumeWorkspaceReturn(workspaceReturnCapsule.nonce);
+            },
+            workspaceReturnScopeMatches: function (scope) {
+                return this.importBatchMode
+                    ? workspaceReturnCapsule && workspaceReturnCapsule.batch === this.importBatch
+                    : scope && this.activeTab === scope.activeTab &&
+                        this.filters.search === scope.search &&
+                        this.filters.supplier === scope.supplier &&
+                        this.filters.has_photos === scope.has_photos &&
+                        this.filters.stock === scope.stock &&
+                        this.filters.sort === scope.sort &&
+                        (this.searchInput || '').trim().slice(0, 200) === scope.search;
+            },
+            buildWorkspaceReturnScope: function () {
+                if (this.loading || this.itemsScope !== this.feedScopeKey() ||
+                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) return null;
+                var visibleCount = Math.min(this.items.length, MAX_BULK_SELECTION);
+                if (!visibleCount || !orderedProductIds(this.items.slice(0, visibleCount))) return null;
+                var scope = {
+                    activeTab: this.activeTab,
+                    search: this.filters.search,
+                    supplier: this.filters.supplier,
+                    has_photos: this.filters.has_photos,
+                    stock: this.filters.stock,
+                    sort: this.filters.sort,
+                    visibleCount: visibleCount,
+                };
+                return validWorkspaceReturnScope(scope) &&
+                    (!this.importBatchMode || defaultWorkspaceReturnScope(scope)) ? scope : null;
+            },
+            navigateCommonContent: function (editorIds, selectionIds) {
+                var scope = this.buildWorkspaceReturnScope();
+                if (!scope) {
+                    this.error = 'Список обновляется или условия недоступны. Дождитесь загрузки и повторите действие.';
+                    return false;
+                }
+                var helpers = window.SellerHubCommonContent || {};
+                var target;
+                try {
+                    target = commonContentSelectionUrl(
+                        this.urls.commonContent, editorIds, helpers
+                    );
+                } catch (_) {
+                    this.error = 'Не удалось открыть общий контент. Обновите страницу и повторите действие.';
+                    return false;
+                }
+                var nonce = null;
+                if (typeof helpers.storeWorkspaceReturn === 'function') {
+                    try {
+                        nonce = helpers.storeWorkspaceReturn({
+                            owner: boot.workspaceOwner,
+                            editorIds: editorIds,
+                            selectionIds: selectionIds,
+                            scope: scope,
+                            batch: this.importBatchMode ? this.importBatch : null,
+                        });
+                    } catch (_) {
+                        nonce = null;
+                    }
+                }
+                try {
+                    window.location.assign(typeof nonce === 'string' && /^[a-f0-9]{32}$/.test(nonce)
+                        ? target + '#workspace-return=' + nonce
+                        : target);
+                    return true;
+                } catch (_) {
+                    if (typeof nonce === 'string' && /^[a-f0-9]{32}$/.test(nonce)) {
+                        this.consumeWorkspaceReturn(nonce);
+                    }
+                    this.error = 'Не удалось открыть общий контент. Обновите страницу и повторите действие.';
+                    return false;
+                }
+            },
+            openCommonContentRow: function (event, item) {
+                if (!event || event.button !== 0 || event.metaKey || event.ctrlKey ||
+                    event.shiftKey || event.altKey || event.defaultPrevented) return;
+                event.preventDefault();
+                if (!item || !Number.isSafeInteger(item.id) || item.id <= 0) {
+                    this.error = 'Не удалось проверить товар. Обновите список и повторите действие.';
+                    return;
+                }
+                this.navigateCommonContent([item.id], this.selected.slice());
+            },
             feedScopeKey: function () {
                 if (this.importBatchMode) {
                     return JSON.stringify({ import_batch: this.importBatch });
@@ -803,6 +1000,11 @@
             },
             load: function () {
                 var self = this;
+                var workspaceReturn = this.workspaceReturnPending ? workspaceReturnCapsule : null;
+                if (workspaceReturn && !this.workspaceReturnScopeMatches(workspaceReturn.scope)) {
+                    this.workspaceReturnChanged();
+                    workspaceReturn = null;
+                }
                 if (this._abort) this._abort.abort();
                 if (this._loadMoreAbort) this._loadMoreAbort.abort();
                 this._loadMoreAbort = null;
@@ -812,6 +1014,9 @@
                 var revision = (this._feedRevision || 0) + 1;
                 this._feedRevision = revision;
                 var scope = this.feedScopeKey();
+                var restorePerPage = workspaceReturn && !this.importBatchMode
+                    ? Math.ceil(workspaceReturn.scope.visibleCount / 50) * 50
+                    : undefined;
                 var abort = new AbortController();
                 this._abort = abort;
                 this.loading = true;
@@ -829,9 +1034,63 @@
                         return;
                     }
                 }
-                this.$api.get(this.urls.feed, this.queryParams(1), { signal: abort.signal })
+                this.$api.get(this.urls.feed, this.queryParams(1, restorePerPage), { signal: abort.signal })
                     .then(function (data) {
                         if (abort.signal.aborted || self._feedRevision !== revision) return;
+                        if (workspaceReturn) {
+                            if (!self.workspaceReturnScopeMatches(workspaceReturn.scope)) {
+                                self.workspaceReturnChanged();
+                                return;
+                            }
+                            if (self.importBatchMode) {
+                                if (!exactImportBatchPage(data)) {
+                                    self.items = [];
+                                    self.itemsScope = '';
+                                    self.pagination = {};
+                                    self.workspaceReturnChanged();
+                                    self.error = 'Не удалось подтвердить состав этой подборки. Вернитесь через «Все мои товары». Обновите список и отметьте товары снова.';
+                                    return;
+                                }
+                                var batchIds = orderedProductIds(data.items);
+                                self.items = data.items;
+                                self.pagination = data.pagination;
+                                self.itemsScope = scope;
+                                if (batchIds && workspaceReturn.selectionIds.every(function (id) {
+                                    return batchIds.indexOf(id) !== -1;
+                                })) {
+                                    self.selected = workspaceReturn.selectionIds.slice();
+                                } else {
+                                    self.workspaceReturnChanged();
+                                }
+                                return;
+                            }
+
+                            var returnedPage = exactWorkspaceFeedPage(data, restorePerPage);
+                            if (!returnedPage) {
+                                self.items = [];
+                                self.itemsScope = '';
+                                self.pagination = {};
+                                self.workspaceReturnChanged();
+                                self.error = 'Не удалось проверить список после возврата. Обновите его и отметьте товары снова.';
+                                return;
+                            }
+                            self.items = data.items;
+                            self.itemsScope = scope;
+                            self.pagination = Object.assign({}, returnedPage.pagination, {
+                                page: Math.max(1, Math.ceil(data.items.length / 50)),
+                                per_page: 50,
+                                pages: Math.ceil(returnedPage.pagination.total / 50),
+                                has_next: data.items.length < returnedPage.pagination.total,
+                            });
+                            if (workspaceReturn.selectionIds.every(function (id) {
+                                return returnedPage.ids.indexOf(id) !== -1;
+                            })) {
+                                self.selected = workspaceReturn.selectionIds.slice();
+                            } else {
+                                self.workspaceReturnChanged();
+                            }
+                            return;
+                        }
                         if (self.importBatchMode) {
                             if (!exactImportBatchPage(data)) {
                                 self.items = [];
@@ -855,6 +1114,13 @@
                     }).catch(function (err) {
                         if ((err && err.name === 'AbortError') || abort.signal.aborted ||
                             self._feedRevision !== revision) return;
+                        if (workspaceReturn) {
+                            self.workspaceReturnChanged();
+                            self.error = self.importBatchMode
+                                ? 'Не удалось загрузить подборку после возврата. Обновите список и отметьте товары снова.'
+                                : 'Не удалось проверить список после возврата. Обновите его и отметьте товары снова.';
+                            return;
+                        }
                         if (self.importBatchMode) {
                             self.items = [];
                             self.itemsScope = '';
@@ -877,6 +1143,10 @@
                         if (self._abort === abort) {
                             self._abort = null;
                             self.loading = false;
+                        }
+                        if (workspaceReturn && self.workspaceReturnPending &&
+                            self._feedRevision === revision) {
+                            self.consumeWorkspaceReturn(workspaceReturn.nonce);
                         }
                     });
             },
@@ -1250,11 +1520,7 @@
                         this.error = 'За один раз можно открыть не больше 50 товаров. Снимите часть отметок.';
                         return;
                     }
-                    try {
-                        window.location.href = window.SellerHubCommonContent.selectionUrl(this.urls.commonContent, productIds);
-                    } catch (_) {
-                        this.error = 'Не удалось открыть выбор товаров. Обновите страницу и повторите действие.';
-                    }
+                    this.navigateCommonContent(productIds, selectionIds);
                     return;
                 }
                 if (action.key === 'wb_prices') {

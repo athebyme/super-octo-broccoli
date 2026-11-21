@@ -13,6 +13,7 @@
     'ozonAccounts': ozon_accounts,
     'suppliers': suppliers_payload,
     'importBatch': import_batch|default(none),
+    'workspaceOwner': (current_user.id|string) ~ ':' ~ (current_user.seller.id|string),
     'urls': {
         'feed': url_for('api_my_products_list'),
         'workspace': url_for('seller_my_products_beta'),
@@ -141,6 +142,11 @@
     <sh-job-progress ref="jobProgress" :job="job" :title="jobTitle"
                      @check-status="recheckJob" @dismiss="dismissJob"></sh-job-progress>
 
+    <div v-if="workspaceReturnNote" class="mp-workspace-return-note"
+         data-workspace-return-note role="status" aria-live="polite">
+        {{ workspaceReturnNote }}
+    </div>
+
     <!-- Вкладки: одно состояние — одна вкладка, со счётчиком -->
     <nav v-if="!importBatchMode" class="mp-tabs" aria-label="Статус карточек">
         <button v-for="tab in tabs" :key="tab.key" type="button"
@@ -247,7 +253,9 @@
                     <span v-if="item.brand">{{ item.brand }}</span>
                     <span v-if="item.category" class="mp-cat">{{ item.category }}</span>
                 </div>
-                <a class="sh-quiet-link" :href="urls.commonContent + '?product_id=' + encodeURIComponent(item.id)"
+                <a class="sh-quiet-link" data-common-content-row-link
+                   :href="urls.commonContent + '?product_id=' + encodeURIComponent(item.id)"
+                   @click="openCommonContentRow($event, item)"
                    :aria-label="'Изменить общий контент товара ' + (item.title || item.vendor_code)">Общий контент</a>
                 <div class="mp-flags">
                     <sh-badge v-if="item.has_supplier_update" label="Есть обновление у поставщика" tone="info"></sh-badge>
@@ -376,6 +384,6 @@
 
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
-<script src="{{ url_for('static', filename='common-product-content.js') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261121-wb-create-terminal-r33') }}"></script>
+<script src="{{ url_for('static', filename='common-product-content.js', v='20261121-common-content-workspace-return-r36') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261121-common-content-workspace-return-r36') }}"></script>
 {% endblock %}
