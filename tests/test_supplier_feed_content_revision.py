@@ -358,6 +358,7 @@ class SupplierFeedContentRevisionTest(unittest.TestCase):
                 result = SupplierService.sync_from_csv(self.supplier_id)
 
         self.assertTrue(result.success)
+        self.assertEqual(result.price_followup_status, 'not_configured')
         self.assertEqual(transaction_states, [False])
         photo_warm.assert_not_called()
 

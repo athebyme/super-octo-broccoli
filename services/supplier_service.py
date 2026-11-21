@@ -1641,7 +1641,7 @@ class SupplierService:
                     config['code'], type(exc).__name__,
                 )
         else:
-            result.price_followup_status = 'skipped'
+            result.price_followup_status = 'not_configured'
 
         logger.info(
             "Catalog sync %s: added=%s updated=%s rows=%s duration=%.1fs",
