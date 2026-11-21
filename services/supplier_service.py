@@ -10,20 +10,26 @@
 - AI-валидация и обогащение на уровне поставщика
 """
 import csv
+import codecs
+import copy
 import json
 import hashlib
 import logging
+import os
 import re
 import time
 import threading
 import uuid
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from io import StringIO
+from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
 import requests
+from sqlalchemy import text
 from sqlalchemy.orm import joinedload, selectinload
 
 from models import (
@@ -175,31 +181,233 @@ class SupplierCSVParser:
         self.encoding = supplier.csv_encoding or 'cp1251'
 
     def fetch_csv(self) -> Optional[str]:
-        """Скачать CSV по URL"""
-        if not self.supplier.csv_source_url:
-            logger.error(f"Supplier {self.supplier.code}: CSV URL не задан")
+        """Скачать и строго декодировать CSV по URL."""
+        raw_bytes = self.fetch_csv_raw()
+        if raw_bytes is None:
             return None
-
         try:
-            resp = requests.get(self.supplier.csv_source_url, timeout=60)
-            resp.raise_for_status()
-            return resp.content.decode(self.encoding, errors='replace')
-        except Exception as e:
-            logger.error(f"Ошибка загрузки CSV для {self.supplier.code}: {e}")
+            return raw_bytes.decode(self.encoding, errors='strict')
+        except (LookupError, UnicodeDecodeError):
+            logger.error("Invalid catalog CSV encoding for supplier %s", self.supplier.code)
             return None
 
     def fetch_csv_raw(self) -> Optional[bytes]:
-        """Скачать CSV как raw bytes (для предвалидации с автодетекцией кодировки)."""
+        """Получить ограниченный публичный CSV через общий pinned TLS transport."""
         if not self.supplier.csv_source_url:
             logger.error(f"Supplier {self.supplier.code}: CSV URL не задан")
             return None
         try:
-            resp = requests.get(self.supplier.csv_source_url, timeout=60)
-            resp.raise_for_status()
-            return resp.content
+            from services.supplier_price_feed import read_supplier_csv_bytes
+
+            return read_supplier_csv_bytes(self.supplier.csv_source_url)
         except Exception as e:
-            logger.error(f"Ошибка загрузки CSV для {self.supplier.code}: {e}")
+            # Transport exceptions carry a short enum code, never the URL/body.
+            logger.error(
+                "Catalog CSV read failed for supplier %s (%s)",
+                self.supplier.code,
+                getattr(e, 'code', 'network_error'),
+            )
             return None
+
+    def preflight_raw(self, raw_bytes: bytes):
+        """Parse the exact downloaded body and reject incomplete catalog rows.
+
+        Returns ``(products, PreValidationResult)``. ``products`` is empty
+        whenever validation fails, so preview and application share the same
+        decoding, row identity checks, and parser behavior.
+        """
+        from services.csv_pre_validator import CSVPreValidator, PreValidationResult
+
+        validation = PreValidationResult()
+        if not isinstance(raw_bytes, bytes) or not raw_bytes:
+            validation.is_valid = False
+            validation.errors.append("CSV файл пуст")
+            return [], validation
+
+        try:
+            codec = codecs.lookup(self.encoding)
+            csv_content = raw_bytes.decode(codec.name, errors='strict')
+        except (LookupError, UnicodeDecodeError):
+            validation.is_valid = False
+            validation.errors.append("Не удалось декодировать CSV в настроенной кодировке")
+            return [], validation
+
+        try:
+            validation = CSVPreValidator.validate_raw(
+                raw_bytes,
+                expected_delimiter=self.supplier.csv_delimiter,
+                expected_encoding=self.supplier.csv_encoding,
+                column_mapping=self.supplier.csv_column_mapping,
+            )
+        except Exception:
+            # The detailed catalog checks below are authoritative. Keep
+            # preview usable if only the optional diagnostics fail.
+            validation = PreValidationResult()
+
+        try:
+            expected_ids = self._catalog_feed_identities(csv_content)
+            if not expected_ids:
+                raise ValueError("CSV не содержит товаров с ID и названием")
+
+            # Apply the established normalizer/enrichers only after the source
+            # rows have a complete identity set.
+            products = self.parse_and_normalize(csv_content)
+            from services.data_normalizer import DataNormalizer
+
+            normalized_expected_ids = [
+                DataNormalizer.clean_string(external_id)
+                for external_id in expected_ids
+            ]
+            actual_ids = [
+                str(product.get('external_id') or '').strip()
+                for product in products
+            ]
+            if (
+                len(actual_ids) != len(normalized_expected_ids)
+                or any(not external_id for external_id in actual_ids)
+                or len(set(actual_ids)) != len(actual_ids)
+                or set(actual_ids) != set(normalized_expected_ids)
+                or any(not str(product.get('title') or '').strip() for product in products)
+            ):
+                raise ValueError("Парсер не сохранил полный набор ID из CSV")
+        except (csv.Error, UnicodeError, ValueError, TypeError) as exc:
+            validation.is_valid = False
+            message = str(exc)
+            if message not in validation.errors:
+                validation.errors.append(message[:200])
+            return [], validation
+        except Exception:
+            validation.is_valid = False
+            validation.errors.append("Не удалось полностью разобрать CSV каталог")
+            return [], validation
+
+        # CSVPreValidator has a generic two-line heuristic, which is not a
+        # completeness contract for a headerless single-row fixture. The
+        # strict source identity checks above are the authoritative result.
+        validation.is_valid = True
+        validation.errors = []
+        return products, validation
+
+    def _catalog_feed_identities(self, csv_content: str) -> List[str]:
+        """Validate every substantive row and return its exact source ID."""
+        if not isinstance(self.delimiter, str) or len(self.delimiter) != 1:
+            raise ValueError("Неверно настроен разделитель CSV")
+
+        reader = csv.reader(
+            StringIO(csv_content, newline=''),
+            delimiter=self.delimiter,
+            quotechar='"',
+            strict=True,
+        )
+        rows = list(reader)
+        data_rows = [row for row in rows if any(cell.strip() for cell in row)]
+        if not data_rows:
+            return []
+
+        if (
+            self.supplier.code == 'sexoptovik'
+            and not self.supplier.csv_column_mapping
+        ):
+            identities = []
+            numeric_ids = set()
+            for row in data_rows:
+                if len(row) != 18:
+                    raise ValueError("Некорректная структура строки каталога sexoptovik")
+                external_id = row[0].strip()
+                title = row[2].strip()
+                if not re.fullmatch(r'[0-9]+', external_id, flags=re.ASCII):
+                    raise ValueError("Некорректный ID товара в каталоге sexoptovik")
+                numeric_id = int(external_id)
+                if numeric_id <= 0 or numeric_id > (1 << 63) - 1:
+                    raise ValueError("Некорректный ID товара в каталоге sexoptovik")
+                if numeric_id in numeric_ids:
+                    raise ValueError("В каталоге sexoptovik найдены повторяющиеся ID")
+                if not title:
+                    raise ValueError("В каталоге sexoptovik найдена строка без названия")
+                numeric_ids.add(numeric_id)
+                identities.append(external_id)
+            return identities
+
+        mapping = self.supplier.csv_column_mapping
+        if isinstance(mapping, dict) and mapping:
+            has_header = bool(getattr(self.supplier, 'csv_has_header', False))
+            uses_header_names = any(
+                isinstance(config.get('column'), str)
+                or isinstance(config.get('columns'), (list, dict))
+                for config in mapping.values()
+                if isinstance(config, dict)
+            )
+            header_index = {}
+            if has_header:
+                header = data_rows.pop(0) if data_rows else []
+                if not header:
+                    raise ValueError("В CSV отсутствует строка заголовков")
+                header_index = {
+                    value.strip().strip('"'): index
+                    for index, value in enumerate(header)
+                }
+
+            def mapped_index(field_name):
+                config = mapping.get(field_name)
+                if not isinstance(config, dict):
+                    return None
+                column = config.get('column')
+                if isinstance(column, str):
+                    return header_index.get(column) if has_header and uses_header_names else None
+                return column if isinstance(column, int) and column >= 0 else None
+
+            id_index = mapped_index('external_id')
+            title_index = mapped_index('title')
+            if id_index is None or title_index is None:
+                raise ValueError("В маппинге CSV не заданы колонки ID и названия")
+
+            identities = []
+            seen = set()
+            for row in data_rows:
+                if id_index >= len(row) or title_index >= len(row):
+                    raise ValueError("В строке каталога отсутствует ID или название")
+                external_id = row[id_index].strip()
+                title = row[title_index].strip()
+                if not external_id or not title:
+                    raise ValueError("В строке каталога отсутствует ID или название")
+                if external_id in seen:
+                    raise ValueError("В каталоге найдены повторяющиеся ID")
+                seen.add(external_id)
+                identities.append(external_id)
+            return identities
+
+        # Generic DictReader uses these exact legacy aliases and generates a
+        # row-number identity only when the source has no ID column at all.
+        header, *records = data_rows
+        id_names = ('id', 'ID', 'id товара', 'Артикул')
+        title_names = ('title', 'Название', 'name', 'наименование')
+        id_name = next((name for name in id_names if name in header), None)
+        title_name = next((name for name in title_names if name in header), None)
+        if title_name is None:
+            raise ValueError("В CSV не найдена колонка названия товара")
+
+        identities = []
+        seen = set()
+        row_number = 0
+        for row in records:
+            if not any(cell.strip() for cell in row):
+                continue
+            row_number += 1
+            title = row[header.index(title_name)].strip() if header.index(title_name) < len(row) else ''
+            if not title:
+                raise ValueError("В строке каталога отсутствует название")
+            if id_name is None:
+                external_id = str(row_number)
+            else:
+                id_index = header.index(id_name)
+                external_id = row[id_index].strip() if id_index < len(row) else ''
+                if not external_id:
+                    raise ValueError("В строке каталога отсутствует ID")
+            if external_id in seen:
+                raise ValueError("В каталоге найдены повторяющиеся ID")
+            seen.add(external_id)
+            identities.append(external_id)
+        return identities
 
     def parse(self, csv_content: str) -> List[Dict]:
         """
@@ -367,7 +575,9 @@ class SupplierCSVParser:
                     continue
 
                 if len(row) <= max_col:
-                    continue
+                    # Missing trailing optional columns are empty cells, not
+                    # a reason to drop an otherwise complete ID/title row.
+                    row.extend([''] * (max_col + 1 - len(row)))
 
                 product = self._extract_fields_by_mapping(
                     row, resolved_mapping, unmapped_columns
@@ -801,6 +1011,44 @@ def discover_columns_by_prefix(header_index: dict, prefix: str) -> list:
     return [idx for _, idx in matched]
 
 
+@contextmanager
+def _supplier_catalog_sync_lock(supplier_id: int):
+    """Cross-process nonblocking fence for one supplier's catalog refresh."""
+    try:
+        import fcntl
+    except ImportError:
+        # A refresh without the process-shared fence would permit duplicate
+        # provider reads and concurrent writes to the same source catalog.
+        yield False
+        return
+
+    lock_path = os.path.join(
+        '/tmp', f'supplier-catalog-sync-{int(supplier_id)}.lock',
+    )
+    try:
+        handle = open(lock_path, 'a+b')
+    except OSError:
+        logger.error("Could not open supplier catalog lock for supplier %s", supplier_id)
+        yield False
+        return
+
+    acquired = False
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except (BlockingIOError, OSError):
+            pass
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
+
+
 # ============================================================================
 # SUPPLIER SERVICE
 # ============================================================================
@@ -939,87 +1187,132 @@ class SupplierService:
 
     @staticmethod
     def sync_from_csv(supplier_id: int, price_data: Dict[str, float] = None) -> SyncResult:
-        """
-        Синхронизация каталога поставщика из CSV.
-
-        Pipeline:
-        1. Скачивание CSV
-        2. Предвалидация (CSVPreValidator)
-        3. Парсинг (SupplierCSVParser)
-        4. Нормализация данных (DataNormalizer)
-        5. Создание/обновление SupplierProduct
-        6. Расчёт confidence score
-        7. Логирование метрик (ParsingLog)
-        """
-        result = SyncResult()
+        """Safely refresh one complete catalog, then run local postprocessing."""
         start_time = time.time()
+        with _supplier_catalog_sync_lock(supplier_id) as acquired:
+            if not acquired:
+                return SyncResult(
+                    success=False,
+                    busy=True,
+                    error_messages=["Обновление каталога этого поставщика уже выполняется"],
+                )
+            return SupplierService._sync_from_csv_locked(
+                supplier_id, price_data=price_data, start_time=start_time,
+            )
 
-        supplier = Supplier.query.get(supplier_id)
+    @staticmethod
+    def _sync_from_csv_locked(
+        supplier_id: int,
+        *,
+        price_data: Dict[str, float] = None,
+        start_time: float,
+    ) -> SyncResult:
+        result = SyncResult()
+        supplier = db.session.get(Supplier, supplier_id)
         if not supplier:
             result.success = False
             result.error_messages.append("Поставщик не найден")
             return result
 
+        config = {
+            'id': supplier.id,
+            'code': supplier.code,
+            'csv_source_url': supplier.csv_source_url,
+            'csv_delimiter': supplier.csv_delimiter,
+            'csv_encoding': supplier.csv_encoding,
+            'csv_column_mapping': copy.deepcopy(supplier.csv_column_mapping),
+            'csv_has_header': bool(supplier.csv_has_header),
+            'is_active': bool(supplier.is_active),
+            'price_file_url': supplier.price_file_url,
+        }
+        parser_supplier = SimpleNamespace(**copy.deepcopy(config))
         supplier.last_sync_status = 'running'
+        supplier.last_sync_error = None
         db.session.commit()
 
-        try:
-            # Скачиваем и парсим CSV
-            parser = SupplierCSVParser(supplier)
-            csv_content = parser.fetch_csv()
-            if not csv_content:
-                result.success = False
-                result.error_messages.append("Не удалось скачать CSV")
-                supplier.last_sync_status = 'failed'
-                supplier.last_sync_error = "Не удалось скачать CSV"
-                db.session.commit()
-                return result
-
-            # --- Предвалидация CSV ---
+        def mark_failed(message: str, *, error_count: int = 1) -> SyncResult:
+            db.session.rollback()
+            result.success = False
+            result.duration_seconds = time.time() - start_time
+            result.errors = error_count
+            result.added = 0
+            result.updated = 0
+            result.error_messages = [message]
             try:
-                from services.csv_pre_validator import CSVPreValidator
-                pre_result = CSVPreValidator.validate(
-                    csv_content,
-                    expected_delimiter=supplier.csv_delimiter,
-                    expected_encoding=supplier.csv_encoding,
-                    column_mapping=supplier.csv_column_mapping,
-                )
-                if not pre_result.is_valid:
-                    logger.error(
-                        f"CSV pre-validation failed for {supplier.code}: "
-                        f"{pre_result.errors}"
-                    )
-                    # Не прерываем — пытаемся парсить, но логируем
-                if pre_result.warnings:
-                    for w in pre_result.warnings:
-                        logger.warning(f"CSV pre-validation warning: {w}")
-                        result.error_messages.append(f"[pre-validation] {w}")
-            except Exception as e:
-                logger.warning(f"CSV pre-validation skipped: {e}")
+                current = db.session.get(Supplier, supplier_id)
+                if current:
+                    current.last_sync_status = 'failed'
+                    current.last_sync_error = message[:500]
+                    db.session.commit()
+            except Exception:
+                db.session.rollback()
+                logger.error("Could not persist failed catalog status for supplier %s", supplier_id)
+            return result
 
-            # --- Парсинг + нормализация ---
-            parsed_products = parser.parse_and_normalize(csv_content)
-            result.total_in_csv = len(parsed_products)
+        # The status commit above closes the ORM transaction before network IO.
+        parser = SupplierCSVParser(parser_supplier)
+        raw_bytes = parser.fetch_csv_raw()
+        if raw_bytes is None:
+            return mark_failed("Не удалось скачать CSV каталога")
 
-            if not parsed_products:
-                result.error_messages.append("CSV пустой или не удалось распарсить")
-                supplier.last_sync_status = 'failed'
-                supplier.last_sync_error = "CSV пустой"
-                db.session.commit()
-                return result
+        parsed_products, pre_result = parser.preflight_raw(raw_bytes)
+        if not pre_result.is_valid:
+            logger.warning(
+                "Catalog preflight rejected supplier %s (%s error(s))",
+                config['code'], len(pre_result.errors),
+            )
+            message = (
+                pre_result.errors[0]
+                if pre_result.errors else "CSV каталога не прошёл полную проверку"
+            )
+            return mark_failed(message)
+        result.total_in_csv = len(parsed_products)
+        if not parsed_products:
+            return mark_failed("CSV каталог не содержит товаров")
 
-            # Загружаем существующие товары поставщика
-            existing_map = {}
-            for sp in SupplierProduct.query.filter_by(supplier_id=supplier_id).all():
-                if sp.external_id:
-                    existing_map[sp.external_id] = sp
+        # Admin settings can change while the body is being read. Revalidate
+        # the exact source/parser configuration before opening the apply phase.
+        try:
+            if db.session.new or db.session.dirty or db.session.deleted:
+                raise RuntimeError("catalog_apply_requires_clean_session")
+            if db.engine.dialect.name == 'sqlite':
+                connection = db.session.connection().connection.driver_connection
+                if getattr(connection, 'in_transaction', False):
+                    raise RuntimeError("catalog_apply_requires_fresh_transaction")
+                # Take the writer reservation before the supplier re-read so a
+                # config update cannot race between comparison and raw apply.
+                db.session.execute(text('BEGIN IMMEDIATE'))
+            live_supplier = db.session.get(Supplier, supplier_id)
+            current_config = None
+            if live_supplier:
+                current_config = {
+                    'id': live_supplier.id,
+                    'code': live_supplier.code,
+                    'csv_source_url': live_supplier.csv_source_url,
+                    'csv_delimiter': live_supplier.csv_delimiter,
+                    'csv_encoding': live_supplier.csv_encoding,
+                    'csv_column_mapping': copy.deepcopy(live_supplier.csv_column_mapping),
+                    'csv_has_header': bool(live_supplier.csv_has_header),
+                    'is_active': bool(live_supplier.is_active),
+                    'price_file_url': live_supplier.price_file_url,
+                }
+            if current_config != config:
+                return mark_failed("Настройки источника изменились во время чтения каталога")
+        except Exception:
+            return mark_failed("Не удалось повторно проверить настройки источника")
 
-            # Preserve the pre-sync final state. The raw feed commit below
-            # advances the revision from normalized upstream fields before
-            # parser postprocessing, so a crash between these phases remains
-            # visible to seller refresh. The parser phase later compares its
-            # final state to this same baseline and takes the max revision,
-            # avoiding a second bump for the same feed change.
+        try:
+            existing_map = {
+                product.external_id: product
+                for product in SupplierProduct.query.filter_by(
+                    supplier_id=supplier_id,
+                ).all()
+                if product.external_id
+            }
+
+            # Keep the raw source baseline and final material baseline through
+            # the native SmartParser post-ingest pass. Raw facts and revisions
+            # commit together before optional local enrichment starts.
             revision_baselines = {}
             raw_input_baselines = {}
             raw_revision_targets = {}
@@ -1049,184 +1342,168 @@ class SupplierService:
                             baseline_revision + 1,
                         )
 
-            # Обрабатываем каждый товар
-            batch_count = 0
-            for pd in parsed_products:
-                existing = None
-                baseline = None
-                try:
-                    ext_id = pd['external_id']
-                    existing = existing_map.get(ext_id)
+            for index, product_data in enumerate(parsed_products, start=1):
+                external_id = product_data['external_id']
+                existing = existing_map.get(external_id)
+                if existing:
+                    if existing.id not in revision_baselines:
+                        revision = int(existing.content_revision or 1)
+                        raw_input_baselines[existing.id] = (
+                            revision,
+                            supplier_material_input_fingerprint(
+                                existing.original_data_json
+                            ),
+                        )
+                        revision_baselines[existing.id] = (
+                            revision,
+                            supplier_product_material_fingerprint(existing),
+                        )
+                    baseline = raw_input_baselines[existing.id]
+                    _update_supplier_product(existing, product_data, price_data)
+                    advance_for_raw_feed_change(existing, baseline)
+                    product = existing
+                    result.updated += 1
+                else:
+                    product = _create_supplier_product(
+                        supplier_id, product_data, price_data,
+                    )
+                    db.session.add(product)
+                    result.added += 1
+                enqueue_for_parse(product)
+                if index % 100 == 0:
+                    db.session.flush()
 
-                    if existing:
-                        if existing.id not in revision_baselines:
-                            revision = int(existing.content_revision or 1)
-                            raw_input_baselines[existing.id] = (
-                                revision,
-                                supplier_material_input_fingerprint(
-                                    existing.original_data_json
-                                ),
-                            )
-                            revision_baselines[existing.id] = (
-                                revision,
-                                supplier_product_material_fingerprint(existing),
-                            )
-                        baseline = raw_input_baselines[existing.id]
-                        enqueue_for_parse(existing)
-                        # Обновляем существующий
-                        _update_supplier_product(existing, pd, price_data)
-                        advance_for_raw_feed_change(existing, baseline)
-                        sp = existing
-                        result.updated += 1
-                    else:
-                        # Создаём новый
-                        sp = _create_supplier_product(supplier_id, pd, price_data)
-                        db.session.add(sp)
-                        result.added += 1
-                    enqueue_for_parse(sp)
-
-                    batch_count += 1
-                    if batch_count % 100 == 0:
-                        db.session.flush()
-
-                except Exception as e:
-                    # Match the previous behavior if a raw upsert partially
-                    # applied before a row-level error: preserve any durable
-                    # feed snapshot and make that source change refreshable.
-                    if existing is not None and baseline is not None:
-                        try:
-                            advance_for_raw_feed_change(existing, baseline)
-                            enqueue_for_parse(existing)
-                        except Exception:
-                            logger.warning(
-                                "Supplier feed revision fallback failed for a row"
-                            )
-                    result.errors += 1
-                    result.error_messages.append(f"Товар {pd.get('external_id', '?')}: {str(e)[:100]}")
-                    if len(result.error_messages) > 50:
-                        result.error_messages.append("...и другие ошибки")
-                        break
-
-            # Resolve newly-added row IDs while the instances are still live
-            # in this session. Reading them after commit can expire each row
-            # and turn the parser handoff into an accidental SELECT per item.
+            # Resolve IDs before commit so the follow-on parser does not cause
+            # an accidental SELECT for every expired ORM instance.
             db.session.flush()
-            sp_ids_to_parse = []
-            seen_parse_ids = set()
+            product_ids_to_parse = []
+            seen_product_ids = set()
             for product in products_to_parse:
-                product_id = product.id
-                if product_id is not None and product_id not in seen_parse_ids:
-                    seen_parse_ids.add(product_id)
-                    sp_ids_to_parse.append(product_id)
+                if product.id is not None and product.id not in seen_product_ids:
+                    seen_product_ids.add(product.id)
+                    product_ids_to_parse.append(product.id)
 
             advance_supplier_content_revisions(
                 raw_revision_targets,
                 products=products_to_parse,
             )
-            db.session.commit()
-
-            # --- Smart Product Parser: brand resolution + characteristics ---
-            try:
-                smart_parser = SmartProductParser(supplier_id=supplier_id)
-                if sp_ids_to_parse:
-                    smart_result = smart_parser.parse_and_apply_bulk(
-                        sp_ids_to_parse,
-                        revision_baselines=revision_baselines,
-                    )
-                    logger.info(
-                        f"SmartParse {supplier.code}: "
-                        f"brands={smart_result.brand_resolved_count}, "
-                        f"cats={smart_result.category_mapped_count}, "
-                        f"avg_score={smart_result.avg_readiness_score:.1f}"
-                    )
-            except Exception as e:
-                logger.warning(f"SmartProductParser skipped: {e}")
-
-            # Обновляем статистику поставщика
-            supplier.total_products = SupplierProduct.query.filter_by(supplier_id=supplier_id).count()
-            supplier.last_sync_at = datetime.utcnow()
-            supplier.last_sync_status = 'success'
-            supplier.last_sync_error = None
             result.duration_seconds = time.time() - start_time
-            supplier.last_sync_duration = result.duration_seconds
+            live_supplier.total_products = SupplierProduct.query.filter_by(
+                supplier_id=supplier_id,
+            ).count()
+            live_supplier.last_sync_at = datetime.utcnow()
+            live_supplier.last_sync_status = 'success'
+            live_supplier.last_sync_error = None
+            live_supplier.last_sync_duration = result.duration_seconds
+            # Every raw row, revision, and freshness timestamp is one commit.
             db.session.commit()
+        except Exception as exc:
+            logger.error(
+                "Atomic catalog apply failed for supplier %s (%s)",
+                config['code'], type(exc).__name__,
+            )
+            return mark_failed("Не удалось применить полный CSV каталог")
 
-            logger.info(
-                f"Синхронизация {supplier.code}: "
-                f"+{result.added} / ~{result.updated} / err={result.errors} "
-                f"({result.duration_seconds:.1f}s)"
+        # Optional post-processing starts only after raw catalog facts have a
+        # durable success timestamp. A failure here never rolls those facts back.
+        try:
+            smart_parser = SmartProductParser(supplier_id=supplier_id)
+            if product_ids_to_parse:
+                smart_result = smart_parser.parse_and_apply_bulk(
+                    product_ids_to_parse,
+                    revision_baselines=revision_baselines,
+                )
+                logger.info(
+                    "SmartParse %s: brands=%s cats=%s avg_score=%.1f",
+                    config['code'],
+                    smart_result.brand_resolved_count,
+                    smart_result.category_mapped_count,
+                    smart_result.avg_readiness_score,
+                )
+                if smart_result.errors:
+                    result.errors += smart_result.errors
+                    result.error_messages.append(
+                        "Каталог обновлён, но часть карточек не прошла локальный Smart Parser"
+                    )
+        except Exception as exc:
+            db.session.rollback()
+            result.errors += 1
+            result.error_messages.append(
+                "Каталог обновлён; локальная постобработка Smart Parser не завершена"
+            )
+            logger.warning(
+                "SmartParser postprocessing failed for supplier %s (%s)",
+                config['code'], type(exc).__name__,
             )
 
-            # --- Логирование метрик парсинга ---
-            try:
-                from models import ParsingLog
-                from services.parsing_confidence import ParsingConfidenceScorer
-
-                # Подсчёт заполненности полей
-                all_sp = SupplierProduct.query.filter_by(supplier_id=supplier_id).limit(500).all()
-                field_fill = {}
-                if all_sp:
-                    for field in ('title', 'brand', 'category', 'vendor_code', 'country',
-                                  'gender', 'barcode', 'description'):
-                        filled = sum(1 for p in all_sp if getattr(p, field, None))
-                        field_fill[field] = round(filled / len(all_sp), 3)
-                    # JSON поля
-                    for field in ('colors_json', 'materials_json', 'photo_urls_json'):
-                        filled = sum(
-                            1 for p in all_sp
-                            if getattr(p, field, None) and getattr(p, field) != '[]'
-                        )
-                        field_fill[field.replace('_json', '')] = round(filled / len(all_sp), 3)
-
-                parsing_log = ParsingLog(
-                    supplier_id=supplier_id,
-                    event_type='sync',
-                    total_products=result.total_in_csv,
-                    processed_successfully=result.added + result.updated,
-                    errors_count=result.errors,
-                    duration_seconds=result.duration_seconds,
-                    field_fill_rates=field_fill,
-                    errors_json=result.error_messages[:20] if result.error_messages else None,
-                )
-                db.session.add(parsing_log)
-                db.session.commit()
-            except Exception as e:
-                logger.debug(f"Failed to save parsing log: {e}")
-
-            # Автоматическая синхронизация цен/остатков после каталога
-            if supplier.price_file_url:
-                try:
-                    price_result = SupplierService.sync_prices_and_stock(supplier_id, force=True)
-                    if price_result.success:
-                        logger.info(
-                            f"Авто-синхр цен {supplier.code}: обновлено={price_result.updated}"
-                        )
-                except Exception as e:
-                    logger.warning(f"Ошибка авто-синхр цен после каталога: {e}")
-
-            # Запускаем фоновое скачивание всех фото поставщика
-            try:
-                from services.photo_cache import bulk_download_supplier_photos
-                dl_result = bulk_download_supplier_photos(supplier_id)
-                logger.info(
-                    f"Фото {supplier.code}: "
-                    f"всего={dl_result['total_photos']}, "
-                    f"в кэше={dl_result['already_cached']}, "
-                    f"в очереди={dl_result['queued']}"
-                )
-            except Exception as e:
-                logger.warning(f"Ошибка запуска скачивания фото: {e}")
-
-        except Exception as e:
-            db.session.rollback()
-            result.success = False
-            result.error_messages.append(f"Критическая ошибка: {str(e)}")
-            supplier.last_sync_status = 'failed'
-            supplier.last_sync_error = str(e)[:500]
-            db.session.commit()
-            logger.error(f"Ошибка синхронизации {supplier.code}: {e}")
-
         result.duration_seconds = time.time() - start_time
+        try:
+            from models import ParsingLog
+
+            all_products = SupplierProduct.query.filter_by(
+                supplier_id=supplier_id,
+            ).limit(500).all()
+            field_fill = {}
+            if all_products:
+                for field_name in (
+                    'title', 'brand', 'category', 'vendor_code', 'country',
+                    'gender', 'barcode', 'description',
+                ):
+                    filled = sum(
+                        1 for product in all_products
+                        if getattr(product, field_name, None)
+                    )
+                    field_fill[field_name] = round(filled / len(all_products), 3)
+                for field_name in ('colors_json', 'materials_json', 'photo_urls_json'):
+                    filled = sum(
+                        1 for product in all_products
+                        if getattr(product, field_name, None)
+                        and getattr(product, field_name) != '[]'
+                    )
+                    field_fill[field_name.replace('_json', '')] = round(
+                        filled / len(all_products), 3,
+                    )
+
+            db.session.add(ParsingLog(
+                supplier_id=supplier_id,
+                event_type='sync',
+                total_products=result.total_in_csv,
+                processed_successfully=result.added + result.updated,
+                errors_count=result.errors,
+                duration_seconds=result.duration_seconds,
+                field_fill_rates=field_fill,
+                errors_json=result.error_messages[:20] if result.error_messages else None,
+            ))
+            db.session.commit()
+        except Exception as exc:
+            db.session.rollback()
+            logger.debug(
+                "Could not save catalog parsing metrics for supplier %s (%s)",
+                config['code'], type(exc).__name__,
+            )
+
+        # Preserve the established bounded price/stock follow-on lane.
+        if config['price_file_url']:
+            try:
+                price_result = SupplierService.sync_prices_and_stock(
+                    supplier_id, force=True,
+                )
+                if price_result.success:
+                    logger.info(
+                        "Supplier price follow-up %s: updated=%s",
+                        config['code'], price_result.updated,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Supplier price follow-up failed for %s (%s)",
+                    config['code'], type(exc).__name__,
+                )
+
+        logger.info(
+            "Catalog sync %s: added=%s updated=%s rows=%s duration=%.1fs",
+            config['code'], result.added, result.updated,
+            result.total_in_csv, result.duration_seconds,
+        )
         return result
 
     # -----------------------------------------------------------------------

@@ -30,6 +30,7 @@ from services.supplier_service import (
     SupplierCSVParser,
     SupplierService,
     _copy_to_imported_product,
+    _supplier_catalog_sync_lock,
 )
 
 
@@ -107,16 +108,17 @@ class SupplierFeedContentRevisionTest(unittest.TestCase):
             return result
 
         patches = [
-            patch.object(SupplierCSVParser, 'fetch_csv', return_value='synthetic'),
             patch.object(
                 SupplierCSVParser,
-                'parse_and_normalize',
-                return_value=[copy.deepcopy(row)],
+                'fetch_csv_raw',
+                return_value=b'synthetic',
             ),
-            patch(
-                'services.csv_pre_validator.CSVPreValidator.validate',
-                return_value=SimpleNamespace(
-                    is_valid=True, warnings=[], errors=[],
+            patch.object(
+                SupplierCSVParser,
+                'preflight_raw',
+                return_value=(
+                    [copy.deepcopy(row)],
+                    SimpleNamespace(is_valid=True, warnings=[], errors=[]),
                 ),
             ),
             patch(
@@ -149,12 +151,211 @@ class SupplierFeedContentRevisionTest(unittest.TestCase):
                 new=parse_product,
             ))
 
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
             yield
 
     def _sync(self, row, *, parser_failure=False):
         with self._sync_patches(row, parser_failure=parser_failure):
             return SupplierService.sync_from_csv(self.supplier_id)
+
+    @staticmethod
+    def _legacy_row(external_id='123', title='Legacy item'):
+        row = [''] * 18
+        row[0] = external_id
+        row[1] = 'SKU'
+        row[2] = title
+        return ';'.join(row)
+
+    def test_sexoptovik_preflight_accepts_exact_18_column_headerless_rows(self):
+        supplier = SimpleNamespace(
+            code='sexoptovik',
+            csv_column_mapping=None,
+            csv_has_header=False,
+            csv_delimiter=';',
+            csv_encoding='utf-8',
+        )
+        products, report = SupplierCSVParser(supplier).preflight_raw(
+            (self._legacy_row() + '\n').encode('utf-8'),
+        )
+        self.assertTrue(report.is_valid, report.errors)
+        self.assertEqual(len(products), 1)
+        self.assertEqual(products[0]['external_id'], '123')
+
+    def test_sexoptovik_preflight_rejects_invalid_identity_and_row_shape(self):
+        supplier = SimpleNamespace(
+            code='sexoptovik',
+            csv_column_mapping=None,
+            csv_has_header=False,
+            csv_delimiter=';',
+            csv_encoding='utf-8',
+        )
+        parser = SupplierCSVParser(supplier)
+        invalid_feeds = (
+            self._legacy_row(external_id='not-numeric'),
+            self._legacy_row(title=''),
+            self._legacy_row()[:-1],
+            self._legacy_row(external_id='001') + '\n' + self._legacy_row(external_id='1'),
+        )
+        for feed in invalid_feeds:
+            with self.subTest(feed=feed[:30]):
+                products, report = parser.preflight_raw(feed.encode('utf-8'))
+                self.assertFalse(report.is_valid)
+                self.assertEqual(products, [])
+
+    def test_mapped_preflight_keeps_header_names_and_optional_short_tail(self):
+        supplier = SimpleNamespace(
+            code='mapped-fixture',
+            csv_column_mapping={
+                'external_id': {'column': 'id'},
+                'title': {'column': 'name'},
+                'vendor_code': {'column': 3},
+            },
+            csv_has_header=True,
+            csv_delimiter=';',
+            csv_encoding='utf-8',
+        )
+        products, report = SupplierCSVParser(supplier).preflight_raw(
+            b'id;name;optional\nSKU-1;Mapped item\nSKU-2;Second item;X\n',
+        )
+        self.assertTrue(report.is_valid, report.errors)
+        self.assertEqual([row['external_id'] for row in products], ['SKU-1', 'SKU-2'])
+
+    def test_invalid_source_does_not_advance_catalog_freshness(self):
+        supplier = Supplier.query.get(self.supplier_id)
+        supplier.code = 'sexoptovik'
+        supplier.csv_encoding = 'utf-8'
+        previous_sync = datetime(2026, 10, 1, 12, 0)
+        supplier.last_sync_at = previous_sync
+        supplier.last_sync_status = 'success'
+        db.session.commit()
+
+        with patch.object(
+            SupplierCSVParser,
+            'fetch_csv_raw',
+            return_value=(self._legacy_row(external_id='bad-id') + '\n').encode(),
+        ):
+            result = SupplierService.sync_from_csv(self.supplier_id)
+
+        self.assertFalse(result.success)
+        self.assertEqual(SupplierProduct.query.filter_by(
+            supplier_id=self.supplier_id,
+        ).count(), 0)
+        db.session.expire_all()
+        supplier = db.session.get(Supplier, self.supplier_id)
+        self.assertEqual(supplier.last_sync_at, previous_sync)
+        self.assertEqual(supplier.last_sync_status, 'failed')
+
+    def test_supplier_disable_during_provider_read_blocks_raw_apply(self):
+        supplier = Supplier.query.get(self.supplier_id)
+        previous_sync = datetime(2026, 10, 1, 12, 0)
+        supplier.last_sync_at = previous_sync
+        supplier.last_sync_status = 'success'
+        db.session.commit()
+
+        def read_after_admin_disable():
+            current = db.session.get(Supplier, self.supplier_id)
+            current.is_active = False
+            db.session.commit()
+            return b'synthetic'
+
+        with self._sync_patches(self._row()), patch.object(
+            SupplierCSVParser,
+            'fetch_csv_raw',
+            side_effect=read_after_admin_disable,
+        ):
+            result = SupplierService.sync_from_csv(self.supplier_id)
+
+        self.assertFalse(result.success)
+        self.assertEqual(SupplierProduct.query.filter_by(
+            supplier_id=self.supplier_id,
+        ).count(), 0)
+        db.session.expire_all()
+        supplier = db.session.get(Supplier, self.supplier_id)
+        self.assertFalse(supplier.is_active)
+        self.assertEqual(supplier.last_sync_at, previous_sync)
+        self.assertEqual(supplier.last_sync_status, 'failed')
+
+    def test_manual_sync_still_runs_for_previously_disabled_supplier(self):
+        supplier = Supplier.query.get(self.supplier_id)
+        supplier.is_active = False
+        db.session.commit()
+
+        result = self._sync(self._row())
+
+        self.assertTrue(result.success)
+        self.assertEqual(SupplierProduct.query.filter_by(
+            supplier_id=self.supplier_id,
+        ).count(), 1)
+
+    def test_catalog_apply_failure_rolls_back_all_raw_rows_and_timestamp(self):
+        initial = self._row(title='Keep current title')
+        self.assertTrue(self._sync(initial).success)
+        source = SupplierProduct.query.filter_by(
+            supplier_id=self.supplier_id,
+            external_id='fixture-1',
+        ).one()
+        previous_revision = source.content_revision
+        previous_sync = datetime(2026, 10, 2, 12, 0)
+        supplier = Supplier.query.get(self.supplier_id)
+        supplier.last_sync_at = previous_sync
+        db.session.commit()
+
+        from services.supplier_service import _update_supplier_product
+        original_update = _update_supplier_product
+
+        def update_then_fail(product, data, price_data=None):
+            original_update(product, data, price_data)
+            raise RuntimeError('synthetic apply failure')
+
+        with self._sync_patches(self._row(title='Must not commit')), patch(
+            'services.supplier_service._update_supplier_product',
+            side_effect=update_then_fail,
+        ):
+            result = SupplierService.sync_from_csv(self.supplier_id)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.added, 0)
+        self.assertEqual(result.updated, 0)
+        db.session.expire_all()
+        source = SupplierProduct.query.filter_by(
+            supplier_id=self.supplier_id,
+            external_id='fixture-1',
+        ).one()
+        supplier = db.session.get(Supplier, self.supplier_id)
+        self.assertEqual(source.title, 'Keep current title')
+        self.assertEqual(source.content_revision, previous_revision)
+        self.assertEqual(supplier.last_sync_at, previous_sync)
+        self.assertEqual(supplier.last_sync_status, 'failed')
+
+    def test_catalog_refresh_returns_busy_without_starting_second_read(self):
+        with _supplier_catalog_sync_lock(self.supplier_id) as acquired:
+            self.assertTrue(acquired)
+            with patch.object(SupplierCSVParser, 'fetch_csv_raw') as fetch_raw:
+                result = SupplierService.sync_from_csv(self.supplier_id)
+        self.assertFalse(result.success)
+        self.assertTrue(result.busy)
+        fetch_raw.assert_not_called()
+
+    def test_provider_read_has_no_open_database_transaction_or_photo_warm(self):
+        transaction_states = []
+
+        def read_catalog():
+            transaction_states.append(db.session().in_transaction())
+            return b'synthetic'
+
+        with self._sync_patches(self._row()), patch(
+            'services.photo_cache.bulk_download_supplier_photos',
+        ) as photo_warm:
+            with patch.object(
+                SupplierCSVParser,
+                'fetch_csv_raw',
+                side_effect=read_catalog,
+            ):
+                result = SupplierService.sync_from_csv(self.supplier_id)
+
+        self.assertTrue(result.success)
+        self.assertEqual(transaction_states, [False])
+        photo_warm.assert_not_called()
 
     def _make_imported_copy_and_channel_snapshots(self, source):
         wb_product = Product(
