@@ -138,8 +138,10 @@ class SyncResult:
 
 def _supplier_catalog_config_snapshot(supplier) -> dict:
     """Return the canonical, effective config used by catalog and price reads."""
+    created_at = getattr(supplier, 'created_at', None)
     return {
         'supplier_id': getattr(supplier, 'id', None),
+        'created_at': created_at.isoformat() if isinstance(created_at, datetime) else None,
         'code': getattr(supplier, 'code', None),
         'csv_source_url': getattr(supplier, 'csv_source_url', None),
         'csv_delimiter': getattr(supplier, 'csv_delimiter', None) or ';',
