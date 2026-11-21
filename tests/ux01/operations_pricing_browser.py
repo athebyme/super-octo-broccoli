@@ -44,6 +44,16 @@ WIDTHS = tuple(int(value.strip()) for value in _WIDTHS_INPUT.split(",") if value
     if _WIDTHS_INPUT else _DEFAULT_WIDTHS
 if not WIDTHS or any(width < 1 for width in WIDTHS):
     raise ValueError("UX01_OPERATIONS_PRICING_WIDTHS must contain positive pixel widths")
+PRICING_NAV_LABELS = (
+    "Текущие цены WB",
+    "Расчёт и предложение WB",
+    "История WB",
+    "Защита WB",
+    "Формула поставщика",
+    "Мониторинг WB",
+    "Подозрительные изменения",
+    "Предложения Ozon",
+)
 OWNED_TEMPLATES = (
     "templates/base.html",
     "templates/bulk_edit_history.html",
@@ -839,6 +849,138 @@ def _keyboard_nav_check(page, selector: str) -> dict:
     return result
 
 
+def _pricing_nav_link_snapshot(locator) -> list[dict]:
+    return locator.evaluate_all("""links => links.map(link => ({
+        label:(link.innerText || '').trim(),
+        href:link.getAttribute('href'),
+        current:link.getAttribute('aria-current'),
+    }))""")
+
+
+def _pricing_desktop_nav_check(page, *, expected_account_id: int | None) -> dict:
+    nav = page.locator("nav.pricing-workspace-nav--desktop")
+    if nav.count() != 1:
+        return {"check": "pricing_desktop_nav_full_row_account_scope", "passed": False,
+                "reason": "shared_pricing_nav_missing_or_duplicated"}
+
+    visible_links = nav.locator("a.pricing-workspace-link:visible")
+    desktop_rows = _pricing_nav_link_snapshot(visible_links)
+    mobile_details = page.locator("details.pricing-workspace-mobile-nav")
+    mobile_rows = (
+        _pricing_nav_link_snapshot(mobile_details.locator("a.pricing-workspace-link"))
+        if mobile_details.count() == 1 else []
+    )
+    current_rows = [row for row in desktop_rows if row["current"] == "page"]
+    expected_account_scope = None
+    if expected_account_id is not None:
+        ozon_links = [row for row in desktop_rows if row["label"] == "Предложения Ozon"]
+        expected_account_scope = (
+            len(ozon_links) == 1
+            and urlsplit(ozon_links[0]["href"] or "").path == "/marketplaces/commercial/"
+            and urlsplit(ozon_links[0]["href"] or "").query == f"account_id={expected_account_id}"
+        )
+
+    details_hidden = mobile_details.count() == 1 and not mobile_details.is_visible()
+    passed = (
+        [row["label"] for row in desktop_rows] == list(PRICING_NAV_LABELS)
+        and len(current_rows) == 1
+        and len(mobile_rows) == len(desktop_rows)
+        and mobile_rows == desktop_rows
+        and details_hidden
+        and (expected_account_scope is not False)
+    )
+    return {
+        "check": "pricing_desktop_nav_full_row_account_scope",
+        "passed": passed,
+        "visible_links": desktop_rows,
+        "mobile_links_match": mobile_rows == desktop_rows,
+        "mobile_details_hidden": details_hidden,
+        "selected_account_href_preserved": expected_account_scope,
+    }
+
+
+def _pricing_mobile_nav_check(page) -> dict:
+    details = page.locator("details.pricing-workspace-mobile-nav")
+    if details.count() != 1:
+        return {"check": "pricing_mobile_nav_disclosure_closed_by_default_and_keyboard_open",
+                "passed": False, "reason": "native_mobile_disclosure_missing_or_duplicated"}
+
+    summary = details.locator("summary.pricing-workspace-nav-summary")
+    links = details.locator("a.pricing-workspace-link")
+    summary_visible = summary.is_visible()
+    initially_closed = not details.evaluate("node => node.open")
+    closed_links_hidden = links.count() == len(PRICING_NAV_LABELS) and all(
+        not links.nth(index).is_visible() for index in range(links.count())
+    )
+    summary_height = summary.evaluate("node => node.getBoundingClientRect().height") if summary.count() else 0
+
+    if summary_visible:
+        summary.focus()
+        page.keyboard.press("Tab")
+    closed_links_skipped = page.evaluate("""() => {
+        const details = document.querySelector('details.pricing-workspace-mobile-nav');
+        const summary = details?.querySelector('summary.pricing-workspace-nav-summary');
+        return !!details && (!details.contains(document.activeElement) ||
+            document.activeElement === summary);
+    }""")
+
+    summary.focus()
+    page.keyboard.press("Tab")
+    page.keyboard.press("Shift+Tab")
+    summary_keyboard_focus = page.evaluate("""() => {
+        const summary = document.querySelector(
+            'details.pricing-workspace-mobile-nav summary.pricing-workspace-nav-summary');
+        const style = summary ? getComputedStyle(summary) : null;
+        return {
+            active:document.activeElement === summary,
+            visible:!!summary && summary.matches(':focus-visible'),
+            outlineStyle:style?.outlineStyle || null,
+            outlineWidth:style ? parseFloat(style.outlineWidth) || 0 : 0,
+        };
+    }""")
+    page.keyboard.press("Enter")
+    opened_by_keyboard = details.evaluate("node => node.open")
+    visible_links = details.locator("a.pricing-workspace-link:visible")
+    opened_rows = _pricing_nav_link_snapshot(visible_links)
+    current_rows = [row for row in opened_rows if row["current"] == "page"]
+    expanded_page_geometry = page.evaluate("""() => ({
+        rootOverflow:document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+        bodyOverflow:document.body.scrollWidth > document.body.clientWidth + 1,
+        summaryCurrent:(document.querySelector('.pricing-workspace-nav-summary-current')?.textContent || '').trim(),
+    })""")
+    passed = (
+        summary_visible
+        and initially_closed
+        and closed_links_hidden
+        and closed_links_skipped
+        and summary_height >= 44
+        and summary_keyboard_focus["active"]
+        and summary_keyboard_focus["visible"]
+        and summary_keyboard_focus["outlineStyle"] == "solid"
+        and summary_keyboard_focus["outlineWidth"] >= 2
+        and opened_by_keyboard
+        and [row["label"] for row in opened_rows] == list(PRICING_NAV_LABELS)
+        and len(current_rows) == 1
+        and expanded_page_geometry["summaryCurrent"] == current_rows[0]["label"]
+        and not expanded_page_geometry["rootOverflow"]
+        and not expanded_page_geometry["bodyOverflow"]
+    )
+    return {
+        "check": "pricing_mobile_nav_disclosure_closed_by_default_and_keyboard_open",
+        "passed": passed,
+        "initially_closed": initially_closed,
+        "summary_visible": summary_visible,
+        "summary_height": round(summary_height),
+        "closed_links_hidden": closed_links_hidden,
+        "closed_links_skipped_in_tab_order": closed_links_skipped,
+        "summary_keyboard_focus": summary_keyboard_focus,
+        "opened_by_keyboard": opened_by_keyboard,
+        "visible_links": opened_rows,
+        "current_link_count": len(current_rows),
+        "expanded_page_geometry": expanded_page_geometry,
+    }
+
+
 def main() -> None:
     from seller_platform import app
     from sqlalchemy import event
@@ -1210,11 +1352,25 @@ def main() -> None:
                             "scope": "after_acceptance" if SOURCE == "worktree" else "baseline_observation",
                         })
 
+                    pricing_desktop_nav = None
                     for width in WIDTHS:
                         page.set_viewport_size({"width": width, "height": 1000})
                         _settle_main_geometry(page)
                         page.evaluate("""() => new Promise(resolve => requestAnimationFrame(
                             () => requestAnimationFrame(resolve)))""")
+                        if width == 1440 and page.locator("nav.pricing-workspace-nav--desktop").count():
+                            expected_nav_account = (
+                                int(fixture["account_id"])
+                                if label in {
+                                    "ozon_commercial_vue", "ozon_commercial_classic",
+                                    "ozon_proposal_vue", "ozon_proposal_classic",
+                                } else None
+                            )
+                            pricing_desktop_nav = _pricing_desktop_nav_check(
+                                page, expected_account_id=expected_nav_account,
+                            )
+                            if SOURCE == "worktree" and not pricing_desktop_nav["passed"]:
+                                raise AssertionError({"page": label, "desktop_nav": pricing_desktop_nav})
                         for scale in ((100, 200) if width in (320, 390) else (100,)):
                             _set_text_scale(page, scale)
                             page.evaluate("""() => new Promise(resolve => requestAnimationFrame(
@@ -1248,16 +1404,37 @@ def main() -> None:
 
                     # Keyboard pass checks real Tab navigation, indicator contrast,
                     # touch target size, and whether the local nav clips its links.
-                    nav_selector = ".operations-history-link, .pricing-workspace-link"
                     page.set_viewport_size({"width": 320, "height": 1000})
                     _settle_main_geometry(page)
+                    pricing_mobile_nav = None
+                    if page.locator("nav.pricing-workspace-nav--desktop").count():
+                        pricing_mobile_nav = _pricing_mobile_nav_check(page)
+                        if SOURCE == "worktree" and not pricing_mobile_nav["passed"]:
+                            raise AssertionError({"page": label, "mobile_nav": pricing_mobile_nav})
+                        nav_selector = (
+                            "details.pricing-workspace-mobile-nav "
+                            "a.pricing-workspace-link:visible"
+                        )
+                    else:
+                        nav_selector = ".operations-history-link:visible, .pricing-workspace-link:visible"
                     focus = _keyboard_nav_check(page, nav_selector)
+                    interaction_passed = focus.get("passed") is True
+                    if SOURCE == "worktree":
+                        interaction_passed = interaction_passed and (
+                            pricing_mobile_nav is None or pricing_mobile_nav.get("passed") is True
+                        ) and (
+                            pricing_desktop_nav is None or pricing_desktop_nav.get("passed") is True
+                        )
                     REPORT["interactions"].append({
                         "page": label,
                         "check": "keyboard_route_focus",
-                        "passed": focus.get("passed") is True,
+                        "passed": interaction_passed,
                         "scope": "after_acceptance" if SOURCE == "worktree" else "baseline_observation",
                         "result": focus,
+                        "pricing_nav_checks": {
+                            "desktop": pricing_desktop_nav,
+                            "mobile": pricing_mobile_nav,
+                        },
                     })
                     page.close()
             if SOURCE == "worktree":
