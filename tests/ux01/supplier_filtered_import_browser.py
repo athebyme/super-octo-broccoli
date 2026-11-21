@@ -1264,6 +1264,7 @@ def run():
         ) as detail_review:
             detail_action.click()
         assert detail_review.value.status == 200
+        page.locator("[data-supplier-review-summary]").wait_for(state="visible")
         assert page.locator("[data-review-requested]").inner_text() == "1"
         assert page.locator("[data-review-changed]").inner_text() == "1"
         detail_row = page.locator("[data-supplier-review-row]")
@@ -1291,6 +1292,8 @@ def run():
         assert keyboard_state[0] and keyboard_state[1]
         assert keyboard_state[2] >= 44 and keyboard_state[3] >= 0
         assert keyboard_state[4] <= keyboard_state[5] and keyboard_state[6] <= keyboard_state[5] + 1
+        supplier_review_screenshot = "supplier-detail-refresh-review-320.png"
+        page.screenshot(path=REPORT_PATH.parent / supplier_review_screenshot, animations="disabled")
         checks.append("supplier_review_confirm_is_keyboard_reachable_at_320px")
 
         with fixture.app.app_context():
@@ -1303,7 +1306,8 @@ def run():
         ) as stale_confirm:
             page.locator("[data-supplier-review-confirm]").click()
         assert stale_confirm.value.status == 409
-        assert page.locator("[data-supplier-review-recheck]").count() == 1
+        page.locator("[data-supplier-review-recheck]").wait_for(state="visible")
+        assert page.locator("[data-supplier-review-confirm]").count() == 0
         with fixture.app.app_context():
             detail_copy = db.session.get(ImportedProduct, review_fixture["detail_copy_id"])
             detail_source = db.session.get(SupplierProduct, review_fixture["detail_source_id"])
@@ -1343,6 +1347,7 @@ def run():
         ) as selected_review:
             page.get_by_role("button", name=re.compile("Проверить выбранное")).click()
         assert selected_review.value.status == 200
+        page.locator("[data-supplier-review-summary]").wait_for(state="visible")
         assert page.locator("[data-review-requested]").inner_text() == "1"
         assert page.locator("[data-review-changed]").inner_text() == "1"
         selected_row = page.locator("[data-supplier-review-row]")
@@ -1403,6 +1408,7 @@ def run():
         ) as all_review:
             all_button.click()
         assert all_review.value.status == 200
+        page.locator("[data-supplier-review-summary]").wait_for(state="visible")
         all_body = supplier_review_posts[-1]["body"]
         assert all_body.get("update_all_for_supplier") == ["1"]
         assert not all_body.get("update_product_ids") and not all_body.get("product_ids")
@@ -1439,13 +1445,17 @@ def run():
         ) as all_confirm:
             page.locator("[data-supplier-review-confirm]").click()
         assert all_confirm.value.status == 302
+        page.wait_for_url(fixture.BASE + "/supplier-catalog")
         assert urlsplit(page.url).path == "/supplier-catalog"
         assert supplier_confirm_posts[-1]["body"].get("supplier_id") == [
             str(fixture_ids["supplier_id"]),
         ]
         assert supplier_confirm_posts[-1]["body"].get("update_all_for_supplier") == ["1"]
         assert not supplier_confirm_posts[-1]["body"].get("update_product_ids")
-        assert f"Локально обновлено: {changed}, пропущено: {skipped}, ошибок: 0." in page.locator("body").inner_text()
+        page.get_by_text(
+            f"Локально обновлено: {changed}, пропущено: {skipped}, ошибок: 0.",
+            exact=False,
+        ).wait_for(state="visible")
         with fixture.app.app_context():
             current_copy = db.session.get(ImportedProduct, review_fixture["current_copy_id"])
             unlinked_copy = db.session.get(ImportedProduct, review_fixture["unlinked_copy_id"])
@@ -1726,6 +1736,7 @@ def run():
         "screenshots": [
             freshness_screenshot,
             "supplier-filtered-import-batch-dark-320.png",
+            supplier_review_screenshot,
             wb_create_report["screenshot"] if wb_create_report else None,
         ],
         "writes": fixture.REPORT["writes"],
