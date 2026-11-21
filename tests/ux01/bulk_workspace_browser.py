@@ -827,7 +827,7 @@ def run():
         ))
         page.locator("#common-content-editor").wait_for(state="visible")
         page.locator("[data-workspace-return-link]").first.wait_for(state="visible")
-        assert query_ids(page.url) == [imported_local_id]
+        assert parse_qs(urlsplit(page.url).query).get("product_id", []) == [str(imported_local_id)]
         batch_editor_hash = urlsplit(page.url).fragment
         assert re.fullmatch(r"workspace-return=[a-f0-9]{32}", batch_editor_hash)
         batch_return_links = page.locator("[data-workspace-return-link]").evaluate_all(

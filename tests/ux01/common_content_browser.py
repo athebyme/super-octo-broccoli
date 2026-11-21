@@ -656,6 +656,18 @@ def _common_editor_url_matches(url: str, expected_ids: list[int], *, with_return
     )
 
 
+def _reload_beta_with_return_nonce(page, nonce: str):
+    page.evaluate("""value => history.replaceState(
+        null, '', '/my-products/beta#workspace-return=' + value
+    )""", nonce)
+    response = page.reload(wait_until="domcontentloaded")
+    page.wait_for_url(lambda value: (
+        urlsplit(str(value)).path == "/my-products/beta"
+        and urlsplit(str(value)).fragment == "workspace-return=" + nonce
+    ))
+    return response
+
+
 def _id_set_fingerprint(values: list[int]) -> str:
     canonical = ",".join(str(value) for value in sorted(values))
     return hashlib.sha256(canonical.encode("ascii")).hexdigest()
@@ -1736,11 +1748,12 @@ def _run_bulk_50_case(page) -> None:
             proxy.filters.sort === 'title' && (proxy.searchInput || '').trim() === proxy.filters.search;
     }""")
     beta_before_handoff = beta_catalog_state(page)
-    assert beta_before_handoff and beta_before_handoff["itemIds"] == product_ids + [overflow_id], {
+    assert beta_before_handoff and beta_before_handoff["itemIds"] == product_ids, {
         "item_count": len(beta_before_handoff["itemIds"]) if beta_before_handoff else None,
         "scope_ready": bool(beta_before_handoff and beta_before_handoff["itemsScope"] == beta_before_handoff["currentScope"]),
     }
     assert beta_before_handoff["pagination"].get("total") == 51
+    assert overflow_id not in beta_before_handoff["itemIds"]
     beta_boxes = page.locator(".mp-list article.mp-row input[type=checkbox]")
     assert beta_boxes.count() == 50
     for index in range(50):
@@ -2115,8 +2128,7 @@ def _run_bulk_50_case(page) -> None:
         });
     }""", product_ids[1])
     assert isinstance(foreign_nonce, str) and re.fullmatch(r"[a-f0-9]{32}", foreign_nonce)
-    foreign_page = page.goto(BASE + "/my-products/beta#workspace-return=" + foreign_nonce,
-                             wait_until="domcontentloaded")
+    foreign_page = _reload_beta_with_return_nonce(page, foreign_nonce)
     assert foreign_page and foreign_page.status == 200
     page.locator("#my-products-app").wait_for(state="visible")
     page.wait_for_function("""() => {
@@ -2131,8 +2143,7 @@ def _run_bulk_50_case(page) -> None:
 
     absent_nonce = "f" * 32
     assert absent_nonce != foreign_nonce, "unmatched nonce must differ from the foreign-owner capsule"
-    unmatched_page = page.goto(BASE + "/my-products/beta#workspace-return=" + absent_nonce,
-                               wait_until="domcontentloaded")
+    unmatched_page = _reload_beta_with_return_nonce(page, absent_nonce)
     assert unmatched_page and unmatched_page.status == 200
     page.locator("#my-products-app").wait_for(state="visible")
     page.wait_for_function("""() => {
