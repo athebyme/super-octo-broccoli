@@ -1072,16 +1072,22 @@ def run_recovery_browser_journey(page, browser, context):
     assert "Без изменений" in page.locator(".max-w-7xl").inner_text()
     assert "Требуют внимания" in page.locator(".max-w-7xl").inner_text()
     result_bounds = recovery_cta.bounding_box()
-    assert result_bounds and result_bounds["height"] >= 32, result_bounds
+    assert result_bounds and result_bounds["height"] >= 44 and result_bounds["width"] >= 44, result_bounds
     assert result_bounds["x"] >= 0 and result_bounds["x"] + result_bounds["width"] <= 320
     assert page.evaluate(
         "() => document.documentElement.scrollWidth <= document.documentElement.clientWidth"
     )
+    page.screenshot(path=OUT / "ozon-reviewed-result-recovery-320.png", animations="disabled")
     assert len(business_write_events) == result_write_marker, business_write_events[result_write_marker:]
     assert _business_counts() == result_counts
 
     # Enter activates the exact CTA on the narrow result page.
     recovery_cta.focus()
+    page.keyboard.press("Shift+Tab")
+    page.keyboard.press("Tab")
+    assert recovery_cta.evaluate("""link => document.activeElement === link &&
+        getComputedStyle(link).outlineStyle !== 'none' &&
+        parseFloat(getComputedStyle(link).outlineWidth) >= 2""")
     page.keyboard.press("Enter")
     page.wait_for_url("**/marketplaces/ozon/uploads/review?*")
     page.locator("#ozon-upload-review:not([v-cloak])").wait_for()
