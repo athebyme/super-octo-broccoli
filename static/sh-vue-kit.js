@@ -173,6 +173,12 @@
     var components = {};
     var confirmInstanceSequence = 0;
 
+    function isTerminalJobStatus(status) {
+        return [
+            'done', 'completed', 'completed_with_errors', 'failed', 'cancelled', 'unknown',
+        ].indexOf(status) !== -1;
+    }
+
     /* Плитка показателя: крупное число, подпись, необязательная динамика */
     components['sh-stat'] = {
         props: {
@@ -697,7 +703,7 @@
             job: { type: Object, default: null },
             title: { type: String, default: 'Выполняем' },
         },
-        emits: ['retry-failed', 'dismiss'],
+        emits: ['check-status', 'dismiss'],
         computed: {
             percent: function () {
                 if (!this.job) return 0;
@@ -707,35 +713,80 @@
                 var total = this.job.total || 0;
                 return total ? Math.round((this.job.processed || 0) / total * 100) : 0;
             },
+            hasJobCounts: function () {
+                if (!this.job) return false;
+                var processed = this.job.processed;
+                var total = this.job.total;
+                return typeof processed === 'number' && Number.isSafeInteger(processed) && processed >= 0 &&
+                    typeof total === 'number' && Number.isSafeInteger(total) && total >= 0;
+            },
+            showProgress: function () {
+                return !!this.job && this.job.status !== 'unknown' &&
+                    (this.job.status !== 'done' || this.hasJobCounts);
+            },
             finished: function () {
-                return !!this.job && (this.job.status === 'done' || this.job.status === 'failed');
+                return !!this.job && isTerminalJobStatus(this.job.status);
+            },
+            resultTitle: function () {
+                if (!this.job) return '';
+                if (this.job.status === 'unknown') return 'Результат неизвестен';
+                if (this.job.status === 'cancelled') return 'Отменено';
+                if (this.job.status === 'failed') return 'Не удалось завершить';
+                if (this.job.status === 'completed_with_errors' || this.failedCount > 0) {
+                    return 'Завершено с ошибками';
+                }
+                if (this.partialCompletion) return 'Обработана часть карточек';
+                return 'Готово';
+            },
+            reportedFailedCount: function () {
+                if (!this.job) return null;
+                var value = this.job.failed !== undefined ? this.job.failed : this.job.failed_count;
+                return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+            },
+            failedCount: function () {
+                return this.reportedFailedCount === null ? 0 : this.reportedFailedCount;
+            },
+            partialCompletion: function () {
+                if (!this.job || this.job.status !== 'done' || this.reportedFailedCount !== 0) return false;
+                var processed = this.job.processed;
+                var total = this.job.total;
+                return typeof processed === 'number' && Number.isSafeInteger(processed) && processed >= 0 &&
+                    typeof total === 'number' && Number.isSafeInteger(total) && total >= 0 && processed < total;
             },
             tone: function () {
                 if (!this.job) return '';
                 if (this.job.status === 'failed') return 'danger';
-                if (this.finished && (this.job.failed || this.job.conflicted)) return 'warn';
+                if (this.job.status === 'unknown' || this.job.status === 'cancelled') return 'warn';
+                if (this.finished && (this.failedCount || this.partialCompletion || this.job.conflicted ||
+                    this.job.status === 'completed_with_errors')) return 'warn';
                 if (this.finished) return 'ok';
                 return '';
             },
         },
         template: `
-            <div v-if="job" class="shk-job" :class="tone ? 'shk-job--' + tone : ''">
+            <div v-if="job" class="shk-job" :class="tone ? 'shk-job--' + tone : ''"
+                 :role="finished ? 'status' : null" :aria-live="finished ? 'polite' : null"
+                 :aria-atomic="finished ? 'true' : null">
                 <div class="shk-job-head">
-                    <span class="shk-job-title">{{ finished ? (job.status === 'failed' ? 'Остановлено' : 'Готово') : title }}</span>
-                    <span class="shk-job-count">{{ job.processed || 0 }} из {{ job.total || 0 }}</span>
-                    <button v-if="finished" type="button" class="shk-job-close" @click="$emit('dismiss')" title="Скрыть">✕</button>
+                    <span class="shk-job-title">{{ finished ? resultTitle : title }}</span>
+                    <span v-if="job.status !== 'unknown' && hasJobCounts" class="shk-job-count">{{ job.processed }} из {{ job.total }}</span>
+                    <button v-if="finished" type="button" class="shk-job-close" @click="$emit('dismiss')"
+                            title="Скрыть" aria-label="Скрыть итог задачи">✕</button>
                 </div>
-                <div class="sh-progress" :class="tone ? 'sh-progress--' + tone : ''" role="progressbar"
+                <div v-if="showProgress" class="sh-progress" :class="tone ? 'sh-progress--' + tone : ''" role="progressbar"
                      :aria-valuenow="percent" aria-valuemin="0" aria-valuemax="100">
                     <div class="sh-progress-bar" :style="{ width: percent + '%' }"></div>
                 </div>
                 <p v-if="job.message" class="shk-job-message">{{ job.message }}</p>
                 <div v-if="finished" class="shk-job-result">
-                    <span v-if="job.succeeded" class="shk-job-stat is-ok">Успешно: {{ job.succeeded }}</span>
-                    <span v-if="job.skipped" class="shk-job-stat">Пропущено: {{ job.skipped }}</span>
-                    <span v-if="job.failed" class="shk-job-stat is-danger">С ошибкой: {{ job.failed }}</span>
-                    <button v-if="job.failed" type="button" class="sh-btn sh-btn--secondary sh-btn--sm"
-                            @click="$emit('retry-failed')">Повторить неудачные</button>
+                    <span v-if="job.status !== 'unknown' && job.succeeded" class="shk-job-stat is-ok">Успешно: {{ job.succeeded }}</span>
+                    <span v-if="job.status !== 'unknown' && job.skipped" class="shk-job-stat">Пропущено: {{ job.skipped }}</span>
+                    <span v-if="job.status !== 'unknown' && failedCount" class="shk-job-stat is-danger">С ошибкой: {{ failedCount }}</span>
+                    <button v-if="job.status === 'unknown'" type="button" class="sh-btn sh-btn--secondary sh-btn--sm"
+                            :disabled="job.checking" @click="$emit('check-status')"
+                            title="Повторяет только чтение статуса этого запуска">
+                        {{ job.checking ? 'Проверяем…' : 'Проверить статус' }}
+                    </button>
                 </div>
             </div>
         `,
@@ -783,5 +834,6 @@
         components: components,
         fmt: fmt,
         api: api,
+        isTerminalJobStatus: isTerminalJobStatus,
     };
 })(window);

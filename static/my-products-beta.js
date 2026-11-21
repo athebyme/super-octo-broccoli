@@ -1,6 +1,6 @@
 /* Мои товары · beta — экран массовых операций.
    Правило страницы: выбрал строки → видишь, что произойдёт → подтвердил →
-   следишь за прогрессом → получаешь честный итог с возможностью доделать. */
+   следишь за прогрессом → получаешь честный итог. */
 (function () {
     'use strict';
 
@@ -87,6 +87,22 @@
         return Array.from(window.crypto.getRandomValues(new Uint8Array(16)), function (byte) {
             return byte.toString(16).padStart(2, '0');
         }).join('');
+    }
+
+    function trackedJobForUi(data, expectedUid) {
+        if (!data || typeof data !== 'object') return null;
+        var raw = data.job && typeof data.job === 'object' ? data.job : data;
+        if (!raw || typeof raw.status !== 'string' || (raw.job_uid && raw.job_uid !== expectedUid)) return null;
+        var job = Object.assign({}, raw);
+        job.job_uid = expectedUid;
+        if (job.failed === undefined && job.failed_count !== undefined) job.failed = job.failed_count;
+        if (job.status === 'completed') job.status = 'done';
+        if (job.status === 'failed') job.message = 'Задача не завершена.';
+        if (job.status === 'cancelled') job.message = 'Операция отменена.';
+        if (job.status === 'unknown') {
+            job.message = 'Не удалось прочитать статус. Результат неизвестен. «Проверить статус» выполнит только чтение того же запуска.';
+        }
+        return job;
     }
 
     var MAX_BULK_SELECTION = 200;
@@ -745,7 +761,7 @@
             if (!this.importBatchMode) this.loadFacets();
         },
         beforeUnmount: function () {
-            if (this._jobTimer) clearInterval(this._jobTimer);
+            this.stopJobTracking();
             if (this._abort) this._abort.abort();
             if (this._loadMoreAbort) this._loadMoreAbort.abort();
             this.cancelSupplierRefreshRestore();
@@ -1739,34 +1755,135 @@
                         error instanceof TypeError ? 'Нет связи. Повторите только чтение.' : error.message;
                 } finally { clearTimeout(timer); this.ozonBusy = ''; }
             },
-            trackJob: function (jobUid, total) {
+            trackJob: function (jobUid, total, initialJob) {
                 var self = this;
-                if (this._jobTimer) clearInterval(this._jobTimer);
-                var poll = function () {
-                    // Вкладка скрыта — не жжём запросы
-                    if (document.hidden) return;
-                    self.$api.get(self.urls.jobStatus + jobUid).then(function (data) {
-                        var job = data.job || data;
-                        self.job = job;
-                        if (job.status === 'done' || job.status === 'failed') {
-                            clearInterval(self._jobTimer);
-                            self._jobTimer = null;
-                            self.load();
-                            self.loadFacets();
-                        }
-                    }).catch(function () {
-                        clearInterval(self._jobTimer);
-                        self._jobTimer = null;
+                this.stopJobTracking();
+                var generation = this._jobGeneration;
+                this._activeJobUid = jobUid;
+                var inFlight = false;
+                var terminal = false;
+                var isCurrent = function () {
+                    return self._jobGeneration === generation && self._activeJobUid === jobUid;
+                };
+                var finish = function (job) {
+                    if (!isCurrent() || terminal) return;
+                    terminal = true;
+                    self.completeTrackedJob(job, generation, jobUid);
+                };
+                var unknownResult = function () {
+                    return Object.assign({}, self.job || {}, {
+                        status: 'unknown',
+                        message: 'Не удалось прочитать статус. Результат неизвестен. «Проверить статус» выполнит только чтение того же запуска.',
                     });
                 };
-                this.job = { status: 'running', total: total || 0, processed: 0 };
-                poll();
+                var poll = function () {
+                    if (!isCurrent() || terminal || inFlight || document.hidden) return;
+                    inFlight = true;
+                    var controller = new AbortController();
+                    var requestTimer = setTimeout(function () { controller.abort(); }, 10000);
+                    self._jobPollAbort = controller;
+                    self._jobPollTimer = requestTimer;
+                    self.$api.get(self.urls.jobStatus + jobUid, null, { signal: controller.signal }).then(function (data) {
+                        if (!isCurrent() || terminal) return;
+                        var job = trackedJobForUi(data, jobUid);
+                        if (!job) {
+                            finish(unknownResult());
+                            return;
+                        }
+                        self.job = job;
+                        if (window.shVue.isTerminalJobStatus(job.status)) finish(job);
+                        else if (job.status !== 'pending' && job.status !== 'running') finish(unknownResult());
+                    }).catch(function () {
+                        if (isCurrent() && !terminal) finish(unknownResult());
+                    }).finally(function () {
+                        clearTimeout(requestTimer);
+                        if (self._jobPollAbort === controller) self._jobPollAbort = null;
+                        if (self._jobPollTimer === requestTimer) self._jobPollTimer = null;
+                        inFlight = false;
+                    });
+                };
+                this.job = { job_uid: jobUid, status: 'running', total: total || 0, processed: 0 };
+                if (initialJob) this.job = initialJob;
+                else poll();
                 this._jobTimer = setInterval(poll, 2500);
             },
-            retryFailed: function () {
-                // Повтор доступен только после честного итога с ошибками
-                this.job = null;
+            completeTrackedJob: function (job, generation, jobUid) {
+                if (this._jobGeneration !== generation || this._activeJobUid !== jobUid) return false;
+                if (this._jobTimer) clearInterval(this._jobTimer);
+                this._jobTimer = null;
+                this.job = job;
                 this.load();
+                this.loadFacets();
+                return true;
+            },
+            recheckJob: function () {
+                var current = this.job;
+                if (!current || current.status !== 'unknown' || current.checking || !current.job_uid) return;
+                var self = this;
+                var jobUid = current.job_uid;
+                var generation = this._jobGeneration;
+                var isCurrent = function () {
+                    return self._jobGeneration === generation && self._activeJobUid === jobUid &&
+                        self.job && self.job.status === 'unknown' && self.job.job_uid === jobUid;
+                };
+                this.job = Object.assign({}, current, { checking: true });
+                var controller = new AbortController();
+                var requestTimer = setTimeout(function () { controller.abort(); }, 10000);
+                this._jobRecheckAbort = controller;
+                this._jobRecheckTimer = requestTimer;
+                this.$api.get(this.urls.jobStatus + jobUid, null, { signal: controller.signal }).then(function (data) {
+                    if (!isCurrent()) return;
+                    var job = trackedJobForUi(data, jobUid);
+                    if (!job) {
+                        self.job = Object.assign({}, self.job, {
+                            checking: false,
+                            message: 'Не удалось подтвердить статус. Результат остаётся неизвестным; проверка повторяет только чтение этого запуска.',
+                        });
+                        return;
+                    }
+                    if (window.shVue.isTerminalJobStatus(job.status)) {
+                        self.completeTrackedJob(job, generation, jobUid);
+                        return;
+                    }
+                    if (job.status === 'pending' || job.status === 'running') {
+                        self.trackJob(jobUid, job.total, job);
+                        return;
+                    }
+                    self.job = Object.assign({}, self.job, {
+                        checking: false,
+                        message: 'Не удалось подтвердить статус. Результат остаётся неизвестным; проверка повторяет только чтение этого запуска.',
+                    });
+                }).catch(function () {
+                    if (!isCurrent()) return;
+                    self.job = Object.assign({}, self.job, {
+                        checking: false,
+                        message: 'Не удалось подтвердить статус. Результат остаётся неизвестным; проверка повторяет только чтение этого запуска.',
+                    });
+                }).finally(function () {
+                    clearTimeout(requestTimer);
+                    if (self._jobRecheckAbort === controller) self._jobRecheckAbort = null;
+                    if (self._jobRecheckTimer === requestTimer) self._jobRecheckTimer = null;
+                });
+            },
+            stopJobTracking: function () {
+                this._jobGeneration = (this._jobGeneration || 0) + 1;
+                this._activeJobUid = null;
+                if (this._jobTimer) clearInterval(this._jobTimer);
+                this._jobTimer = null;
+                if (this._jobPollTimer) clearTimeout(this._jobPollTimer);
+                this._jobPollTimer = null;
+                var pollAbort = this._jobPollAbort;
+                this._jobPollAbort = null;
+                if (pollAbort) pollAbort.abort();
+                if (this._jobRecheckTimer) clearTimeout(this._jobRecheckTimer);
+                this._jobRecheckTimer = null;
+                var recheckAbort = this._jobRecheckAbort;
+                this._jobRecheckAbort = null;
+                if (recheckAbort) recheckAbort.abort();
+            },
+            dismissJob: function () {
+                this.stopJobTracking();
+                this.job = null;
             },
 
             /* ---------- отображение ---------- */

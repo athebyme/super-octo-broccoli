@@ -378,6 +378,19 @@
     .mp-signal { display: none; }
 }
 @media (max-width: 700px) {
+    #my-products-app .shk-job-close {
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        flex:0 0 44px;
+        width:44px;
+        min-width:44px;
+        height:44px;
+        min-height:44px;
+        padding:0;
+    }
+    #my-products-app .shk-job-result > .sh-btn { min-width:44px; min-height:44px; }
+    #my-products-app .shk-job-title { min-width:0; overflow-wrap:anywhere; }
     .mp-head-actions { width:100%; flex-direction:column; align-items:stretch; gap:2px; }
     .mp-head-actions > .sh-btn { justify-content:center; }
     .mp-batch-head-actions { width:100%; justify-content:flex-start; }
