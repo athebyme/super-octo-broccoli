@@ -37,6 +37,7 @@ report = {
     "checks": [],
     "provider_attempts": 0,
     "provider_dispatch_calls": 0,
+    "provider_fake_status_reads": 0,
     "unexpected_external": [],
     "unexpected_http": [],
     "js_errors": [],
@@ -44,6 +45,7 @@ report = {
     "source_prepare": {},
     "review": {},
     "reviewed_queue": {},
+    "reviewed_result_recovery": {},
     "scope": "synthetic_ozon_bulk_ready_review_browser",
     "multi_page_review": "not_run; 4-row journey exercises the real API; 200-row paging contract stays in its Node test",
 }
@@ -91,6 +93,7 @@ from models import (
 )
 from services.marketplace_drafts import MarketplaceDraftService
 from services.marketplace_publications import MarketplacePublicationService
+from services.marketplace_adapters import MarketplaceCredentials
 from services.ozon_bulk_upload import OzonBulkUploadService
 from tests.ozon_release.seed import PASSWORD, PHOTO, USERNAME, seed
 
@@ -300,6 +303,10 @@ state = {
     "reviewed_worker_stats": None,
     "review_api_pages": [],
     "queue_confirmed": False,
+    "recovery_initial_queue_pending": False,
+    "recovery_confirmation_pending": False,
+    "recovery_review_api_pages": [],
+    "recovery_review_queries": [],
 }
 business_write_events = []
 BUSINESS_TABLES = {
@@ -407,6 +414,343 @@ def _run_real_review_worker():
         return stats
 
 
+def _seed_recovery_source_run():
+    """Create five real prepared drafts for a settled mixed-result run."""
+    recovery_titles = {
+        "stale": "BR Recovery · изменённая версия",
+        "rejected": "BR Recovery · окончательный отказ Ozon",
+        "success": "BR Recovery · подтверждённая карточка",
+        "noop": source_titles["update"],
+        "uncertain": "BR Recovery · итог требует сверки",
+    }
+    with app.app_context():
+        # The first journey already proved update queue creation. Mark that
+        # fixture operation terminal so the same linked source can exercise a
+        # second, independently reviewed update without an active-write fence.
+        first_update = MarketplaceOperation.query.filter_by(
+            seller_id=fixture["seller_id"],
+            account_id=account_id,
+            draft_id=state["draft_ids"][1],
+        ).one()
+        assert first_update.operation_kind == "product_update"
+        first_update.status = "succeeded"
+        first_update.completed_at = datetime.utcnow()
+        first_update.next_poll_at = None
+        first_update.quota_reserved = 0
+        db.session.commit()
+
+        product_type = MarketplaceProductType.query.filter_by(
+            marketplace_id=marketplace_id,
+            external_type_id="1000",
+        ).one()
+        recovery_sources = {}
+        for ordinal, kind in enumerate(("stale", "rejected", "success", "uncertain"), 1):
+            source = _make_source(
+                seller_id=fixture["seller_id"],
+                external_id=f"br-recovery-{kind}-source",
+                vendor_code=f"BR-RECOVERY-{kind.upper()}",
+                title=recovery_titles[kind],
+                description=f"Синтетические данные для восстановления {kind}.",
+                category=product_type.category.name,
+                barcode=f"460000000{ordinal:04d}",
+            )
+            recovery_sources[kind] = source
+            db.session.add(source)
+
+        foreign_listing = db.session.get(
+            MarketplaceListing, fixture["foreign_listing_id"],
+        )
+        foreign_source = _make_source(
+            seller_id=foreign_listing.seller_id,
+            external_id="br-recovery-foreign-source",
+            vendor_code="BR-RECOVERY-FOREIGN",
+            title="BR Recovery · чужой черновик",
+            description="Синтетический чужой черновик для проверки границы владения.",
+            category=product_type.category.name,
+            barcode="4600000000999",
+        )
+        db.session.add(foreign_source)
+        db.session.flush()
+        foreign_draft = MarketplaceDraftService.create_draft(
+            seller_id=foreign_listing.seller_id,
+            account_id=fixture["foreign_account_id"],
+            imported_product_id=foreign_source.id,
+            product_type_id=product_type.id,
+        )
+        db.session.commit()
+
+        recovery_ids = [
+            recovery_sources["stale"].id,
+            recovery_sources["rejected"].id,
+            recovery_sources["success"].id,
+            source_ids["update"],
+            recovery_sources["uncertain"].id,
+        ]
+        acceptance = OzonBulkUploadService.accept_source_prepare(
+            seller_id=fixture["seller_id"],
+            account_id=account_id,
+            imported_product_ids=recovery_ids,
+            request_key="r42-recovery-source-prepare-key-0000000000000001",
+            created_by_user_id=fixture.get("user_id"),
+        )
+        job = acceptance.job
+        stats = OzonBulkUploadService.run_due_preparation()
+        run = OzonBulkUploadRun.query.filter_by(job_id=job.id).one()
+        items = OzonBulkUploadItem.query.filter_by(run_id=run.id).order_by(
+            OzonBulkUploadItem.ordinal.asc(),
+        ).all()
+        assert len(items) == 5
+        assert [item.imported_product_id for item in items] == recovery_ids
+        assert all(item.phase == "prepared" and item.draft_id for item in items), [
+            (item.imported_product_id, item.phase, item.error_code) for item in items
+        ]
+        drafts = [db.session.get(MarketplaceProductDraft, item.draft_id) for item in items]
+        assert all(draft.status == "ready" for draft in drafts)
+        state["recovery_source_job_uid"] = job.job_uid
+        state["recovery_source_draft_ids"] = [item.draft_id for item in items]
+        state["recovery_draft_by_kind"] = {
+            "stale": items[0].draft_id,
+            "rejected": items[1].draft_id,
+            "success": items[2].draft_id,
+            "noop": items[3].draft_id,
+            "uncertain": items[4].draft_id,
+        }
+        state["recovery_titles"] = recovery_titles
+        state["foreign_draft_id"] = foreign_draft.id
+        state["recovery_source_worker_stats"] = stats
+        state["recovery_initial_queue_pending"] = True
+        return job.job_uid
+
+
+def _edit_recovery_draft_after_acceptance():
+    """Edit one accepted row before the real reviewed worker checks versions."""
+    draft_id = state["recovery_draft_by_kind"]["stale"]
+    expected_version = state["recovery_review_versions"][draft_id]
+    with app.app_context():
+        draft = db.session.get(MarketplaceProductDraft, draft_id)
+        assert draft.version == expected_version
+        edited_content = json.loads(draft.content_json or "{}")
+        edited_content["description"] = (
+            "Изменено после подтверждения списка, до запуска worker."
+        )
+        edited = MarketplaceDraftService.update_draft(
+            seller_id=fixture["seller_id"],
+            draft_id=draft_id,
+            expected_version=expected_version,
+            patch={"content": edited_content},
+            corrected_by_user_id=fixture.get("user_id"),
+        )
+        assert edited.version > expected_version
+        validated = MarketplaceDraftService.validate_draft(
+            seller_id=fixture["seller_id"],
+            draft_id=draft_id,
+            expected_version=edited.version,
+        )
+        state["recovery_edited_version"] = validated.version
+        assert validated.version > expected_version
+        assert validated.status == "ready", (
+            validated.status,
+            validated.validation_result_json,
+        )
+        db.session.expire_all()
+        latest = db.session.get(MarketplaceProductDraft, draft_id)
+        assert latest.version == validated.version
+        assert json.loads(latest.content_json)["description"] == (
+            "Изменено после подтверждения списка, до запуска worker."
+        )
+
+
+def _run_real_recovery_review_worker():
+    """Run the accepted batch, then persist mixed provider outcomes locally."""
+    with app.app_context():
+        stats = OzonBulkUploadService.run_due_preparation()
+        job = BackgroundJob.query.filter_by(
+            job_uid=state["recovery_initial_result_uid"],
+            seller_id=fixture["seller_id"],
+        ).one()
+        run = OzonBulkUploadRun.query.filter_by(job_id=job.id).one()
+        rows = OzonBulkUploadItem.query.filter_by(run_id=run.id).order_by(
+            OzonBulkUploadItem.ordinal.asc(),
+        ).all()
+        assert run.mode == "reviewed_drafts"
+        assert len(rows) == 5
+        row_by_draft = {row.draft_id: row for row in rows}
+        drafts = state["recovery_draft_by_kind"]
+        stale = row_by_draft[drafts["stale"]]
+        assert stale.phase == "needs_input", (stale.phase, stale.error_code)
+        assert stale.operation_id is None
+        assert stale.reviewed_version == state["recovery_review_versions"][drafts["stale"]]
+        assert state["recovery_edited_version"] > stale.reviewed_version
+        operations = {
+            kind: db.session.get(MarketplaceOperation, row_by_draft[draft_id].operation_id)
+            for kind, draft_id in drafts.items()
+            if kind != "stale"
+        }
+        assert len(operations) == 4 and all(operations.values())
+        assert stats["enqueued"] == 4, stats
+        assert operations["noop"].operation_kind == "product_update"
+
+        now = datetime.utcnow()
+        success = operations["success"]
+        success.status = "succeeded"
+        success.error_code = None
+        success.error_message = None
+        success.quota_reserved = 0
+        success.next_poll_at = None
+        success.completed_at = now
+        success.item_results_json = json.dumps([{
+            "offer_id": success.draft.offer_id,
+            "product_id": "98765001",
+            "status": "imported",
+            "errors": [],
+        }], ensure_ascii=False)
+        db.session.commit()
+
+        uncertain = operations["uncertain"]
+        MarketplacePublicationService._mark_uncertain(
+            uncertain,
+            code="synthetic_task_status_unknown",
+            message="Синтетическая неопределённость для проверки исключения из восстановления.",
+            now=now,
+        )
+        db.session.expire_all()
+        uncertain = db.session.get(MarketplaceOperation, uncertain.id)
+        stopped_uncertain = MarketplacePublicationService.resolve_uncertain(
+            seller_id=fixture["seller_id"],
+            operation_id=uncertain.id,
+            expected_version=uncertain.version,
+            reason="Синтетическая приёмка: остановить сверку без повторной записи.",
+            resolved_by_user_id=uncertain.created_by_user_id,
+            now=now,
+        )
+        assert stopped_uncertain.status == "uncertain"
+        assert stopped_uncertain.next_poll_at is None
+        assert "manual_resolution" in json.loads(
+            stopped_uncertain.request_summary_json or "{}"
+        )
+
+        no_op = operations["noop"]
+        submitted = json.loads(no_op.snapshot.submitted_state_json or "{}")
+        MarketplacePublicationService._mark_update_already_current(
+            no_op,
+            live={
+                "identity": {
+                    "offer_id": no_op.draft.offer_id,
+                    "product_id": no_op.listing.external_product_id,
+                },
+                "payload": submitted,
+                "fingerprint": no_op.request_fingerprint,
+            },
+            now=now,
+        )
+
+        rejected = operations["rejected"]
+        rejected.status = "submitted"
+        rejected.attempt_count = 1
+        rejected.external_task_id = "991234567"
+        rejected.submitted_at = now
+        rejected.next_poll_at = now
+        rejected.deadline_at = None
+        db.session.commit()
+        rejected_offer_id = rejected.draft.offer_id
+        recovery_account = db.session.get(SellerMarketplaceAccount, account_id)
+        recovery_external_account_id = recovery_account.external_account_id
+
+        class FakeTaskStatusAdapter:
+            def require_capability(self, _capability):
+                return None
+
+            def get_submission(self, credentials, payload):
+                assert credentials.external_account_id == recovery_external_account_id
+                assert payload == {"task_id": 991234567}
+                report["provider_fake_status_reads"] += 1
+                return {"result": {
+                    "total": 1,
+                    "items": [{
+                        "offer_id": rejected_offer_id,
+                        "product_id": 0,
+                        "status": "failed",
+                        "errors": [{
+                            "code": "SYNTHETIC_DEFINITIVE_REJECT",
+                            "message": "Synthetic item rejection",
+                        }],
+                    }],
+                }}
+
+        credentials = MarketplaceCredentials(
+            external_account_id=recovery_external_account_id,
+            api_key="synthetic-recovery-status-read",
+        )
+        # The harness normally replaces poll_operation with a write-denial
+        # sentinel. Restore the real method for this single fake status read;
+        # allow_submission=False guarantees no provider write method can run.
+        MarketplacePublicationService.poll_operation = original_poll_operation
+        try:
+            final_rejection = original_poll_operation(
+                seller_id=fixture["seller_id"],
+                operation_id=rejected.id,
+                adapter=FakeTaskStatusAdapter(),
+                credentials=credentials,
+                now=now,
+                allow_submission=False,
+            )
+        finally:
+            MarketplacePublicationService.poll_operation = forbid_dispatch
+        assert final_rejection.status == "failed"
+        assert final_rejection.error_code == "ozon_import_failed"
+        assert final_rejection.snapshot is not None
+        confirmed_state = json.loads(final_rejection.snapshot.confirmed_state_json or "{}")
+        assert confirmed_state.get("source") == "task_status"
+        assert confirmed_state.get("result", {}).get("items", [{}])[0].get("status") == "failed"
+        assert report["provider_fake_status_reads"] == 1
+
+        OzonBulkUploadService.reconcile_run(
+            seller_id=fixture["seller_id"], job_uid=job.job_uid,
+        )
+        state["recovery_initial_operation_ids"] = {
+            kind: operation.id for kind, operation in operations.items()
+        }
+        state["recovery_initial_operation_statuses"] = {
+            kind: operation.status for kind, operation in operations.items()
+        }
+        state["recovery_initial_result_uid"] = job.job_uid
+        state["recovery_initial_worker_stats"] = stats
+        state["recovery_expected_ids"] = [drafts["stale"], drafts["rejected"]]
+        state["recovery_excluded_ids"] = [
+            drafts["success"], drafts["noop"], drafts["uncertain"],
+        ]
+        state["recovery_confirmation_pending"] = False
+        return stats
+
+
+def _run_real_recovery_followup_worker():
+    """Queue only the drafts explicitly accepted from the recovery review."""
+    with app.app_context():
+        stats = OzonBulkUploadService.run_due_preparation()
+        job = BackgroundJob.query.filter_by(
+            job_uid=state["recovery_final_result_uid"],
+            seller_id=fixture["seller_id"],
+        ).one()
+        run = OzonBulkUploadRun.query.filter_by(job_id=job.id).one()
+        rows = OzonBulkUploadItem.query.filter_by(run_id=run.id).order_by(
+            OzonBulkUploadItem.ordinal.asc(),
+        ).all()
+        assert run.mode == "reviewed_drafts"
+        assert len(rows) == 2
+        assert {row.draft_id for row in rows} == set(state["recovery_expected_ids"])
+        assert all(row.phase == "operation_linked" and row.operation_id for row in rows), [
+            (row.draft_id, row.phase, row.error_code) for row in rows
+        ]
+        assert stats["enqueued"] == 2, stats
+        operations = [db.session.get(MarketplaceOperation, row.operation_id) for row in rows]
+        assert all(operation.status == "queued" for operation in operations)
+        assert all(operation.attempt_count == 0 and operation.poll_count == 0 for operation in operations)
+        assert all(operation.draft_id in state["recovery_expected_ids"] for operation in operations)
+        state["recovery_final_worker_stats"] = stats
+        state["recovery_final_operation_ids"] = [operation.id for operation in operations]
+        state["recovery_final_operation_statuses"] = [operation.status for operation in operations]
+
+
 def bridge(route):
     request = route.request
     url = urlsplit(request.url)
@@ -430,12 +774,35 @@ def bridge(route):
 
         if request.method == "GET" and path == "/marketplaces/ozon/uploads/api/review":
             query = parse_qs(url.query, keep_blank_values=True)
-            assert query.get("account_id") == [str(account_id)], query
-            assert query.get("parent_prepare_job_uid") == [state["source_job_uid"]], query
+            is_negative_probe = state.get("recovery_negative_probe_active") is True
+            if not is_negative_probe:
+                assert query.get("account_id") == [str(account_id)], query
             ids = [int(value) for value in query.get("draft_ids", [""])[0].split(",")]
-            assert ids == state["draft_ids"], (ids, state["draft_ids"])
             page = int(query.get("page", ["1"])[0])
-            state["review_api_pages"].append(page)
+            if query.get("result_job_uid"):
+                assert query.get("result_job_uid") == [state["recovery_initial_result_uid"]], query
+                assert not query.get("parent_prepare_job_uid"), query
+                state["recovery_review_api_pages"].append(page)
+                state["recovery_review_queries"].append({
+                    "account_id": query.get("account_id"),
+                    "draft_ids": ids,
+                    "result_job_uid": query.get("result_job_uid"),
+                    "page": page,
+                })
+                assert page == 1
+                if ids == state["recovery_expected_ids"]:
+                    pass
+                else:
+                    # Negative exact-scope probes deliberately ask for one
+                    # altered ID set; the route must reject every one.
+                    assert state.get("recovery_negative_probe_active") is True
+            elif query.get("parent_prepare_job_uid") == [state.get("recovery_source_job_uid")]:
+                assert ids == state["recovery_source_draft_ids"], (ids, state["recovery_source_draft_ids"])
+                state.setdefault("recovery_source_review_api_pages", []).append(page)
+            else:
+                assert query.get("parent_prepare_job_uid") == [state["source_job_uid"]], query
+                assert ids == state["draft_ids"], (ids, state["draft_ids"])
+                state["review_api_pages"].append(page)
 
         if request.method == "POST" and path == "/marketplaces/ozon/uploads/":
             body = json.loads(request.post_data or "{}")
@@ -467,28 +834,72 @@ def bridge(route):
             body = json.loads(request.post_data or "{}")
             assert body.get("account_id") == account_id
             assert body.get("confirm_write") is True
-            assert body.get("parent_prepare_job_uid") == state["source_job_uid"]
-            assert set(body.get("draft_ids", [])) == set(state["ready_draft_ids"])
-            assert len(body.get("draft_ids", [])) == 2
-            assert set(body.get("expected_versions", {})) == {
-                str(draft_id) for draft_id in state["ready_draft_ids"]
-            }
-            assert all(
-                type(version) is int and version == state["review_versions"][draft_id]
-                for draft_id, version in (
-                    (int(key), value) for key, value in body["expected_versions"].items()
-                )
-            )
             assert re.fullmatch(r"[A-Za-z0-9_-]{24,128}", body.get("request_key", ""))
-            state["reviewed_post"] = {
-                "account_id": body["account_id"],
-                "draft_ids": body["draft_ids"],
-                "expected_versions": body["expected_versions"],
-                "parent_prepare_job_uid": body["parent_prepare_job_uid"],
-                "confirm_write": body["confirm_write"],
-                "csrf": True,
-            }
-            state["queue_confirmed"] = True
+            if state.get("recovery_confirmation_pending"):
+                expected_ids = state["recovery_expected_ids"]
+                assert body.get("result_job_uid") == state["recovery_initial_result_uid"]
+                assert not body.get("parent_prepare_job_uid")
+                assert set(body.get("draft_ids", [])) == set(expected_ids)
+                assert len(body.get("draft_ids", [])) == len(expected_ids)
+                expected_versions = state["recovery_current_review_versions"]
+                assert body.get("expected_versions") == {
+                    str(draft_id): expected_versions[draft_id]
+                    for draft_id in body["draft_ids"]
+                }
+                state["recovery_final_post"] = {
+                    "account_id": body["account_id"],
+                    "draft_ids": body["draft_ids"],
+                    "expected_versions": body["expected_versions"],
+                    "result_job_uid": body["result_job_uid"],
+                    "confirm_write": body["confirm_write"],
+                    "csrf": True,
+                }
+            elif state.get("recovery_initial_queue_pending"):
+                expected_ids = state["recovery_source_draft_ids"]
+                assert body.get("parent_prepare_job_uid") == state["recovery_source_job_uid"]
+                assert not body.get("result_job_uid")
+                assert set(body.get("draft_ids", [])) == set(expected_ids)
+                assert len(body.get("draft_ids", [])) == 5
+                assert set(body.get("expected_versions", {})) == {
+                    str(draft_id) for draft_id in expected_ids
+                }
+                assert all(
+                    type(version) is int and version == state["recovery_review_versions"][draft_id]
+                    for draft_id, version in (
+                        (int(key), value) for key, value in body["expected_versions"].items()
+                    )
+                )
+                state["recovery_initial_post"] = {
+                    "account_id": body["account_id"],
+                    "draft_ids": body["draft_ids"],
+                    "expected_versions": body["expected_versions"],
+                    "parent_prepare_job_uid": body["parent_prepare_job_uid"],
+                    "confirm_write": body["confirm_write"],
+                    "csrf": True,
+                }
+            else:
+                assert body.get("parent_prepare_job_uid") == state["source_job_uid"]
+                assert not body.get("result_job_uid")
+                assert set(body.get("draft_ids", [])) == set(state["ready_draft_ids"])
+                assert len(body.get("draft_ids", [])) == 2
+                assert set(body.get("expected_versions", {})) == {
+                    str(draft_id) for draft_id in state["ready_draft_ids"]
+                }
+                assert all(
+                    type(version) is int and version == state["review_versions"][draft_id]
+                    for draft_id, version in (
+                        (int(key), value) for key, value in body["expected_versions"].items()
+                    )
+                )
+                state["reviewed_post"] = {
+                    "account_id": body["account_id"],
+                    "draft_ids": body["draft_ids"],
+                    "expected_versions": body["expected_versions"],
+                    "parent_prepare_job_uid": body["parent_prepare_job_uid"],
+                    "confirm_write": body["confirm_write"],
+                    "csrf": True,
+                }
+                state["queue_confirmed"] = True
 
         response = route.fetch(max_redirects=0)
         if response.status >= 500:
@@ -511,9 +922,18 @@ def bridge(route):
             assert accepted["success"] is True
             assert accepted["run"]["mode"] == "reviewed_drafts"
             assert accepted["run"]["account_id"] == account_id
-            # This is the real queue worker, after the explicit review/confirm
-            # POST. It creates durable operation rows but never calls a provider.
-            _run_real_review_worker()
+            if state.get("recovery_confirmation_pending"):
+                state["recovery_final_result_uid"] = accepted["run"]["job_uid"]
+                _run_real_recovery_followup_worker()
+            elif state.get("recovery_initial_queue_pending"):
+                state["recovery_initial_result_uid"] = accepted["run"]["job_uid"]
+                _edit_recovery_draft_after_acceptance()
+                _run_real_recovery_review_worker()
+                state["recovery_initial_queue_pending"] = False
+            else:
+                # This is the original real queue worker, after the explicit
+                # review/confirm POST. It never calls a provider.
+                _run_real_review_worker()
 
         route.fulfill(response=response)
         return
@@ -561,6 +981,298 @@ def passed(name):
     assert report["provider_attempts"] == 0
     report["checks"].append(name)
     print(json.dumps({"browser_check": name}), flush=True)
+
+
+def run_recovery_browser_journey(page, browser, context):
+    """Exercise exact, read-only reviewed-result recovery end to end."""
+    source_job_uid = _seed_recovery_source_run()
+    page.set_viewport_size({"width": 1440, "height": 980})
+    page.goto(f"{base}/marketplaces/ozon/uploads/{source_job_uid}")
+    source_review_link = page.locator("a[data-source-prepare-review]")
+    source_review_link.wait_for()
+    source_review_href = source_review_link.get_attribute("href")
+    source_review_query = parse_qs(urlsplit(source_review_href).query)
+    assert urlsplit(source_review_href).path == "/marketplaces/ozon/uploads/review"
+    assert source_review_query.get("account_id") == [str(account_id)]
+    assert source_review_query.get("parent_prepare_job_uid") == [source_job_uid]
+    assert [
+        int(value) for value in source_review_query["draft_ids"][0].split(",")
+    ] == state["recovery_source_draft_ids"]
+
+    page.goto(base + source_review_href)
+    page.locator("#ozon-upload-review:not([v-cloak])").wait_for()
+    prepared_review = page.evaluate(
+        "() => JSON.parse(document.querySelector('#our-bootstrap').textContent).review"
+    )
+    assert prepared_review["account_id"] == account_id
+    assert prepared_review["parent_prepare_job_uid"] == source_job_uid
+    assert prepared_review["draft_ids"] == state["recovery_source_draft_ids"]
+    assert len(prepared_review["items"]) == 5
+    assert all(item["selectable"] for item in prepared_review["items"])
+    assert all(item["version"] > 0 for item in prepared_review["items"])
+    state["recovery_review_versions"] = {
+        item["draft_id"]: item["version"] for item in prepared_review["items"]
+    }
+    all_ready = page.get_by_role(
+        "button", name="Проверить все готовые", exact=True,
+    )
+    all_ready.click()
+    first_confirmation = page.get_by_role("dialog")
+    first_confirmation.wait_for(state="visible")
+    assert first_confirmation.locator(".our-dialog-list li").count() == 5
+    assert "Готовы к отправке: 5 из 5 проверенных." in (
+        first_confirmation.locator(".our-dialog-summary").inner_text()
+    )
+    first_confirm_checkbox = first_confirmation.locator(".our-confirm input")
+    first_confirm_checkbox.check()
+    with page.expect_response(lambda response: (
+        response.request.method == "POST"
+        and urlsplit(response.url).path == "/marketplaces/ozon/uploads/from-drafts"
+    )) as initial_recovery_queue_response_info:
+        first_confirmation.get_by_role(
+            "button", name="Отправить проверенные карточки", exact=True,
+        ).click()
+    initial_recovery_queue_response = initial_recovery_queue_response_info.value
+    assert initial_recovery_queue_response.status == 202
+    assert state["recovery_initial_post"]["draft_ids"]
+    assert state["recovery_initial_worker_stats"]["enqueued"] == 4
+    assert state["recovery_initial_operation_statuses"] == {
+        "rejected": "failed",
+        "success": "succeeded",
+        "noop": "succeeded",
+        "uncertain": "uncertain",
+    }
+    assert report["provider_fake_status_reads"] == 1
+    assert state["recovery_edited_version"] > state["recovery_review_versions"][
+        state["recovery_draft_by_kind"]["stale"]
+    ]
+    page.wait_for_url(f"**/marketplaces/ozon/uploads/{state['recovery_initial_result_uid']}")
+
+    result_uid = state["recovery_initial_result_uid"]
+    expected_ids = state["recovery_expected_ids"]
+    excluded_ids = state["recovery_excluded_ids"]
+    result_write_marker = len(business_write_events)
+    result_counts = _business_counts()
+    page.set_viewport_size({"width": 320, "height": 780})
+    recovery_cta = page.locator("a[data-reviewed-result-recovery]")
+    recovery_cta.wait_for()
+    assert recovery_cta.inner_text().strip() == "Проверить оставшиеся карточки"
+    assert recovery_cta.get_attribute("aria-label") == (
+        "Проверить оставшиеся карточки (2)"
+    )
+    recovery_href = recovery_cta.get_attribute("href")
+    recovery_parts = urlsplit(recovery_href)
+    recovery_query = parse_qs(recovery_parts.query)
+    assert recovery_parts.path == "/marketplaces/ozon/uploads/review"
+    assert recovery_query.get("account_id") == [str(account_id)]
+    assert recovery_query.get("result_job_uid") == [result_uid]
+    assert [int(value) for value in recovery_query["draft_ids"][0].split(",")] == expected_ids
+    assert set(expected_ids).isdisjoint(excluded_ids)
+    assert len(expected_ids) == 2 and len(excluded_ids) == 3
+    assert "Без изменений" in page.locator(".max-w-7xl").inner_text()
+    assert "Требуют внимания" in page.locator(".max-w-7xl").inner_text()
+    result_bounds = recovery_cta.bounding_box()
+    assert result_bounds and result_bounds["height"] >= 32, result_bounds
+    assert result_bounds["x"] >= 0 and result_bounds["x"] + result_bounds["width"] <= 320
+    assert page.evaluate(
+        "() => document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+    )
+    assert len(business_write_events) == result_write_marker, business_write_events[result_write_marker:]
+    assert _business_counts() == result_counts
+
+    # Enter activates the exact CTA on the narrow result page.
+    recovery_cta.focus()
+    page.keyboard.press("Enter")
+    page.wait_for_url("**/marketplaces/ozon/uploads/review?*")
+    page.locator("#ozon-upload-review:not([v-cloak])").wait_for()
+    result_review = page.evaluate(
+        "() => JSON.parse(document.querySelector('#our-bootstrap').textContent).review"
+    )
+    assert result_review["account_id"] == account_id
+    assert result_review["result_job_uid"] == result_uid
+    assert not result_review.get("parent_prepare_job_uid")
+    assert result_review["draft_ids"] == expected_ids
+    assert len(result_review["items"]) == 2
+    recovery_rows = {item["draft_id"]: item for item in result_review["items"]}
+    stale_id = state["recovery_draft_by_kind"]["stale"]
+    rejected_id = state["recovery_draft_by_kind"]["rejected"]
+    assert set(recovery_rows) == {stale_id, rejected_id}
+    assert recovery_rows[stale_id]["version"] == state["recovery_edited_version"]
+    assert recovery_rows[rejected_id]["version"] == state["recovery_review_versions"][rejected_id]
+    assert all(row["selectable"] for row in recovery_rows.values())
+    state["recovery_current_review_versions"] = {
+        draft_id: row["version"] for draft_id, row in recovery_rows.items()
+    }
+    back_link = page.get_by_role("link", name="К результату отправки", exact=True)
+    back_link.wait_for()
+    assert urlsplit(back_link.get_attribute("href")).path == (
+        f"/marketplaces/ozon/uploads/{result_uid}"
+    )
+    review_context_text = page.locator(".our-context").inner_text()
+    assert "Ozon CI 0" in review_context_text
+    review_write_marker = len(business_write_events)
+    review_counts = _business_counts()
+
+    negative_cases = [
+        {
+            "name": "wrong_account",
+            "account_id": fixture["foreign_account_id"],
+            "draft_ids": expected_ids,
+        },
+        {
+            "name": "wrong_owner",
+            "account_id": account_id,
+            "draft_ids": [stale_id, state["foreign_draft_id"]],
+        },
+        {
+            "name": "extra_success",
+            "account_id": account_id,
+            "draft_ids": [stale_id, rejected_id, state["recovery_draft_by_kind"]["success"]],
+        },
+        {
+            "name": "missing_current_row",
+            "account_id": account_id,
+            "draft_ids": [stale_id, 9007199254740991],
+        },
+        {
+            "name": "mixed_unsafe_statuses",
+            "account_id": account_id,
+            "draft_ids": [*expected_ids, *excluded_ids],
+        },
+        {
+            "name": "no_eligible_rows",
+            "account_id": account_id,
+            "draft_ids": [state["recovery_draft_by_kind"]["success"]],
+        },
+    ]
+    state["recovery_negative_probe_active"] = True
+    negative_responses = page.evaluate(
+        """async cases => Promise.all(cases.map(async item => {
+            const query = new URLSearchParams({
+                account_id: String(item.account_id),
+                draft_ids: item.draft_ids.join(','),
+                result_job_uid: item.result_job_uid,
+            });
+            const response = await fetch('/marketplaces/ozon/uploads/api/review?' + query, {
+                credentials: 'same-origin',
+                headers: {Accept: 'application/json'},
+            });
+            return {name: item.name, status: response.status,
+                    body: await response.json()};
+        }))""",
+        [dict(case, result_job_uid=result_uid) for case in negative_cases],
+    )
+    state["recovery_negative_probe_active"] = False
+    assert {item["name"] for item in negative_responses} == {
+        item["name"] for item in negative_cases
+    }
+    assert all(item["status"] in {404, 409} for item in negative_responses), negative_responses
+    assert all(item["body"].get("success") is False for item in negative_responses)
+    assert len(business_write_events) == review_write_marker, business_write_events[review_write_marker:]
+    assert _business_counts() == review_counts
+
+    # JavaScript-disabled rendering uses the same current account/result and
+    # exact draft versions for the classic form.
+    classic_context = browser.new_context(
+        java_script_enabled=False,
+        viewport={"width": 320, "height": 780},
+        service_workers="block",
+        timezone_id="Europe/Moscow",
+        storage_state=context.storage_state(),
+    )
+    classic_context.route("**/*", bridge)
+    classic_page = classic_context.new_page()
+    classic_page.set_default_timeout(20000)
+    classic_page.goto(base + recovery_href)
+    classic_page.locator(".our-noscript").wait_for()
+    classic_bootstrap = json.loads(
+        classic_page.locator("#our-bootstrap").inner_text()
+    )["review"]
+    assert classic_bootstrap["result_job_uid"] == result_uid
+    assert classic_bootstrap["account_id"] == account_id
+    assert [item["draft_id"] for item in classic_bootstrap["items"]] == expected_ids
+    assert {
+        int(key): value for key, value in classic_bootstrap["expected_versions"].items()
+    } == {
+        stale_id: state["recovery_edited_version"],
+        rejected_id: state["recovery_review_versions"][rejected_id],
+    }
+    assert "Ozon CI 0" in classic_page.locator(".our-context").inner_text()
+    classic_back = classic_page.get_by_role("link", name="К результату отправки", exact=True)
+    assert urlsplit(classic_back.get_attribute("href")).path == (
+        f"/marketplaces/ozon/uploads/{result_uid}"
+    )
+    assert classic_page.locator('input[name="result_job_uid"]').get_attribute("value") == result_uid
+    assert "BR Recovery · изменённая версия" in classic_page.locator(".our-noscript").inner_text()
+    assert "BR Recovery · окончательный отказ Ozon" in classic_page.locator(".our-noscript").inner_text()
+    assert classic_page.evaluate(
+        "() => document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+    )
+    assert len(business_write_events) == review_write_marker, business_write_events[review_write_marker:]
+    classic_context.close()
+
+    # The seller checks the exact two currently recoverable rows and confirms
+    # once. The worker queues only this subset and no provider write runs.
+    batch_review = page.get_by_role(
+        "button", name="Проверить все готовые", exact=True,
+    )
+    batch_review.click()
+    final_dialog = page.get_by_role("dialog")
+    final_dialog.wait_for(state="visible")
+    assert final_dialog.locator(".our-dialog-list li").count() == 2
+    final_copy = final_dialog.inner_text()
+    assert state["recovery_titles"]["stale"] in final_copy
+    assert state["recovery_titles"]["rejected"] in final_copy
+    confirm = final_dialog.locator(".our-confirm input")
+    confirm.check()
+    send = final_dialog.get_by_role(
+        "button", name="Отправить проверенные карточки", exact=True,
+    )
+    assert send.is_enabled()
+    state["recovery_confirmation_pending"] = True
+    with page.expect_response(lambda response: (
+        response.request.method == "POST"
+        and urlsplit(response.url).path == "/marketplaces/ozon/uploads/from-drafts"
+    )) as final_response_info:
+        send.click()
+    final_response = final_response_info.value
+    assert final_response.status == 202
+    assert set(state["recovery_final_post"]["draft_ids"]) == set(expected_ids)
+    assert state["recovery_final_post"]["result_job_uid"] == result_uid
+    assert state["recovery_final_post"]["expected_versions"] == {
+        str(draft_id): version
+        for draft_id, version in state["recovery_current_review_versions"].items()
+    }
+    assert state["recovery_final_worker_stats"]["enqueued"] == 2
+    assert len(state["recovery_final_operation_ids"]) == 2
+    assert state["recovery_final_operation_statuses"] == ["queued", "queued"]
+    assert report["provider_dispatch_calls"] == 0
+    assert report["provider_attempts"] == 0
+    assert report["provider_fake_status_reads"] == 1
+    report["reviewed_result_recovery"].update({
+        "source_result_job_uid": result_uid,
+        "source_draft_ids": state["recovery_source_draft_ids"],
+        "result_recovery_draft_ids": expected_ids,
+        "excluded_success_noop_uncertain_ids": excluded_ids,
+        "cta_query_exact": True,
+        "vue_review_exact": True,
+        "classic_review_exact": True,
+        "stale_review_version": state["recovery_review_versions"][stale_id],
+        "current_version_after_edit": state["recovery_edited_version"],
+        "fake_task_status_reads": report["provider_fake_status_reads"],
+        "negative_scope_responses": [
+            {"name": item["name"], "status": item["status"]}
+            for item in negative_responses
+        ],
+        "final_accepted_draft_ids": state["recovery_final_post"]["draft_ids"],
+        "final_enqueued_operation_ids": state["recovery_final_operation_ids"],
+        "final_enqueued_operation_statuses": state["recovery_final_operation_statuses"],
+        "read_only_result_and_review_gets": True,
+        "narrow_keyboard_cta_activation": True,
+        "classic_mobile_no_horizontal_overflow": True,
+        "result_cta_bounds_320": result_bounds,
+    })
+    passed("reviewed_result_recovery_returns_exact_current_rows_read_only_and_queues_only_confirmed_subset")
 
 
 def run_browser_journey():
@@ -1022,6 +1734,7 @@ def run_browser_journey():
         assert not report["unexpected_http"]
         assert not report["js_errors"]
         passed("explicit_reviewed_queue_creates_exactly_one_create_and_one_update_without_provider_dispatch")
+        run_recovery_browser_journey(page, browser, context)
         browser.close()
 
 
