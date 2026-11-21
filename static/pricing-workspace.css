@@ -68,6 +68,10 @@
     background: var(--bg-card);
 }
 
+.pricing-workspace-mobile-nav {
+    display: none;
+}
+
 .pricing-workspace-link {
     display: inline-flex;
     align-items: center;
@@ -355,12 +359,78 @@
 }
 
 @media (max-width: 680px) {
-    .pricing-workspace-nav {
+    .pricing-workspace-nav--desktop {
+        display: none;
+    }
+
+    .pricing-workspace-mobile-nav {
+        display: block;
+        min-width: 0;
+        margin: 0 0 20px;
+        border: 1px solid var(--border);
+        border-radius: var(--r-md, 8px);
+        background: var(--bg-card);
+        color: var(--text);
+    }
+
+    .pricing-workspace-nav-summary {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+        min-height: 44px;
+        padding: 8px 12px;
+        color: var(--text-secondary);
+        font-size: 13px;
+        line-height: 1.35;
+        cursor: pointer;
+        list-style: none;
+    }
+
+    .pricing-workspace-nav-summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .pricing-workspace-nav-summary::after {
+        flex: 0 0 auto;
+        margin-left: auto;
+        color: var(--text-muted);
+        content: "▾";
+    }
+
+    .pricing-workspace-mobile-nav[open] > .pricing-workspace-nav-summary::after {
+        content: "▴";
+    }
+
+    .pricing-workspace-nav-summary-title {
+        flex: 0 0 auto;
+        font-weight: 600;
+    }
+
+    .pricing-workspace-nav-summary-current {
+        flex: 1 1 auto;
+        min-width: 0;
+        color: var(--accent-strong);
+        font-size: 12px;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+        text-align: right;
+        white-space: normal;
+    }
+
+    .pricing-workspace-mobile-links {
+        min-width: 0;
+        padding: 8px;
+        border-top: 1px solid var(--border);
+    }
+
+    .pricing-workspace-mobile-nav[open] > .pricing-workspace-mobile-links {
+        display: grid;
         gap: 3px;
     }
 
-    .pricing-workspace-link {
-        flex: 1 1 145px;
+    .pricing-workspace-mobile-links .pricing-workspace-link {
+        width: 100%;
         justify-content: flex-start;
     }
 

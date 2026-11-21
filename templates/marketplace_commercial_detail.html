@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Изменение Ozon #{{ proposal.id }} — Seller Hub{% endblock %}
 {% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}"><link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='ozon-commercial.css') }}">{% endblock %}
+<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='20261121-pricing-compact-nav') }}"><link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='ozon-commercial.css') }}">{% endblock %}
 {% block content %}
 <script type="application/json" id="oc-bootstrap">{{ {'mode':'detail', 'proposalId':proposal.id, 'base':url_for('marketplace_commercial.index'), 'catalog':url_for('marketplace_listings.index'), 'writeEnabled':write_enabled} | tojson }}</script>
 <div class="oc-fallback" id="oc-fallback">Загружаем изменение… <a href="{{ url_for('marketplace_commercial.classic_detail', proposal_id=proposal.id) }}">Открыть упрощённую версию</a></div>

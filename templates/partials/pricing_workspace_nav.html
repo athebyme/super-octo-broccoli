@@ -25,12 +25,27 @@
         {'key': 'ozon-proposals', 'label': 'Предложения Ozon', 'href': url_for('marketplace_commercial.index', account_id=pricing_nav_account)}
     ] %}
 {% endif %}
-<nav class="pricing-workspace-nav" aria-label="Цены, расчёты и история">
-    {% for item in pricing_workspace_items %}
+{% set pricing_workspace_active = pricing_workspace_items | selectattr('key', 'equalto', pricing_workspace_current) | first %}
+{% macro render_pricing_workspace_links(items, current) %}
+    {% for item in items %}
     <a href="{{ item.href }}"
-       class="pricing-workspace-link{% if pricing_workspace_current == item.key %} is-current{% endif %}"
-       {% if pricing_workspace_current == item.key %}aria-current="page"{% endif %}>
+       class="pricing-workspace-link{% if current == item.key %} is-current{% endif %}"
+       {% if current == item.key %}aria-current="page"{% endif %}>
         {{ item.label }}
     </a>
     {% endfor %}
+{% endmacro %}
+<nav class="pricing-workspace-nav pricing-workspace-nav--desktop" aria-label="Цены, расчёты и история">
+    {{ render_pricing_workspace_links(pricing_workspace_items, pricing_workspace_current) }}
 </nav>
+<details class="pricing-workspace-mobile-nav">
+    <summary class="pricing-workspace-nav-summary">
+        <span class="pricing-workspace-nav-summary-title">Разделы цен</span>
+        {% if pricing_workspace_active %}
+        <span class="pricing-workspace-nav-summary-current">{{ pricing_workspace_active.label }}</span>
+        {% endif %}
+    </summary>
+    <nav class="pricing-workspace-mobile-links" aria-label="Цены, расчёты и история">
+        {{ render_pricing_workspace_links(pricing_workspace_items, pricing_workspace_current) }}
+    </nav>
+</details>

@@ -2,7 +2,7 @@
 {% from "macros/icons.html" import icon %}
 {% block title %}Цены и остатки Ozon — Seller Hub{% endblock %}
 {% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}"><link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='ozon-commercial.css', v='20261121-ozon-bulk-prices') }}">{% endblock %}
+<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='20261121-pricing-compact-nav') }}"><link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='ozon-commercial.css', v='20261121-ozon-bulk-prices') }}">{% endblock %}
 {% block content %}
 <script type="application/json" id="oc-bootstrap">{{ {'mode':'list', 'filters':filters, 'base':url_for('marketplace_commercial.index'), 'catalog':url_for('marketplace_listings.index'), 'writeEnabled':write_enabled, 'bulkSelection':bulk_selection|default(none), 'workspaceOwner':(current_user.id|string) ~ ':' ~ (current_user.seller.id|string), 'workspaceUrl':url_for('seller_my_products_beta')} | tojson }}</script>
 <div class="oc-fallback" id="oc-fallback">Загружаем цены и остатки… <a href="{{ url_for('marketplace_commercial.classic', account_id=filters.account_id) }}">Открыть упрощённую версию</a></div>
