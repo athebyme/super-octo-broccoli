@@ -162,7 +162,11 @@ function assertTerminalRefresh(calls) {
 
   // A failed status read is displayed as an unknown read-only outcome. It is
   // terminal for this poll, refreshes the visible list once, and never POSTs.
-  const lostRead = makeApp(() => Promise.reject(new TypeError('network unavailable')));
+  const lostReadResponse = deferred();
+  lostReadResponse.reject(new TypeError('network unavailable'));
+  const confirmedAfterLoss = deferred();
+  const lostReadResponses = [lostReadResponse, confirmedAfterLoss];
+  const lostRead = makeApp(() => lostReadResponses.shift().promise);
   lostRead.app.trackJob('bulk-lost-read', 1);
   await flush();
   assert.equal(lostRead.calls.get.length, 1);
@@ -173,6 +177,66 @@ function assertTerminalRefresh(calls) {
   assert.deepEqual(activeTimerIds(), []);
   assertTerminalRefresh(lostRead.calls);
   assert.equal(lostRead.calls.post, 0);
+
+  // The explicit retry reads the same job UID, remains a GET-only action, and
+  // replaces the unknown state only after the server returns a valid result.
+  assert.equal(typeof lostRead.app.recheckJob, 'function');
+  lostRead.app.recheckJob();
+  lostRead.app.recheckJob();
+  assert.deepEqual(lostRead.calls.get, [
+    '/api/jobs/bulk-lost-read',
+    '/api/jobs/bulk-lost-read',
+  ], 'overlapping status checks coalesce to one GET for the same job UID');
+  assert.equal(lostRead.app.job.status, 'unknown',
+    'starting a recheck does not turn an unknown outcome into success');
+  confirmedAfterLoss.resolve({
+    job_uid: 'bulk-lost-read', job_type: 'bulk_wb_import', status: 'completed',
+    total: 1, processed: 1, succeeded: 1, failed_count: 0,
+  });
+  await flush();
+  assert.equal(lostRead.app.job.status, 'done');
+  assert.equal(lostRead.app.job.succeeded, 1);
+  assert.equal(lostRead.app._jobTimer, null);
+  assert.deepEqual(activeTimerIds(), []);
+  assert.equal(lostRead.calls.loads, 2,
+    'the verified terminal recheck refreshes the list after the earlier unknown read');
+  assert.equal(lostRead.calls.facets, 2);
+  assert.equal(lostRead.calls.post, 0, 'status recheck never retries the create POST');
+
+  // Malformed, foreign-UID, and unknown-state replies must not overwrite the
+  // explicit unknown outcome with a false terminal result.
+  const unsafeReplies = [
+    unknownUid => ({job_uid: 'malformed-reply'}),
+    unknownUid => ({
+      job_uid: 'different-job', status: 'completed', total: 1,
+      processed: 1, succeeded: 1, failed_count: 0,
+    }),
+    unknownUid => ({
+      job_uid: unknownUid, status: 'awaiting-provider', total: 1,
+      processed: 1, succeeded: 1, failed_count: 0,
+    }),
+  ];
+  for (let index = 0; index < unsafeReplies.length; index += 1) {
+    const unknownUid = 'unknown-state-' + index;
+    const failedInitialRead = deferred();
+    failedInitialRead.reject(new TypeError('network unavailable'));
+    const recheckResponse = deferred();
+    const replies = [failedInitialRead, recheckResponse];
+    const guarded = makeApp(() => replies.shift().promise);
+    guarded.app.trackJob(unknownUid, 1);
+    await flush();
+    assert.equal(guarded.app.job.status, 'unknown');
+    guarded.app.recheckJob();
+    recheckResponse.resolve(unsafeReplies[index](unknownUid));
+    await flush();
+    assert.equal(guarded.app.job.status, 'unknown');
+    assert.ok(String(guarded.app.job.message || '').trim().length > 0);
+    assert.equal(guarded.app._jobTimer, null);
+    assert.deepEqual(activeTimerIds(), []);
+    assertTerminalRefresh(guarded.calls);
+    assert.equal(guarded.calls.get.length, 2);
+    assert.equal(guarded.calls.post, 0);
+  }
 
   // Repeated timer ticks do not start overlapping GETs. Once the first read
   // settles as pending/running, the next tick can make one new read.
