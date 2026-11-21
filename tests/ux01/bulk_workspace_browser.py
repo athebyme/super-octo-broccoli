@@ -374,6 +374,11 @@ def run():
     price_create_posts = []
     price_create_receipts = []
     price_create_attempts = []
+    price_create_server_results = []
+    lost_price_create_response = {
+        "armed": False, "body": None, "body_text": None,
+        "receipt": None, "retry_seen": False,
+    }
     price_preview_posts = []
     price_preview_responses = []
     price_decisions = []
@@ -568,8 +573,38 @@ def run():
                 receipt = response.json()
                 if receipt.get("success") is not True or not isinstance(receipt.get("batch_id"), int):
                     raise AssertionError("WB price create returned no exact batch receipt")
+                attempt["batch_id"] = receipt["batch_id"]
+                attempt["replayed"] = receipt.get("replayed") is True
                 attempt["status"] = response.status
                 price_create_attempts.append(attempt)
+                price_create_server_results.append({
+                    "status": response.status,
+                    "batch_id": receipt["batch_id"],
+                    "selected_count": receipt.get("selected_count"),
+                    "changed_count": receipt.get("changed_count"),
+                    "batch_status": receipt.get("status"),
+                    "redirect": receipt.get("redirect"),
+                    "stats": receipt.get("stats"),
+                    "replayed": receipt.get("replayed") is True,
+                })
+                if lost_price_create_response["armed"]:
+                    if lost_price_create_response["body"] is not None:
+                        raise AssertionError("Only one simulated lost price response is supported")
+                    lost_price_create_response.update({
+                        "armed": False,
+                        "body": json.loads(json.dumps(body)),
+                        "body_text": request.post_data,
+                        "receipt": receipt,
+                    })
+                    route.abort("failed")
+                    return
+                if (lost_price_create_response["body"] is not None
+                        and not lost_price_create_response["retry_seen"]):
+                    if body != lost_price_create_response["body"]:
+                        raise AssertionError("WB retry changed the immutable reviewed request body")
+                    if request.post_data != lost_price_create_response["body_text"]:
+                        raise AssertionError("WB retry did not replay the exact original JSON body")
+                    lost_price_create_response["retry_seen"] = True
                 price_create_posts.append({
                     "product_ids": body["product_ids"],
                     "reviewed_write": body["reviewed_write"],
@@ -1382,10 +1417,109 @@ def run():
             ).count() == batches_before_stale_save
         checks.append("wb_server_rejects_stale_review_token_without_batch_or_provider_write")
 
-        # Return to the catalogue with the failed preview still visibly
-        # recoverable through its exact original workspace hash.
-        stale_preview_return = page.locator("a[data-price-workspace-return]:visible").last
-        assert urlsplit(stale_preview_return.get_attribute("href") or "").fragment == comparison_hash
+        # A committed request whose response is lost remains explicitly
+        # retryable after reload. The retry must replay the same signed body
+        # and return the original batch without a second insert.
+        replay_preview, _replay_preview_response = calculate_price_preview("fixed", 5)
+        assert replay_preview["stats"]["selected_count"] == 3
+        assert replay_preview["stats"]["changed_count"] == 3
+        assert replay_preview["stats"]["dangerous"] == 0
+        assert replay_preview["can_create"] is True
+        with fixture.app.app_context():
+            replay_batches_before = PriceChangeBatch.query.filter_by(
+                seller_id=fixture.FIXTURE["seller_id"],
+            ).count()
+        replay_attempts_before = len(price_create_attempts)
+        replay_server_results_before = len(price_create_server_results)
+        replay_ui_receipts_before = len(price_create_receipts)
+        replay_ui_posts_before = len(price_create_posts)
+        replay_provider_attempts_before = fixture.REPORT["provider_attempts"]
+        lost_price_create_response["armed"] = True
+        with page.expect_event("requestfailed", predicate=lambda request: (
+            urlsplit(request.url).path == LOCAL_PRICE_CREATE
+            and request.method == "POST"
+        )):
+            page.locator("[data-price-reviewed-save]").click()
+        assert lost_price_create_response["body"] is not None
+        assert len(price_create_attempts) == replay_attempts_before + 1
+        assert len(price_create_server_results) == replay_server_results_before + 1
+        first_commit = price_create_server_results[-1]
+        lost_receipt = lost_price_create_response["receipt"]
+        assert first_commit["status"] == 200
+        assert first_commit["replayed"] is False
+        assert first_commit["batch_id"] == lost_receipt["batch_id"]
+        assert len(price_create_posts) == replay_ui_posts_before
+        assert len(price_create_receipts) == replay_ui_receipts_before
+        assert page.locator("[data-price-reviewed-retry]").is_visible()
+        assert urlsplit(page.url).path == "/prices/change"
+        with fixture.app.app_context():
+            assert PriceChangeBatch.query.filter_by(
+                seller_id=fixture.FIXTURE["seller_id"],
+            ).count() == replay_batches_before + 1
+            replay_batch = PriceChangeBatch.query.filter_by(
+                id=lost_receipt["batch_id"],
+                seller_id=fixture.FIXTURE["seller_id"],
+            ).one()
+            assert PriceChangeItem.query.filter_by(batch_id=replay_batch.id).count() == 3
+
+        attempts_before_reload = len(price_create_attempts)
+        server_results_before_reload = len(price_create_server_results)
+        page.reload(wait_until="domcontentloaded")
+        page.locator('[x-data^="priceChangeApp("]').wait_for(state="visible")
+        page.locator("[data-price-reviewed-retry]").wait_for(state="visible")
+        page.wait_for_function("""ids => {
+            const element = document.querySelector('[x-data^="priceChangeApp("]');
+            return element && window.Alpine &&
+                Alpine.$data(element).selectedIds.join(',') === ids.join(',');
+        }""", arg=comparison_product_ids)
+        assert len(price_create_attempts) == attempts_before_reload
+        assert len(price_create_server_results) == server_results_before_reload
+        assert fixture.REPORT["provider_attempts"] == replay_provider_attempts_before == 0
+
+        with page.expect_response(lambda response: (
+            urlsplit(response.url).path == LOCAL_PRICE_CREATE
+            and response.request.method == "POST"
+        )) as recovered_save_response_info:
+            page.locator("[data-price-reviewed-retry]").click()
+        recovered_save_response = recovered_save_response_info.value
+        assert recovered_save_response.status == 200
+        replayed_receipt = recovered_save_response.json()
+        assert replayed_receipt.get("replayed") is True
+        assert lost_price_create_response["retry_seen"] is True
+        assert len(price_create_attempts) == replay_attempts_before + 2
+        assert price_create_attempts[-1]["status"] == 200
+        assert price_create_attempts[-1]["replayed"] is True
+        assert price_create_server_results[-1]["replayed"] is True
+        assert price_create_server_results[-1]["batch_id"] == first_commit["batch_id"]
+        for receipt_field in (
+            "batch_id", "status", "redirect", "selected_count", "changed_count", "stats",
+        ):
+            assert replayed_receipt[receipt_field] == lost_receipt[receipt_field], receipt_field
+        assert replayed_receipt["selected_count"] == 3
+        assert replayed_receipt["changed_count"] == 3
+        assert urlsplit(page.url).path == f"/prices/batch/{first_commit['batch_id']}"
+        assert page.get_by_text("Готово к применению", exact=True).is_visible()
+        assert page.locator("tbody tr").count() == 3
+        replay_return = page.locator("a[data-price-workspace-return]:visible").first
+        assert replay_return.inner_text().strip() == "Вернуться к товарам"
+        assert urlsplit(replay_return.get_attribute("href") or "").fragment == comparison_hash
+        assert len(price_create_posts) == replay_ui_posts_before + 1
+        assert len(price_create_receipts) == replay_ui_receipts_before + 1
+        assert price_create_receipts[-1]["batch_id"] == first_commit["batch_id"]
+        assert fixture.REPORT["provider_attempts"] == replay_provider_attempts_before == 0
+        with fixture.app.app_context():
+            assert PriceChangeBatch.query.filter_by(
+                seller_id=fixture.FIXTURE["seller_id"],
+            ).count() == replay_batches_before + 1
+            assert PriceChangeItem.query.filter_by(
+                batch_id=first_commit["batch_id"],
+            ).count() == 3
+        checks.append("wb_lost_save_response_retries_same_body_after_reload_without_duplicate_batch")
+
+        # Return to the catalogue through the exact selection receipt restored
+        # by the replayed successful batch.
+        replay_return = page.locator("a[data-price-workspace-return]:visible").first
+        assert urlsplit(replay_return.get_attribute("href") or "").fragment == comparison_hash
         page.goto(fixture.BASE + "/my-products/beta")
         page.locator("#my-products-app").wait_for(state="visible")
         price_review_scope["product_ids"] = [fixture_ids["wb_id"]]
