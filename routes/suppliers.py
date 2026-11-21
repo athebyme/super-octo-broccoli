@@ -4121,13 +4121,17 @@ def register_supplier_routes(app):
                 imported_id: product_id
                 for imported_id, product_id in owned_wb_rows
             }
-        wb_product_ids = []
+        wb_targets = []
         seen_wb_product_ids = set()
         for imported_id in updated_ids:
             product_id = wb_product_by_imported_id.get(imported_id)
             if product_id and product_id not in seen_wb_product_ids:
-                wb_product_ids.append(product_id)
+                wb_targets.append({
+                    'imported_product_id': imported_id,
+                    'product_id': product_id,
+                })
                 seen_wb_product_ids.add(product_id)
+        wb_product_ids = [target['product_id'] for target in wb_targets]
         session['supplier_update_wb_ids'] = wb_product_ids[:200]
 
         message = f'Обновлено локальных карточек: {refreshed}.'
@@ -4149,6 +4153,7 @@ def register_supplier_routes(app):
                 'items': result.item_results,
                 'message': message,
                 'wb_ready': len(wb_product_ids),
+                'wb_targets': wb_targets,
             })
         flash(message, 'warning' if errors else 'success')
         return _redirect_seller_my_products(

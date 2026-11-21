@@ -251,10 +251,128 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
             'status': 'updated',
             'reason': None,
         }])
+        self.assertEqual(payload['wb_targets'], [])
+        self.assertEqual(payload['wb_ready'], 0)
         self.db.session.refresh(selected)
         self.db.session.refresh(other_copy)
         self.assertEqual(selected.title, 'fresh title')
         self.assertEqual(other_copy.title, 'old unselected')
+
+    def test_json_refresh_returns_ordered_verified_wb_target_subset(self):
+        first_source = self._source(
+            self.supplier.id, 'wb-first', 'fresh first',
+        )
+        first = self._copy(first_source, title='old first')
+        no_wb_source = self._source(
+            self.supplier.id, 'not-published', 'fresh internal only',
+        )
+        internal_only = self._copy(no_wb_source, title='old internal only')
+        pending_source = self._source(
+            self.supplier.id, 'pending-wb-link', 'fresh pending',
+        )
+        pending = self._copy(pending_source, title='old pending')
+        no_nm_source = self._source(
+            self.supplier.id, 'missing-nm-id', 'fresh no nm id',
+        )
+        no_nm = self._copy(no_nm_source, title='old no nm id')
+        second_source = self._source(
+            self.supplier.id, 'wb-second', 'fresh second',
+        )
+        second = self._copy(second_source, title='old second')
+
+        first_wb = self.Product(
+            seller_id=self.seller.id,
+            nm_id=123456701,
+            vendor_code='first-wb',
+            title='First WB product',
+        )
+        second_wb = self.Product(
+            seller_id=self.seller.id,
+            nm_id=123456702,
+            vendor_code='second-wb',
+            title='Second WB product',
+        )
+        pending_wb = self.Product(
+            seller_id=self.seller.id,
+            nm_id=123456703,
+            vendor_code='pending-wb',
+            title='Pending WB product',
+        )
+        no_nm_wb = self.Product(
+            seller_id=self.seller.id,
+            nm_id=0,
+            vendor_code='no-nm-wb',
+            title='Product without WB nm id',
+        )
+        self.db.session.add_all([first_wb, second_wb, pending_wb, no_nm_wb])
+        self.db.session.flush()
+        first.import_status = 'imported'
+        first.product_id = first_wb.id
+        pending.import_status = 'validated'
+        pending.product_id = pending_wb.id
+        no_nm.import_status = 'imported'
+        no_nm.product_id = no_nm_wb.id
+        second.import_status = 'imported'
+        second.product_id = second_wb.id
+        self.db.session.commit()
+
+        response = self._post(
+            '/my-products/refresh-from-supplier',
+            json={
+                'product_ids': [
+                    first.id, internal_only.id, pending.id, no_nm.id, second.id,
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload['status'], 'completed')
+        self.assertEqual((payload['requested'], payload['updated']), (5, 5))
+        self.assertEqual(payload['wb_targets'], [
+            {
+                'imported_product_id': first.id,
+                'product_id': first_wb.id,
+            },
+            {
+                'imported_product_id': second.id,
+                'product_id': second_wb.id,
+            },
+        ])
+        self.assertEqual(payload['wb_ready'], 2)
+        with self.client.session_transaction() as client_session:
+            self.assertEqual(
+                client_session['supplier_update_wb_ids'],
+                [first_wb.id, second_wb.id],
+            )
+
+    def test_classic_refresh_keeps_legacy_redirect_and_wb_session_handoff(self):
+        source = self._source(self.supplier.id, 'classic-wb', 'fresh classic')
+        copied = self._copy(source, title='old classic')
+        product = self.Product(
+            seller_id=self.seller.id,
+            nm_id=123456703,
+            vendor_code='classic-wb',
+            title='Classic WB product',
+        )
+        self.db.session.add(product)
+        self.db.session.flush()
+        copied.import_status = 'imported'
+        copied.product_id = product.id
+        self.db.session.commit()
+
+        response = self._post(
+            '/my-products/refresh-from-supplier',
+            data={'selected_ids': str(copied.id)},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('refreshed=1', response.headers['Location'])
+        self.assertIn('wb_ready=1', response.headers['Location'])
+        with self.client.session_transaction() as client_session:
+            self.assertEqual(
+                client_session['supplier_update_wb_ids'], [product.id],
+            )
 
     def test_foreign_legacy_product_link_is_not_offered_for_wb_followup(self):
         source = self._source(self.supplier.id, 'foreign-product-link', 'fresh')
@@ -292,6 +410,7 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(payload['updated'], 1)
         self.assertEqual(payload['wb_ready'], 0)
+        self.assertEqual(payload['wb_targets'], [])
         with self.client.session_transaction() as client_session:
             self.assertEqual(client_session['supplier_update_wb_ids'], [])
 
@@ -301,6 +420,20 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
         failed_source = self._source(self.supplier.id, 'bad', 'fresh bad')
         failed = self._copy(failed_source, title='old bad')
         unlinked = self._copy(None, title='unlinked')
+        wb_products = [
+            self.Product(
+                seller_id=self.seller.id,
+                nm_id=123456704 + index,
+                vendor_code=f'partial-{index}',
+                title=f'Partial WB product {index}',
+            )
+            for index in range(3)
+        ]
+        self.db.session.add_all(wb_products)
+        self.db.session.flush()
+        for imported, product in zip([good, failed, unlinked], wb_products):
+            imported.import_status = 'imported'
+            imported.product_id = product.id
         self.db.session.commit()
 
         from services import supplier_service
@@ -336,6 +469,13 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
                 (unlinked.id, 'skipped', 'no_supplier_link'),
             ],
         )
+        self.assertEqual(payload['wb_targets'], [
+            {
+                'imported_product_id': good.id,
+                'product_id': wb_products[0].id,
+            },
+        ])
+        self.assertEqual(payload['wb_ready'], 1)
         self.assertNotIn('private exception detail', response.get_data(as_text=True))
         self.db.session.refresh(good)
         self.db.session.refresh(failed)
