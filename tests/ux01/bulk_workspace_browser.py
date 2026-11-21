@@ -606,8 +606,13 @@ def run():
         assert posts[3]["body"]["product_ids"] == [str(fixture_ids["import_id"])]
         assert "update_product_ids" not in posts[3]["body"]
         with fixture.app.app_context():
-            assert ImportedProduct.query.filter_by(seller_id=fixture.FIXTURE["seller_id"],
-                                                   supplier_product_id=fixture_ids["import_id"]).count() == 1
+            imported_local = ImportedProduct.query.filter_by(
+                seller_id=fixture.FIXTURE["seller_id"],
+                supplier_product_id=fixture_ids["import_id"],
+            ).one()
+            imported_local_id = imported_local.id
+            imported_local_title = imported_local.title
+            assert imported_local_title == "Позиция для импорта"
             assert db.session.get(ImportedProduct, fixture.FIXTURE["source_id"]).supplier_content_revision == 1
         checks.append("ordinary_supplier_import_saves_only_its_selected_source")
         assert len(posts) == 4 and not errors, errors
@@ -721,11 +726,7 @@ def run():
         # this tests presentation only and does not call a provider.
         mobile_page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").check()
         mobile_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
-        imported_row_checkbox = mobile_page.locator(
-            f'.mp-list article.mp-row input[type="checkbox"][value="{fixture_ids["import_id"]}"]'
-        )
-        imported_row_checkbox.wait_for()
-        imported_row_checkbox.check()
+        mobile_page.get_by_role("checkbox", name=f"Выбрать {imported_local_title}").check()
         refresh_response_override = {
             "success": True,
             "status": "completed_with_errors",
@@ -736,7 +737,7 @@ def run():
             "items": [
                 {"product_id": fixture_ids["local_id"], "status": "updated", "reason": None},
                 {"product_id": fixture_ids["manual_id"], "status": "skipped", "reason": "no_supplier_link"},
-                {"product_id": fixture_ids["import_id"], "status": "error", "reason": "update_failed"},
+                {"product_id": imported_local_id, "status": "error", "reason": "update_failed"},
             ],
         }
         pick_action(mobile_page, "Обновить из поставщика")
@@ -746,7 +747,7 @@ def run():
         assert partial_refresh.value.status == 200
         assert posts[-1] == {"path": LOCAL_REFRESH,
                              "body": {"product_ids": [fixture_ids["local_id"], fixture_ids["manual_id"],
-                                                        fixture_ids["import_id"]]}}
+                                                        imported_local_id]}}
         partial_result = mobile_page.locator(".mp-refresh-result")
         partial_result.get_by_role("heading", name="Обновление завершено с ошибками").wait_for()
         partial_result.get_by_text("В запросе товаров: 3.", exact=False).wait_for()
@@ -755,7 +756,7 @@ def run():
         ).all_text_contents()] == ["1", "1", "1"]
         partial_result.get_by_text("Карточки и итог (3)").click()
         error_row = partial_result.locator(".mp-refresh-result-item.is-danger")
-        error_row.get_by_text("Позиция для импорта", exact=False).wait_for()
+        error_row.get_by_text(imported_local_title, exact=False).wait_for()
         error_row.get_by_text("Не удалось сохранить данные. Откройте карточку и проверьте её.").wait_for()
         assert error_row.get_by_role("link", name="Открыть карточку").count() == 1
         updated_row = partial_result.locator(".mp-refresh-result-item.is-ok")
