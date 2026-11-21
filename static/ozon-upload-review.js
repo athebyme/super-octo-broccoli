@@ -10,6 +10,7 @@
         (resultJobUid ? ':result:' + resultJobUid : '');
     const selectionKey = scope + ':selection', pendingKey = scope + ':pending';
     const runPattern = /^ozon-upload-[0-9a-f]{32}$/;
+    const invalidResultContext = Boolean(resultJobUid && !runPattern.test(resultJobUid));
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     const positive = value => Number.isSafeInteger(value) && value > 0;
     const read = key => { try { return JSON.parse(sessionStorage.getItem(key) || 'null'); } catch (_) { return null; } };
@@ -23,8 +24,7 @@
             allowed.has(row.id) && !seen.has(row.id) && (seen.add(row.id), true));
     }
     function validPending(value) {
-        if ((resultJobUid && !runPattern.test(resultJobUid)) ||
-            !value || value.account_id !== initial.account_id ||
+        if (invalidResultContext || !value || value.account_id !== initial.account_id ||
             typeof value.request_key !== 'string' || !/^[A-Za-z0-9_-]{24,128}$/.test(value.request_key) ||
             value.parent_prepare_job_uid !== initial.parent_prepare_job_uid ||
             (value.result_job_uid || '') !== resultJobUid ||
@@ -67,7 +67,7 @@
             pending:validPending(storedPending) ? storedPending : null,
             storageProblem:hasStored(pendingKey) && !validPending(storedPending),
             csrf:initial.csrf_token, busy:'',
-            error:resultJobUid && !/^ozon-upload-[0-9a-f]{32}$/.test(resultJobUid)
+            error:invalidResultContext
                 ? 'Результат отправки не распознан. Вернитесь к исходному запуску.' : '',
             status:'',
             reviewed:null, reviewedMode:'', reviewSummary:null, dialogStatus:'', confirmed:false, sessionEnded:false, retrySameKey:false,
@@ -78,9 +78,9 @@
                 const versions = new Map(this.selected.map(row => [row.id, row.version]));
                 return (this.reviewed || []).filter(row => versions.get(row.draft_id) === row.version);
             },
-            locked() { return !!this.busy || !!this.pending || this.storageProblem || this.sessionEnded; },
-            canReview() { return this.selected.length > 0 && !this.locked && (!resultJobUid || runPattern.test(resultJobUid)); },
-            canReviewAll() { return this.review.draft_ids.length > 1 && !this.locked && (!resultJobUid || runPattern.test(resultJobUid)); },
+            locked() { return invalidResultContext || !!this.busy || !!this.pending || this.storageProblem || this.sessionEnded; },
+            canReview() { return this.selected.length > 0 && !this.locked; },
+            canReviewAll() { return this.review.draft_ids.length > 1 && !this.locked; },
         },
         methods: {
             pageUrl(page) { return config.urls.html + '?' + params(initial.draft_ids, page); },
@@ -113,8 +113,7 @@
             picked(row) { return this.selected.some(item => item.id === row.draft_id && item.version === row.version); },
             saveSelection() { return store(selectionKey, this.selected); },
             async readExactReview(ids) {
-                if ((resultJobUid && !runPattern.test(resultJobUid)) ||
-                    !Array.isArray(ids) || ids.length < 1 || ids.length > 200 ||
+                if (invalidResultContext || !Array.isArray(ids) || ids.length < 1 || ids.length > 200 ||
                     ids.some(id => !positive(id)) || new Set(ids).size !== ids.length)
                     throw Error('Состав карточек изменился. Начните просмотр заново.');
                 const pageCount = Math.ceil(ids.length / 20), rows = [];

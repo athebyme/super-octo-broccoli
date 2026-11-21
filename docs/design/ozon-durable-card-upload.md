@@ -52,3 +52,9 @@ The schema migration creates empty additive tables; legacy adoption is bounded r
 
 
 Root scheduling delta (2026-09-27): the existing singleton APScheduler registers a separate `prepare_ozon_uploads` job every10s, max_instances=1/coalesce, invoking run_limit20/item_limit40/seconds_budget8. No custom thread/executor is introduced. The minute provider-operation poll remains independent. Service default45s is a maximum callable ceiling, not the runtime scheduler budget. Measured 200 real local missing-data preparations:10 ticks, max0.794s/tick,6.577s total,181248KiB peakRSS,0 provider calls/operations; ready-card preparation and actual publication are separate gates.
+
+## Проверка оставшихся карточек из результата
+
+Когда наблюдаемый результат `reviewed_drafts` перестаёт меняться автоматически, `review_recovery_draft_ids` содержит упорядоченные ID актуально связанных черновиков для новой проверки. Основание даёт локальный сбой до отправки или точная завершённая операция с подтверждённым отказом. После физической отправки доказательство отказа приходит из завершённой задачи Ozon. Успех, неопределённость, частичный исход одной операции и отмена остаются в истории. Удаление или смена связи товара с черновиком удаляет строку из доступного набора.
+
+Кнопка результата открывает прежний `/review`. `result_job_uid` сохраняется при чтении строк, пагинации и отдельном подтверждении `/from-drafts` и ограничивает выбор исходной партией и её доступными строками. Обычная проверка и переход от локальной подготовки используют прежние параметры. Новый запрос привязывает исходный результат к отпечатку. Поиск уже принятого запроса с тем же ключом сохраняет прежний порядок проверки. Просмотр результата V3 выводит текущее состояние без записи, а планировщик обновляет сохранённую сводку.

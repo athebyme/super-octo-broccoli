@@ -52,7 +52,7 @@
             {% endif %}
             {% if not local_only and run.status != 'running' and review_recovery_draft_ids %}
             <a class="sh-btn sh-btn--primary sh-btn--md" data-reviewed-result-recovery
-               aria-label="Проверить оставшиеся карточки: {{ review_recovery_draft_ids|length }}"
+               aria-label="Проверить оставшиеся карточки ({{ review_recovery_draft_ids|length }})"
                href="{{ url_for('ozon_bulk_uploads.review', account_id=run.account_id, draft_ids=review_recovery_draft_ids|join(','), result_job_uid=run.job_uid) }}">
                 Проверить оставшиеся карточки
             </a>

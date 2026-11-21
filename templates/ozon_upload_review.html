@@ -3,7 +3,8 @@
 {% block title %}Проверка карточек Ozon — Seller Hub{% endblock %}
 {% block content %}
 {% set preparation_result_url = url_for('ozon_bulk_uploads.detail', job_uid=review.parent_prepare_job_uid) if review.parent_prepare_job_uid else none %}
-{% set reviewed_result_url = url_for('ozon_bulk_uploads.detail', job_uid=review.result_job_uid) if review.result_job_uid else none %}
+{% set reviewed_result_uid = review.result_job_uid|default(none, true) %}
+{% set reviewed_result_url = url_for('ozon_bulk_uploads.detail', job_uid=reviewed_result_uid) if reviewed_result_uid else none %}
 <link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-editor.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='ozon-upload-review.css', v='20261121-ready-review-1') }}">
 <script type="application/json" id="our-bootstrap">{{ {
@@ -93,6 +94,7 @@
 </section>
 <noscript>
     <section class="our our-noscript" aria-labelledby="our-noscript-title">
+        {% if reviewed_result_url %}<a class="our-back" href="{{ reviewed_result_url }}"><span aria-hidden="true">←</span> К результату отправки</a>{% endif %}
         {% set dimension_units = {'MILLIMETERS':'мм', 'CENTIMETERS':'см', 'INCHES':'дюйм'} %}
         {% set weight_units = {'GRAMS':'г', 'KILOGRAMS':'кг', 'POUNDS':'фунт'} %}
         <h2 id="our-noscript-title">Проверка карточек без JavaScript</h2>
@@ -103,7 +105,7 @@
             <input type="hidden" name="request_key" value="{{ review.request_key }}">
             <input type="hidden" name="expected_versions" value="{{ review.expected_versions|tojson|forceescape }}">
             {% if review.parent_prepare_job_uid %}<input type="hidden" name="parent_prepare_job_uid" value="{{ review.parent_prepare_job_uid }}">{% endif %}
-            {% if review.result_job_uid %}<input type="hidden" name="result_job_uid" value="{{ review.result_job_uid }}">{% endif %}
+            {% if reviewed_result_uid %}<input type="hidden" name="result_job_uid" value="{{ reviewed_result_uid }}">{% endif %}
             <div class="our-list">
             {% for row in review['items'] %}
                 <article class="our-card"><div class="our-card-select">{% if row.selectable %}<label class="our-card-check"><input type="checkbox" name="draft_ids" value="{{ row.draft_id }}" aria-label="Выбрать карточку {{ row.title }}"></label>{% endif %}</div><div class="our-card-main"><h3>{{ row.title }}</h3><p>{{ 'Полное обновление' if row.action == 'update' else 'Новая карточка' }} · версия {{ row.version }} · {{ row.offer_id }}</p><p>{{ row.type_name or 'Тип Ozon не выбран' }}</p><p>Цена продавца: {% if row.commercial and row.commercial.currency_code == 'RUB' and row.commercial.price %}{{ row.commercial.price }} ₽{% else %}не указана или валюта не подтверждена{% endif %} · фото в составе: {{ row.photos_count if row.photos_count is not none else 'неизвестно' }}</p><p>Упаковка: {{ row.dimensions.width if row.dimensions and row.dimensions.width else '—' }} × {{ row.dimensions.height if row.dimensions and row.dimensions.height else '—' }} × {{ row.dimensions.depth if row.dimensions and row.dimensions.depth else '—' }} {{ dimension_units.get(row.dimensions.dimension_unit, '') if row.dimensions else '' }} · вес {{ row.dimensions.weight if row.dimensions and row.dimensions.weight else '—' }} {{ weight_units.get(row.dimensions.weight_unit, '') if row.dimensions else '' }}</p>{% if row.errors %}<ul class="our-issues">{% for issue in row.errors %}<li>{{ issue.message }}</li>{% endfor %}</ul>{% endif %}<a href="{{ url_for('marketplace_drafts.classic_detail', draft_id=row.draft_id) }}">Открыть карточку</a></div></article>
@@ -113,8 +115,8 @@
             <button type="submit" class="sh-btn sh-btn--primary">Отправить отмеченные карточки</button>
         </form>
         <nav class="our-pagination" aria-label="Страницы проверки">
-            {% if review.pagination.page > 1 %}<a href="{{ url_for('ozon_bulk_uploads.review', account_id=review.account_id, draft_ids=review.draft_ids|join(','), page=review.pagination.page - 1, parent_prepare_job_uid=review.parent_prepare_job_uid, result_job_uid=review.result_job_uid) }}">← Предыдущие 20</a>{% endif %}
-            {% if review.pagination.page < review.pagination.pages %}<a href="{{ url_for('ozon_bulk_uploads.review', account_id=review.account_id, draft_ids=review.draft_ids|join(','), page=review.pagination.page + 1, parent_prepare_job_uid=review.parent_prepare_job_uid, result_job_uid=review.result_job_uid) }}">Следующие 20 →</a>{% endif %}
+            {% if review.pagination.page > 1 %}<a href="{{ url_for('ozon_bulk_uploads.review', account_id=review.account_id, draft_ids=review.draft_ids|join(','), page=review.pagination.page - 1, parent_prepare_job_uid=review.parent_prepare_job_uid, result_job_uid=reviewed_result_uid) }}">← Предыдущие 20</a>{% endif %}
+            {% if review.pagination.page < review.pagination.pages %}<a href="{{ url_for('ozon_bulk_uploads.review', account_id=review.account_id, draft_ids=review.draft_ids|join(','), page=review.pagination.page + 1, parent_prepare_job_uid=review.parent_prepare_job_uid, result_job_uid=reviewed_result_uid) }}">Следующие 20 →</a>{% endif %}
         </nav>
     </section>
 </noscript>
