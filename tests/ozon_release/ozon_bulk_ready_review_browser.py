@@ -684,10 +684,39 @@ def run_browser_journey():
         assert editor["mode"] == "source_prepare"
         assert editor["review_draft_ids"] == state["draft_ids"]
         assert editor["account_id"] == account_id
+        page.set_viewport_size({"width": 320, "height": 780})
+        draft_by_source = dict(zip(state["source_item_ids"], state["draft_ids"]))
+        blocked_draft_id = draft_by_source[source_ids["blocked"]]
+        with app.app_context():
+            source_run = OzonBulkUploadRun.query.filter_by(
+                seller_id=fixture["seller_id"], account_id=account_id,
+                mode="source_prepare",
+            ).one()
+            blocked_item = OzonBulkUploadItem.query.filter_by(
+                run_id=source_run.id,
+                imported_product_id=source_ids["blocked"],
+            ).one()
+            assert blocked_item.phase == "prepared"
+            blocked_source_receipt = (
+                blocked_item.phase,
+                blocked_item.prepared_version,
+                blocked_item.error_code,
+                blocked_item.error_message,
+            )
+        blocked_editor_row_data = [
+            row for group in editor["groups"] for row in group["rows"]
+            if row["draft_id"] == blocked_draft_id
+        ]
+        assert len(blocked_editor_row_data) == 1
+        assert blocked_editor_row_data[0]["phase"] == "prepared"
+        assert blocked_editor_row_data[0]["status"] == "needs_input"
+        blocked_editor_row = page.locator(
+            f'.orb-row[data-draft="{blocked_draft_id}"]'
+        )
+        assert blocked_editor_row.locator(".orb-state").inner_text().strip() == "Нужны данные"
 
         # Use the actual native bulk editor to fill one field on one new and
         # one update draft. This remains a local edit to the prepared run.
-        draft_by_source = dict(zip(state["source_item_ids"], state["draft_ids"]))
         repair_row_ids = [
             draft_by_source[source_ids["create"]],
             draft_by_source[source_ids["update"]],
@@ -734,21 +763,34 @@ def run_browser_journey():
             "draft_ids": repair_row_ids,
             "csrf": True,
         }
-        page.locator(".orb-receipt strong").filter(
-            has_text="Проверено карточек: 2"
+        page.locator(".orb-receipt[data-source-prepare-receipt] strong").filter(
+            has_text="Обработано черновиков: 2"
         ).wait_for()
-        return_review_link = page.locator(
-            ".orb-receipt a[data-source-prepare-review]"
-        )
+        receipt = page.locator(".orb-receipt[data-source-prepare-receipt]")
+        return_review_link = receipt.locator("a[data-source-prepare-review]")
         assert return_review_link.count() == 1
         return_review_link.wait_for()
-        page.set_viewport_size({"width": 320, "height": 780})
+        page.wait_for_function(
+            "() => document.activeElement === document.querySelector('[data-source-prepare-receipt]')"
+        )
         assert page.evaluate(
             "() => document.documentElement.scrollWidth <= document.documentElement.clientWidth"
         )
-        assert return_review_link.is_visible()
+        header_bounds = page.locator(".mobile-header").bounding_box()
+        summary_bounds = receipt.locator("strong").bounding_box()
+        review_link_bounds = return_review_link.bounding_box()
+        assert header_bounds and summary_bounds and review_link_bounds
+        header_bottom = header_bounds["y"] + header_bounds["height"]
+        for name, bounds in (
+            ("summary", summary_bounds),
+            ("review link", review_link_bounds),
+        ):
+            assert bounds["y"] >= header_bottom, (name, bounds, header_bounds)
+            assert bounds["y"] + bounds["height"] <= 780, (name, bounds)
+            assert bounds["x"] >= 0 and bounds["x"] + bounds["width"] <= 320, (name, bounds)
+        assert receipt.evaluate("node => document.activeElement === node")
         repair_mobile_screenshot = OUT / "ozon-bulk-source-prepare-repair-mobile.png"
-        page.screenshot(path=str(repair_mobile_screenshot), full_page=True)
+        page.screenshot(path=str(repair_mobile_screenshot))
         with app.app_context():
             run = OzonBulkUploadRun.query.filter_by(
                 seller_id=fixture["seller_id"], account_id=account_id,
@@ -759,6 +801,16 @@ def run_browser_journey():
             ).order_by(OzonBulkUploadItem.ordinal.asc()).all()
             assert [item.draft_id for item in source_items] == state["draft_ids"]
             assert [item.phase for item in source_items] == ["prepared"] * 4
+            blocked_after = next(
+                item for item in source_items
+                if item.imported_product_id == source_ids["blocked"]
+            )
+            assert (
+                blocked_after.phase,
+                blocked_after.prepared_version,
+                blocked_after.error_code,
+                blocked_after.error_message,
+            ) == blocked_source_receipt
             for item in source_items[:2]:
                 draft = db.session.get(MarketplaceProductDraft, item.draft_id)
                 assert item.prepared_version == draft.version
@@ -779,7 +831,9 @@ def run_browser_journey():
             "native_repair_mobile_viewport": {
                 "width": 320,
                 "height": 780,
-                "return_action_visible": return_review_link.is_visible(),
+                "focused_receipt": True,
+                "summary_visible_below_fixed_header": True,
+                "return_action_visible_below_fixed_header": True,
                 "no_horizontal_overflow": True,
                 "screenshot": repair_mobile_screenshot.name,
             },
