@@ -207,8 +207,8 @@
             <label class="mp-selectall">
                 <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected"
                        @change="toggleAll"
-                       :aria-label="(importBatchMode || supplierRefreshBatchMode) ? 'Выбрать все товары из точного списка' : (allSelected ? 'Снять выбор всех загруженных товаров' : 'Выбрать все загруженные товары')">
-                <span>{{ (importBatchMode || supplierRefreshBatchMode) ? 'Выбрать весь точный список' : (allSelected ? 'Снять выбор' : 'Выбрать загруженные') }}</span>
+                       :aria-label="importBatchMode ? 'Выбрать товары из импорта' : (supplierRefreshBatchMode ? 'Выбрать товары для обновления' : (allSelected ? 'Снять выбор всех загруженных товаров' : 'Выбрать все загруженные товары'))">
+                <span>{{ importBatchMode ? 'Выбрать товары из импорта' : (supplierRefreshBatchMode ? 'Выбрать товары для обновления' : (allSelected ? 'Снять выбор' : 'Выбрать загруженные')) }}</span>
             </label>
             <button v-if="canSelectAllFiltered" type="button" class="mp-select-filtered"
                     :disabled="selectAllLoading" @click="selectAllFiltered">
