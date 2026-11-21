@@ -29,6 +29,7 @@ import logging
 import operator
 import re
 import math
+import secrets
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import List, Dict, Any, Optional, Tuple
@@ -64,6 +65,8 @@ PRICE_REVIEW_TOKEN_SALT = 'wb-authoritative-price-review-v1'
 PRICE_REVIEW_TOKEN_MAX_AGE_SECONDS = 300
 PRICE_REVIEW_TOKEN_MAX_LENGTH = 4096
 PRICE_REVIEW_WRITE_RECEIPT = 'wb_reviewed_selection_v1'
+PRICE_REVIEW_NONCE_RE = re.compile(r'^[A-Za-z0-9_-]{32}$')
+PRICE_REVIEW_RECEIPT_VERSION = 1
 
 
 def _price_workspace_return_nonce(form):
@@ -529,7 +532,20 @@ def calculate_price_changes(
 def _review_canonical_value(value):
     """Convert review inputs and observations to stable JSON-safe values."""
     if isinstance(value, Decimal):
-        return {'decimal': format(value.normalize(), 'f') if value else '0'}
+        if not value:
+            return {'decimal': '0'}
+        sign, digits_tuple, exponent = value.as_tuple()
+        digits = list(digits_tuple)
+        while len(digits) > 1 and digits[-1] == 0:
+            digits.pop()
+            exponent += 1
+        coefficient = ''.join(str(digit) for digit in digits)
+        mantissa = coefficient[0]
+        if len(coefficient) > 1:
+            mantissa += '.' + coefficient[1:]
+        adjusted_exponent = exponent + len(coefficient) - 1
+        prefix = '-' if sign else ''
+        return {'decimal': f'{prefix}{mantissa}e{adjusted_exponent}'}
     if isinstance(value, datetime):
         return {'datetime': value.isoformat()}
     if isinstance(value, float):
@@ -568,6 +584,14 @@ def _review_decimal(value, field_name):
         raise ValueError(f'Некорректное значение: {field_name}') from exc
     if not parsed.is_finite():
         raise ValueError(f'Значение должно быть конечным: {field_name}')
+    try:
+        calculator_value = float(parsed)
+    except (OverflowError, ValueError) as exc:
+        raise ValueError(
+            f'Значение выходит за диапазон расчёта: {field_name}'
+        ) from exc
+    if not math.isfinite(calculator_value) or (calculator_value == 0 and parsed != 0):
+        raise ValueError(f'Значение выходит за диапазон расчёта: {field_name}')
     return parsed
 
 
@@ -981,22 +1005,23 @@ def _price_review_serializer():
 def _issue_price_review_token(user_id, seller_id, product_ids, snapshot):
     digests = snapshot['digests']
     return _price_review_serializer().dumps({
-        'v': 1,
+        'v': 2,
         'user_id': int(user_id),
         'seller_id': int(seller_id),
         'count': len(product_ids),
+        'nonce': secrets.token_urlsafe(24),
         **digests,
     })
 
 
-def _load_price_review_token(token, *, user_id, seller_id):
+def _load_price_review_token(
+    token, *, user_id, seller_id,
+    max_age=PRICE_REVIEW_TOKEN_MAX_AGE_SECONDS,
+):
     if not isinstance(token, str) or not token or len(token) > PRICE_REVIEW_TOKEN_MAX_LENGTH:
         raise ValueError('Проверка цены отсутствует. Рассчитайте изменения снова.')
     try:
-        payload = _price_review_serializer().loads(
-            token,
-            max_age=PRICE_REVIEW_TOKEN_MAX_AGE_SECONDS,
-        )
+        payload = _price_review_serializer().loads(token, max_age=max_age)
     except SignatureExpired as exc:
         raise ValueError('Предпросмотр устарел. Рассчитайте изменения снова.') from exc
     except BadSignature as exc:
@@ -1004,11 +1029,13 @@ def _load_price_review_token(token, *, user_id, seller_id):
     digest_names = {'ids', 'inputs', 'settings', 'sources', 'results', 'combined'}
     if (
         not isinstance(payload, dict)
-        or payload.get('v') != 1
+        or payload.get('v') != 2
         or payload.get('user_id') != int(user_id)
         or payload.get('seller_id') != int(seller_id)
         or not isinstance(payload.get('count'), int)
         or payload['count'] <= 0
+        or not isinstance(payload.get('nonce'), str)
+        or not PRICE_REVIEW_NONCE_RE.fullmatch(payload['nonce'])
         or any(
             not isinstance(payload.get(key), str)
             or not re.fullmatch(r'[a-f0-9]{64}', payload[key])
@@ -1082,24 +1109,82 @@ def _reviewed_price_preview(data, seller):
     })
 
 
+def _price_review_batch_result(batch_id, status, receipt, *, replayed):
+    redirect = (
+        url_for('prices.batch_confirm', batch_id=batch_id)
+        if status == 'pending_review'
+        else url_for('prices.batch_detail', batch_id=batch_id)
+    )
+    return {
+        'success': True,
+        'reviewed_write': True,
+        'reviewed_selection': PRICE_REVIEW_WRITE_RECEIPT,
+        'replayed': bool(replayed),
+        'selected_count': receipt['selected_count'],
+        'changed_count': receipt['changed_count'],
+        'batch_id': batch_id,
+        'status': status,
+        'stats': receipt['stats'],
+        'redirect': redirect,
+    }
+
+
+def _decode_price_review_receipt(batch):
+    try:
+        receipt = json.loads(batch.review_receipt_json)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get('version') != PRICE_REVIEW_RECEIPT_VERSION
+        or not isinstance(receipt.get('request_digest'), str)
+        or not re.fullmatch(r'[a-f0-9]{64}', receipt['request_digest'])
+        or not isinstance(receipt.get('selected_count'), int)
+        or not isinstance(receipt.get('changed_count'), int)
+        or receipt['selected_count'] <= 0
+        or receipt['changed_count'] <= 0
+        or receipt['changed_count'] > receipt['selected_count']
+        or not isinstance(receipt.get('stats'), dict)
+        or receipt['stats'].get('selected_count') != receipt['selected_count']
+        or receipt['stats'].get('changed_count') != receipt['changed_count']
+        or receipt['stats'].get('total') != receipt['changed_count']
+    ):
+        return None
+    return receipt
+
+
 def _reviewed_price_create(data, seller):
     if not isinstance(data, dict):
-        return jsonify({'success': False, 'error': 'Некорректный формат запроса'}), 400
+        return jsonify({
+            'success': False,
+            'code': 'review_invalid_input',
+            'error': 'Некорректный формат запроса',
+        }), 400
     name = data.get('name', '')
     description = data.get('description', '')
     if not isinstance(name, str) or not isinstance(description, str):
-        return jsonify({'success': False, 'error': 'Название и причина должны быть текстом'}), 400
+        return jsonify({
+            'success': False,
+            'code': 'review_invalid_input',
+            'error': 'Название и причина должны быть текстом',
+        }), 400
     name = name.strip()
     description = description.strip()
     if len(name) > 200:
-        return jsonify({'success': False, 'error': 'Название операции слишком длинное'}), 400
+        return jsonify({
+            'success': False,
+            'code': 'review_invalid_input',
+            'error': 'Название операции слишком длинное',
+        }), 400
 
+    token = data.get('review_token')
     try:
         product_ids, normalized = _normalize_review_request(data)
         token_payload = _load_price_review_token(
-            data.get('review_token'),
+            token,
             user_id=current_user.id,
             seller_id=seller.id,
+            max_age=None,
         )
         if token_payload['count'] != len(product_ids):
             raise ValueError('Состав выбора изменился. Рассчитайте изменения снова.')
@@ -1114,8 +1199,73 @@ def _reviewed_price_create(data, seller):
             'error': str(exc),
         }), 409
 
+    review_key_material = (
+        f"wb-price-review:v{token_payload['v']}:{int(seller.id)}:"
+        f"{int(current_user.id)}:{token_payload['nonce']}"
+    )
+    token_hash = hashlib.sha256(review_key_material.encode('utf-8')).hexdigest()
+    request_digest = _review_digest({
+        'user_id': int(current_user.id),
+        'seller_id': int(seller.id),
+        'review_key_hash': token_hash,
+        'product_ids': product_ids,
+        'normalized': normalized,
+        'review_digests': {
+            key: token_payload[key]
+            for key in ('ids', 'inputs', 'settings', 'sources', 'results', 'combined')
+        },
+        'name': name,
+        'description': description,
+    })
+
     try:
         _begin_review_write_transaction()
+
+        # A matching signed request returns its durable receipt before checking
+        # whether the source prices/settings have since moved or the token aged.
+        existing = PriceChangeBatch.query.populate_existing().filter_by(
+            seller_id=seller.id,
+            review_key_hash=token_hash,
+        ).first()
+        if existing is not None:
+            receipt = _decode_price_review_receipt(existing)
+            if receipt is None:
+                db.session.rollback()
+                return jsonify({
+                    'success': False,
+                    'code': 'review_receipt_unavailable',
+                    'error': 'Результат сохранения нельзя безопасно восстановить. Проверьте историю цен.',
+                }), 500
+            if not hmac.compare_digest(receipt['request_digest'], request_digest):
+                db.session.rollback()
+                return jsonify({
+                    'success': False,
+                    'code': 'review_request_conflict',
+                    'error': 'Эта проверка уже связана с другим названием или составом запроса.',
+                }), 409
+            result = _price_review_batch_result(
+                existing.id, existing.status, receipt, replayed=True,
+            )
+            db.session.rollback()
+            return jsonify(result)
+
+        # New requests still require a live preview. Only an exact existing
+        # receipt is eligible for signature-authenticated replay after expiry.
+        try:
+            _load_price_review_token(
+                token,
+                user_id=current_user.id,
+                seller_id=seller.id,
+                max_age=PRICE_REVIEW_TOKEN_MAX_AGE_SECONDS,
+            )
+        except ValueError as exc:
+            db.session.rollback()
+            return jsonify({
+                'success': False,
+                'code': 'review_expired',
+                'error': str(exc),
+            }), 409
+
         settings = _effective_review_settings(seller.id)
         snapshot = _build_review_snapshot(seller.id, product_ids, normalized, settings)
         for key in ('ids', 'inputs', 'settings', 'sources', 'results', 'combined'):
@@ -1179,6 +1329,21 @@ def _reviewed_price_create(data, seller):
             if stats['dangerous'] > 0 and settings.mode == 'confirm'
             else 'confirmed'
         )
+        receipt = {
+            'version': PRICE_REVIEW_RECEIPT_VERSION,
+            'request_digest': request_digest,
+            'selected_count': stats['selected_count'],
+            'changed_count': stats['changed_count'],
+            'stats': stats,
+        }
+        batch.review_key_hash = token_hash
+        batch.review_receipt_json = json.dumps(
+            receipt,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+            allow_nan=False,
+        )
         db.session.add(batch)
         db.session.flush()
         for row in material_rows:
@@ -1195,22 +1360,9 @@ def _reviewed_price_create(data, seller):
                 safety_level=row['safety_level'],
             ))
         db.session.commit()
-        redirect = (
-            url_for('prices.batch_confirm', batch_id=batch.id)
-            if batch.status == 'pending_review'
-            else url_for('prices.batch_detail', batch_id=batch.id)
-        )
-        return jsonify({
-            'success': True,
-            'reviewed_write': True,
-            'reviewed_selection': PRICE_REVIEW_WRITE_RECEIPT,
-            'selected_count': stats['selected_count'],
-            'changed_count': stats['changed_count'],
-            'batch_id': batch.id,
-            'status': batch.status,
-            'stats': stats,
-            'redirect': redirect,
-        })
+        return jsonify(_price_review_batch_result(
+            batch.id, batch.status, receipt, replayed=False,
+        ))
     except LookupError as exc:
         db.session.rollback()
         return jsonify({

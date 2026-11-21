@@ -3,7 +3,11 @@
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
+import tempfile
+import threading
+import time
 import unittest
 from decimal import Decimal
 from types import SimpleNamespace
@@ -371,6 +375,308 @@ class SafePriceHandoffTest(unittest.TestCase):
             [self.first.id],
         )
 
+    def test_reviewed_create_replays_exact_durable_receipt_after_expiry(self):
+        import routes.safe_prices as safe_prices
+        from models import PriceChangeBatch
+
+        request = self._review_request(
+            [self.first.id], change_value=1200,
+        )
+        preview = self._request_as_owner(
+            'post', '/prices/api/preview', json=request,
+        )
+        self.assertEqual(preview.status_code, 200)
+        token = preview.get_json()['review_token']
+        body = dict(
+            request,
+            review_token=token,
+            name='Saved proposal',
+            description='Exact original reason',
+        )
+
+        first = self._request_as_owner('post', '/prices/create-batch', json=body)
+        self.assertEqual(first.status_code, 200)
+        original = first.get_json()
+        self.assertFalse(original['replayed'])
+        self.assertEqual(original['selected_count'], 1)
+        self.assertEqual(original['changed_count'], 1)
+        batch = self.db.session.get(PriceChangeBatch, original['batch_id'])
+        self.assertEqual(len(batch.review_key_hash), 64)
+        self.assertNotEqual(batch.review_key_hash, token)
+        self.assertEqual(PriceChangeBatch.query.filter_by(seller_id=self.seller.id).count(), 1)
+
+        for field, value in (
+            ('name', 'Changed title'),
+            ('description', 'Changed reason'),
+        ):
+            conflict = self._request_as_owner(
+                'post', '/prices/create-batch', json=dict(body, **{field: value}),
+            )
+            self.assertEqual(conflict.status_code, 409)
+            self.assertEqual(conflict.get_json()['code'], 'review_request_conflict')
+
+        from models import Seller
+        foreign_seller = Seller.query.filter(Seller.id != self.seller.id).first()
+        foreign_owner = SimpleNamespace(
+            id=foreign_seller.user_id,
+            seller=foreign_seller,
+            is_authenticated=True,
+            is_active=True,
+            is_admin=False,
+        )
+        with patch('flask_login.utils._get_user', return_value=foreign_owner), \
+                patch('routes.safe_prices.current_user', foreign_owner), \
+                patch('routes.safe_prices.get_current_seller', return_value=foreign_seller):
+            foreign_replay = self.client.post('/prices/create-batch', json=body)
+        self.assertEqual(foreign_replay.status_code, 409)
+        self.assertEqual(PriceChangeBatch.query.filter_by(seller_id=foreign_seller.id).count(), 0)
+
+        # A stable key is derived from the signed nonce rather than its wire
+        # serialization. Re-signing the same claims in another field order is
+        # still the same operation and returns the original receipt.
+        payload = safe_prices._price_review_serializer().loads(token, max_age=None)
+        alternate_token = safe_prices._price_review_serializer().dumps(
+            dict(reversed(list(payload.items()))),
+        )
+        self.assertNotEqual(alternate_token, token)
+        alternate = self._request_as_owner(
+            'post', '/prices/create-batch', json=dict(body, review_token=alternate_token),
+        )
+        self.assertEqual(alternate.status_code, 200)
+        self.assertTrue(alternate.get_json()['replayed'])
+        self.assertEqual(alternate.get_json()['batch_id'], original['batch_id'])
+
+        # Current source data and batch status can advance after the write; a
+        # lost-response retry still receives original counts and current route.
+        self.first.price = Decimal('1234')
+        batch.status = 'applied'
+        self.db.session.commit()
+        with patch('routes.safe_prices.PRICE_REVIEW_TOKEN_MAX_AGE_SECONDS', -1):
+            replay = self._request_as_owner(
+                'post', '/prices/create-batch', json=body,
+            )
+        self.assertEqual(replay.status_code, 200)
+        result = replay.get_json()
+        self.assertTrue(result['replayed'])
+        self.assertEqual(result['batch_id'], original['batch_id'])
+        self.assertEqual(result['status'], 'applied')
+        self.assertEqual(result['redirect'], f"/prices/batch/{original['batch_id']}")
+        self.assertEqual(result['selected_count'], original['selected_count'])
+        self.assertEqual(result['changed_count'], original['changed_count'])
+        self.assertEqual(result['stats'], original['stats'])
+        self.assertEqual(PriceChangeBatch.query.filter_by(seller_id=self.seller.id).count(), 1)
+
+    def test_expired_review_without_saved_batch_cannot_create(self):
+        from models import PriceChangeBatch
+
+        request = self._review_request([self.first.id], change_value=1200)
+        token = self._request_as_owner(
+            'post', '/prices/api/preview', json=request,
+        ).get_json()['review_token']
+        with patch('routes.safe_prices.PRICE_REVIEW_TOKEN_MAX_AGE_SECONDS', -1):
+            response = self._request_as_owner(
+                'post', '/prices/create-batch',
+                json=dict(request, review_token=token, name='Expired proposal'),
+            )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()['code'], 'review_expired')
+        self.assertEqual(PriceChangeBatch.query.filter_by(seller_id=self.seller.id).count(), 0)
+
+    def test_oversized_review_name_returns_definitive_validation_code(self):
+        from models import PriceChangeBatch
+
+        request = self._review_request([self.first.id], change_value=1200)
+        token = self._request_as_owner(
+            'post', '/prices/api/preview', json=request,
+        ).get_json()['review_token']
+        response = self._request_as_owner(
+            'post', '/prices/create-batch',
+            json=dict(request, review_token=token, name='x' * 201),
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()['code'], 'review_invalid_input')
+        self.assertEqual(PriceChangeBatch.query.filter_by(seller_id=self.seller.id).count(), 0)
+
+    def test_review_decimal_range_is_checked_before_digest_canonicalization(self):
+        import routes.safe_prices as safe_prices
+
+        response = self._request_as_owner(
+            'post', '/prices/api/preview',
+            json=self._review_request([self.first.id], change_value='1e1000000'),
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()['code'], 'review_invalid_input')
+        self.assertIn('диапазон расчёта', response.get_json()['error'])
+        self.assertLess(
+            len(safe_prices._review_canonical_value(Decimal('1e1000000'))['decimal']),
+            32,
+        )
+
+    def test_each_preview_issues_a_distinct_signed_retry_nonce(self):
+        from models import PriceChangeBatch
+
+        request = self._review_request([self.first.id], change_value=1200)
+        first_token = self._request_as_owner(
+            'post', '/prices/api/preview', json=request,
+        ).get_json()['review_token']
+        second_token = self._request_as_owner(
+            'post', '/prices/api/preview', json=request,
+        ).get_json()['review_token']
+        self.assertNotEqual(first_token, second_token)
+
+        results = []
+        for token in (first_token, second_token):
+            response = self._request_as_owner(
+                'post', '/prices/create-batch',
+                json=dict(request, review_token=token, name='Separate explicit review'),
+            )
+            self.assertEqual(response.status_code, 200)
+            results.append(response.get_json())
+        self.assertFalse(results[0]['replayed'])
+        self.assertFalse(results[1]['replayed'])
+        self.assertNotEqual(results[0]['batch_id'], results[1]['batch_id'])
+        self.assertEqual(PriceChangeBatch.query.filter_by(seller_id=self.seller.id).count(), 2)
+
+    def test_review_key_is_unique_under_concurrent_same_token_posts(self):
+        import sqlalchemy as sa
+        import routes.safe_prices as safe_prices
+        from models import PriceChangeBatch, Product, Seller, User
+
+        original_engine = self.db.engine
+        temporary = tempfile.NamedTemporaryFile(prefix='wb-price-review-', suffix='.sqlite')
+        file_engine = sa.create_engine(
+            f"sqlite:///{temporary.name}",
+            connect_args={'check_same_thread': False, 'timeout': 2.0},
+        )
+        try:
+            self.db.session.remove()
+            self.db._app_engines[self.app] = {None: file_engine}
+            self.db.drop_all()
+            self.db.create_all()
+
+            user = User(
+                username='price-review-race',
+                email='price-review-race@example.test',
+                is_active=True,
+            )
+            user.set_password('synthetic-password')
+            self.seller = Seller(user=user, company_name='Race seller')
+            self.db.session.add(self.seller)
+            self.db.session.flush()
+            self.first = Product(
+                seller_id=self.seller.id,
+                nm_id=771101,
+                vendor_code='race-101',
+                title='Concurrent proposal product',
+                is_active=True,
+                price=Decimal('1000'),
+            )
+            self.db.session.add(self.first)
+            self.db.session.commit()
+            seller_proxy = SimpleNamespace(id=self.seller.id)
+            self.owner = SimpleNamespace(
+                id=user.id,
+                username=user.username,
+                seller=seller_proxy,
+                is_authenticated=True,
+                is_active=True,
+                is_admin=False,
+            )
+
+            request = self._review_request([self.first.id], change_value=1200)
+            token = self._request_as_owner(
+                'post', '/prices/api/preview', json=request,
+            ).get_json()['review_token']
+            body = dict(request, review_token=token, name='Concurrent exact request')
+
+            original_snapshot = safe_prices._build_review_snapshot
+            snapshot_entered = threading.Event()
+
+            def slow_first_snapshot(*args, **kwargs):
+                if not snapshot_entered.is_set():
+                    snapshot_entered.set()
+                    time.sleep(0.35)
+                return original_snapshot(*args, **kwargs)
+
+            barrier = threading.Barrier(2)
+
+            def send_same_request():
+                client = self.app.test_client()
+                barrier.wait(timeout=5)
+                return client.post('/prices/create-batch', json=body)
+
+            with patch('flask_login.utils._get_user', return_value=self.owner), \
+                    patch('routes.safe_prices.current_user', self.owner), \
+                    patch('routes.safe_prices.get_current_seller', return_value=seller_proxy), \
+                    patch('routes.safe_prices._build_review_snapshot', side_effect=slow_first_snapshot):
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    responses = list(executor.map(lambda _index: send_same_request(), range(2)))
+
+            statuses = sorted(response.status_code for response in responses)
+            self.assertEqual(statuses, [200, 503])
+            successful = next(response.get_json() for response in responses if response.status_code == 200)
+            self.assertFalse(successful['replayed'])
+            self.assertEqual(PriceChangeBatch.query.filter_by(seller_id=self.seller.id).count(), 1)
+
+            retry = self._request_as_owner('post', '/prices/create-batch', json=body)
+            self.assertEqual(retry.status_code, 200)
+            self.assertTrue(retry.get_json()['replayed'])
+            self.assertEqual(retry.get_json()['batch_id'], successful['batch_id'])
+            self.assertEqual(PriceChangeBatch.query.filter_by(seller_id=self.seller.id).count(), 1)
+        finally:
+            self.db.session.remove()
+            self.db._app_engines[self.app] = {None: original_engine}
+            file_engine.dispose()
+            temporary.close()
+
+    def test_wb_price_review_receipt_migration_preserves_legacy_nulls(self):
+        from migrations.migrate_add_wb_price_review_receipt import apply_migration
+
+        connection = sqlite3.connect(':memory:')
+        try:
+            connection.execute(
+                'CREATE TABLE price_change_batches (id INTEGER PRIMARY KEY, name TEXT)'
+            )
+            connection.execute(
+                "INSERT INTO price_change_batches (id,name) VALUES (17,'historical')"
+            )
+            connection.commit()
+            connection.execute('BEGIN IMMEDIATE')
+            apply_migration(connection, verbose=False)
+            connection.commit()
+            connection.execute('BEGIN IMMEDIATE')
+            self.assertEqual(apply_migration(connection, verbose=False), 0)
+            connection.commit()
+
+            columns = {
+                row[1]: row
+                for row in connection.execute('PRAGMA table_info(price_change_batches)')
+            }
+            self.assertEqual(columns['review_key_hash'][2], 'VARCHAR(64)')
+            self.assertEqual(columns['review_key_hash'][3], 0)
+            self.assertEqual(columns['review_receipt_json'][2], 'TEXT')
+            self.assertEqual(columns['review_receipt_json'][3], 0)
+            self.assertEqual(
+                connection.execute(
+                    'SELECT review_key_hash,review_receipt_json '
+                    'FROM price_change_batches WHERE id=17'
+                ).fetchone(),
+                (None, None),
+            )
+            connection.execute(
+                "INSERT INTO price_change_batches (name,review_key_hash) VALUES ('new','a')"
+            )
+            connection.execute(
+                "INSERT INTO price_change_batches (name,review_key_hash) VALUES ('legacy-two',NULL)"
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    "INSERT INTO price_change_batches (name,review_key_hash) VALUES ('duplicate','a')"
+                )
+        finally:
+            connection.close()
+
     def test_reviewed_price_states_keep_zero_distinct_from_unknown_and_scope_fallback(self):
         from datetime import datetime
 
@@ -649,6 +955,9 @@ class SafePriceHandoffTest(unittest.TestCase):
         self.assertIn(b'canCreateReviewedBatch()', response.data)
         self.assertIn(b'reviewed_write: true', response.data)
         self.assertIn('Сохранить проверенные изменения'.encode(), response.data)
+        self.assertIn(b'data-price-reviewed-retry', response.data)
+        self.assertIn(b'pendingReviewBodyJson', response.data)
+        self.assertIn(b'maxlength="200"', response.data)
         self.assertNotIn(b'eval(', response.data)
         self.assertNotIn(b'calculateNewPrice', response.data)
 
@@ -772,9 +1081,15 @@ const source = match[0].replace(/^<script>|<\/script>$/g, '')
   .replace(/\{\{[\s\S]*?\}\}/g, '0');
 let received;
 const hash = '#workspace-return=0123456789abcdef0123456789abcdef';
+const storage = new Map();
 const context = {
   URL,
   URLSearchParams,
+  sessionStorage: {
+    getItem(key) { return storage.get(key) || null; },
+    setItem(key, value) { storage.set(key, value); },
+    removeItem(key) { storage.delete(key); },
+  },
   window: {
     location: {hash, origin:'https://seller.test'},
     SellerHubCommonContent: {
@@ -835,12 +1150,53 @@ assert.equal(app.exactBatchResult({...reviewedSubset, changed_count:3}), null);
 app.selectedIds = [7002, 7001];
 assert.equal(app.exactBatchResult(data), null);
 
-const normal = context.__priceChangeApp(false, []);
+const normal = context.__priceChangeApp(false, [], {
+  owner:'7:9', workspaceUrl:'/my-products/beta',
+});
 normal.selectedIds = [8001, 8002];
 normal.changeValue = 10;
 normal.preview = {review_token:'signed', can_create:true, stats:{changed_count:2}};
 normal.previewInputKey = normal.reviewInputKey();
 assert.equal(normal.canCreateReviewedBatch(), true);
+const pendingBody = {
+  reviewed_write:true, review_token:'signed-token', product_ids:[8001, 8002],
+  change_type:'set', change_value:10, formula:'', formula_variables:{},
+  name:'Exact proposal', description:'reason', price_source:'local', exact_selection:false,
+};
+normal.persistPendingReviewedSubmission(pendingBody);
+assert.equal(normal.pendingReviewPersisted, true);
+assert.equal(normal.canCreateReviewedBatch(), false);
+const immutableBody = normal.pendingReviewBodyJson;
+const recovered = context.__priceChangeApp(false, [], {
+  owner:'7:9', workspaceUrl:'/my-products/beta',
+});
+recovered.selectedIds = [8001, 8002];
+recovered.pendingReviewStorageKey = recovered.reviewStorageKeyForScope('7:9', recovered.selectedIds);
+recovered.restorePendingReviewedSubmission();
+assert.equal(recovered.pendingReviewMatchesRoute(), true);
+assert.equal(recovered.pendingReviewBodyJson, immutableBody);
+assert.equal(recovered.pendingReviewPersisted, true);
+assert.deepEqual(JSON.parse(recovered.pendingReviewBodyJson), pendingBody);
+const replayed = {
+  success:true, reviewed_write:true, reviewed_selection:'wb_reviewed_selection_v1',
+  replayed:true, batch_id:91, status:'applied', selected_count:2,
+  changed_count:1, stats:{total:1}, redirect:'/prices/batch/91',
+};
+assert.equal(recovered.reviewedBatchResult(replayed, [8001, 8002]).href, '/prices/batch/91');
+const otherOwner = context.__priceChangeApp(false, [], {
+  owner:'8:9', workspaceUrl:'/my-products/beta',
+});
+otherOwner.selectedIds = [8001, 8002];
+otherOwner.pendingReviewStorageKey = otherOwner.reviewStorageKeyForScope('8:9', otherOwner.selectedIds);
+otherOwner.restorePendingReviewedSubmission();
+assert.equal(otherOwner.pendingReviewSubmission, null);
+const otherScope = context.__priceChangeApp(false, [], {
+  owner:'7:9', workspaceUrl:'/my-products/beta',
+});
+otherScope.selectedIds = [8002, 8001];
+otherScope.pendingReviewStorageKey = otherScope.reviewStorageKeyForScope('7:9', otherScope.selectedIds);
+otherScope.restorePendingReviewedSubmission();
+assert.equal(otherScope.pendingReviewSubmission, null);
 normal.changeValue = 11;
 assert.equal(normal.reviewIsCurrent(), false);
 assert.equal(normal.canCreateReviewedBatch(), false);

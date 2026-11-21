@@ -52,7 +52,16 @@
         <a x-show="selectionHandoff" data-price-workspace-return :href="workspaceReturnHref()" class="inline-flex items-center min-h-[44px] mt-2 font-medium underline">Вернуться к товарам</a>
     </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div x-show="pendingReviewSubmission" x-cloak data-price-reviewed-retry-pending class="mb-6 p-4 rounded-xl border border-amber-300 bg-amber-50 text-sm text-amber-950" role="status">
+        <p>Ответ на сохранение не подтверждён. Повтор отправит тот же проверенный запрос для <span x-text="pendingReviewScope.length"></span> товаров и вернёт исходную партию, если она уже создана.</p>
+        <p x-show="!pendingReviewPersisted" class="mt-2">Запрос сохранён только в этой открытой вкладке; не перезагружайте её до повтора.</p>
+        <p x-show="!pendingReviewMatchesRoute()" class="mt-2">Откройте исходный выбор товаров, чтобы повторить этот запрос.</p>
+        <button data-price-reviewed-retry @click="retryReviewedSubmission" :disabled="submitting || !pendingReviewMatchesRoute()" class="mt-3 inline-flex min-h-[44px] items-center rounded-lg bg-amber-800 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:opacity-50">
+            Повторить тот же запрос
+        </button>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6" :inert="!!pendingReviewSubmission">
         <!-- Левая колонка - Параметры изменения -->
         <div class="lg:col-span-1 space-y-6">
             <!-- Выбранные товары -->
@@ -135,7 +144,7 @@
                     <label for="name" class="block text-sm font-medium text-gray-700 mb-1">
                         Название операции
                     </label>
-                    <input type="text" id="name" x-model="name" :disabled="submitting"
+                    <input type="text" id="name" x-model="name" maxlength="200" :disabled="submitting"
                            placeholder="Например: Новогодняя распродажа"
                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
                 </div>
@@ -561,6 +570,12 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
         handoffProductIds,
         workspaceReturn,
         requestError: '',
+        pendingReviewStoragePrefix: 'seller-hub:wb-reviewed-price-create:v1:',
+        pendingReviewStorageKey: '',
+        pendingReviewSubmission: null,
+        pendingReviewBodyJson: '',
+        pendingReviewScope: [],
+        pendingReviewPersisted: false,
 
         workspaceReturnHref() {
             const fallback = this.workspaceReturn.workspaceUrl || '/my-products/beta';
@@ -577,6 +592,137 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
                 workspaceUrl: fallback,
             });
             return href || fallback;
+        },
+
+        restorePendingReviewedSubmission() {
+            let serialized;
+            try {
+                serialized = sessionStorage.getItem(this.pendingReviewStorageKey);
+            } catch (error) {
+                return;
+            }
+            if (!serialized) return;
+            try {
+                if (serialized.length > 16000) throw new Error('oversized');
+                const saved = JSON.parse(serialized);
+                if (saved?.owner !== this.workspaceReturn.owner) {
+                    sessionStorage.removeItem(this.pendingReviewStorageKey);
+                    return;
+                }
+                const routeScope = this.selectionHandoff
+                    ? this.handoffProductIds : this.selectedIds;
+                if (!Array.isArray(saved?.scope) ||
+                    JSON.stringify(saved.scope) !== JSON.stringify(routeScope)) {
+                    sessionStorage.removeItem(this.pendingReviewStorageKey);
+                    return;
+                }
+                if (saved?.version !== 1 || typeof saved.body_json !== 'string' ||
+                    saved.body_json.length > 12000) {
+                    throw new Error('invalid');
+                }
+                const body = JSON.parse(saved.body_json);
+                const ids = body?.product_ids;
+                if (body?.reviewed_write !== true ||
+                    typeof body.review_token !== 'string' || !body.review_token ||
+                    body.review_token.length > 4096 || !Array.isArray(ids) ||
+                    !ids.length ||
+                    ids.some(id => !Number.isSafeInteger(id) || id <= 0) ||
+                    new Set(ids).size !== ids.length ||
+                    JSON.stringify(saved.scope) !== JSON.stringify(ids)) {
+                    throw new Error('invalid');
+                }
+                this.pendingReviewSubmission = body;
+                this.pendingReviewBodyJson = saved.body_json;
+                this.pendingReviewScope = ids.slice();
+                this.pendingReviewPersisted = true;
+                if (!this.selectionHandoff) this.selectedIds = ids.slice();
+            } catch (error) {
+                try { sessionStorage.removeItem(this.pendingReviewStorageKey); } catch (ignored) {}
+            }
+        },
+
+        persistPendingReviewedSubmission(body) {
+            const ids = body?.product_ids;
+            if (!Array.isArray(ids) || !ids.length ||
+                ids.some(id => !Number.isSafeInteger(id) || id <= 0) ||
+                new Set(ids).size !== ids.length) {
+                throw new Error('Некорректный точный выбор товаров.');
+            }
+            const bodyJson = JSON.stringify(body);
+            const storageKey = this.reviewStorageKeyForScope(
+                this.workspaceReturn.owner, ids,
+            );
+            this.pendingReviewSubmission = body;
+            this.pendingReviewBodyJson = bodyJson;
+            this.pendingReviewScope = ids.slice();
+            this.pendingReviewPersisted = false;
+            this.pendingReviewStorageKey = storageKey;
+            try {
+                const serialized = JSON.stringify({
+                    version: 1,
+                    owner: this.workspaceReturn.owner,
+                    scope: ids,
+                    body_json: bodyJson,
+                });
+                if (bodyJson.length <= 12000 && serialized.length <= 16000) {
+                    sessionStorage.setItem(storageKey, serialized);
+                    this.pendingReviewPersisted = true;
+                }
+            } catch (error) {
+                // Same-page retries remain available if tab storage is full or disabled.
+            }
+        },
+
+        reviewStorageKeyForScope(owner, ids) {
+            const value = JSON.stringify([owner, ids]);
+            let hash = 14695981039346656037n;
+            for (let index = 0; index < value.length; index += 1) {
+                hash ^= BigInt(value.charCodeAt(index));
+                hash = BigInt.asUintN(64, hash * 1099511628211n);
+            }
+            return this.pendingReviewStoragePrefix + hash.toString(16).padStart(16, '0');
+        },
+
+        clearPendingReviewedSubmission() {
+            try { sessionStorage.removeItem(this.pendingReviewStorageKey); } catch (error) {}
+            this.pendingReviewSubmission = null;
+            this.pendingReviewBodyJson = '';
+            this.pendingReviewScope = [];
+            this.pendingReviewPersisted = false;
+        },
+
+        pendingReviewMatchesRoute() {
+            if (!this.pendingReviewSubmission) return false;
+            const currentIds = this.selectionHandoff
+                ? this.handoffProductIds : this.selectedIds;
+            return Array.isArray(currentIds) &&
+                currentIds.length === this.pendingReviewScope.length &&
+                currentIds.every((id, index) => id === this.pendingReviewScope[index]);
+        },
+
+        reviewedBatchResult(data, expectedIds) {
+            const batchId = data?.batch_id;
+            const changedCount = data?.stats?.total;
+            const supportedStatuses = [
+                'draft', 'pending_review', 'confirmed', 'applying', 'applied',
+                'partially_applied', 'failed', 'reverted', 'cancelled',
+            ];
+            if (data?.success !== true || data?.reviewed_write !== true ||
+                data?.reviewed_selection !== 'wb_reviewed_selection_v1' ||
+                typeof data?.replayed !== 'boolean' ||
+                !Number.isSafeInteger(batchId) || batchId <= 0 ||
+                !Array.isArray(expectedIds) || !expectedIds.length ||
+                data?.selected_count !== expectedIds.length ||
+                !Number.isSafeInteger(data?.changed_count) ||
+                data.changed_count <= 0 || data.changed_count > data.selected_count ||
+                data.changed_count !== changedCount || !data.stats ||
+                !Number.isSafeInteger(changedCount) || changedCount <= 0 ||
+                !supportedStatuses.includes(data.status)) return null;
+
+            const suffix = data.status === 'pending_review' ? '/confirm' : '';
+            const path = '/prices/batch/' + batchId + suffix;
+            if (data.redirect !== path) return null;
+            return {href: path, canonicalRedirect: true};
         },
 
         exactBatchResult(data) {
@@ -685,6 +831,12 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
                     }
                 }
             }
+
+            this.pendingReviewStorageKey = this.reviewStorageKeyForScope(
+                this.workspaceReturn.owner,
+                this.selectionHandoff ? this.handoffProductIds : this.selectedIds,
+            );
+            this.restorePendingReviewedSubmission();
 
             // Загружаем товары
             this.loadProducts(1);
@@ -892,7 +1044,7 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
         },
 
         canCreateReviewedBatch() {
-            return this.reviewIsCurrent() &&
+            return !this.pendingReviewSubmission && this.reviewIsCurrent() &&
                 this.preview.can_create === true &&
                 this.preview.stats?.changed_count > 0;
         },
@@ -970,6 +1122,7 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
 
         // Предпросмотр
         async loadPreview() {
+            if (this.pendingReviewSubmission) return;
             if (this.selectedIds.length === 0) return;
 
             const requestVersion = ++this.reviewVersion;
@@ -1019,64 +1172,82 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
             }
         },
 
-        // Создание батча
+        // Создать запрос один раз и сохранить его до POST. При неизвестном
+        // ответе повторяется та же неизменяемая проверенная нагрузка.
         async createBatch() {
+            if (this.pendingReviewSubmission) return;
             if (!this.canCreateReviewedBatch()) {
                 this.requestError = 'Сначала рассчитайте и проверьте актуальные изменения.';
                 return;
             }
 
+            const body = {
+                reviewed_write: true,
+                review_token: this.preview.review_token,
+                product_ids: this.selectedIds.slice(),
+                change_type: this.changeType,
+                change_value: this.changeValue,
+                formula: this.formula,
+                formula_variables: {},
+                name: this.name,
+                description: this.description,
+                price_source: this.useMarketplacePrices ? 'marketplace' : 'local',
+                exact_selection: this.selectionHandoff,
+            };
+            try {
+                this.persistPendingReviewedSubmission(body);
+            } catch (error) {
+                this.requestError = error.message || 'Не удалось безопасно сохранить запрос для повтора. Отправка не выполнялась.';
+                return;
+            }
+            this.requestError = '';
+            await this.retryReviewedSubmission();
+        },
+
+        async retryReviewedSubmission() {
+            if (!this.pendingReviewSubmission || !this.pendingReviewBodyJson ||
+                !this.pendingReviewMatchesRoute() || this.submitting) return;
+
             this.submitting = true;
             this.requestError = '';
-            const reviewToken = this.preview.review_token;
             try {
                 const response = await fetch('{{ url_for("prices.create_batch") }}', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        reviewed_write: true,
-                        review_token: reviewToken,
-                        product_ids: this.selectedIds,
-                        change_type: this.changeType,
-                        change_value: this.changeValue,
-                        formula: this.formula,
-                        formula_variables: {},
-                        name: this.name,
-                        description: this.description,
-                        price_source: this.useMarketplacePrices ? 'marketplace' : 'local',
-                        exact_selection: this.selectionHandoff
-                    })
+                    body: this.pendingReviewBodyJson,
                 });
-
                 const data = await response.json();
 
-                if (response.ok && data.success) {
-                    let resultHref = data.redirect;
-                    let returnHash = '';
-                    if (this.selectionHandoff) {
-                        const result = this.exactBatchResult(data);
-                        if (!result) {
-                            this.requestError = 'Партия могла сохраниться, но ответ не содержит точного результата. Проверьте историю цен; повторная отправка заблокирована.';
-                            this.invalidateReview();
-                            return;
-                        }
-                        resultHref = result.href;
-                        returnHash = this.bindExactBatchReturn(data, result.canonicalRedirect);
+                if (response.ok && data.success === true) {
+                    const result = this.reviewedBatchResult(data, this.pendingReviewScope);
+                    if (!result) {
+                        this.requestError = 'Партия могла сохраниться, но ответ не содержит точного результата. Повторите тот же запрос.';
+                        return;
                     }
-                    // Очищаем выбор после успешного создания
-                    this.clearSelection();
-                    // Переходим на страницу батча
-                    window.location.href = resultHref + returnHash;
-                } else {
-                    this.requestError = data.error || 'Не удалось сохранить проверенное изменение.';
-                    this.invalidateReview();
-                    this.requestError = data.error || 'Не удалось сохранить проверенное изменение.';
+                    const returnHash = this.selectionHandoff
+                        ? this.bindExactBatchReturn(data, result.canonicalRedirect) : '';
+                    this.clearPendingReviewedSubmission();
+                    if (!this.selectionHandoff) {
+                        this.selectedIds = [];
+                        localStorage.removeItem('price_change_selected');
+                    }
+                    window.location.href = result.href + returnHash;
+                    return;
                 }
+
+                const safeToReviewAgain = [
+                    'review_invalid_input', 'review_expired', 'review_stale', 'review_no_changes',
+                    'price_change_blocked', 'review_selection_changed',
+                ].includes(data?.code);
+                if (safeToReviewAgain) {
+                    this.clearPendingReviewedSubmission();
+                    this.invalidateReview();
+                }
+                this.requestError = data.error || 'Не удалось подтвердить сохранение. Повторите тот же запрос.';
             } catch (error) {
-                console.error('Create batch error:', error);
-                this.requestError = 'Не удалось подтвердить сохранение. Проверьте историю цен перед повторной отправкой.';
-                this.invalidateReview();
-                this.requestError = 'Не удалось подтвердить сохранение. Проверьте историю цен перед повторной отправкой.';
+                // A lost response can follow a committed write. Retain the exact
+                // serialized request for an explicit retry, without logging it.
+                this.requestError = 'Не удалось подтвердить сохранение. Повторите тот же запрос; он вернёт исходную партию, если она уже создана.';
             } finally {
                 this.submitting = false;
             }

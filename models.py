@@ -2553,6 +2553,11 @@ class PriceChangeBatch(db.Model):
     description = db.Column(db.Text)  # Описание / причина изменения
     change_type = db.Column(db.String(50), nullable=False)  # 'fixed', 'percent', 'formula'
 
+    # Durable idempotency receipt for the reviewed WB price-create path.
+    # Historical/legacy batches keep both fields NULL.
+    review_key_hash = db.Column(db.String(64), nullable=True)
+    review_receipt_json = db.Column(db.Text, nullable=True)
+
     # Параметры изменения
     change_value = db.Column(db.Float)  # Значение изменения (число или процент)
     change_formula = db.Column(db.String(500))  # Формула изменения (если type='formula')
@@ -2612,6 +2617,11 @@ class PriceChangeBatch(db.Model):
     __table_args__ = (
         db.Index('idx_price_batch_seller_status', 'seller_id', 'status'),
         db.Index('idx_price_batch_seller_created', 'seller_id', 'created_at'),
+        db.Index(
+            'uq_price_change_batches_review_key_hash',
+            'review_key_hash',
+            unique=True,
+        ),
     )
 
     def __repr__(self) -> str:
