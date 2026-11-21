@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-21T18:33:39.015494+00:00",
+  "generated_at": "2026-11-21T18:51:30.020679+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "4e49fe2e3e7c5413e899800e04afe796f4c490fafbe88da9bbd7107365982f83"
+      "sha256": "5b2d1151f398ab631813f541e28816767392a7a0f97744f1e7bc5ef878556fa2"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -481,7 +481,7 @@
     },
     {
       "path": "docs/design/seller-bulk-workspace-2026-11-20.md",
-      "sha256": "d989a8d115f845c89f1561b08e0c9b146765234d798a8e06a05d9ba0c28e91ea"
+      "sha256": "7e89e338073bc24f15a165cb759fff81f01c743faf265f8a43f51f963082552d"
     },
     {
       "path": "docs/design/startup-migration-performance.md",
@@ -2765,7 +2765,7 @@
     },
     {
       "path": "static/pricing-workspace.css",
-      "sha256": "7768653b0e807924a9292699e1162fbda3193ac5b66519f98ce44c2a21d25068"
+      "sha256": "f083f6264b65715206e53e670abd47d74c2cb05ce9af693a8d8c4592f208109a"
     },
     {
       "path": "static/seller-workspace.css",
@@ -3133,19 +3133,19 @@
     },
     {
       "path": "templates/marketplace_commercial.html",
-      "sha256": "4a57d298f0fedba5dd05e92a00b833e9d64e7290b9c7a0af343f797a2cdf7d0c"
+      "sha256": "b1b3604d8605957b89b00118ac92de61334f9caf7d0381d04b42be4a142eeb0d"
     },
     {
       "path": "templates/marketplace_commercial_classic.html",
-      "sha256": "07236c688b4b4176e2fabbf0f5538d1dec3447364fe9b5ae0c6a63e582686611"
+      "sha256": "6e87adcc2b0bb71c33907ed52a57e68ad63f2878461b1784078cc704a1d6b528"
     },
     {
       "path": "templates/marketplace_commercial_detail.html",
-      "sha256": "2a5bb4207a6ed715e6453bd2f99722bcd99b68e9d9083c0705117cd5257a6e66"
+      "sha256": "3beeee0a20648f832b79e5a3ed7cebc1d9fee5ca835aa970e488f626b00b2682"
     },
     {
       "path": "templates/marketplace_commercial_detail_classic.html",
-      "sha256": "c186f96b30dcceb059e1d90dd045ace822a0e233559b6281892f6a9b5d20e613"
+      "sha256": "0b51dc845b29fb183340491542d3004c22d11f454ccc0e1ba8b408c4fbd807fd"
     },
     {
       "path": "templates/marketplace_commercial_error.html",
@@ -3341,7 +3341,7 @@
     },
     {
       "path": "templates/partials/pricing_workspace_nav.html",
-      "sha256": "02c5cf852c69b4d4fd7e13639e26c3bf0dda3569ea9e54e7ea989bbd2bf29cb8"
+      "sha256": "4931233bb7f5436f411e8198405d2daac70297111cac2f81ceed7f6126e1e5a8"
     },
     {
       "path": "templates/partials/pricing_workspace_ozon_facts.html",
@@ -3377,7 +3377,7 @@
     },
     {
       "path": "templates/price_monitor_settings.html",
-      "sha256": "e90bd3c7cd735100011c831f95394f3be662cda82a186981ac980afb9f83c708"
+      "sha256": "6698520201cd43abd84125f6c39b6983990dab98235801975a14b6b21340036f"
     },
     {
       "path": "templates/prices_batch_confirm.html",
@@ -3385,27 +3385,27 @@
     },
     {
       "path": "templates/prices_batch_detail.html",
-      "sha256": "9c59fa63685754ecaba326a623962ebb88e21bb8b64515ba58f20b879755babd"
+      "sha256": "66ff0df6cfe544b0e5421616161d268474217db3466785f79783e985817ec55e"
     },
     {
       "path": "templates/prices_change.html",
-      "sha256": "b679026eadce4c7d1e5e07b7058d2201152cf4d2ed5dde3b594d4b1ec7766eb1"
+      "sha256": "b1a54f216890cc6355c96f2655245dae2cd31047b23c89920879dcb9f0ac82f1"
     },
     {
       "path": "templates/prices_dashboard.html",
-      "sha256": "426bcd596a0023c47b0303a5aa8833e33fedd46de1d0b80a38d306bf20785bde"
+      "sha256": "81cb369356651f2d09b531dc2437bfa4ed542ea50ba1d2e5fe6230cad0208776"
     },
     {
       "path": "templates/prices_history.html",
-      "sha256": "a815e1e4d1d75fb97e2e4f98375600a52e906852d3bfd5963a93eda4eff8dc96"
+      "sha256": "66c3b26bd37966c87ca0bc032fd62fc655551ee57b887510220105356a57fdbd"
     },
     {
       "path": "templates/prices_settings.html",
-      "sha256": "8d34d7fe5aff24167caf0433d00d1f8b479edf59c5f5f0288a7c2e8e36edf8ea"
+      "sha256": "e9535319c0721a434aa131afdfb2696339850c19d81eaaeef53b9ec003e29039"
     },
     {
       "path": "templates/pricing_settings.html",
-      "sha256": "be041aa4753d1e0316e09fbdd8d351cf6a09fd61fe1cc633be56a1b2ab50ef8e"
+      "sha256": "167f31e7c6c62a7f657b8c94319dec82a7e7a7eb8e53f816a1c4b57b143e2784"
     },
     {
       "path": "templates/product_create.html",
@@ -3521,7 +3521,7 @@
     },
     {
       "path": "templates/suspicious_price_changes.html",
-      "sha256": "004097b705090655b0cdae2f0107158bf641fa8de882cdb18d7352337cce216f"
+      "sha256": "d3c4f89832a34d4e913e406e2fb6a736ab158e3268b2123b8bd58c25f71ab912"
     },
     {
       "path": "templates/telegram_alerts.html",
@@ -3673,7 +3673,7 @@
     },
     {
       "path": "tests/ozon_release/ozon_bulk_price_proposals_browser.py",
-      "sha256": "9ff32eced5c9d63693cf500463501278d5535601a8f4850932a431ecbae960f4"
+      "sha256": "2bcdbf20ea0566f475e07944c3f9a99759656e22029e19a3c5839c0e46105f5f"
     },
     {
       "path": "tests/ozon_release/ozon_bulk_ready_review_browser.py",
@@ -4409,7 +4409,7 @@
     },
     {
       "path": "tests/test_my_products_supplier_refresh_handoff.py",
-      "sha256": "a3a08a59b070198757f1ecc0d2c75a8693ff4fa3896ba84f91ca4a001112a2ce"
+      "sha256": "9735fdf49917fa302c345fd905d192a3668cccc3b3d46a47312cca18e99ce2a4"
     },
     {
       "path": "tests/test_orchestrator.py",
@@ -5141,7 +5141,7 @@
     },
     {
       "path": "tests/ux01/operations_pricing_browser.py",
-      "sha256": "37421e9bbfbf0f7594d27507a2f20bbb251b2e7a8b4e00d743cd7353d9cfffe2"
+      "sha256": "093cbeea012b691108f8da0497c5660f22240a52a977146d5c3cb036c4328a08"
     },
     {
       "path": "tests/ux01/supplier_filtered_import_browser.py",
@@ -5160,5 +5160,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "275fe226ed70ecc062e2cfd1bf70b15067f8c4b01c7408e757802ca48df2fd65"
+  "aggregate_sha256": "69dda49728dcbbbfefb798870a376fde87d5a3ae199bd89edd2cf89bd41cb4f9"
 }
