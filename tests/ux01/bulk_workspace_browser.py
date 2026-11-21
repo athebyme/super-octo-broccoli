@@ -111,6 +111,20 @@ def open_products(page, title=MAIN_TITLE):
     page.get_by_role("checkbox", name=f"Выбрать {title}").wait_for()
 
 
+def selected_browser_state(page):
+    return page.evaluate("""() => {
+        const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+        return proxy ? {
+            selected: proxy.selected.slice(),
+            ozonIds: proxy.ozonIds.slice(),
+        } : null;
+    }""")
+
+
+def refresh_ozon_button(page, count=1):
+    return page.get_by_role("button", name=f"Подготовить для Ozon ({count})")
+
+
 def pick_action(page, name):
     page.get_by_role("button", name="Что сделать").click()
     action = page.get_by_role("menuitem", name=name)
@@ -529,6 +543,7 @@ def run():
         refresh_result.get_by_text(MANUAL_TITLE, exact=False).wait_for()
         refresh_result.get_by_text("Нет связи с каталогом поставщика. Данные не менялись.").wait_for()
         assert page.locator(".shk-job").count() == 0
+        assert page.get_by_role("button", name=re.compile(r"^Подготовить для Ozon")).count() == 0
         checks.append("supplier_refresh_skip_has_exact_named_reason_without_generic_job")
 
         open_products(page)
@@ -632,6 +647,64 @@ def run():
         assert mixed_result.is_visible()
         checks.append("seller_workspace_resize_releases_desktop_sidebar_space_immediately")
 
+        # Hand off the verified update from the real local mixed result. The
+        # skipped row is selected separately to prove the CTA uses its own
+        # exact updated set and leaves the catalog selection alone.
+        page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
+        assert selected_browser_state(page) == {
+            "selected": [fixture_ids["manual_id"]], "ozonIds": [],
+        }
+        refresh_cta = refresh_ozon_button(page)
+        assert refresh_cta.count() == 1
+        posts_before_handoff = len(posts)
+        refresh_cta.click()
+        refresh_dialog = page.locator('dialog[aria-labelledby="mp-ozon-dialog-title"]')
+        refresh_dialog.wait_for()
+        assert refresh_dialog.get_by_label("Магазин Ozon").input_value() == str(fixture.FIXTURE["account_id"])
+        assert selected_browser_state(page) == {
+            "selected": [fixture_ids["manual_id"]], "ozonIds": [fixture_ids["local_id"]],
+        }
+        assert len(posts) == posts_before_handoff, posts
+        prepare = refresh_dialog.get_by_role("button", name="Подготовить черновики")
+        assert prepare.is_disabled()
+        refresh_dialog.get_by_role("button", name="Вернуться").click()
+        assert not refresh_dialog.is_visible()
+        assert len(posts) == posts_before_handoff, posts
+        assert selected_browser_state(page) == {
+            "selected": [fixture_ids["manual_id"]], "ozonIds": [fixture_ids["local_id"]],
+        }
+        assert refresh_cta.evaluate("element => element === document.activeElement")
+
+        refresh_cta.click()
+        refresh_dialog.wait_for()
+        prepare = refresh_dialog.get_by_role("button", name="Подготовить черновики")
+        assert prepare.is_disabled()
+        refresh_dialog.get_by_role("checkbox").check()
+        assert prepare.is_enabled()
+        with page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_OZON_PREPARE
+                                  and response.request.method == "POST") as refreshed_prepare:
+            prepare.click()
+        assert refreshed_prepare.value.status == 202
+        prepared_from_refresh = posts[-1]
+        assert prepared_from_refresh["path"] == LOCAL_OZON_PREPARE
+        assert set(prepared_from_refresh["body"]) == {
+            "imported_product_ids", "account_id", "request_key", "confirm_prepare",
+        }
+        assert prepared_from_refresh["body"]["imported_product_ids"] == [fixture_ids["local_id"]]
+        assert prepared_from_refresh["body"]["account_id"] == fixture.FIXTURE["account_id"]
+        assert re.fullmatch(r"[a-f0-9]{32}", prepared_from_refresh["body"]["request_key"])
+        assert prepared_from_refresh["body"]["request_key"] != posts[1]["body"]["request_key"]
+        assert prepared_from_refresh["body"]["confirm_prepare"] is True
+        assert "confirm_write" not in prepared_from_refresh["body"]
+        handoff_job_path = refreshed_prepare.value.headers["location"]
+        assert re.fullmatch(r"/marketplaces/ozon/uploads/ozon-upload-[0-9a-f]{32}", handoff_job_path)
+        page.wait_for_url(fixture.BASE + handoff_job_path, wait_until="domcontentloaded")
+        with fixture.app.app_context():
+            handoff_job = BackgroundJob.query.filter_by(
+                job_uid=handoff_job_path.rsplit("/", 1)[-1], seller_id=fixture.FIXTURE["seller_id"],
+            ).one()
+            assert handoff_job.total == 1
+        checks.append("supplier_refresh_verified_update_handoff_posts_exact_local_ozon_prepare_key")
 
         # Start a separate mobile browser context at 320px. Do not resize a
         # desktop page across the shared sidebar breakpoint for this check.
@@ -648,16 +721,22 @@ def run():
         # this tests presentation only and does not call a provider.
         mobile_page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").check()
         mobile_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
+        imported_row_checkbox = mobile_page.locator(
+            f'.mp-list article.mp-row input[type="checkbox"][value="{fixture_ids["import_id"]}"]'
+        )
+        imported_row_checkbox.wait_for()
+        imported_row_checkbox.check()
         refresh_response_override = {
             "success": True,
             "status": "completed_with_errors",
-            "requested": 2,
+            "requested": 3,
             "updated": 1,
-            "skipped": 0,
+            "skipped": 1,
             "errors": 1,
             "items": [
-                {"product_id": fixture_ids["manual_id"], "status": "error", "reason": "update_failed"},
                 {"product_id": fixture_ids["local_id"], "status": "updated", "reason": None},
+                {"product_id": fixture_ids["manual_id"], "status": "skipped", "reason": "no_supplier_link"},
+                {"product_id": fixture_ids["import_id"], "status": "error", "reason": "update_failed"},
             ],
         }
         pick_action(mobile_page, "Обновить из поставщика")
@@ -666,20 +745,22 @@ def run():
             mobile_page.get_by_role("button", name="Обновить", exact=True).click()
         assert partial_refresh.value.status == 200
         assert posts[-1] == {"path": LOCAL_REFRESH,
-                             "body": {"product_ids": [fixture_ids["local_id"], fixture_ids["manual_id"]]}}
+                             "body": {"product_ids": [fixture_ids["local_id"], fixture_ids["manual_id"],
+                                                        fixture_ids["import_id"]]}}
         partial_result = mobile_page.locator(".mp-refresh-result")
         partial_result.get_by_role("heading", name="Обновление завершено с ошибками").wait_for()
-        partial_result.get_by_text("В запросе товаров: 2.", exact=False).wait_for()
+        partial_result.get_by_text("В запросе товаров: 3.", exact=False).wait_for()
         assert [value.strip() for value in partial_result.locator(
             ".mp-refresh-result-counts dd"
-        ).all_text_contents()] == ["1", "0", "1"]
-        partial_result.get_by_text("Карточки и итог (2)").click()
+        ).all_text_contents()] == ["1", "1", "1"]
+        partial_result.get_by_text("Карточки и итог (3)").click()
         error_row = partial_result.locator(".mp-refresh-result-item.is-danger")
-        error_row.get_by_text(MANUAL_TITLE, exact=False).wait_for()
+        error_row.get_by_text("Позиция для импорта", exact=False).wait_for()
         error_row.get_by_text("Не удалось сохранить данные. Откройте карточку и проверьте её.").wait_for()
         assert error_row.get_by_role("link", name="Открыть карточку").count() == 1
         updated_row = partial_result.locator(".mp-refresh-result-item.is-ok")
         updated_row.get_by_text(REFRESHED_TITLE, exact=False).wait_for()
+        partial_result.locator(".mp-refresh-result-item.is-muted").get_by_text(MANUAL_TITLE, exact=False).wait_for()
         assert mobile_page.locator(".shk-job").count() == 0
         assert mobile_page.get_by_role("button", name="Повторить неудачные").count() == 0
         verify_bounds(mobile_page)
@@ -693,8 +774,34 @@ def run():
         assert not partial_result.locator("details").evaluate("element => element.open")
         summary.press("Enter")
         assert partial_result.locator("details").evaluate("element => element.open")
+        assert refresh_ozon_button(mobile_page).count() == 1
         checks.append("supplier_refresh_partial_error_has_owner_link_and_no_retry")
         checks.append("supplier_refresh_result_fits_320_and_details_are_keyboard_operable")
+
+        # Even a partial result with updated, skipped, and failed rows may hand
+        # off only the verified update; opening and dismissing is local UI only.
+        mobile_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
+        assert selected_browser_state(mobile_page) == {
+            "selected": [fixture_ids["manual_id"]], "ozonIds": [],
+        }
+        partial_cta = refresh_ozon_button(mobile_page)
+        partial_post_count = len(posts)
+        partial_cta.click()
+        partial_dialog = mobile_page.locator('dialog[aria-labelledby="mp-ozon-dialog-title"]')
+        partial_dialog.wait_for()
+        assert partial_dialog.get_by_label("Магазин Ozon").input_value() == str(fixture.FIXTURE["account_id"])
+        assert selected_browser_state(mobile_page) == {
+            "selected": [fixture_ids["manual_id"]], "ozonIds": [fixture_ids["local_id"]],
+        }
+        assert len(posts) == partial_post_count, posts
+        partial_dialog.get_by_role("button", name="Вернуться").click()
+        assert not partial_dialog.is_visible()
+        assert selected_browser_state(mobile_page) == {
+            "selected": [fixture_ids["manual_id"]], "ozonIds": [fixture_ids["local_id"]],
+        }
+        assert partial_cta.evaluate("element => element === document.activeElement")
+        assert len(posts) == partial_post_count, posts
+        checks.append("supplier_refresh_partial_updated_skipped_error_handoff_is_exact_and_dismissible")
 
         # Unknown and rejected requests show the submitted count and refresh
         # action once, without duplicating a generic row for every selection.
@@ -714,6 +821,7 @@ def run():
         unknown_result.get_by_text("В запросе товаров: 1.", exact=False).wait_for()
         assert unknown_result.locator(".mp-refresh-result-details").count() == 0
         assert unknown_result.get_by_role("button", name="Обновить список").count() == 1
+        assert mobile_page.get_by_role("button", name=re.compile(r"^Подготовить для Ozon")).count() == 0
         assert unknown_result.get_by_text(MANUAL_TITLE, exact=False).count() == 0
         checks.append("supplier_refresh_unknown_result_has_count_and_one_refresh_action")
 
@@ -732,6 +840,7 @@ def run():
         rejected_result.get_by_text("В запросе товаров: 1.", exact=False).wait_for()
         assert rejected_result.locator(".mp-refresh-result-details").count() == 0
         assert rejected_result.get_by_role("button", name="Обновить список").count() == 1
+        assert mobile_page.get_by_role("button", name=re.compile(r"^Подготовить для Ozon")).count() == 0
         assert rejected_result.get_by_text(MANUAL_TITLE, exact=False).count() == 0
         verify_bounds(mobile_page)
         checks.append("supplier_refresh_rejected_result_has_count_and_one_refresh_action")
