@@ -3,6 +3,105 @@
 
 {% block title %}Каталог — {{ supplier.name }} - Seller Hub{% endblock %}
 
+{% macro supplier_feed_freshness(supplier) -%}
+{% set mapping = supplier.csv_column_mapping if supplier.csv_column_mapping is mapping else {} %}
+{% set has_catalog_price = 'supplier_price' in mapping %}
+{% set has_catalog_stock = 'supplier_quantity' in mapping %}
+{% set attempt_at = supplier.last_price_sync_attempt_at if supplier.last_price_sync_attempt_at is defined else none %}
+<section class="sc-feed-freshness" aria-label="Свежесть данных поставщика">
+    <div class="sc-feed-freshness-item">
+        <strong class="sc-feed-freshness-label">Каталог</strong>
+        {% if supplier.last_sync_at %}
+        <span class="sc-feed-freshness-value">Последняя успешная загрузка
+            <time datetime="{{ supplier.last_sync_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ supplier.last_sync_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
+        </span>
+        {% else %}
+        <span class="sc-feed-freshness-value">Успешная загрузка не подтверждена</span>
+        {% endif %}
+        {% if supplier.last_sync_status == 'failed' %}
+        <span class="sc-feed-freshness-warning">Последняя попытка завершилась ошибкой</span>
+        {% endif %}
+    </div>
+    {% if supplier.price_file_url %}
+    <div class="sc-feed-freshness-item">
+        <strong class="sc-feed-freshness-label">Цены и остатки · отдельный файл</strong>
+        <span class="sc-feed-freshness-value">Автообновление: {{ 'включено' if supplier.auto_sync_prices else 'выключено' }}</span>
+        {% if supplier.last_price_sync_at %}
+        <span class="sc-feed-freshness-value">Последняя успешная загрузка
+            <time datetime="{{ supplier.last_price_sync_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ supplier.last_price_sync_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
+        </span>
+        {% else %}
+        <span class="sc-feed-freshness-value">Успешная загрузка не подтверждена</span>
+        {% endif %}
+        {% if supplier.last_price_sync_status == 'failed' %}
+            {% if attempt_at %}
+        <span class="sc-feed-freshness-warning">Последняя попытка завершилась ошибкой:
+            <time datetime="{{ attempt_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ attempt_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
+        </span>
+            {% else %}
+        <span class="sc-feed-freshness-warning">Последняя попытка завершилась ошибкой</span>
+            {% endif %}
+        {% elif supplier.last_price_sync_status == 'running' and attempt_at %}
+        <span class="sc-feed-freshness-warning">Результат последней попытки не подтверждён:
+            <time datetime="{{ attempt_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ attempt_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
+        </span>
+        {% endif %}
+    </div>
+    {% elif has_catalog_price or has_catalog_stock %}
+    <div class="sc-feed-freshness-item">
+        <strong class="sc-feed-freshness-label">
+            {% if has_catalog_price and has_catalog_stock %}Цена и остатки{% elif has_catalog_price %}Цена{% else %}Остатки{% endif %} · в каталоге
+        </strong>
+        {% if supplier.last_sync_at %}
+        <span class="sc-feed-freshness-value">Обновляются вместе с каталогом
+            <time datetime="{{ supplier.last_sync_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ supplier.last_sync_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
+        </span>
+        {% else %}
+        <span class="sc-feed-freshness-value">Успешная загрузка не подтверждена</span>
+        {% endif %}
+    </div>
+    {% endif %}
+</section>
+{%- endmacro %}
+
+{% block extra_head %}
+<style>
+    .sc-feed-freshness {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+        gap: 10px 16px;
+        margin: 0 0 20px;
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg-card);
+    }
+    .sc-feed-freshness-item {
+        display: grid;
+        align-content: start;
+        gap: 3px;
+        min-width: 0;
+    }
+    .sc-feed-freshness-label {
+        color: var(--text-secondary);
+        font-size: 12px;
+        line-height: 1.4;
+    }
+    .sc-feed-freshness-value,
+    .sc-feed-freshness-warning {
+        color: var(--text-muted);
+        font-size: 12px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+    }
+    .sc-feed-freshness time {
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+    }
+    .sc-feed-freshness-warning { color: var(--warn); }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <nav class="mb-4 text-sm text-gray-500">
@@ -23,6 +122,8 @@
             </p>
         </div>
     </header>
+
+    {{ supplier_feed_freshness(supplier) }}
 
     {{ preparation_journey('source', none, 'товар из каталога поставщика', 'Выберите позиции для импорта. Публикация на площадке здесь не выполняется.', channel='Ozon') }}
 
@@ -266,8 +367,8 @@
                 <div class="min-w-0 flex-1" role="group" aria-labelledby="supplier-update-heading">
                     <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                         <div>
-                            <h2 id="supplier-update-heading" class="text-sm font-semibold" style="color:var(--warn)">Обновить из каталога</h2>
-                            <p class="text-xs" style="color:var(--text-secondary)">Скопировать новые данные в локальные карточки. WB не меняется.</p>
+                            <h2 id="supplier-update-heading" class="text-sm font-semibold" style="color:var(--warn)">Применить сохранённые данные</h2>
+                            <p class="text-xs" style="color:var(--text-secondary)">Скопировать изменения из сохранённого каталога в локальные карточки. Новая загрузка у поставщика не выполняется; WB и Ozon не меняются.</p>
                         </div>
                         {% if action_counts.updatable %}
                         <label class="flex min-h-11 items-center gap-2 text-xs" style="color:var(--text-secondary)">
@@ -282,12 +383,12 @@
                     </div>
                     <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
                         <button type="submit" form="supplier-update-form" disabled
-                                onclick="return confirm('Скопировать изменения из общего каталога в выбранные локальные карточки? WB не меняется.')"
+                                onclick="return confirm('Применить выбранные данные из сохранённого каталога в локальные карточки? Новая загрузка у поставщика не выполняется. На WB и Ozon ничего не отправляется.')"
                                 class="sh-btn sh-btn--secondary sh-btn--sm"
                                 style="border-color:var(--warn-border);color:var(--warn)"
                                 :disabled="updateSelected.length === 0"
                                 aria-describedby="update-selection-count">
-                            Обновить из каталога <span x-text="'(' + updateSelected.length + ')'">(0)</span>
+                            Применить выбранное <span x-text="'(' + updateSelected.length + ')'">(0)</span>
                         </button>
                         <p id="update-selection-count" class="text-xs" style="color:var(--text-muted)" aria-live="polite">
                             С новыми данными: {{ action_counts.updatable }}. <span x-text="updateSelected.length + ' выбрано'">0 выбрано</span>
