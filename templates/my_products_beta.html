@@ -1,18 +1,21 @@
 {% extends "base.html" %}
 
-{% block title %}Мои товары · beta — Seller Hub{% endblock %}
+{% set import_batch_context = import_batch|default(none) %}
+{% block title %}{{ 'Товары из импорта' if import_batch_context is not none else 'Мои товары' }} · beta — Seller Hub{% endblock %}
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261121-supplier-refresh-wb-handoff-1') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261121-supplier-import-batch-1') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
     'wbConnected': wb_connected,
     'ozonEnabled': ozon_enabled,
     'ozonAccounts': ozon_accounts,
     'suppliers': suppliers_payload,
+    'importBatch': import_batch|default(none),
     'urls': {
         'feed': url_for('api_my_products_list'),
+        'workspace': url_for('seller_my_products_beta'),
         'facets': url_for('api_my_products_facets'),
         'jobStatus': '/api/jobs/',
         'pushToWb': url_for('seller_push_to_wb_bulk'),
@@ -37,10 +40,14 @@
 {% raw %}
     <header class="shk-head">
         <div>
-            <h1 class="shk-head-title">Мои товары</h1>
-            <p class="shk-head-sub">Выберите товары для массовых действий.</p>
+            <h1 class="shk-head-title">{{ importBatchMode ? 'Товары из импорта' : 'Мои товары' }}</h1>
+            <p class="shk-head-sub" v-if="importBatchMode">Выберите товары из этой подборки для массовых действий.</p>
+            <p class="shk-head-sub" v-else>Выберите товары для массовых действий.</p>
         </div>
-        <div class="mp-head-actions">
+        <div v-if="importBatchMode" class="mp-batch-head-actions">
+            <a class="sh-btn sh-btn--secondary" :href="urls.workspace">Все мои товары</a>
+        </div>
+        <div v-else class="mp-head-actions">
             <a class="sh-btn sh-btn--primary" :href="urls.supplierCatalog">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="shk-btn-icon"><path d="M12 5v14M5 12h14"/></svg>
                 Импортировать товары
@@ -112,7 +119,7 @@
     <sh-job-progress :job="job" :title="jobTitle" @dismiss="job = null" @retry-failed="retryFailed"></sh-job-progress>
 
     <!-- Вкладки: одно состояние — одна вкладка, со счётчиком -->
-    <nav class="mp-tabs" aria-label="Статус карточек">
+    <nav v-if="!importBatchMode" class="mp-tabs" aria-label="Статус карточек">
         <button v-for="tab in tabs" :key="tab.key" type="button"
                 class="mp-tab" :class="{'is-active': activeTab === tab.key}"
                 @click="setTab(tab.key)">
@@ -121,7 +128,7 @@
         </button>
     </nav>
 
-    <sh-filter-bar v-model="searchInput" placeholder="Название, бренд или артикул"
+    <sh-filter-bar v-if="!importBatchMode" v-model="searchInput" placeholder="Название, бренд или артикул"
                    :chips="[]" :sticky="true">
         <select v-model="filters.supplier" class="mp-select" aria-label="Поставщик">
             <option value="">Все поставщики</option>
@@ -156,12 +163,13 @@
         <div class="mp-ozon-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!ozonBusy || ozonSessionEnded" @click="readOzonPending">{{ ozonBusy === 'read' ? 'Проверяем…' : 'Проверить результат' }}</button><button v-if="ozonRetrySameKey" type="button" class="sh-btn sh-btn--secondary" :disabled="!!ozonBusy || ozonSessionEnded" @click="retryOzonPending">Повторить тот же запрос</button></div>
     </div>
 
-    <div class="mp-listhead" v-if="items.length || loading">
+    <div class="mp-listhead" :class="{'mp-listhead--import-batch': importBatchMode}" v-if="items.length || loading">
         <div class="mp-select-controls">
             <label class="mp-selectall">
                 <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected"
-                       @change="toggleAll" aria-label="Выбрать все загруженные товары">
-                <span>{{ allSelected ? 'Снять выбор' : 'Выбрать загруженные' }}</span>
+                       @change="toggleAll"
+                       :aria-label="importBatchMode ? 'Выбрать товары из импорта' : (allSelected ? 'Снять выбор всех загруженных товаров' : 'Выбрать все загруженные товары')">
+                <span>{{ importBatchMode ? 'Выбрать товары из импорта' : (allSelected ? 'Снять выбор' : 'Выбрать загруженные') }}</span>
             </label>
             <button v-if="canSelectAllFiltered" type="button" class="mp-select-filtered"
                     :disabled="selectAllLoading" @click="selectAllFiltered">
@@ -187,7 +195,7 @@
             </div>
         </template>
 
-        <sh-empty v-else-if="!items.length"
+        <sh-empty v-else-if="!items.length && !error"
                   :title="emptyState.title" :text="emptyState.text">
             <button v-if="emptyState.action === 'reset'" type="button"
                     class="sh-btn sh-btn--secondary" @click="resetFilters">Сбросить фильтры</button>
@@ -273,11 +281,11 @@
         </article>
     </div>
 
-    <div v-if="items.length || !loading" class="mp-foot">
+    <div v-if="(items.length || !loading) && (!importBatchMode || (items.length && !error))" class="mp-foot">
         <span class="mp-foot-info">Показано {{ items.length }} из {{ $fmt.int(pagination.total || 0) }}</span>
         <button v-if="pagination.has_next" type="button" class="sh-btn sh-btn--secondary"
                 :class="{'is-loading': loadingMore}" :disabled="loading || loadingMore || selectAllLoading" @click="loadMore">Показать ещё</button>
-        <a class="mp-legacy-link" :href="urls.classic">Прежний список</a>
+        <a v-if="!importBatchMode" class="mp-legacy-link" :href="urls.classic">Прежний список</a>
     </div>
 
     <!-- Основные операции собраны в одном списке; редкие действия скрыты до запроса. -->
@@ -346,5 +354,5 @@
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261120-bulk-workspace') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261121-supplier-refresh-wb-handoff-1') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261121-supplier-import-batch-1') }}"></script>
 {% endblock %}

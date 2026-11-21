@@ -30,6 +30,9 @@
 .mp-price-links a { color:var(--accent-text); text-decoration:underline; text-underline-offset:2px; }
 .mp-price-links a:hover { color:var(--text); }
 .mp-price-links a:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; border-radius:2px; }
+.mp-batch-head-actions { display:flex; align-items:center; }
+.mp-batch-head-actions .sh-btn { min-height:44px; }
+.mp-batch-head-actions .sh-btn:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
 
 /* ---------- Вкладки состояний ---------- */
 .mp-tabs {
@@ -84,6 +87,8 @@
     cursor: pointer;
 }
 .mp-selectall input { accent-color: var(--accent); cursor: pointer; }
+.mp-selectall input:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
+.mp-listhead--import-batch .mp-selectall { min-height:44px; }
 .mp-select-filtered {
     min-height: 32px;
     padding: 4px 3px;
@@ -372,6 +377,7 @@
 @media (max-width: 700px) {
     .mp-head-actions { width:100%; flex-direction:column; align-items:stretch; gap:2px; }
     .mp-head-actions > .sh-btn { justify-content:center; }
+    .mp-batch-head-actions { width:100%; justify-content:flex-start; }
     .mp-price-links { gap:0 16px; }
     .mp-price-links a { display:inline-flex; align-items:center; }
     .mp-head-actions > .sh-btn, .mp-price-links a,

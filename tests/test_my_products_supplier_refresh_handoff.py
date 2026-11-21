@@ -1,4 +1,4 @@
-"""Node-only regression for the exact Ozon handoff after supplier refresh."""
+"""Node-only regressions for supplier refresh handoff and import batch scope."""
 
 from pathlib import Path
 import shutil
@@ -19,7 +19,10 @@ const boot = {
   wbConnected: true,
   ozonEnabled: true,
   ozonAccounts: [account],
+  importBatch: null,
   urls: {
+    feed: '/api/my-products',
+    workspace: '/my-products/beta',
     refreshFromSupplier: '/my-products/refresh-from-supplier',
     commonContent: '/my-products/common-content',
     enrichBulk: '/products/enrich-bulk',
@@ -31,6 +34,7 @@ const fakeWindow = {
     mount(_selector, value) { component = value; return value; },
   },
   crypto: {randomUUID() { return 'a'.repeat(32); }},
+  location: {search: ''},
 };
 const stored = new Map();
 const submittedForms = [];
@@ -66,7 +70,8 @@ const context = {
   console,
 };
 vm.createContext(context);
-vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
+const sourceText = fs.readFileSync(process.argv[1], 'utf8');
+vm.runInContext(sourceText, context);
 assert.ok(component && component.methods);
 
 function sameJson(left, right) {
@@ -122,6 +127,34 @@ function setSupplierOutcome(app, data, ids) {
     sameJson(body.product_ids, ids);
     return Promise.resolve(data);
   };
+}
+
+function remount(importBatch, search) {
+  boot.importBatch = importBatch;
+  fakeWindow.location.search = search;
+  vm.runInContext(sourceText, context);
+  return component;
+}
+
+function makeFeedApp(definition, getResponse) {
+  const app = Object.assign(definition.data(), definition.methods);
+  const getCalls = [];
+  app.$refs = {};
+  app.$api = {
+    get(url, params, options) {
+      getCalls.push({
+        url,
+        params: params === undefined ? null : JSON.parse(JSON.stringify(params)),
+        signal: !!options?.signal,
+      });
+      return typeof getResponse === 'function' ? getResponse(url, params) : Promise.resolve(getResponse);
+    },
+  };
+  app.$nextTick = function (callback) { if (callback) callback.call(this); };
+  Object.entries(definition.computed).forEach(([name, getter]) => {
+    Object.defineProperty(app, name, {get() { return getter.call(app); }});
+  });
+  return {app, getCalls};
 }
 
 async function finishSupplierRefresh(data, ids) {
@@ -301,6 +334,123 @@ async function finishSupplierRefresh(data, ids) {
   sameJson(ordinary.app.selected, selection);
   assert.equal(ordinary.refs.dialog.open, true, 'the ordinary Ozon action still uses the shared dialog helper');
 
+  const batchToken = 'supplier-import-receipt-7';
+  const batchPage = {
+    success: true,
+    import_batch_count: 2,
+    items: [{id: 101, title: 'Imported A'}, {id: 202, title: 'Imported B'}],
+    pagination: {page: 1, per_page: 200, total: 2, pages: 1, has_next: false},
+  };
+  let batchDefinition = remount(batchToken, '?import_batch=' + encodeURIComponent(batchToken));
+  let batch = makeFeedApp(batchDefinition, batchPage);
+  assert.equal(batch.app.importBatchMode, true);
+  assert.equal(batch.app.importBatchInvalid, false);
+  sameJson(batch.app.selected, []);
+  sameJson(batch.app.queryParams(99, 5), {import_batch: batchToken});
+  batch.app.load();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(batch.getCalls.length, 1);
+  assert.equal(batch.getCalls[0].url, '/api/my-products');
+  sameJson(batch.getCalls[0].params, {import_batch: batchToken});
+  sameJson(batch.app.items.map(item => item.id), [101, 202]);
+  sameJson(batch.app.selected, []);
+  batch.app.loadFacets();
+  batch.app.loadMore();
+  batch.app.selectAllFiltered();
+  assert.equal(batch.getCalls.length, 1, 'batch mode does not fetch facets or another page');
+  batch.app.toggleAll();
+  sameJson(batch.app.selected, [101, 202]);
+  batch.app.selected = batch.app.selected.filter(id => id !== 202);
+  sameJson(batch.app.selected, [101], 'the seller can exclude a row from the exact batch');
+  assert.equal(batch.app.feedScopeKey(), JSON.stringify({import_batch: batchToken}));
+
+  for (const invalid of [
+    {token: '', search: '?import_batch=', response: batchPage, reason: 'empty sentinel'},
+    {token: null, search: '?import_batch=expired', response: batchPage, reason: 'missing bootstrap token'},
+    {token: 'valid-receipt', search: '?import_batch=valid-receipt', response: {
+      ...batchPage, import_batch_count: 3,
+    }, reason: 'count mismatch'},
+    {token: 'valid-receipt', search: '?import_batch=valid-receipt', response: {
+      ...batchPage, import_batch_count: 0, items: [],
+    }, reason: 'empty batch'},
+    {token: 'valid-receipt', search: '?import_batch=valid-receipt', response: {
+      ...batchPage, items: [{id: 101}, {id: 101}],
+    }, reason: 'duplicate IDs'},
+    {token: 'valid-receipt', search: '?import_batch=valid-receipt', response: {
+      ...batchPage, pagination: {...batchPage.pagination, page: 2},
+    }, reason: 'wrong page'},
+    {token: 'valid-receipt', search: '?import_batch=valid-receipt', response: {
+      ...batchPage, pagination: {...batchPage.pagination, has_next: true},
+    }, reason: 'partial page'},
+    {token: 'valid-receipt', search: '?import_batch=valid-receipt', response: {
+      ...batchPage, pagination: {...batchPage.pagination, per_page: 50},
+    }, reason: 'wrong page size'},
+    {token: 'valid-receipt', search: '?import_batch=valid-receipt', response: {
+      ...batchPage, pagination: {...batchPage.pagination, pages: 2},
+    }, reason: 'multiple pages'},
+    {token: 'x'.repeat(8193), search: '?import_batch=long', response: batchPage, reason: 'oversized token'},
+  ]) {
+    batchDefinition = remount(invalid.token, invalid.search);
+    batch = makeFeedApp(batchDefinition, invalid.response);
+    batch.app.items = [{id: 999, title: 'Stale row'}];
+    batch.app.selected = [999];
+    batch.app.load();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(batch.app.importBatchMode, true, invalid.reason);
+    sameJson(batch.app.items, [], invalid.reason + ' must not leave stale rows visible');
+    sameJson(batch.app.selected, [], invalid.reason + ' must clear selection');
+    assert.ok(batch.app.error, invalid.reason + ' must show a recovery error');
+    if (invalid.token && invalid.token.length <= 8192) {
+      assert.equal(batch.getCalls.length, 1, invalid.reason);
+      sameJson(batch.getCalls[0].params, {import_batch: invalid.token});
+    } else {
+      assert.equal(batch.getCalls.length, 0, invalid.reason + ' must not query an unrestricted list');
+    }
+  }
+
+  batchDefinition = remount('valid-receipt', '?import_batch=valid-receipt');
+  batch = makeFeedApp(batchDefinition, () => Promise.reject(Object.assign(Error('gone'), {status: 404})));
+  batch.app.items = [{id: 999, title: 'Stale row'}];
+  batch.app.selected = [999];
+  batch.app.load();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(batch.getCalls.length, 1);
+  sameJson(batch.getCalls[0].params, {import_batch: 'valid-receipt'});
+  sameJson(batch.app.items, [], 'expired receipt must not fall back to all products');
+  sameJson(batch.app.selected, []);
+
+  batch = makeFeedApp(batchDefinition, () => Promise.reject(Object.assign(
+    Error('Срок действия набора импорта истёк'), {status: 410}
+  )));
+  batch.app.load();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(batch.app.error, /Срок действия набора импорта истёк/);
+  assert.match(batch.app.error, /Все мои товары/);
+
+  const savedUrlSearchParams = context.URLSearchParams;
+  context.URLSearchParams = undefined;
+  batchDefinition = remount(null, '?import_batch=expired');
+  context.URLSearchParams = savedUrlSearchParams;
+  assert.equal(batchDefinition.data().importBatchMode, true, 'query fallback must fail closed without URLSearchParams');
+  assert.equal(batchDefinition.data().importBatchInvalid, true);
+
+  const normalDefinition = remount(null, '');
+  const normal = makeFeedApp(normalDefinition, {
+    success: true,
+    items: [],
+    pagination: {page: 1, per_page: 50, total: 0, pages: 0, has_next: false},
+  });
+  assert.equal(normal.app.importBatchMode, false);
+  assert.equal(normal.app.importBatchInvalid, false);
+  sameJson(normal.app.queryParams(1), {
+    search: '', supplier: '', has_photos: '', stock: '', sort: '', page: 1, per_page: 50,
+  });
+  normal.app.load();
+  normal.app.loadFacets();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(normal.getCalls.length, 2, 'ordinary workspace still loads feed and facets');
+  assert.ok(normal.getCalls.every(call => call.params === null || !Object.hasOwn(call.params, 'import_batch')));
+
   console.log(JSON.stringify({status: 'passed', checks: [
     'only_exactly_verified_updated_ids_are_handed_to_the_existing_ozon_dialog',
     'wb_result_handoff_uses_exact_csrf_form_with_characteristics_preset',
@@ -312,6 +462,10 @@ async function finishSupplierRefresh(data, ids) {
     'handoff_and_dismissal_leave_general_selection_unchanged_and_restore_focus',
     'unknown_rejected_zero_inconsistent_pending_and_disabled_states_do_not_open_the_dialog',
     'ordinary_ozon_action_reuses_shared_preparation_helper',
+    'import_receipt_mode_reads_one_exact_authorized_page_without_auto_selection',
+    'import_receipt_mode_uses_explicit_exact_selection_and_allows_exclusion',
+    'invalid_or_stale_import_receipts_clear_rows_and_never_fall_back_to_global_feed',
+    'ordinary_workspace_keeps_its_existing_feed_and_facets',
   ]}));
 })().catch(error => { console.error(error.stack || String(error)); process.exitCode = 1; });
 """

@@ -6,6 +6,20 @@
 
     if (typeof window.shVue === 'undefined') return;
     var boot = window.shVue.bootstrapData('mp-bootstrap');
+    var importBatchQueryRequested = false;
+    var locationSearch = window.location && typeof window.location.search === 'string'
+        ? window.location.search : '';
+    try {
+        importBatchQueryRequested = new URLSearchParams(locationSearch).has('import_batch');
+    } catch (_) {
+        importBatchQueryRequested = /(?:^|[?&])import_batch(?:=|&|$)/.test(locationSearch);
+    }
+    var hasImportBatchToken = typeof boot.importBatch === 'string';
+    var importBatchMode = hasImportBatchToken || importBatchQueryRequested;
+    var importBatchToken = hasImportBatchToken ? boot.importBatch : '';
+    var importBatchInvalid = importBatchMode && (
+        !hasImportBatchToken || !importBatchToken || importBatchToken.length > 8192
+    );
     var ozonPendingKey = 'ozon-source-prepare-v1';
     function readOzonPending() {
         try { return JSON.parse(sessionStorage.getItem(ozonPendingKey) || 'null'); }
@@ -74,6 +88,20 @@
             ids.push(id);
         }
         return ids;
+    }
+
+    function exactImportBatchPage(data) {
+        var pagination = data && data.pagination;
+        var count = data && data.import_batch_count;
+        var ids = data && orderedProductIds(data.items);
+        return !!data && data.success === true &&
+            Number.isSafeInteger(count) && count >= 1 &&
+            count <= MAX_BULK_SELECTION && Array.isArray(data.items) &&
+            data.items.length === count && ids &&
+            pagination && pagination.page === 1 &&
+            pagination.per_page === MAX_BULK_SELECTION &&
+            pagination.total === count && pagination.pages === 1 &&
+            pagination.has_next === false;
     }
 
     function exactOzonPriceAccountChoices(items, selectionIds, accounts) {
@@ -335,6 +363,9 @@
                 ozonAccounts: boot.ozonAccounts || [],
                 suppliers: boot.suppliers || [],
                 urls: boot.urls || {},
+                importBatch: importBatchToken,
+                importBatchMode: importBatchMode,
+                importBatchInvalid: importBatchInvalid,
 
                 items: [],
                 itemsScope: '',
@@ -405,7 +436,7 @@
                     this.pagination.total > this.items.length;
             },
             canSelectAllFiltered: function () {
-                return !this.loading && !this.loadingMore &&
+                return !this.importBatchMode && !this.loading && !this.loadingMore &&
                     this.itemsScope === this.feedScopeKey() &&
                     (this.searchInput || '').trim().slice(0, 200) === this.filters.search &&
                     Number.isSafeInteger(this.pagination.total) &&
@@ -558,6 +589,13 @@
                 ];
             },
             emptyState: function () {
+                if (this.importBatchMode) {
+                    return {
+                        title: 'В этом импорте пока нет товаров',
+                        text: 'В этой подборке нет доступных карточек для массовых действий.',
+                        action: 'none',
+                    };
+                }
                 if (this.filters.search || this.filters.supplier
                     || this.filters.has_photos || this.filters.stock) {
                     return {
@@ -611,7 +649,7 @@
 
         mounted: function () {
             this.load();
-            this.loadFacets();
+            if (!this.importBatchMode) this.loadFacets();
         },
         beforeUnmount: function () {
             if (this._jobTimer) clearInterval(this._jobTimer);
@@ -622,6 +660,9 @@
 
         methods: {
             queryParams: function (page, perPage) {
+                if (this.importBatchMode) {
+                    return { import_batch: this.importBatch };
+                }
                 var params = {
                     search: this.filters.search,
                     supplier: this.filters.supplier,
@@ -636,6 +677,9 @@
                 return params;
             },
             feedScopeKey: function () {
+                if (this.importBatchMode) {
+                    return JSON.stringify({ import_batch: this.importBatch });
+                }
                 var params = this.queryParams(1, 50);
                 delete params.page;
                 delete params.per_page;
@@ -663,15 +707,62 @@
                 this._abort = abort;
                 this.loading = true;
                 this.error = '';
+                if (this.importBatchMode) {
+                    // Never leave rows from a previous scope actionable while
+                    // the exact imported batch is being re-read.
+                    this.items = [];
+                    this.itemsScope = '';
+                    this.pagination = {};
+                    if (this.importBatchInvalid) {
+                        this.error = 'Эта подборка недоступна. Вернитесь через «Все мои товары».';
+                        this.loading = false;
+                        if (this._abort === abort) this._abort = null;
+                        return;
+                    }
+                }
                 this.$api.get(this.urls.feed, this.queryParams(1), { signal: abort.signal })
                     .then(function (data) {
                         if (abort.signal.aborted || self._feedRevision !== revision) return;
+                        if (self.importBatchMode) {
+                            if (!exactImportBatchPage(data)) {
+                                self.items = [];
+                                self.itemsScope = '';
+                                self.pagination = {};
+                                var serverError = data && data.success === false &&
+                                    typeof data.error === 'string' ? data.error.trim() : '';
+                                self.error = serverError
+                                    ? serverError.slice(0, 300) + ' Вернитесь через «Все мои товары».'
+                                    : 'Не удалось подтвердить состав этой подборки. Вернитесь через «Все мои товары».';
+                                return;
+                            }
+                            self.items = data.items;
+                            self.pagination = data.pagination;
+                            self.itemsScope = scope;
+                            return;
+                        }
                         self.items = data.items || [];
                         self.pagination = data.pagination || {};
                         self.itemsScope = scope;
                     }).catch(function (err) {
                         if ((err && err.name === 'AbortError') || abort.signal.aborted ||
                             self._feedRevision !== revision) return;
+                        if (self.importBatchMode) {
+                            self.items = [];
+                            self.itemsScope = '';
+                            self.pagination = {};
+                            if (err && err.status === 410) {
+                                var expiryMessage = typeof err.message === 'string'
+                                    ? err.message.trim().slice(0, 300) : '';
+                                if (expiryMessage && !/[.!?]$/.test(expiryMessage)) expiryMessage += '.';
+                                self.error = (expiryMessage || 'Срок действия подборки импорта истёк.') +
+                                    ' Вернитесь через «Все мои товары».';
+                            } else if (err && (err.status === 400 || err.status === 404)) {
+                                self.error = 'Подборка импорта недоступна. Вернитесь через «Все мои товары».';
+                            } else {
+                                self.error = 'Не удалось загрузить подборку импорта. Повторите загрузку; если ошибка повторится, вернитесь через «Все мои товары».';
+                            }
+                            return;
+                        }
                         self.error = err.message || 'Не удалось загрузить товары';
                     }).finally(function () {
                         if (self._abort === abort) {
@@ -681,6 +772,7 @@
                     });
             },
             loadMore: function () {
+                if (this.importBatchMode) return;
                 if (this.loading || this.loadingMore || !this.pagination.has_next ||
                     this.itemsScope !== this.feedScopeKey()) return;
                 var self = this;
@@ -738,6 +830,7 @@
                     });
             },
             selectAllFiltered: function () {
+                if (this.importBatchMode) return;
                 if (!this.canSelectAllFiltered || this.selectAllLoading) return;
                 var self = this;
                 var total = this.pagination.total;
@@ -805,18 +898,21 @@
                     });
             },
             loadFacets: function () {
+                if (this.importBatchMode) return;
                 var self = this;
                 this.$api.get(this.urls.facets).then(function (data) {
                     self.facets = data.statuses || {};
                 }).catch(function () { /* счётчики некритичны */ });
             },
             setTab: function (key) {
+                if (this.importBatchMode) return;
                 if (this.activeTab === key) return;
                 this.activeTab = key;
                 this.selected = [];
                 this.load();
             },
             resetFilters: function () {
+                if (this.importBatchMode) return;
                 this.searchInput = '';
                 this.filters.search = '';
                 this.filters.supplier = '';
