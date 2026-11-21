@@ -3159,6 +3159,7 @@ class Supplier(db.Model):
 
     # Статистика синхронизации цен
     last_price_sync_at = db.Column(db.DateTime)
+    last_price_sync_attempt_at = db.Column(db.DateTime)
     last_price_sync_status = db.Column(db.String(50))  # success/failed/running
     last_price_sync_error = db.Column(db.Text)
     last_price_file_hash = db.Column(db.String(64))     # MD5 hash INF файла
@@ -3325,6 +3326,7 @@ class Supplier(db.Model):
             'last_sync_status': self.last_sync_status,
             'price_file_url': self.price_file_url,
             'last_price_sync_at': self.last_price_sync_at.isoformat() if self.last_price_sync_at else None,
+            'last_price_sync_attempt_at': self.last_price_sync_attempt_at.isoformat() if self.last_price_sync_attempt_at else None,
             'last_price_sync_status': self.last_price_sync_status,
             'auto_sync_prices': self.auto_sync_prices,
             'ai_enabled': self.ai_enabled,

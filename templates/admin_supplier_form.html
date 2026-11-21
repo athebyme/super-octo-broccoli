@@ -280,27 +280,38 @@
                             <input type="checkbox" name="auto_sync_prices" {{ 'checked' if supplier and
                                 supplier.auto_sync_prices else '' }}
                                 class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
-                            <span class="text-sm text-gray-700">Автосинхронизация цен</span>
+                            <span class="text-sm text-gray-700">Обновлять закупочные цены и остатки по расписанию</span>
                         </label>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Интервал (мин)</label>
+                            <label for="supplier-price-sync-interval" class="block text-sm font-medium text-gray-700 mb-1">Интервал проверки (мин)</label>
                             <input type="number" name="auto_sync_interval_minutes" min="5" step="5"
+                                id="supplier-price-sync-interval"
                                 value="{{ supplier.auto_sync_interval_minutes if supplier and supplier.auto_sync_interval_minutes else 60 }}"
                                 class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
                         </div>
                     </div>
-                    {% if mode == 'edit' and supplier.last_price_sync_at %}
-                    <div class="bg-gray-50 rounded-lg p-3 text-sm">
-                        <span class="text-gray-500">Последняя синхронизация цен:</span>
-                        <span
-                            class="font-medium {{ 'text-green-600' if supplier.last_price_sync_status == 'success' else 'text-red-600' }}">
-                            {{ supplier.last_price_sync_at.strftime('%d.%m.%Y %H:%M') }}
-                            ({{ supplier.last_price_sync_status }})
-                        </span>
-                        {% if supplier.last_price_sync_error %}
-                        <p class="text-red-500 text-xs mt-1">{{ supplier.last_price_sync_error[:200] }}</p>
+                    {% if mode == 'edit' and supplier.price_file_url %}
+                    <dl class="bg-gray-50 rounded-lg p-3 text-sm space-y-1">
+                        <div>
+                            <dt class="inline text-gray-500">Файл цен и остатков получен</dt>
+                            <dd class="inline font-medium">
+                                {% if supplier.last_price_sync_at %}
+                                <time datetime="{{ supplier.last_price_sync_at.isoformat() }}Z">{{ supplier.last_price_sync_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
+                                {% else %}Ещё нет{% endif %}
+                            </dd>
+                        </div>
+                        {% if supplier.last_price_sync_attempt_at %}
+                        <div>
+                            <dt class="inline text-gray-500">Последняя попытка</dt>
+                            <dd class="inline font-medium">
+                                <time datetime="{{ supplier.last_price_sync_attempt_at.isoformat() }}Z">{{ supplier.last_price_sync_attempt_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
+                            </dd>
+                        </div>
                         {% endif %}
-                    </div>
+                        {% if supplier.last_price_sync_status == 'failed' %}
+                        <div class="text-red-700">Последняя проверка завершилась ошибкой. Проверьте источник файла.</div>
+                        {% endif %}
+                    </dl>
                     {% endif %}
 
                     <hr class="my-4">

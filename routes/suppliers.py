@@ -946,11 +946,6 @@ def register_supplier_routes(app):
         force = request.form.get('force', '0') == '1'
         result = SupplierService.sync_prices_and_stock(supplier_id, force=force)
 
-        # Каскадное обновление к продавцам
-        cascade_result = None
-        if result.success and result.updated > 0:
-            cascade_result = SupplierService.cascade_prices_to_sellers(supplier_id)
-
         log_admin_action(
             admin_user_id=current_user.id,
             action='sync_supplier_prices',
@@ -960,7 +955,8 @@ def register_supplier_routes(app):
                 'updated': result.updated,
                 'errors': result.errors,
                 'duration': round(result.duration_seconds, 1),
-                'cascade_updated': cascade_result['updated'] if cascade_result else 0,
+                'cascade_updated': result.seller_rows_updated,
+                'already_running': result.busy,
             },
             request=request
         )
@@ -968,9 +964,11 @@ def register_supplier_routes(app):
         if result.success:
             msg = (f'Синхронизация цен: {result.updated} обновлено, '
                    f'{result.errors} ошибок ({result.duration_seconds:.1f}с)')
-            if cascade_result and cascade_result['updated'] > 0:
-                msg += f' | Обновлено у продавцов: {cascade_result["updated"]}'
+            if result.seller_rows_updated:
+                msg += f' | Обновлено у продавцов: {result.seller_rows_updated}'
             flash(msg, 'success')
+        elif result.busy:
+            flash('Проверка цен и остатков уже идёт.', 'warning')
         else:
             flash(f'Ошибка синхронизации цен: {"; ".join(result.error_messages[:3])}', 'danger')
 

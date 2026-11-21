@@ -346,6 +346,17 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         coalesce=True,
     )
 
+    from services.supplier_price_sync import run_auto_supplier_price_sync_tick
+    scheduler.add_job(
+        func=lambda: run_auto_supplier_price_sync_tick(flask_app),
+        trigger=IntervalTrigger(minutes=1),
+        id='supplier_price_feed_sync',
+        name='Refresh one due supplier price and stock feed',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # Seller WB enrichment has two durable phases: a leased dispatch cursor
     # and read-only confirmation against the asynchronous WB read model. The
     # same singleton tick resumes both after a web-worker/container restart.

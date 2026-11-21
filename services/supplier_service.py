@@ -122,6 +122,8 @@ class SyncResult:
     errors: int = 0
     error_messages: list = field(default_factory=list)
     duration_seconds: float = 0.0
+    seller_rows_updated: int = 0
+    busy: bool = False
 
 
 @dataclass
@@ -1198,9 +1200,6 @@ class SupplierService:
                         logger.info(
                             f"Авто-синхр цен {supplier.code}: обновлено={price_result.updated}"
                         )
-                        # Каскадное обновление к продавцам
-                        if price_result.updated > 0:
-                            SupplierService.cascade_prices_to_sellers(supplier_id)
                 except Exception as e:
                     logger.warning(f"Ошибка авто-синхр цен после каталога: {e}")
 
@@ -1235,274 +1234,14 @@ class SupplierService:
 
     @staticmethod
     def sync_prices_and_stock(supplier_id: int, force: bool = False) -> SyncResult:
+        """Read and apply one complete supplier price feed.
+
+        The legacy force flag remains accepted. Each admitted check now reads
+        the actual CSV so its per-row price observations can be refreshed.
         """
-        Синхронизация цен и остатков из отдельного CSV файла поставщика.
+        from services.supplier_price_sync import sync_supplier_price_feed
 
-        CSV формат (sexoptovik): id;осн.артикул;цена;наличие;статус;доп.артикул;штрихкод;ррц
-
-        Обновляет: supplier_price, supplier_quantity, supplier_status,
-        recommended_retail_price, barcode, vendor_code, additional_vendor_code.
-        Сохраняет previous_price для трекинга изменений.
-        """
-        result = SyncResult()
-        start_time = time.time()
-
-        supplier = Supplier.query.get(supplier_id)
-        if not supplier:
-            result.success = False
-            result.error_messages.append("Поставщик не найден")
-            return result
-
-        if not supplier.price_file_url:
-            result.success = False
-            result.error_messages.append("URL файла цен не задан")
-            return result
-
-        supplier.last_price_sync_status = 'running'
-        db.session.commit()
-
-        try:
-            # Проверяем обновление через INF файл (если не force)
-            if not force and supplier.price_file_inf_url:
-                try:
-                    inf_resp = requests.get(supplier.price_file_inf_url, timeout=30)
-                    inf_resp.raise_for_status()
-                    import hashlib as _hl
-                    new_hash = _hl.md5(inf_resp.content).hexdigest()
-                    if new_hash == supplier.last_price_file_hash:
-                        result.success = True
-                        result.error_messages.append("Файл не изменился с последней синхронизации")
-                        supplier.last_price_sync_status = 'success'
-                        db.session.commit()
-                        result.duration_seconds = time.time() - start_time
-                        return result
-                except Exception as e:
-                    logger.warning(f"Не удалось проверить INF файл: {e}")
-
-            # Загружаем CSV цен
-            encoding = supplier.price_file_encoding or 'cp1251'
-            delimiter = supplier.price_file_delimiter or ';'
-
-            try:
-                resp = requests.get(supplier.price_file_url, timeout=120)
-                resp.raise_for_status()
-            except Exception as e:
-                result.success = False
-                result.error_messages.append(f"Ошибка загрузки файла цен: {str(e)[:200]}")
-                supplier.last_price_sync_status = 'failed'
-                supplier.last_price_sync_error = str(e)[:500]
-                db.session.commit()
-                return result
-
-            text = resp.content.decode(encoding, errors='replace')
-
-            # Парсим CSV
-            price_data = {}
-            reader = csv.reader(StringIO(text), delimiter=delimiter)
-            header_skipped = False
-
-            for row in reader:
-                if len(row) < 4:
-                    continue
-
-                raw_id = row[0].strip()
-
-                # Пропускаем заголовок
-                if not header_skipped:
-                    try:
-                        int(raw_id)
-                    except ValueError:
-                        header_skipped = True
-                        continue
-                    header_skipped = True
-
-                try:
-                    product_id = int(raw_id)
-                except ValueError:
-                    continue
-
-                try:
-                    price = float(row[2].strip().replace(',', '.')) if row[2].strip() else 0
-                except (ValueError, IndexError):
-                    price = 0
-
-                try:
-                    quantity = int(row[3].strip()) if len(row) > 3 and row[3].strip() else 0
-                except (ValueError, IndexError):
-                    quantity = 0
-
-                # Статус поставщика (колонка 4)
-                sup_status_raw = row[4].strip() if len(row) > 4 else ''
-
-                # Доп. артикул (колонка 5)
-                add_vendor = row[5].strip() if len(row) > 5 else ''
-
-                # Штрихкод (колонка 6)
-                barcode = row[6].strip() if len(row) > 6 else ''
-
-                # РРЦ (колонка 7)
-                try:
-                    rrp = float(row[7].strip().replace(',', '.')) if len(row) > 7 and row[7].strip() else None
-                except (ValueError, IndexError):
-                    rrp = None
-
-                price_data[product_id] = {
-                    'vendor_code': row[1].strip() if len(row) > 1 else '',
-                    'price': price,
-                    'quantity': quantity,
-                    'status': sup_status_raw,
-                    'additional_vendor_code': add_vendor,
-                    'barcode': barcode,
-                    'rrp': rrp,
-                }
-
-            result.total_in_csv = len(price_data)
-            logger.info(f"Загружено {len(price_data)} записей цен из CSV ({supplier.code})")
-
-            if not price_data:
-                result.error_messages.append("Файл цен пустой или не удалось распарсить")
-                supplier.last_price_sync_status = 'failed'
-                supplier.last_price_sync_error = "Файл цен пустой"
-                db.session.commit()
-                return result
-
-            # Обновляем товары
-            products = SupplierProduct.query.filter_by(supplier_id=supplier_id).all()
-            now = datetime.utcnow()
-
-            batch_count = 0
-            for sp in products:
-                try:
-                    # Извлекаем числовой ID из external_id
-                    numeric_id = extract_supplier_product_id(sp.external_id) if sp.external_id else None
-
-                    if numeric_id is None:
-                        continue
-
-                    data = price_data.get(numeric_id)
-                    if data is None:
-                        continue
-
-                    # Сохраняем предыдущую цену
-                    old_price = sp.supplier_price
-
-                    # Обновляем поля
-                    if data['price'] > 0:
-                        sp.supplier_price = data['price']
-                    sp.supplier_quantity = data['quantity']
-
-                    # Статус поставщика
-                    if data['status'] == '1' or data['quantity'] > 0:
-                        sp.supplier_status = 'in_stock'
-                    else:
-                        sp.supplier_status = 'out_of_stock'
-
-                    # РРЦ
-                    if data['rrp'] is not None and data['rrp'] > 0:
-                        sp.recommended_retail_price = data['rrp']
-
-                    # Артикулы и штрихкод
-                    if data['vendor_code']:
-                        sp.vendor_code = data['vendor_code']
-                    if data['additional_vendor_code']:
-                        sp.additional_vendor_code = data['additional_vendor_code']
-                    if data['barcode']:
-                        sp.barcode = data['barcode']
-
-                    # Трекинг изменения цены
-                    sp.last_price_sync_at = now
-                    if old_price is not None and data['price'] > 0 and old_price != data['price']:
-                        sp.previous_price = old_price
-                        sp.price_changed_at = now
-
-                    result.updated += 1
-
-                    batch_count += 1
-                    if batch_count % 200 == 0:
-                        # Коммитим каждые 200 записей, чтобы не держать write-lock слишком долго
-                        db.session.commit()
-
-                except Exception as e:
-                    result.errors += 1
-                    result.error_messages.append(f"Товар {sp.external_id}: {str(e)[:100]}")
-                    if len(result.error_messages) > 50:
-                        result.error_messages.append("...и другие ошибки")
-                        break
-
-            db.session.commit()
-
-            # Обновляем hash INF файла
-            if supplier.price_file_inf_url:
-                try:
-                    inf_resp = requests.get(supplier.price_file_inf_url, timeout=30)
-                    inf_resp.raise_for_status()
-                    import hashlib as _hl
-                    supplier.last_price_file_hash = _hl.md5(inf_resp.content).hexdigest()
-                except Exception:
-                    pass
-
-            supplier.last_price_sync_at = now
-            supplier.last_price_sync_status = 'success'
-            supplier.last_price_sync_error = None
-            db.session.commit()
-
-            result.duration_seconds = time.time() - start_time
-            logger.info(
-                f"Синхронизация цен {supplier.code}: "
-                f"обновлено={result.updated}, ошибок={result.errors} "
-                f"({result.duration_seconds:.1f}s)"
-            )
-
-        except Exception as e:
-            db.session.rollback()
-            result.success = False
-            result.error_messages.append(f"Критическая ошибка: {str(e)}")
-            supplier.last_price_sync_status = 'failed'
-            supplier.last_price_sync_error = str(e)[:500]
-            db.session.commit()
-            logger.error(f"Ошибка синхронизации цен {supplier.code}: {e}")
-
-        result.duration_seconds = time.time() - start_time
-        return result
-
-    @staticmethod
-    def cascade_prices_to_sellers(supplier_id: int) -> dict:
-        """
-        Каскадное обновление закупочных цен и остатков к продавцам.
-        Обновляет supplier_price и supplier_quantity в ImportedProduct,
-        НЕ меняет calculated_price — это делает продавец через свои PricingSettings.
-        """
-        updated = 0
-        errors = 0
-
-        imported_products = ImportedProduct.query.filter(
-            ImportedProduct.supplier_product_id.isnot(None),
-            ImportedProduct.supplier_id == supplier_id
-        ).all()
-
-        batch_count = 0
-        for imp in imported_products:
-            try:
-                sp = imp.supplier_product
-                if not sp:
-                    continue
-                if sp.supplier_price is not None:
-                    imp.supplier_price = sp.supplier_price
-                if sp.supplier_quantity is not None:
-                    imp.supplier_quantity = sp.supplier_quantity
-                imp.updated_at = datetime.utcnow()
-                updated += 1
-                batch_count += 1
-                if batch_count % 200 == 0:
-                    db.session.commit()
-            except Exception as e:
-                errors += 1
-                logger.warning(f"Cascade error ImportedProduct {imp.id}: {e}")
-
-        db.session.commit()
-        logger.info(f"Каскадное обновление цен для поставщика {supplier_id}: "
-                     f"обновлено={updated}, ошибок={errors}")
-        return {'updated': updated, 'errors': errors, 'total': len(imported_products)}
+        return sync_supplier_price_feed(supplier_id)
 
     @staticmethod
     def get_price_stock_stats(supplier_id: int) -> dict:
