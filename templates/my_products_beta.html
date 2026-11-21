@@ -13,6 +13,9 @@
     'ozonAccounts': ozon_accounts,
     'suppliers': suppliers_payload,
     'importBatch': import_batch|default(none),
+    'supplierRefreshBatch': supplier_refresh_batch|default(none),
+    'supplierRefreshBatchInvalid': supplier_refresh_batch_invalid|default(false),
+    'supplierRefreshReturnUrl': supplier_refresh_return_url|default(url_for('seller_my_products')),
     'workspaceOwner': (current_user.id|string) ~ ':' ~ (current_user.seller.id|string),
     'urls': {
         'feed': url_for('api_my_products_list'),
@@ -39,15 +42,21 @@
     },
 } | tojson }}</script>
 
-<div id="my-products-app" class="shk-page" v-cloak>
+<div id="my-products-app" class="shk-page" v-cloak
+     :data-supplier-refresh-handoff="supplierRefreshBatchMode ? 'active' : null">
 {% raw %}
     <header class="shk-head">
         <div>
-            <h1 class="shk-head-title">{{ importBatchMode ? 'Товары из импорта' : 'Мои товары' }}</h1>
+            <h1 class="shk-head-title">{{ supplierRefreshBatchMode ? 'Обновление из каталога' : (importBatchMode ? 'Товары из импорта' : 'Мои товары') }}</h1>
+            <p class="shk-head-sub" v-if="supplierRefreshBatchMode">Выбор передан из классического списка. Список будет проверен заново; обновление начнётся только после отдельного просмотра и подтверждения.</p>
             <p class="shk-head-sub" v-if="importBatchMode">Выберите товары из этой подборки для массовых действий.</p>
-            <p class="shk-head-sub" v-else>Выберите товары для массовых действий.</p>
+            <p class="shk-head-sub" v-if="!importBatchMode && !supplierRefreshBatchMode">Выберите товары для массовых действий.</p>
         </div>
-        <div v-if="importBatchMode" class="mp-batch-head-actions">
+        <div v-if="supplierRefreshBatchMode" class="mp-batch-head-actions">
+            <a class="sh-btn sh-btn--secondary" data-supplier-refresh-return
+               :href="supplierRefreshReturnUrl">Вернуться к классическому списку</a>
+        </div>
+        <div v-else-if="importBatchMode" class="mp-batch-head-actions">
             <a class="sh-btn sh-btn--secondary" :href="urls.workspace">Все мои товары</a>
         </div>
         <div v-else class="mp-head-actions">
@@ -149,7 +158,7 @@
     </div>
 
     <!-- Вкладки: одно состояние — одна вкладка, со счётчиком -->
-    <nav v-if="!importBatchMode" class="mp-tabs" aria-label="Статус карточек">
+    <nav v-if="!importBatchMode && !supplierRefreshBatchMode" class="mp-tabs" aria-label="Статус карточек">
         <button v-for="tab in tabs" :key="tab.key" type="button"
                 class="mp-tab" :class="{'is-active': activeTab === tab.key}"
                 @click="setTab(tab.key)">
@@ -158,7 +167,7 @@
         </button>
     </nav>
 
-    <sh-filter-bar v-if="!importBatchMode" v-model="searchInput" placeholder="Название, бренд или артикул"
+    <sh-filter-bar v-if="!importBatchMode && !supplierRefreshBatchMode" v-model="searchInput" placeholder="Название, бренд или артикул"
                    :chips="[]" :sticky="true">
         <select v-model="filters.supplier" class="mp-select" aria-label="Поставщик">
             <option value="">Все поставщики</option>
@@ -193,13 +202,13 @@
         <div class="mp-ozon-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!ozonBusy || ozonSessionEnded" @click="readOzonPending">{{ ozonBusy === 'read' ? 'Проверяем…' : 'Проверить результат' }}</button><button v-if="ozonRetrySameKey" type="button" class="sh-btn sh-btn--secondary" :disabled="!!ozonBusy || ozonSessionEnded" @click="retryOzonPending">Повторить тот же запрос</button></div>
     </div>
 
-    <div class="mp-listhead" :class="{'mp-listhead--import-batch': importBatchMode}" v-if="items.length || loading">
+    <div class="mp-listhead" :class="{'mp-listhead--import-batch': importBatchMode || supplierRefreshBatchMode}" v-if="items.length || loading">
         <div class="mp-select-controls">
             <label class="mp-selectall">
                 <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected"
                        @change="toggleAll"
-                       :aria-label="importBatchMode ? 'Выбрать товары из импорта' : (allSelected ? 'Снять выбор всех загруженных товаров' : 'Выбрать все загруженные товары')">
-                <span>{{ importBatchMode ? 'Выбрать товары из импорта' : (allSelected ? 'Снять выбор' : 'Выбрать загруженные') }}</span>
+                       :aria-label="(importBatchMode || supplierRefreshBatchMode) ? 'Выбрать все товары из точного списка' : (allSelected ? 'Снять выбор всех загруженных товаров' : 'Выбрать все загруженные товары')">
+                <span>{{ (importBatchMode || supplierRefreshBatchMode) ? 'Выбрать весь точный список' : (allSelected ? 'Снять выбор' : 'Выбрать загруженные') }}</span>
             </label>
             <button v-if="canSelectAllFiltered" type="button" class="mp-select-filtered"
                     :disabled="selectAllLoading" @click="selectAllFiltered">
@@ -313,11 +322,11 @@
         </article>
     </div>
 
-    <div v-if="(items.length || !loading) && (!importBatchMode || (items.length && !error))" class="mp-foot">
+    <div v-if="(items.length || !loading) && (!(importBatchMode || supplierRefreshBatchMode) || (items.length && !error))" class="mp-foot">
         <span class="mp-foot-info">Показано {{ items.length }} из {{ $fmt.int(pagination.total || 0) }}</span>
         <button v-if="pagination.has_next" type="button" class="sh-btn sh-btn--secondary"
                 :class="{'is-loading': loadingMore}" :disabled="loading || loadingMore || selectAllLoading" @click="loadMore">Показать ещё</button>
-        <a v-if="!importBatchMode" class="mp-legacy-link" :href="urls.classic">Прежний список</a>
+        <a v-if="!importBatchMode && !supplierRefreshBatchMode" class="mp-legacy-link" :href="urls.classic">Прежний список</a>
     </div>
 
     <!-- Основные операции собраны в одном списке; редкие действия скрыты до запроса. -->

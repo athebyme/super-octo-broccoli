@@ -1,8 +1,13 @@
-"""Node-only regressions for supplier refresh handoff and import batch scope."""
+"""Supplier refresh handoff regressions for browser logic and route scope."""
 
 from pathlib import Path
+import os
 import shutil
 import subprocess
+import unittest
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlencode, urlsplit
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +25,9 @@ const boot = {
   ozonEnabled: true,
   ozonAccounts: [account],
   importBatch: null,
+  supplierRefreshBatch: null,
+  supplierRefreshBatchInvalid: false,
+  supplierRefreshReturnUrl: '/my-products?updates=1',
   urls: {
     feed: '/api/my-products',
     workspace: '/my-products/beta',
@@ -222,8 +230,10 @@ function setSupplierOutcome(app, data, ids) {
   };
 }
 
-function remount(importBatch, search) {
+function remount(importBatch, search, supplierRefreshBatch = null, supplierRefreshBatchInvalid = false) {
   boot.importBatch = importBatch;
+  boot.supplierRefreshBatch = supplierRefreshBatch;
+  boot.supplierRefreshBatchInvalid = supplierRefreshBatchInvalid;
   fakeWindow.location.search = search;
   vm.runInContext(sourceText, context);
   return component;
@@ -940,6 +950,73 @@ async function finishSupplierRefresh(data, ids) {
   assert.equal(normal.getCalls.length, 2, 'ordinary workspace still loads feed and facets');
   assert.ok(normal.getCalls.every(call => call.params === null || !Object.hasOwn(call.params, 'import_batch')));
 
+  const supplierToken = 'signed-classic-refresh-selection';
+  const supplierPage = {
+    success: true,
+    supplier_refresh_batch_count: 2,
+    items: [{id: 202, title: 'Second'}, {id: 101, title: 'First'}],
+    pagination: {page: 1, per_page: 200, total: 2, pages: 1, has_next: false},
+  };
+  const supplierDefinition = remount(
+    null, '?supplier_refresh_batch=' + encodeURIComponent(supplierToken), supplierToken,
+  );
+  const supplierBatch = makeFeedApp(supplierDefinition, supplierPage);
+  assert.equal(supplierBatch.app.supplierRefreshBatchMode, true);
+  assert.equal(supplierBatch.app.supplierRefreshBatchInvalid, false);
+  assert.equal(supplierBatch.app.supplierRefreshReturnUrl, '/my-products?updates=1');
+  sameJson(supplierBatch.app.queryParams(99, 5), {
+    supplier_refresh_batch: supplierToken,
+  });
+  supplierBatch.app.load();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(supplierBatch.getCalls.length, 1);
+  sameJson(supplierBatch.getCalls[0].params, {
+    supplier_refresh_batch: supplierToken,
+  });
+  sameJson(supplierBatch.app.items.map(item => item.id), [202, 101]);
+  sameJson(supplierBatch.app.selected, [202, 101],
+    'classic handoff restores the exact order and preselects the signed rows');
+  assert.equal(supplierBatch.app.feedScopeKey(), JSON.stringify({
+    supplier_refresh_batch: supplierToken,
+  }));
+  supplierBatch.app.loadFacets();
+  supplierBatch.app.loadMore();
+  supplierBatch.app.selectAllFiltered();
+  assert.equal(supplierBatch.getCalls.length, 1,
+    'exact handoff does not widen through a filtered or paginated fetch');
+  const handoffPreviewCalls = [];
+  supplierBatch.app.$refs = {
+    supplierRefreshDialog: {open: false, showModal() { this.open = true; }},
+    supplierRefreshCancel: {focus() {}},
+    supplierRefreshReviewRetry: {focus() {}},
+  };
+  supplierBatch.app.$api.post = function (url, body) {
+    handoffPreviewCalls.push({url, body});
+    return Promise.resolve(supplierPreview(body.product_ids));
+  };
+  assert.equal(handoffPreviewCalls.length, 0, 'handoff itself does not open or submit a review');
+  supplierBatch.app.openSupplierRefreshReview(
+    [202, 101], [202, 101], [202, 101].map(id => ({productId: id, label: 'Product ' + id})),
+  );
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(handoffPreviewCalls.length, 1, 'the existing action click opens the review preview');
+  assert.equal(handoffPreviewCalls[0].url, '/api/my-products/supplier-refresh-preview');
+  sameJson(handoffPreviewCalls[0].body.product_ids, [202, 101]);
+
+  const invalidSupplierDefinition = remount(
+    null, '?supplier_refresh_batch=', null, true,
+  );
+  const invalidSupplierBatch = makeFeedApp(invalidSupplierDefinition, supplierPage);
+  invalidSupplierBatch.app.items = [{id: 999, title: 'Stale'}];
+  invalidSupplierBatch.app.selected = [999];
+  invalidSupplierBatch.app.load();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(invalidSupplierBatch.app.supplierRefreshBatchMode, true);
+  assert.equal(invalidSupplierBatch.getCalls.length, 0,
+    'invalid handoff never falls back to an unrestricted feed');
+  sameJson(invalidSupplierBatch.app.items, []);
+  sameJson(invalidSupplierBatch.app.selected, []);
+
   console.log(JSON.stringify({status: 'passed', checks: [
     'only_exactly_verified_updated_ids_are_handed_to_the_existing_ozon_dialog',
     'wb_result_handoff_uses_exact_csrf_form_with_characteristics_preset',
@@ -962,6 +1039,8 @@ async function finishSupplierRefresh(data, ids) {
     'import_receipt_mode_reads_one_exact_authorized_page_without_auto_selection',
     'import_receipt_mode_uses_explicit_exact_selection_and_allows_exclusion',
     'invalid_or_stale_import_receipts_clear_rows_and_never_fall_back_to_global_feed',
+    'classic_supplier_refresh_handoff_preselects_exact_order_without_preview_until_click',
+    'invalid_supplier_refresh_handoff_never_falls_back_to_global_feed',
     'ordinary_workspace_keeps_its_existing_feed_and_facets',
   ]}));
 })().catch(error => { console.error(error.stack || String(error)); process.exitCode = 1; });
@@ -983,3 +1062,332 @@ def test_supplier_refresh_handoff_uses_only_verified_updated_ids():
     )
     assert result.returncode == 0, result.stderr or result.stdout
     assert '"status":"passed"' in result.stdout
+
+
+class SupplierRefreshHandoffRouteTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        os.environ['DISABLE_SECURE_COOKIE'] = '1'
+        os.environ.setdefault('SKIP_SCHEDULER', '1')
+        import sqlalchemy as sa
+        from sqlalchemy.pool import StaticPool
+        import seller_platform
+        from models import db
+
+        cls.app = seller_platform.app
+        cls.db = db
+        cls.previous_engine_map = db._app_engines.get(cls.app)
+        cls.previous_config = {
+            name: cls.app.config.get(name)
+            for name in (
+                'SQLALCHEMY_DATABASE_URI', 'SQLALCHEMY_TRACK_MODIFICATIONS',
+                'SQLALCHEMY_ENGINE_OPTIONS', 'WTF_CSRF_ENABLED', 'TESTING',
+            )
+        }
+        cls.app.config.update(
+            SQLALCHEMY_DATABASE_URI='sqlite:///:memory:',
+            SQLALCHEMY_TRACK_MODIFICATIONS=False,
+            SQLALCHEMY_ENGINE_OPTIONS={},
+            WTF_CSRF_ENABLED=False,
+            TESTING=True,
+        )
+        cls.engine = sa.create_engine(
+            'sqlite:///:memory:',
+            connect_args={'check_same_thread': False},
+            poolclass=StaticPool,
+        )
+        db._app_engines[cls.app] = {None: cls.engine}
+
+    @classmethod
+    def tearDownClass(cls):
+        with cls.app.app_context():
+            cls.db.session.remove()
+        cls.engine.dispose()
+        if cls.previous_engine_map is None:
+            cls.db._app_engines.pop(cls.app, None)
+        else:
+            cls.db._app_engines[cls.app] = cls.previous_engine_map
+        for name, value in cls.previous_config.items():
+            cls.app.config[name] = value
+
+    def setUp(self):
+        from models import ImportedProduct, Seller, Supplier, User, db
+
+        self.ctx = self.app.app_context()
+        self.ctx.push()
+        db.session.remove()
+        db.drop_all()
+        db.create_all()
+        self.client = self.app.test_client()
+
+        owner = User(
+            username='refresh-handoff-owner',
+            email='refresh-handoff-owner@test.local',
+            is_active=True,
+        )
+        owner.set_password('synthetic-password')
+        seller = Seller(user=owner, company_name='Handoff seller')
+        other_user = User(
+            username='refresh-handoff-other',
+            email='refresh-handoff-other@test.local',
+            is_active=True,
+        )
+        other_user.set_password('synthetic-password')
+        other_seller = Seller(user=other_user, company_name='Other seller')
+        supplier = Supplier(name='Handoff supplier', code='handoff')
+        db.session.add_all([seller, other_seller, supplier])
+        db.session.flush()
+
+        first = ImportedProduct(
+            seller_id=seller.id, supplier_id=supplier.id,
+            external_id='handoff-first', source_type='synthetic',
+            title='First selected product', brand='Acme',
+            import_status='validated',
+        )
+        second = ImportedProduct(
+            seller_id=seller.id, supplier_id=supplier.id,
+            external_id='handoff-second', source_type='synthetic',
+            title='Second selected product', brand='Acme',
+            import_status='validated',
+        )
+        foreign = ImportedProduct(
+            seller_id=other_seller.id, supplier_id=supplier.id,
+            external_id='handoff-foreign', source_type='synthetic',
+            title='Foreign product', import_status='validated',
+        )
+        db.session.add_all([first, second, foreign])
+        db.session.commit()
+
+        self.user = SimpleNamespace(
+            id=owner.id,
+            username=owner.username,
+            seller=seller,
+            is_authenticated=True,
+            is_active=True,
+            is_admin=False,
+        )
+        self.seller_id = seller.id
+        self.supplier_id = supplier.id
+        self.first_id = first.id
+        self.second_id = second.id
+        self.foreign_id = foreign.id
+
+    def tearDown(self):
+        self.db.session.remove()
+        self.db.drop_all()
+        self.ctx.pop()
+
+    def _auth(self):
+        return patch('flask_login.utils._get_user', return_value=self.user)
+
+    def test_classic_form_redirects_exact_selection_to_read_only_beta_review(self):
+        from models import ImportedProduct, db
+        from routes.suppliers import _load_supplier_refresh_handoff_token
+
+        classic_query = urlencode({
+            'updates': '1',
+            'search': '  product  ',
+            'supplier': str(self.supplier_id),
+            'brand': 'Acme',
+            'wb_category': 'Candles',
+            'has_photos': 'yes',
+            'stock': 'in_stock',
+            'price_min': '10.5',
+            'price_max': '40',
+            'sort': 'title',
+        })
+        with self._auth(), patch(
+            'routes.suppliers.SupplierService.update_imported_products',
+        ) as update, patch(
+            'routes.suppliers.SupplierService.preview_imported_products',
+        ) as preview:
+            response = self.client.post(
+                '/my-products/refresh-from-supplier/review?' + classic_query,
+                data={'selected_ids': [str(self.second_id), str(self.first_id)]},
+            )
+        self.assertEqual(response.status_code, 303)
+        update.assert_not_called()
+        preview.assert_not_called()
+        self.assertIn('private, no-store', response.headers['Cache-Control'])
+        query = parse_qs(urlsplit(response.location).query, keep_blank_values=True)
+        self.assertEqual(set(query), {'supplier_refresh_batch'})
+        token = query['supplier_refresh_batch'][0]
+        handoff = _load_supplier_refresh_handoff_token(
+            token, user_id=self.user.id, seller_id=self.seller_id,
+        )
+        self.assertEqual(handoff['ids'], [self.second_id, self.first_id])
+        self.assertEqual(handoff['return_args'], {
+            'updates': 1,
+            'search': 'product',
+            'supplier': self.supplier_id,
+            'brand': 'Acme',
+            'wb_category': 'Candles',
+            'has_photos': 'yes',
+            'stock': 'in_stock',
+            'price_min': '10.5',
+            'price_max': '40',
+            'sort': 'title',
+        })
+        rows = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == self.seller_id,
+            ImportedProduct.id.in_([self.first_id, self.second_id]),
+        ).all()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(db.session.query(ImportedProduct).count(), 3)
+
+        with self._auth(), patch(
+            'routes.suppliers.render_template', return_value='beta-page',
+        ) as render:
+            page = self.client.get(response.location)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('no-store', page.headers['Cache-Control'])
+        self.assertEqual(render.call_args.kwargs['supplier_refresh_batch'], token)
+        returned = urlsplit(render.call_args.kwargs['supplier_refresh_return_url'])
+        self.assertEqual(returned.path, '/my-products')
+        self.assertEqual(parse_qs(returned.query), {
+            'updates': ['1'],
+            'search': ['product'],
+            'supplier': [str(self.supplier_id)],
+            'brand': ['Acme'],
+            'wb_category': ['Candles'],
+            'has_photos': ['yes'],
+            'stock': ['in_stock'],
+            'price_min': ['10.5'],
+            'price_max': ['40'],
+            'sort': ['title'],
+        })
+
+        with self._auth():
+            feed = self.client.get(
+                '/api/my-products?' + urlencode([
+                    ('supplier_refresh_batch', token),
+                    ('status', 'failed'),
+                    ('search', 'unmatched'),
+                ]),
+            )
+        self.assertEqual(feed.status_code, 200)
+        self.assertIn('no-store', feed.headers['Cache-Control'])
+        payload = feed.get_json()
+        self.assertEqual(
+            [item['id'] for item in payload['items']],
+            [self.second_id, self.first_id],
+        )
+        self.assertEqual(payload['supplier_refresh_batch_count'], 2)
+        self.assertNotIn('import_batch_count', payload)
+
+    def test_classic_handoff_and_signed_feed_fail_closed_for_whole_scope(self):
+        from models import ImportedProduct, db
+        from routes.suppliers import _issue_supplier_refresh_handoff_token
+
+        with self._auth(), patch(
+            'routes.suppliers.SupplierService.update_imported_products',
+        ) as update:
+            foreign_form = self.client.post(
+                '/my-products/refresh-from-supplier/review?updates=1&search=Acme',
+                data={'selected_ids': [str(self.first_id), str(self.foreign_id)]},
+            )
+            missing_form = self.client.post(
+                '/my-products/refresh-from-supplier/review?updates=1&search=Acme',
+                data={'selected_ids': [str(self.first_id), '9223372036854775000']},
+            )
+        update.assert_not_called()
+        self.assertEqual(foreign_form.status_code, 302)
+        self.assertEqual(missing_form.status_code, 302)
+        self.assertEqual(urlsplit(foreign_form.location).path, '/my-products')
+        self.assertEqual(urlsplit(missing_form.location).path, '/my-products')
+        self.assertNotIn('supplier_refresh_batch', foreign_form.location)
+        self.assertNotIn('supplier_refresh_batch', missing_form.location)
+
+        token = _issue_supplier_refresh_handoff_token(
+            user_id=self.user.id,
+            seller_id=self.seller_id,
+            imported_product_ids=[self.first_id, self.second_id],
+            return_args={'updates': 1},
+        )
+        db.session.query(ImportedProduct).filter_by(id=self.second_id).delete()
+        db.session.commit()
+        with self._auth():
+            stale = self.client.get('/api/my-products?' + urlencode({
+                'supplier_refresh_batch': token,
+            }))
+        self.assertEqual(stale.status_code, 404)
+        self.assertIn('no-store', stale.headers['Cache-Control'])
+        self.assertNotIn('items', stale.get_json())
+
+    def test_signed_handoff_rejects_tampered_expired_foreign_and_ambiguous_tokens(self):
+        from routes.suppliers import _issue_supplier_refresh_handoff_token
+
+        token = _issue_supplier_refresh_handoff_token(
+            user_id=self.user.id,
+            seller_id=self.seller_id,
+            imported_product_ids=[self.first_id],
+            return_args={'updates': 1, 'supplier': self.supplier_id},
+        )
+        token_body, signature = token.rsplit('.', 1)
+        changed = ('a' if signature[0] != 'a' else 'b') + signature[1:]
+        cases = [
+            (urlencode({'supplier_refresh_batch': f'{token_body}.{changed}'}), 400),
+            (urlencode([
+                ('supplier_refresh_batch', token),
+                ('supplier_refresh_batch', token),
+            ]), 400),
+            (urlencode({'supplier_refresh_batch': ''}), 400),
+            (urlencode([
+                ('supplier_refresh_batch', token), ('import_batch', 'other'),
+            ]), 400),
+        ]
+        for query, status in cases:
+            with self.subTest(status=status, query=query[:60]), self._auth():
+                response = self.client.get('/api/my-products?' + query)
+            self.assertEqual(response.status_code, status)
+            self.assertIn('no-store', response.headers['Cache-Control'])
+            self.assertNotIn('items', response.get_json())
+
+        with patch(
+            'routes.suppliers.SUPPLIER_REFRESH_HANDOFF_MAX_AGE_SECONDS', -1,
+        ), self._auth():
+            expired = self.client.get('/api/my-products?' + urlencode({
+                'supplier_refresh_batch': token,
+            }))
+        self.assertEqual(expired.status_code, 410)
+        self.assertIn('no-store', expired.headers['Cache-Control'])
+
+        with self._auth():
+            foreign_owner = self.client.get('/api/my-products?' + urlencode({
+                'supplier_refresh_batch': _issue_supplier_refresh_handoff_token(
+                    user_id=self.user.id + 1,
+                    seller_id=self.seller_id,
+                    imported_product_ids=[self.first_id],
+                    return_args={},
+                ),
+            }))
+        self.assertEqual(foreign_owner.status_code, 404)
+
+    def test_account_scope_is_validated_and_tokenless_legacy_route_is_unchanged(self):
+        from types import SimpleNamespace
+
+        with self._auth():
+            foreign_account = self.client.post(
+                '/my-products/refresh-from-supplier/review?account_id=999&updates=1',
+                data={'selected_ids': [str(self.first_id)]},
+            )
+        self.assertEqual(foreign_account.status_code, 404)
+
+        legacy_result = SimpleNamespace(
+            imported=1,
+            skipped=0,
+            errors=0,
+            total_requested=1,
+            item_results=[{'product_id': self.first_id, 'status': 'updated'}],
+            success=True,
+        )
+        with self._auth(), patch(
+            'routes.suppliers.SupplierService.update_imported_products',
+            return_value=legacy_result,
+        ) as update:
+            legacy = self.client.post(
+                '/my-products/refresh-from-supplier?updates=1',
+                data={'selected_ids': [str(self.first_id)]},
+            )
+        self.assertEqual(legacy.status_code, 302)
+        update.assert_called_once_with(self.seller_id, [self.first_id])

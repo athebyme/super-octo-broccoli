@@ -35,6 +35,9 @@ MAX_BULK_PRODUCTS = 200
 SUPPLIER_IMPORT_BATCH_TOKEN_SALT = 'supplier-import-workspace-v1'
 SUPPLIER_IMPORT_BATCH_MAX_AGE_SECONDS = 60 * 60
 SUPPLIER_IMPORT_BATCH_MAX_TOKEN_BYTES = 8 * 1024
+SUPPLIER_REFRESH_HANDOFF_TOKEN_SALT = 'supplier-refresh-handoff-v1'
+SUPPLIER_REFRESH_HANDOFF_MAX_AGE_SECONDS = 10 * 60
+SUPPLIER_REFRESH_HANDOFF_MAX_TOKEN_BYTES = 8 * 1024
 SUPPLIER_REFRESH_RECEIPT_TOKEN_SALT = 'supplier-refresh-result-receipt-v1'
 SUPPLIER_REFRESH_RECEIPT_MAX_AGE_SECONDS = 60 * 60
 SUPPLIER_REFRESH_RECEIPT_MAX_TOKEN_BYTES = 7_500
@@ -263,11 +266,136 @@ class SupplierImportBatchTokenError(ValueError):
         self.status_code = status_code
 
 
+class SupplierRefreshHandoffTokenError(ValueError):
+    """A signed classic-to-beta supplier refresh selection is invalid."""
+
+    def __init__(self, message, *, status_code=400):
+        super().__init__(message)
+        self.status_code = status_code
+
+
 def _supplier_import_batch_serializer():
     return URLSafeTimedSerializer(
         current_app.secret_key,
         salt=SUPPLIER_IMPORT_BATCH_TOKEN_SALT,
     )
+
+
+def _supplier_refresh_handoff_serializer():
+    return URLSafeTimedSerializer(
+        current_app.secret_key,
+        salt=SUPPLIER_REFRESH_HANDOFF_TOKEN_SALT,
+    )
+
+
+def _issue_supplier_refresh_handoff_token(
+    *, user_id, seller_id, imported_product_ids, return_args,
+):
+    """Sign one exact, bounded classic selection and its safe return filters."""
+    try:
+        ids = _bulk_product_ids(imported_product_ids)
+    except ValueError:
+        return None
+    if any(value > MAX_SIGNED_SQLITE_ID for value in ids):
+        return None
+    canonical_return_args = _my_products_return_args(return_args)
+    payload = {
+        'v': 1,
+        'user_id': user_id,
+        'seller_id': seller_id,
+        'ids': ids,
+        'return_args': canonical_return_args,
+    }
+    token = _supplier_refresh_handoff_serializer().dumps(payload)
+    if len(token.encode('utf-8')) > SUPPLIER_REFRESH_HANDOFF_MAX_TOKEN_BYTES:
+        return None
+    return token
+
+
+def _load_supplier_refresh_handoff_token(token, *, user_id, seller_id):
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token.encode('utf-8')) > SUPPLIER_REFRESH_HANDOFF_MAX_TOKEN_BYTES
+    ):
+        raise SupplierRefreshHandoffTokenError(
+            'Выбор для обновления недействителен',
+        )
+    try:
+        payload = _supplier_refresh_handoff_serializer().loads(
+            token,
+            max_age=SUPPLIER_REFRESH_HANDOFF_MAX_AGE_SECONDS,
+        )
+    except SignatureExpired as exc:
+        raise SupplierRefreshHandoffTokenError(
+            'Срок действия выбранного списка истёк', status_code=410,
+        ) from exc
+    except BadSignature as exc:
+        raise SupplierRefreshHandoffTokenError(
+            'Выбор для обновления недействителен',
+        ) from exc
+
+    if not isinstance(payload, dict) or set(payload) != {
+        'v', 'user_id', 'seller_id', 'ids', 'return_args',
+    }:
+        raise SupplierRefreshHandoffTokenError(
+            'Выбор для обновления недействителен',
+        )
+    if (
+        type(payload.get('v')) is not int
+        or payload['v'] != 1
+        or type(payload.get('user_id')) is not int
+        or type(payload.get('seller_id')) is not int
+    ):
+        raise SupplierRefreshHandoffTokenError(
+            'Выбор для обновления недействителен',
+        )
+    if payload['user_id'] != user_id or payload['seller_id'] != seller_id:
+        raise SupplierRefreshHandoffTokenError(
+            'Выбранный список недоступен', status_code=404,
+        )
+    try:
+        ids = _bulk_product_ids(payload.get('ids'))
+    except ValueError as exc:
+        raise SupplierRefreshHandoffTokenError(
+            'Выбор для обновления недействителен',
+        ) from exc
+    if any(value > MAX_SIGNED_SQLITE_ID for value in ids):
+        raise SupplierRefreshHandoffTokenError(
+            'Выбор для обновления недействителен',
+        )
+    return_args = payload.get('return_args')
+    if (
+        not isinstance(return_args, dict)
+        or _my_products_return_args(return_args) != return_args
+    ):
+        raise SupplierRefreshHandoffTokenError(
+            'Выбор для обновления недействителен',
+        )
+    return {'ids': ids, 'return_args': return_args}
+
+
+def _load_supplier_refresh_handoff_from_request(*, user_id, seller_id):
+    values = request.args.getlist('supplier_refresh_batch')
+    if len(values) != 1:
+        raise SupplierRefreshHandoffTokenError(
+            'Выбранный список недействителен',
+        )
+    token = values[0]
+    handoff = _load_supplier_refresh_handoff_token(
+        token, user_id=user_id, seller_id=seller_id,
+    )
+    return token, handoff
+
+
+def _no_store_supplier_refresh_handoff_response(response):
+    """Keep signed exact selections and their row payloads out of caches."""
+    response = make_response(response)
+    if 'supplier_refresh_batch' in request.args:
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
 
 
 def _ordered_committed_import_ids(
@@ -1091,9 +1219,10 @@ def _my_products_return_args(args):
     account_id = _coerce_positive_int(args.get('account_id'))
     if account_id is not None:
         result['account_id'] = account_id
+    updates_value = args.get('updates')
     updates_filter = (
-        isinstance(args.get('updates'), str)
-        and args.get('updates').strip() == '1'
+        (isinstance(updates_value, str) and updates_value.strip() == '1')
+        or (type(updates_value) is int and updates_value == 1)
     )
     if updates_filter:
         result['updates'] = 1
@@ -1108,12 +1237,19 @@ def _my_products_return_args(args):
     if search and len(search) <= 200:
         result['search'] = search
 
-    supplier = args.get('supplier')
-    supplier = supplier.strip() if isinstance(supplier, str) else ''
+    supplier_value = args.get('supplier')
+    supplier = (
+        supplier_value.strip()
+        if isinstance(supplier_value, str) else ''
+    )
     if supplier == 'none':
         result['supplier'] = supplier
     else:
-        supplier_id = _coerce_positive_int(supplier)
+        supplier_id = (
+            supplier_value
+            if type(supplier_value) is int and supplier_value > 0
+            else _coerce_positive_int(supplier)
+        )
         if supplier_id is not None:
             result['supplier'] = supplier_id
 
@@ -3124,6 +3260,42 @@ def register_supplier_routes(app):
     def seller_my_products_beta():
         """Экран массовых операций: выбор → предупреждение → прогресс → итог."""
         seller = current_user.seller
+        has_supplier_refresh_batch = 'supplier_refresh_batch' in request.args
+        if has_supplier_refresh_batch and 'import_batch' in request.args:
+            response = make_response('Выбранный список недействителен', 400)
+            return _no_store_supplier_refresh_handoff_response(response)
+        supplier_refresh_batch = None
+        supplier_refresh_batch_invalid = False
+        supplier_refresh_return_url = url_for('seller_my_products')
+        if has_supplier_refresh_batch:
+            try:
+                supplier_refresh_batch, handoff = (
+                    _load_supplier_refresh_handoff_from_request(
+                        user_id=current_user.id,
+                        seller_id=seller.id,
+                    )
+                )
+                return_args = handoff['return_args']
+                if 'account_id' in return_args:
+                    from services.marketplace_accounts import (
+                        MarketplaceAccountError, MarketplaceAccountService,
+                    )
+                    try:
+                        MarketplaceAccountService.get_owned_account(
+                            seller_id=seller.id,
+                            account_id=return_args['account_id'],
+                            marketplace_code='ozon',
+                        )
+                    except MarketplaceAccountError:
+                        # A formerly valid account may be removed while the
+                        # signed handoff is open. Fall back to the safe list.
+                        return_args = dict(return_args)
+                        return_args.pop('account_id', None)
+                supplier_refresh_return_url = url_for(
+                    'seller_my_products', **return_args,
+                )
+            except SupplierRefreshHandoffTokenError:
+                supplier_refresh_batch_invalid = True
         ozon_enabled = bool(
             current_app.config.get('MARKETPLACE_OZON_ENABLED', False)
         )
@@ -3159,8 +3331,12 @@ def register_supplier_routes(app):
             suppliers_payload=suppliers_payload,
             ozon_uploads_url=ozon_uploads_url,
             import_batch=_bounded_import_batch_template_value(),
+            supplier_refresh_batch=supplier_refresh_batch,
+            supplier_refresh_batch_invalid=supplier_refresh_batch_invalid,
+            supplier_refresh_return_url=supplier_refresh_return_url,
         )
-        return _no_store_supplier_import_batch_response(response)
+        response = _no_store_supplier_import_batch_response(response)
+        return _no_store_supplier_refresh_handoff_response(response)
 
     @app.route('/api/my-products')
     @login_required
@@ -3172,6 +3348,43 @@ def register_supplier_routes(app):
         )
 
         seller = current_user.seller
+        has_supplier_refresh_batch = 'supplier_refresh_batch' in request.args
+        if has_supplier_refresh_batch and 'import_batch' in request.args:
+            return _no_store_supplier_refresh_handoff_response((jsonify({
+                'success': False,
+                'error': 'Выбранный список недействителен',
+            }), 400))
+        if has_supplier_refresh_batch:
+            try:
+                _, handoff = _load_supplier_refresh_handoff_from_request(
+                    user_id=current_user.id,
+                    seller_id=seller.id,
+                )
+                payload = MyProductsFeed.list_products_by_ids(
+                    seller_id=seller.id,
+                    imported_product_ids=handoff['ids'],
+                )
+            except SupplierRefreshHandoffTokenError as exc:
+                return _no_store_supplier_refresh_handoff_response((jsonify({
+                    'success': False,
+                    'error': str(exc),
+                }), exc.status_code))
+            except MyProductsFeedNotFound:
+                return _no_store_supplier_refresh_handoff_response((jsonify({
+                    'success': False,
+                    'error': 'Выбранный список недоступен',
+                }), 404))
+            except MyProductsFeedError:
+                return _no_store_supplier_refresh_handoff_response((jsonify({
+                    'success': False,
+                    'error': 'Выбранный список недействителен',
+                }), 400))
+            payload['supplier_refresh_batch_count'] = payload.pop(
+                'import_batch_count',
+            )
+            return _no_store_supplier_refresh_handoff_response(
+                jsonify({'success': True, **payload})
+            )
         if 'import_batch' in request.args:
             try:
                 imported_product_ids = _load_supplier_import_batch_ids(
@@ -5397,6 +5610,70 @@ def register_supplier_routes(app):
                 'error': 'Слишком много данных для показа проверки; сократите выбор',
             }), 413
         return jsonify(response_payload)
+
+    @app.route('/my-products/refresh-from-supplier/review', methods=['POST'])
+    @login_required
+    @seller_required
+    def my_products_refresh_review_handoff():
+        """Open the beta review for one exact classic selection, without writes."""
+        seller = current_user.seller
+        try:
+            ids = _form_bulk_product_ids(request.form.getlist('selected_ids'))
+        except ValueError:
+            flash('Некорректный выбор карточек.', 'warning')
+            return _redirect_seller_my_products(request.args)
+        if not ids:
+            flash('Выберите от 1 до 200 карточек.', 'warning')
+            return _redirect_seller_my_products(request.args)
+
+        account_values = request.args.getlist('account_id')
+        return_args = _my_products_return_args(request.args)
+        if account_values:
+            if len(account_values) != 1 or 'account_id' not in return_args:
+                return 'Некорректный кабинет Ozon', 400
+            from services.marketplace_accounts import (
+                MarketplaceAccountError, MarketplaceAccountService,
+            )
+            try:
+                MarketplaceAccountService.get_owned_account(
+                    seller_id=seller.id,
+                    account_id=return_args['account_id'],
+                    marketplace_code='ozon',
+                )
+            except MarketplaceAccountError as exc:
+                return str(exc), exc.status_code
+
+        owned_ids = db.session.query(ImportedProduct.id).filter(
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.id.in_(ids),
+        ).all()
+        if len(owned_ids) != len(ids):
+            flash(
+                'Не удалось подтвердить весь выбор. Обновите список и выберите карточки заново.',
+                'warning',
+            )
+            return _redirect_seller_my_products(request.args)
+
+        token = _issue_supplier_refresh_handoff_token(
+            user_id=current_user.id,
+            seller_id=seller.id,
+            imported_product_ids=ids,
+            return_args=return_args,
+        )
+        if not token:
+            flash(
+                'Не удалось сохранить точный выбор. Обновите список и повторите действие.',
+                'warning',
+            )
+            return _redirect_seller_my_products(request.args)
+        response = redirect(
+            url_for('seller_my_products_beta', supplier_refresh_batch=token),
+            code=303,
+        )
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
 
     @app.route('/my-products/refresh-from-supplier', methods=['POST'])
     @login_required

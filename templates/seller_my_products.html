@@ -262,8 +262,9 @@ function scheduleProductPhotoRetry(image) {
     <div class="sh-alert sh-alert--info mb-6" role="note">
         <div>
             <strong>Сначала обновляются ваши карточки в Seller Hub.</strong>
-            Категория и характеристики копируются из свежего каталога поставщика
-            локально; WB и Ozon на этом шаге не меняются. Для опубликованных
+            Перед применением проверьте точный список и изменения. Категория и
+            характеристики копируются из свежего каталога поставщика только после
+            подтверждения; WB и Ozon на этом шаге не меняются. Для опубликованных
             карточек после применения появится отдельное подтверждение отправки
             характеристик на WB.
         </div>
@@ -432,15 +433,15 @@ function scheduleProductPhotoRetry(image) {
             </button>
             {% endif %}
             {% endif %}
-            <form method="POST" action="{{ url_for('my_products_refresh_from_supplier', **page_args) }}" class="inline-flex">
+            <form method="POST" action="{{ url_for('my_products_refresh_review_handoff', **page_args) }}" class="inline-flex" data-supplier-refresh-review-handoff="bulk">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <template x-for="id in selected" :key="'ref-' + id">
                     <input type="hidden" name="selected_ids" :value="id">
                 </template>
                 <button type="submit" :disabled="selected.length === 0"
                         class="sh-btn {{ 'sh-btn--primary' if updates_filter else 'sh-btn--secondary' }} sh-btn--md"
-                        title="Скопировать свежие данные общей карточки поставщика в выбранные локальные карточки. WB и Ozon не вызываются.">
-                    {{ 'Применить в мои карточки' if updates_filter else 'Обновить из каталога' }}<span x-show="selected.length" x-text="' (' + selected.length + ')'"></span>
+                        title="Сначала проверьте точный список и изменения. Данные поставщика применятся локально только после подтверждения; WB и Ozon не вызываются.">
+                    {{ 'Проверить применение в мои карточки' if updates_filter else 'Проверить обновление из каталога' }}<span x-show="selected.length" x-text="' (' + selected.length + ')'"></span>
                 </button>
             </form>
             {% if not updates_filter %}
@@ -1022,13 +1023,13 @@ function scheduleProductPhotoRetry(image) {
                     </td>
                     <td class="px-3 py-2 text-center whitespace-nowrap">
                         {% if updates_filter %}
-                        <form method="POST" action="{{ url_for('my_products_refresh_from_supplier', **page_args) }}" class="inline">
+                        <form method="POST" action="{{ url_for('my_products_refresh_review_handoff', **page_args) }}" class="inline" data-supplier-refresh-review-handoff="row">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="selected_ids" value="{{ p.id }}">
                             <button type="submit"
                                     class="inline-flex items-center px-2.5 py-1 sh-btn sh-btn--primary sh-btn--sm"
-                                    title="Применить свежую категорию и характеристики локально; WB и Ozon не изменятся">
-                                Применить локально
+                                    title="Откройте просмотр изменений. Данные применятся локально только после подтверждения; WB и Ozon не изменятся">
+                                Проверить изменения
                             </button>
                         </form>
                         <a href="{{ url_for('seller_product_wb_preview', product_id=p.id) }}"
