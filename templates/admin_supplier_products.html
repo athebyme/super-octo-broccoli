@@ -35,64 +35,107 @@
     </div>
 
     <div class="mb-6">
-        <div class="flex flex-wrap items-start gap-2">
-            {% if supplier.csv_source_url %}
-            <form method="POST" action="{{ url_for('admin_supplier_sync', supplier_id=supplier.id) }}" class="inline-flex shrink-0">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" onclick="return confirm('Обновить каталог из CSV? Новые товары будут добавлены, совпавшие — обновлены.')"
-                        class="px-4 py-3 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">
-                    Обновить каталог
-                </button>
-            </form>
-            {% endif %}
-            <details class="min-w-0 max-w-full">
-                <summary class="cursor-pointer select-none px-4 py-3 border border-gray-300 bg-white text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
-                    Дополнительные действия
-                </summary>
-                <div class="mt-2 flex max-w-full flex-wrap items-center gap-2">
-                    <a href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id) }}"
-                       class="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700">
-                        Массовое обогащение
-                    </a>
-                    <a href="{{ url_for('admin_supplier_smart_parser', supplier_id=supplier.id) }}"
-                       class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">
-                        Smart Parser
-                    </a>
-                    {% if supplier.ai_enabled %}
-                    <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id) }}"
-                       class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">
-                        AI Парсер
-                    </a>
-                    <a href="{{ url_for('admin_supplier_ai_history', supplier_id=supplier.id) }}"
-                       class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
-                        AI история
-                    </a>
-                    {% endif %}
-                    {% if supplier.description_file_url %}
-                    <form method="POST" action="{{ url_for('admin_supplier_sync_descriptions', supplier_id=supplier.id) }}" class="inline">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit" onclick="return confirm('Синхронизировать описания товаров из CSV?')"
-                                class="px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700">
-                            Синхр. описания
-                        </button>
-                    </form>
-                    {% endif %}
-                    {% if supplier.price_file_url %}
-                    <form method="POST" action="{{ url_for('admin_supplier_sync_prices', supplier_id=supplier.id) }}" class="inline">
-                        <input type="hidden" name="force" value="1">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit" onclick="return confirm('Синхронизировать цены и остатки?')"
-                                class="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700">
-                            Синхр. цены/остатки
-                        </button>
-                    </form>
-                    {% endif %}
-                    <a href="{{ url_for('admin_supplier_parsing_quality_dashboard', supplier_id=supplier.id) }}"
-                       class="px-4 py-2 border border-indigo-300 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-50">
-                        Качество парсинга
-                    </a>
+        <div class="flex flex-col gap-3">
+            <div class="flex flex-wrap items-start gap-2">
+                {% if supplier.csv_source_url %}
+                <form method="POST" action="{{ url_for('admin_supplier_sync', supplier_id=supplier.id) }}" class="inline-flex shrink-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="catalog_refresh_baseline" value="{{ catalog_refresh_latest_id }}">
+                    <button type="submit" data-testid="catalog-refresh-submit"
+                            {% if catalog_refresh_latest_active %}disabled{% endif %}
+                            class="min-h-11 px-4 py-3 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60">
+                        Обновить каталог
+                    </button>
+                </form>
+                {% endif %}
+                <div id="catalog-refresh-status" role="status" aria-live="polite" aria-atomic="true"
+                     data-testid="catalog-refresh-status"
+                     data-refresh-state="{{ catalog_refresh_view.state }}"
+                     data-refresh-run-id="{{ catalog_refresh_view.run_id }}"
+                     data-refresh-raw-committed="{{ 'true' if catalog_refresh_view.raw_committed else 'false' }}"
+                     data-refresh-status-url="{{ catalog_refresh_status_url or '' }}"
+                     data-refresh-latest-run-id="{{ catalog_refresh_latest_id }}"
+                     data-refresh-latest-active="{{ 'true' if catalog_refresh_latest_active else 'false' }}"
+                     class="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
+                    <p data-testid="catalog-refresh-headline" class="text-sm font-semibold text-gray-900">
+                        {{ catalog_refresh_view.headline }}
+                    </p>
+                    <p data-refresh-detail class="mt-0.5 text-xs text-gray-600">
+                        {{ catalog_refresh_view.detail }}
+                    </p>
+                    <div data-testid="catalog-refresh-counts" {% if not catalog_refresh_view.show_counts %}hidden{% endif %}
+                     class="mt-2 text-xs text-gray-700">
+                    <div class="flex flex-wrap gap-x-4 gap-y-1">
+                        <span>Строк: <strong data-refresh-field="total">{{ catalog_refresh_view.counts.get('total', '') }}</strong></span>
+                        <span>Добавлено: <strong data-refresh-field="added">{{ catalog_refresh_view.counts.get('added', '') }}</strong></span>
+                        <span>Существующих обработано: <strong data-refresh-field="updated">{{ catalog_refresh_view.counts.get('updated', '') }}</strong></span>
+                        <span data-refresh-field-wrap="postprocess-errors"
+                              {% if catalog_refresh_view.postprocess_errors is none %}hidden{% endif %}>
+                            Ошибки проверок: <strong data-refresh-field="postprocess-errors">{{ catalog_refresh_view.postprocess_errors if catalog_refresh_view.postprocess_errors is not none else '' }}</strong>
+                        </span>
+                    </div>
+                    </div>
+                    <p data-testid="catalog-refresh-price" {% if not catalog_refresh_view.price_status %}hidden{% endif %}
+                       class="mt-2 text-xs text-gray-600">
+                        <span data-refresh-field="price-status">{{ catalog_refresh_view.price_label or '' }}</span>
+                        <span data-refresh-conflicts-wrap="true"
+                              {% if catalog_refresh_view.price_conflicts is none %}hidden{% endif %}>
+                            Конфликтующих строк: <strong data-refresh-field="price-conflicts">{{ catalog_refresh_view.price_conflicts if catalog_refresh_view.price_conflicts is not none else '' }}</strong>
+                        </span>
+                    </p>
+                    <script type="application/json" data-refresh-copy>{{ catalog_refresh_copy|tojson }}</script>
+                    <script type="application/json" data-refresh-price-labels>{{ catalog_refresh_price_labels|tojson }}</script>
+                    <script type="application/json" data-refresh-error-copy>{{ catalog_refresh_error_copy|tojson }}</script>
                 </div>
-            </details>
+                <details class="min-w-0 max-w-full">
+                    <summary class="cursor-pointer select-none px-4 py-3 border border-gray-300 bg-white text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
+                        Дополнительные действия
+                    </summary>
+                    <div class="mt-2 flex max-w-full flex-wrap items-center gap-2">
+                        <a href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id) }}"
+                           class="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700">
+                            Массовое обогащение
+                        </a>
+                        <a href="{{ url_for('admin_supplier_smart_parser', supplier_id=supplier.id) }}"
+                           class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">
+                            Smart Parser
+                        </a>
+                        {% if supplier.ai_enabled %}
+                        <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id) }}"
+                           class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">
+                            AI Парсер
+                        </a>
+                        <a href="{{ url_for('admin_supplier_ai_history', supplier_id=supplier.id) }}"
+                           class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
+                            AI история
+                        </a>
+                        {% endif %}
+                        {% if supplier.description_file_url %}
+                        <form method="POST" action="{{ url_for('admin_supplier_sync_descriptions', supplier_id=supplier.id) }}" class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" onclick="return confirm('Синхронизировать описания товаров из CSV?')"
+                                    class="px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700">
+                                Синхр. описания
+                            </button>
+                        </form>
+                        {% endif %}
+                        {% if supplier.price_file_url %}
+                        <form method="POST" action="{{ url_for('admin_supplier_sync_prices', supplier_id=supplier.id) }}" class="inline">
+                            <input type="hidden" name="force" value="1">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" onclick="return confirm('Синхронизировать цены и остатки?')"
+                                    class="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700">
+                                Синхр. цены/остатки
+                            </button>
+                        </form>
+                        {% endif %}
+                        <a href="{{ url_for('admin_supplier_parsing_quality_dashboard', supplier_id=supplier.id) }}"
+                           class="px-4 py-2 border border-indigo-300 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-50">
+                            Качество парсинга
+                        </a>
+                    </div>
+                </details>
+            </div>
         </div>
     </div>
 
@@ -326,4 +369,8 @@
     </div>
     {% endif %}
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='supplier-catalog-refresh.js', v='20261121-r37') }}" defer></script>
 {% endblock %}

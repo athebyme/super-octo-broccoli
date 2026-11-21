@@ -8,10 +8,15 @@ from unittest.mock import patch
 from flask import Flask
 from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect
+from werkzeug.datastructures import MultiDict
 
 from models import Supplier, User, db
 from routes.suppliers import register_supplier_routes
-from services.supplier_service import SupplierCSVParser, SyncResult, SupplierService
+from services.supplier_catalog_refresh_models import SupplierCatalogRefreshRun
+from services.supplier_service import SupplierCSVParser, SupplierService
+
+
+RUN_ID = '123e4567-e89b-42d3-a456-426614174000'
 
 
 class SupplierCSVRefreshRoutesTest(unittest.TestCase):
@@ -27,11 +32,20 @@ class SupplierCSVRefreshRoutesTest(unittest.TestCase):
         db.init_app(self.app)
         LoginManager(self.app)
         CSRFProtect(self.app)
+
+        def template_url_fallback(_error, endpoint, _values):
+            return f'/test/{endpoint}'
+
+        self.app.url_build_error_handlers.append(template_url_fallback)
         register_supplier_routes(self.app)
 
         @self.app.route('/dashboard')
         def dashboard():
             return 'dashboard'
+
+        @self.app.route('/notifications')
+        def notifications_page():
+            return 'notifications'
 
         self.client = self.app.test_client()
         self.context = self.app.app_context()
@@ -65,6 +79,7 @@ class SupplierCSVRefreshRoutesTest(unittest.TestCase):
     def _auth(self, *, admin):
         user = SimpleNamespace(
             id=self.admin_id,
+            username='csv-refresh-admin',
             is_authenticated=True,
             is_active=True,
             is_admin=admin,
@@ -106,6 +121,7 @@ class SupplierCSVRefreshRoutesTest(unittest.TestCase):
         auth_patch, login_patch = self._auth(admin=True)
         with auth_patch, login_patch, \
              patch('routes.suppliers.SupplierService.get_supplier') as get_supplier, \
+             patch('services.supplier_catalog_refresh.enqueue_catalog_refresh') as enqueue, \
              patch('routes.suppliers.SupplierService.sync_from_csv') as sync, \
              patch.object(SupplierCSVParser, 'fetch_csv_raw') as fetch_raw:
             sync_response = self.client.post(
@@ -118,17 +134,12 @@ class SupplierCSVRefreshRoutesTest(unittest.TestCase):
         self.assertEqual(sync_response.status_code, 400)
         self.assertEqual(preview_response.status_code, 400)
         get_supplier.assert_not_called()
+        enqueue.assert_not_called()
         sync.assert_not_called()
         fetch_raw.assert_not_called()
 
-    def test_admin_sync_calls_once_for_exact_supplier_and_flashes_success(self):
-        result = SyncResult(
-            success=True,
-            total_in_csv=5,
-            added=2,
-            updated=3,
-            duration_seconds=0.4,
-        )
+    def test_admin_sync_enqueues_once_and_redirects_to_exact_status(self):
+        payload = {'id': RUN_ID, 'status': 'pending'}
         original_get_supplier = SupplierService.get_supplier
         auth_patch, login_patch = self._auth(admin=True)
         with auth_patch, login_patch, \
@@ -138,46 +149,179 @@ class SupplierCSVRefreshRoutesTest(unittest.TestCase):
                  wraps=original_get_supplier,
              ) as get_supplier, \
              patch(
-                 'routes.suppliers.SupplierService.sync_from_csv',
-                 return_value=result,
-             ) as sync, \
+                 'services.supplier_catalog_refresh.enqueue_catalog_refresh',
+                 return_value=(payload, True),
+             ) as enqueue, \
+             patch('routes.suppliers.SupplierService.sync_from_csv') as sync, \
              patch('routes.suppliers.log_admin_action') as audit:
             response = self.client.post(
                 f'/admin/suppliers/{self.supplier_id}/sync',
+                data={'catalog_refresh_baseline': ''},
             )
 
-        self.assertEqual(response.status_code, 302)
-        self.assertTrue(response.location.endswith(
-            f'/admin/suppliers/{self.supplier_id}/products',
-        ))
-        get_supplier.assert_called_once_with(self.supplier_id)
-        sync.assert_called_once_with(self.supplier_id)
-        audit.assert_called_once()
+        self.assertEqual(response.status_code, 303)
         self.assertEqual(
-            audit.call_args.kwargs['details']['rows_in_file'],
-            5,
+            response.location,
+            f'/admin/suppliers/{self.supplier_id}/products'
+            f'?catalog_refresh_run={RUN_ID}#catalog-refresh-status',
         )
+        get_supplier.assert_called_once_with(self.supplier_id)
+        enqueue.assert_called_once_with(
+            supplier_id=self.supplier_id,
+            admin_user_id=self.admin_id,
+            expected_latest_id=None,
+            ip_address='127.0.0.1',
+        )
+        sync.assert_not_called()
+        audit.assert_not_called()
         flashes = self._flashes(self.client)
         self.assertEqual(flashes[-1][0], 'success')
-        self.assertIn('Новых позиций — 2', flashes[-1][1])
-        self.assertIn('Существующих позиций обработано — 3', flashes[-1][1])
+        self.assertIn('поставлено в очередь', flashes[-1][1])
 
-    def test_busy_sync_flashes_warning_without_claiming_success(self):
-        result = SyncResult(success=False, busy=True)
+    def test_stale_form_reuses_current_run_without_second_enqueue(self):
+        payload = {'id': RUN_ID, 'status': 'running'}
         auth_patch, login_patch = self._auth(admin=True)
         with auth_patch, login_patch, patch(
-            'routes.suppliers.SupplierService.sync_from_csv',
-            return_value=result,
-        ) as sync, patch('routes.suppliers.log_admin_action'):
+            'services.supplier_catalog_refresh.enqueue_catalog_refresh',
+            return_value=(payload, False),
+        ) as enqueue, patch('routes.suppliers.SupplierService.sync_from_csv') as sync:
             response = self.client.post(
                 f'/admin/suppliers/{self.supplier_id}/sync',
+                data={'catalog_refresh_baseline': '123e4567-e89b-42d3-a456-426614174001'},
             )
 
-        self.assertEqual(response.status_code, 302)
-        sync.assert_called_once_with(self.supplier_id)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(
+            response.location,
+            f'/admin/suppliers/{self.supplier_id}/products'
+            f'?catalog_refresh_run={RUN_ID}#catalog-refresh-status',
+        )
+        enqueue.assert_called_once_with(
+            supplier_id=self.supplier_id,
+            admin_user_id=self.admin_id,
+            expected_latest_id='123e4567-e89b-42d3-a456-426614174001',
+            ip_address='127.0.0.1',
+        )
+        sync.assert_not_called()
         flashes = self._flashes(self.client)
-        self.assertEqual(flashes[-1][0], 'warning')
-        self.assertEqual(flashes[-1][1], 'Каталог этого поставщика уже обновляется.')
+        self.assertEqual(flashes[-1][0], 'info')
+        self.assertIn('уже выполняется', flashes[-1][1])
+
+    def test_sync_rejects_duplicate_baseline_fields(self):
+        auth_patch, login_patch = self._auth(admin=True)
+        with auth_patch, login_patch, patch(
+            'services.supplier_catalog_refresh.enqueue_catalog_refresh',
+        ) as enqueue:
+            response = self.client.post(
+                f'/admin/suppliers/{self.supplier_id}/sync',
+                data=MultiDict([
+                    ('catalog_refresh_baseline', ''),
+                    ('catalog_refresh_baseline', ''),
+                ]),
+            )
+
+        self.assertEqual(response.status_code, 303)
+        enqueue.assert_not_called()
+
+    def test_status_get_is_exact_supplier_scoped_read_only_and_uncached(self):
+        now = datetime(2026, 11, 21, 10, 0)
+        db.session.add(SupplierCatalogRefreshRun(
+            id=RUN_ID,
+            supplier_id=self.supplier_id,
+            admin_user_id=self.admin_id,
+            status='completed',
+            config_digest='a' * 64,
+            created_at=now,
+            started_at=now,
+            raw_committed_at=now,
+            completed_at=now,
+            total=5,
+            added=2,
+            updated=3,
+            postprocess_errors=0,
+            price_status='partial',
+            price_conflicts=1,
+        ))
+        db.session.commit()
+        auth_patch, login_patch = self._auth(admin=True)
+        with auth_patch, login_patch, \
+             patch.object(db.session, 'commit', wraps=db.session.commit) as commit:
+            response = self.client.get(
+                f'/admin/suppliers/{self.supplier_id}/sync-status?run_id={RUN_ID}',
+            )
+            wrong_scope = self.client.get(
+                f'/admin/suppliers/{self.supplier_id + 100}/sync-status?run_id={RUN_ID}',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.get_json()), {
+            'id', 'status', 'created_at', 'started_at', 'raw_committed_at',
+            'completed_at', 'total', 'added', 'updated', 'postprocess_errors',
+            'price_status', 'price_conflicts', 'error_code',
+        })
+        self.assertEqual(response.get_json()['id'], RUN_ID)
+        self.assertEqual(response.get_json()['status'], 'completed')
+        self.assertEqual(response.get_json()['total'], 5)
+        self.assertIn('no-store', response.headers['Cache-Control'])
+        self.assertEqual(wrong_scope.status_code, 404)
+        commit.assert_not_called()
+
+    def test_status_get_requires_one_canonical_run_id_and_admin(self):
+        auth_patch, login_patch = self._auth(admin=True)
+        with auth_patch, login_patch:
+            missing = self.client.get(
+                f'/admin/suppliers/{self.supplier_id}/sync-status',
+            )
+            repeated = self.client.get(
+                f'/admin/suppliers/{self.supplier_id}/sync-status'
+                '?run_id=bad&run_id=bad',
+            )
+            malformed = self.client.get(
+                f'/admin/suppliers/{self.supplier_id}/sync-status?run_id=not-a-uuid',
+            )
+
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(repeated.status_code, 400)
+        self.assertEqual(malformed.status_code, 400)
+
+        seller_auth, seller_login = self._auth(admin=False)
+        with seller_auth, seller_login:
+            denied = self.client.get(
+                f'/admin/suppliers/{self.supplier_id}/sync-status?run_id={RUN_ID}',
+            )
+        self.assertEqual(denied.status_code, 302)
+
+    def test_products_page_renders_exact_latest_baseline_and_active_state(self):
+        now = datetime(2026, 11, 21, 10, 0)
+        db.session.add(SupplierCatalogRefreshRun(
+            id=RUN_ID,
+            supplier_id=self.supplier_id,
+            admin_user_id=self.admin_id,
+            status='pending',
+            config_digest='a' * 64,
+            created_at=now,
+        ))
+        db.session.commit()
+        auth_patch, login_patch = self._auth(admin=True)
+        with auth_patch, login_patch:
+            response = self.client.get(
+                f'/admin/suppliers/{self.supplier_id}/products',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        page = response.get_data(as_text=True)
+        self.assertIn('id="catalog-refresh-status"', page)
+        self.assertIn('data-refresh-state="pending"', page)
+        self.assertIn(f'data-refresh-run-id="{RUN_ID}"', page)
+        self.assertIn(f'data-refresh-latest-run-id="{RUN_ID}"', page)
+        self.assertIn(f'name="catalog_refresh_baseline" value="{RUN_ID}"', page)
+        self.assertIn('data-refresh-latest-active="true"', page)
+        self.assertIn('data-testid="catalog-refresh-submit"', page)
+        self.assertIn('data-testid="catalog-refresh-counts" hidden', page)
+        self.assertIn(
+            f'/admin/suppliers/{self.supplier_id}/sync-status?run_id={RUN_ID}',
+            page,
+        )
 
     def test_preview_uses_parser_preflight_and_does_not_run_sync(self):
         raw_bytes = b'id;title\nSKU-1;Fixture'

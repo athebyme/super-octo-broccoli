@@ -41,6 +41,156 @@ SUPPLIER_REFRESH_STATUS_REASONS = {
     'error': 'update_failed',
 }
 MAX_SIGNED_SQLITE_ID = (1 << 63) - 1
+CATALOG_REFRESH_ACTIVE_STATES = frozenset({'pending', 'running'})
+CATALOG_REFRESH_TERMINAL_STATES = frozenset({
+    'completed', 'partial', 'failed', 'interrupted',
+})
+CATALOG_REFRESH_UUID_RE = re.compile(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+)
+CATALOG_REFRESH_PRICE_LABELS = {
+    'success': 'Цены и остатки обновлены.',
+    'failed': 'Не удалось обновить цены и остатки.',
+    'partial': 'Цены и остатки обновлены частично.',
+    'skipped': 'Проверка цен и остатков пропущена.',
+    'not_configured': 'Файл цен и остатков не настроен.',
+    'busy': 'Проверка цен и остатков уже выполнялась.',
+    'source_changed': 'Источник цен изменился; новые значения не применены.',
+    'unknown': 'Результат проверки цен и остатков неизвестен.',
+}
+CATALOG_REFRESH_ERROR_COPY = {
+    'configuration_changed': 'Настройки источника изменились после постановки в очередь. Запустите обновление ещё раз.',
+    'source_changed': 'Источник изменился во время загрузки. Проверьте настройки и запустите обновление снова.',
+    'catalog_fetch_failed': 'Не удалось загрузить файл каталога. Проверьте адрес и доступность источника.',
+    'catalog_validation_failed': 'Файл каталога не прошёл проверку структуры. Исправьте файл и повторите запуск.',
+    'admin_not_authorized': 'Право администратора изменилось; сохранение каталога не подтверждено.',
+}
+CATALOG_REFRESH_COPY = {
+    'idle': {
+        'headline': 'Нет текущего обновления.',
+        'detail': 'Можно запустить обновление каталога.',
+    },
+    'pending': {
+        'headline': 'Обновление поставлено в очередь.',
+        'detail': 'Каталог ещё не сохранён.',
+    },
+    'running_before': {
+        'headline': 'Загружается каталог поставщика.',
+        'detail': 'Счётчики появятся после сохранения файла.',
+    },
+    'running_after': {
+        'headline': 'Каталог сохранён.',
+        'detail': 'Выполняются дополнительные проверки.',
+    },
+    'completed': {
+        'headline': 'Каталог обновлён.',
+        'detail': 'Основные и дополнительные проверки завершены.',
+    },
+    'partial': {
+        'headline': 'Каталог обновлён частично.',
+        'detail': 'Проверьте результат дополнительных проверок.',
+    },
+    'failed': {
+        'headline': 'Каталог не обновлён.',
+        'detail': 'Проверьте источник и запустите обновление снова.',
+    },
+    'interrupted_before': {
+        'headline': 'Обновление прервано.',
+        'detail': 'Сохранение каталога не подтверждено.',
+    },
+    'interrupted_after': {
+        'headline': 'Каталог сохранён.',
+        'detail': 'Фоновые проверки прервались; проверьте результат.',
+    },
+    'unknown': {
+        'headline': 'Не удалось подтвердить состояние.',
+        'detail': 'Обновите страницу, чтобы проверить его снова.',
+    },
+    'session': {
+        'headline': 'Сеанс администратора завершён.',
+        'detail': 'Войдите снова, чтобы проверить состояние.',
+    },
+}
+
+
+def _supplier_catalog_refresh_view(payload, *, lookup_failed=False):
+    """Prepare safe, count-aware copy for the admin catalog page."""
+    if lookup_failed:
+        return {
+            'state': 'unknown', 'run_id': '', 'raw_committed': False,
+            'active': False, 'copy_key': 'unknown',
+            'headline': CATALOG_REFRESH_COPY['unknown']['headline'],
+            'detail': CATALOG_REFRESH_COPY['unknown']['detail'],
+            'show_counts': False, 'counts': {}, 'postprocess_errors': None,
+            'price_status': None, 'price_label': None, 'price_conflicts': None,
+            'error_detail': None,
+        }
+    if payload is None:
+        return {
+            'state': 'idle', 'run_id': '', 'raw_committed': False,
+            'active': False, 'copy_key': 'idle',
+            'headline': CATALOG_REFRESH_COPY['idle']['headline'],
+            'detail': CATALOG_REFRESH_COPY['idle']['detail'],
+            'show_counts': False, 'counts': {}, 'postprocess_errors': None,
+            'price_status': None, 'price_label': None, 'price_conflicts': None,
+            'error_detail': None,
+        }
+
+    status = payload.get('status')
+    if status not in CATALOG_REFRESH_ACTIVE_STATES | CATALOG_REFRESH_TERMINAL_STATES:
+        return _supplier_catalog_refresh_view(None, lookup_failed=True)
+    raw_committed = bool(payload.get('raw_committed_at'))
+    if status == 'running':
+        copy_key = 'running_after' if raw_committed else 'running_before'
+    elif status == 'interrupted':
+        copy_key = 'interrupted_after' if raw_committed else 'interrupted_before'
+    else:
+        copy_key = status
+    copy = CATALOG_REFRESH_COPY[copy_key]
+
+    def safe_count(value):
+        return value if type(value) is int and value >= 0 else None
+
+    counts = {
+        key: safe_count(payload.get(key))
+        for key in ('total', 'added', 'updated')
+    }
+    show_counts = raw_committed and all(value is not None for value in counts.values())
+    postprocess_errors = (
+        safe_count(payload.get('postprocess_errors'))
+        if raw_committed and status in CATALOG_REFRESH_TERMINAL_STATES else None
+    )
+    price_status = payload.get('price_status')
+    if (
+        not raw_committed
+        or status not in CATALOG_REFRESH_TERMINAL_STATES
+        or price_status not in CATALOG_REFRESH_PRICE_LABELS
+    ):
+        price_status = None
+    price_conflicts = (
+        safe_count(payload.get('price_conflicts'))
+        if price_status is not None else None
+    )
+    error_detail = (
+        CATALOG_REFRESH_ERROR_COPY.get(payload.get('error_code'))
+        if status in {'failed', 'partial', 'interrupted'} else None
+    )
+    return {
+        'state': status,
+        'run_id': payload.get('id') or '',
+        'raw_committed': raw_committed,
+        'active': status in CATALOG_REFRESH_ACTIVE_STATES,
+        'copy_key': copy_key,
+        'headline': copy['headline'],
+        'detail': error_detail or copy['detail'],
+        'show_counts': show_counts,
+        'counts': counts,
+        'postprocess_errors': postprocess_errors,
+        'price_status': price_status,
+        'price_label': CATALOG_REFRESH_PRICE_LABELS.get(price_status),
+        'price_conflicts': price_conflicts,
+        'error_detail': error_detail,
+    }
 
 
 def _bulk_product_ids(raw_ids, limit=MAX_BULK_PRODUCTS):
@@ -899,36 +1049,111 @@ def register_supplier_routes(app):
             flash('URL CSV не задан для этого поставщика', 'warning')
             return redirect(url_for('admin_supplier_edit', supplier_id=supplier_id))
 
-        result = SupplierService.sync_from_csv(supplier_id)
+        baseline_values = request.form.getlist('catalog_refresh_baseline')
+        if len(baseline_values) != 1:
+            flash('Форма обновления устарела. Обновите страницу и повторите.', 'warning')
+            return redirect(
+                url_for('admin_supplier_products', supplier_id=supplier_id),
+                code=303,
+            )
 
-        log_admin_action(
-            admin_user_id=current_user.id,
-            action='sync_supplier_csv',
-            target_type='supplier',
-            target_id=supplier_id,
-            details={
-                'added': result.added,
-                'updated': result.updated,
-                'errors': result.errors,
-                'rows_in_file': result.total_in_csv,
-                'already_running': result.busy,
-                'duration': round(result.duration_seconds, 1)
-            },
-            request=request
+        expected_latest_id = baseline_values[0] or None
+        try:
+            # Keep this import lazy: the refresh model is registered only after
+            # startup migrations have completed.
+            from services.supplier_catalog_refresh import (
+                enqueue_catalog_refresh,
+            )
+
+            payload, created = enqueue_catalog_refresh(
+                supplier_id=supplier_id,
+                admin_user_id=current_user.id,
+                expected_latest_id=expected_latest_id,
+                ip_address=request.remote_addr,
+            )
+        except Exception as exc:
+            error_code = getattr(exc, 'code', None)
+            if error_code == 'supplier_not_found':
+                flash('Поставщик не найден', 'danger')
+            elif error_code == 'invalid_expected_run_id':
+                flash('Форма обновления устарела. Обновите страницу и повторите.', 'warning')
+            elif error_code == 'database_busy':
+                flash('База данных занята. Повторите запуск позже.', 'warning')
+            else:
+                logger.warning(
+                    'Supplier catalog refresh admission failed (%s)',
+                    type(exc).__name__,
+                )
+                flash('Не удалось поставить обновление в очередь. Повторите попытку позже.', 'danger')
+            return redirect(
+                url_for('admin_supplier_products', supplier_id=supplier_id),
+                code=303,
+            )
+
+        run_id = payload.get('id') if isinstance(payload, dict) else None
+        if not isinstance(run_id, str) or not CATALOG_REFRESH_UUID_RE.fullmatch(run_id):
+            flash('Не удалось подтвердить заявку на обновление.', 'warning')
+            return redirect(
+                url_for('admin_supplier_products', supplier_id=supplier_id),
+                code=303,
+            )
+
+        if created:
+            flash('Обновление каталога поставлено в очередь.', 'success')
+        elif payload.get('status') in CATALOG_REFRESH_ACTIVE_STATES:
+            flash('Обновление каталога уже выполняется.', 'info')
+        else:
+            flash('Показан текущий результат. Новое обновление не запускалось.', 'info')
+
+        return redirect(
+            url_for(
+                'admin_supplier_products',
+                supplier_id=supplier_id,
+                catalog_refresh_run=run_id,
+                _anchor='catalog-refresh-status',
+            ),
+            code=303,
         )
 
-        if result.success:
-            message = (f'Каталог поставщика обновлён. Новых позиций — {result.added}. '
-                       f'Существующих позиций обработано — {result.updated}.')
-            if result.errors:
-                message += ' Часть дополнительных проверок карточек завершилась ошибкой.'
-            flash(message, 'warning' if result.errors else 'success')
-        elif result.busy:
-            flash('Каталог этого поставщика уже обновляется.', 'warning')
-        else:
-            flash('Не удалось обновить каталог. Проверьте адрес, кодировку и структуру CSV.', 'danger')
+    @app.route(
+        '/admin/suppliers/<int:supplier_id>/sync-status',
+        methods=['GET'],
+    )
+    @login_required
+    @admin_required
+    def admin_supplier_catalog_refresh_status(supplier_id):
+        """Return one exact supplier-scoped refresh receipt without writes."""
+        run_ids = request.args.getlist('run_id')
+        if (
+            len(run_ids) != 1
+            or not CATALOG_REFRESH_UUID_RE.fullmatch(run_ids[0])
+        ):
+            response = jsonify({'error_code': 'invalid_run_id'})
+            response.headers['Cache-Control'] = 'private, no-store, max-age=0'
+            return response, 400
+        run_id = run_ids[0]
+        try:
+            from services.supplier_catalog_refresh import (
+                get_catalog_refresh,
+            )
 
-        return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+            payload = get_catalog_refresh(supplier_id, run_id=run_id)
+        except Exception as exc:
+            logger.warning(
+                'Supplier catalog status read failed (%s)',
+                type(exc).__name__,
+            )
+            response = jsonify({'error_code': 'status_unavailable'})
+            response.headers['Cache-Control'] = 'private, no-store, max-age=0'
+            return response, 503
+        if payload is None:
+            response = jsonify({'error_code': 'refresh_not_found'})
+            response.headers['Cache-Control'] = 'private, no-store, max-age=0'
+            return response, 404
+
+        response = jsonify(payload)
+        response.headers['Cache-Control'] = 'private, no-store, max-age=0'
+        return response
 
     # -------------------------------------------------------------------
     # Синхронизация цен и остатков
@@ -1019,6 +1244,53 @@ def register_supplier_routes(app):
         stats = SupplierService.get_product_stats(supplier_id)
         price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
 
+        catalog_refresh_latest = None
+        catalog_refresh_current = None
+        catalog_refresh_lookup_failed = False
+        requested_runs = request.args.getlist('catalog_refresh_run')
+        try:
+            from services.supplier_catalog_refresh import get_catalog_refresh
+
+            catalog_refresh_latest = get_catalog_refresh(supplier_id)
+            if len(requested_runs) > 1 or (requested_runs and not requested_runs[0]):
+                catalog_refresh_lookup_failed = True
+            elif requested_runs:
+                catalog_refresh_current = get_catalog_refresh(
+                    supplier_id,
+                    run_id=requested_runs[0],
+                )
+                catalog_refresh_lookup_failed = catalog_refresh_current is None
+            else:
+                catalog_refresh_current = catalog_refresh_latest
+        except Exception as exc:
+            logger.warning(
+                'Supplier catalog status page read failed (%s)',
+                type(exc).__name__,
+            )
+            catalog_refresh_lookup_failed = True
+        catalog_refresh_view = _supplier_catalog_refresh_view(
+            catalog_refresh_current,
+            lookup_failed=catalog_refresh_lookup_failed,
+        )
+        catalog_refresh_latest_id = (
+            catalog_refresh_latest.get('id')
+            if isinstance(catalog_refresh_latest, dict)
+            else ''
+        ) or ''
+        catalog_refresh_latest_active = bool(
+            isinstance(catalog_refresh_latest, dict)
+            and catalog_refresh_latest.get('status') in CATALOG_REFRESH_ACTIVE_STATES
+        )
+        catalog_refresh_status_url = (
+            url_for(
+                'admin_supplier_catalog_refresh_status',
+                supplier_id=supplier_id,
+                run_id=catalog_refresh_current['id'],
+            )
+            if catalog_refresh_current and catalog_refresh_current.get('id')
+            else None
+        )
+
         # Получить список брендов и категорий для фильтров
         brands = db.session.query(SupplierProduct.brand).filter(
             SupplierProduct.supplier_id == supplier_id,
@@ -1042,7 +1314,15 @@ def register_supplier_routes(app):
                                current_brand=brand, current_category=category,
                                ai_validated=ai_validated,
                                stock_status=stock_status,
-                               sort_by=sort_by, sort_dir=sort_dir)
+                               sort_by=sort_by, sort_dir=sort_dir,
+                               catalog_refresh_latest=catalog_refresh_latest,
+                               catalog_refresh_latest_id=catalog_refresh_latest_id,
+                               catalog_refresh_latest_active=catalog_refresh_latest_active,
+                               catalog_refresh_view=catalog_refresh_view,
+                               catalog_refresh_status_url=catalog_refresh_status_url,
+                               catalog_refresh_copy=CATALOG_REFRESH_COPY,
+                               catalog_refresh_price_labels=CATALOG_REFRESH_PRICE_LABELS,
+                               catalog_refresh_error_copy=CATALOG_REFRESH_ERROR_COPY)
 
     # -------------------------------------------------------------------
     # Детали / редактирование товара поставщика
