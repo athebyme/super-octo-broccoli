@@ -30,6 +30,16 @@ MAX_BULK_PRODUCTS = 200
 SUPPLIER_IMPORT_BATCH_TOKEN_SALT = 'supplier-import-workspace-v1'
 SUPPLIER_IMPORT_BATCH_MAX_AGE_SECONDS = 60 * 60
 SUPPLIER_IMPORT_BATCH_MAX_TOKEN_BYTES = 8 * 1024
+SUPPLIER_REFRESH_RECEIPT_TOKEN_SALT = 'supplier-refresh-result-receipt-v1'
+SUPPLIER_REFRESH_RECEIPT_MAX_AGE_SECONDS = 60 * 60
+SUPPLIER_REFRESH_RECEIPT_MAX_TOKEN_BYTES = 7_500
+SUPPLIER_REFRESH_RECEIPT_HEADER = 'X-Supplier-Refresh-Receipt'
+SUPPLIER_REFRESH_LABEL_MAX_CHARS = 2_048
+SUPPLIER_REFRESH_STATUS_REASONS = {
+    'updated': None,
+    'skipped': 'no_supplier_link',
+    'error': 'update_failed',
+}
 MAX_SIGNED_SQLITE_ID = (1 << 63) - 1
 
 
@@ -233,6 +243,233 @@ def _no_store_supplier_import_batch_response(response):
         response.headers['Pragma'] = 'no-cache'
         response.headers['Expires'] = '0'
     return response
+
+
+class SupplierRefreshReceiptError(ValueError):
+    """A supplier refresh receipt is invalid, expired, or out of scope."""
+
+    def __init__(self, message, *, status_code=400):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _supplier_refresh_receipt_serializer():
+    return URLSafeTimedSerializer(
+        current_app.secret_key,
+        salt=SUPPLIER_REFRESH_RECEIPT_TOKEN_SALT,
+    )
+
+
+def _validated_supplier_refresh_receipt_subset(ids, statuses, wb_pairs):
+    """Validate bounded status and WB-pair facts shared by issue and load."""
+    if (
+        not isinstance(statuses, list)
+        or len(statuses) != len(ids)
+        or any(
+            not isinstance(status, str)
+            or status not in SUPPLIER_REFRESH_STATUS_REASONS
+            for status in statuses
+        )
+        or statuses.count('updated') < 1
+        or not isinstance(wb_pairs, list)
+        or len(wb_pairs) > statuses.count('updated')
+    ):
+        return None
+
+    updated_indexes = {
+        product_id: index
+        for index, (product_id, status) in enumerate(zip(ids, statuses))
+        if status == 'updated'
+    }
+    normalized_pairs = []
+    seen_product_ids = set()
+    last_updated_index = -1
+    for pair in wb_pairs:
+        if not isinstance(pair, list) or len(pair) != 2:
+            return None
+        imported_id, product_id = pair
+        if (
+            type(imported_id) is not int
+            or imported_id not in updated_indexes
+            or type(product_id) is not int
+            or product_id <= 0
+            or product_id > MAX_SIGNED_SQLITE_ID
+            or product_id in seen_product_ids
+            or updated_indexes[imported_id] <= last_updated_index
+        ):
+            return None
+        last_updated_index = updated_indexes[imported_id]
+        seen_product_ids.add(product_id)
+        normalized_pairs.append([imported_id, product_id])
+    return normalized_pairs
+
+
+def _issue_supplier_refresh_receipt(
+    *, user_id, seller_id, requested_ids, requested, updated, skipped, errors,
+    item_results, wb_targets,
+):
+    """Sign only a fully verified, bounded terminal supplier refresh result."""
+    if (
+        type(user_id) is not int or user_id <= 0
+        or type(seller_id) is not int or seller_id <= 0
+        or user_id > MAX_SIGNED_SQLITE_ID
+        or seller_id > MAX_SIGNED_SQLITE_ID
+    ):
+        return None
+    try:
+        ids = _bulk_product_ids(requested_ids)
+    except ValueError:
+        return None
+    if any(product_id > MAX_SIGNED_SQLITE_ID for product_id in ids):
+        return None
+    if (
+        type(requested) is not int or requested != len(ids)
+        or any(type(value) is not int or value < 0 for value in (updated, skipped, errors))
+        or updated < 1
+        or updated + skipped + errors != requested
+        or not isinstance(item_results, list)
+        or len(item_results) != requested
+        or not isinstance(wb_targets, list)
+        or len(wb_targets) > updated
+    ):
+        return None
+
+    statuses = []
+    counts = {'updated': 0, 'skipped': 0, 'error': 0}
+    for expected_id, item in zip(ids, item_results):
+        status = item.get('status') if isinstance(item, dict) else None
+        if (
+            not isinstance(item, dict)
+            or set(item) != {'product_id', 'status', 'reason'}
+            or type(item.get('product_id')) is not int
+            or item['product_id'] != expected_id
+            or not isinstance(status, str)
+            or status not in SUPPLIER_REFRESH_STATUS_REASONS
+            or item.get('reason') != SUPPLIER_REFRESH_STATUS_REASONS.get(status)
+        ):
+            return None
+        statuses.append(status)
+        counts[status] += 1
+    if (
+        counts['updated'] != updated
+        or counts['skipped'] != skipped
+        or counts['error'] != errors
+    ):
+        return None
+
+    raw_wb_pairs = []
+    for target in wb_targets:
+        if (
+            not isinstance(target, dict)
+            or set(target) != {'imported_product_id', 'product_id'}
+        ):
+            return None
+        raw_wb_pairs.append([
+            target.get('imported_product_id'), target.get('product_id'),
+        ])
+    normalized_targets = _validated_supplier_refresh_receipt_subset(
+        ids, statuses, raw_wb_pairs,
+    )
+    if normalized_targets is None:
+        return None
+
+    payload = {
+        'v': 1,
+        'user_id': user_id,
+        'seller_id': seller_id,
+        'ids': ids,
+        'statuses': statuses,
+        'wb_targets': normalized_targets,
+    }
+    token = _supplier_refresh_receipt_serializer().dumps(payload)
+    if len(token.encode('utf-8')) > SUPPLIER_REFRESH_RECEIPT_MAX_TOKEN_BYTES:
+        return None
+    return token
+
+
+def _load_supplier_refresh_receipt(token, *, user_id, seller_id):
+    """Validate signature, lifetime, exact shape, and current caller scope."""
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token.encode('utf-8')) > SUPPLIER_REFRESH_RECEIPT_MAX_TOKEN_BYTES
+    ):
+        raise SupplierRefreshReceiptError('Итог обновления недоступен')
+    try:
+        payload = _supplier_refresh_receipt_serializer().loads(
+            token,
+            max_age=SUPPLIER_REFRESH_RECEIPT_MAX_AGE_SECONDS,
+        )
+    except SignatureExpired as exc:
+        raise SupplierRefreshReceiptError(
+            'Срок получения итога обновления истёк',
+            status_code=410,
+        ) from exc
+    except BadSignature as exc:
+        raise SupplierRefreshReceiptError('Итог обновления недействителен') from exc
+
+    if not isinstance(payload, dict) or set(payload) != {
+        'v', 'user_id', 'seller_id', 'ids', 'statuses', 'wb_targets',
+    }:
+        raise SupplierRefreshReceiptError('Итог обновления недействителен')
+    if (
+        type(payload.get('v')) is not int or payload['v'] != 1
+        or type(payload.get('user_id')) is not int
+        or type(payload.get('seller_id')) is not int
+        or payload['user_id'] <= 0
+        or payload['seller_id'] <= 0
+        or payload['user_id'] > MAX_SIGNED_SQLITE_ID
+        or payload['seller_id'] > MAX_SIGNED_SQLITE_ID
+    ):
+        raise SupplierRefreshReceiptError('Итог обновления недействителен')
+    if payload['user_id'] != user_id or payload['seller_id'] != seller_id:
+        raise SupplierRefreshReceiptError(
+            'Итог обновления недоступен',
+            status_code=404,
+        )
+    try:
+        ids = _bulk_product_ids(payload.get('ids'))
+    except ValueError as exc:
+        raise SupplierRefreshReceiptError('Итог обновления недействителен') from exc
+    if any(product_id > MAX_SIGNED_SQLITE_ID for product_id in ids):
+        raise SupplierRefreshReceiptError('Итог обновления недействителен')
+
+    statuses = payload.get('statuses')
+    normalized_pairs = _validated_supplier_refresh_receipt_subset(
+        ids, statuses, payload.get('wb_targets'),
+    )
+    if normalized_pairs is None:
+        raise SupplierRefreshReceiptError('Итог обновления недействителен')
+    targets = []
+    for imported_id, product_id in normalized_pairs:
+        targets.append({
+            'imported_product_id': imported_id,
+            'product_id': product_id,
+        })
+    return {'ids': ids, 'statuses': statuses, 'wb_targets': targets}
+
+
+def _supplier_refresh_result_no_store(view):
+    """Mark every API response no-store, including auth and scope failures."""
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        response = make_response(view(*args, **kwargs))
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
+    return wrapped
+
+
+def _supplier_refresh_product_label(imported_product):
+    title = imported_product.title.strip() if isinstance(imported_product.title, str) else ''
+    vendor_code = imported_product.external_vendor_code or imported_product.external_id or ''
+    vendor_code = vendor_code.strip() if isinstance(vendor_code, str) else ''
+    if title and vendor_code and title != vendor_code:
+        label = f'{title} · {vendor_code}'
+    else:
+        label = title or vendor_code or 'Товар из выбранного списка'
+    return label[:SUPPLIER_REFRESH_LABEL_MAX_CHARS]
 
 
 def _redirect_after_supplier_import(
@@ -4409,7 +4646,7 @@ def register_supplier_routes(app):
         if errors:
             message += f' Не удалось обновить: {errors}.'
         if wants_json:
-            return jsonify({
+            response_payload = {
                 'success': True,
                 'status': (
                     'completed_with_errors' if errors
@@ -4423,13 +4660,156 @@ def register_supplier_routes(app):
                 'message': message,
                 'wb_ready': len(wb_product_ids),
                 'wb_targets': wb_targets,
-            })
+            }
+            receipt = None
+            if getattr(result, 'success', None) is True:
+                receipt = _issue_supplier_refresh_receipt(
+                    user_id=current_user.id,
+                    seller_id=seller.id,
+                    requested_ids=ids,
+                    requested=getattr(result, 'total_requested', None),
+                    updated=refreshed,
+                    skipped=skipped,
+                    errors=errors,
+                    item_results=result.item_results,
+                    wb_targets=wb_targets,
+                )
+            if receipt:
+                response_payload['resume_receipt'] = receipt
+            response = jsonify(response_payload)
+            if receipt:
+                response.headers['Cache-Control'] = 'no-store'
+                response.headers['Pragma'] = 'no-cache'
+                response.headers['Expires'] = '0'
+            return response
         flash(message, 'warning' if errors else 'success')
         return _redirect_seller_my_products(
             request.args,
             refreshed=refreshed,
             wb_ready=len(wb_product_ids),
         )
+
+    @app.route('/api/my-products/supplier-refresh-result', methods=['GET'])
+    @_supplier_refresh_result_no_store
+    @login_required
+    @seller_required
+    def api_my_products_supplier_refresh_result():
+        """Resume a verified supplier refresh receipt without repeating work."""
+        header_values = request.headers.getlist(SUPPLIER_REFRESH_RECEIPT_HEADER)
+        if request.query_string or len(header_values) != 1:
+            return jsonify({
+                'success': False,
+                'error': 'Итог обновления недоступен',
+            }), 400
+        token = header_values[0]
+        if (
+            not token
+            or ',' in token
+            or len(token.encode('utf-8')) > SUPPLIER_REFRESH_RECEIPT_MAX_TOKEN_BYTES
+        ):
+            return jsonify({
+                'success': False,
+                'error': 'Итог обновления недоступен',
+            }), 400
+        try:
+            receipt = _load_supplier_refresh_receipt(
+                token,
+                user_id=current_user.id,
+                seller_id=current_user.seller.id,
+            )
+        except SupplierRefreshReceiptError as exc:
+            return jsonify({
+                'success': False,
+                'error': str(exc),
+            }), exc.status_code
+
+        ids = receipt['ids']
+        imported_rows = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == current_user.seller.id,
+            ImportedProduct.id.in_(ids),
+        ).all()
+        imported_by_id = {row.id: row for row in imported_rows}
+        if len(imported_by_id) != len(ids):
+            return jsonify({
+                'success': False,
+                'error': 'Итог обновления недоступен',
+            }), 404
+
+        labels = [
+            {
+                'productId': product_id,
+                'label': _supplier_refresh_product_label(imported_by_id[product_id]),
+            }
+            for product_id in ids
+        ]
+        statuses = receipt['statuses']
+        counts = {
+            'updated': statuses.count('updated'),
+            'skipped': statuses.count('skipped'),
+            'error': statuses.count('error'),
+        }
+        status_reason = {
+            'updated': None,
+            'skipped': 'no_supplier_link',
+            'error': 'update_failed',
+        }
+        items = [
+            {
+                'product_id': product_id,
+                'status': item_status,
+                'reason': status_reason[item_status],
+            }
+            for product_id, item_status in zip(ids, statuses)
+        ]
+
+        original_targets = receipt['wb_targets']
+        current_target_rows = []
+        if original_targets:
+            original_imported_ids = [
+                target['imported_product_id'] for target in original_targets
+            ]
+            current_target_rows = db.session.query(
+                ImportedProduct.id,
+                Product.id,
+            ).join(
+                Product, Product.id == ImportedProduct.product_id,
+            ).filter(
+                ImportedProduct.seller_id == current_user.seller.id,
+                ImportedProduct.id.in_(original_imported_ids),
+                ImportedProduct.import_status == 'imported',
+                Product.seller_id == current_user.seller.id,
+                Product.nm_id > 0,
+            ).all()
+        current_product_by_imported_id = {
+            imported_id: product_id
+            for imported_id, product_id in current_target_rows
+        }
+        wb_targets = [
+            target for target in original_targets
+            if current_product_by_imported_id.get(
+                target['imported_product_id'],
+            ) == target['product_id']
+        ]
+        wb_unavailable = len(original_targets) - len(wb_targets)
+        message = f'Обновлено локальных карточек: {counts["updated"]}.'
+        if counts['skipped']:
+            message += f' Без связи с каталогом поставщика: {counts["skipped"]}.'
+        if counts['error']:
+            message += f' Не удалось обновить: {counts["error"]}.'
+        return jsonify({
+            'success': True,
+            'status': 'completed_with_errors' if counts['error'] else 'completed',
+            'requested': len(ids),
+            'updated': counts['updated'],
+            'skipped': counts['skipped'],
+            'errors': counts['error'],
+            'items': items,
+            'message': message,
+            'wb_ready': len(wb_targets),
+            'wb_targets': wb_targets,
+            'wb_unavailable': wb_unavailable,
+            'labels': labels,
+        })
 
     # -------------------------------------------------------------------
     # Дашборд качества парсинга (HTML)

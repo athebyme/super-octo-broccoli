@@ -2,6 +2,7 @@
 """Exact seller/supplier scope and terminal feedback for supplier refresh."""
 
 import os
+import random
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -149,6 +150,41 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
         with patch('flask_login.utils._get_user', return_value=self.user), \
                 patch('routes.suppliers.current_user', self.user):
             return self.client.post(path, data=data, json=json)
+
+    def _get(self, path, *, headers=None, user=None, query_string=None):
+        active_user = user or self.user
+        with patch('flask_login.utils._get_user', return_value=active_user), \
+                patch('routes.suppliers.current_user', active_user):
+            return self.client.get(
+                path, headers=headers, query_string=query_string,
+            )
+
+    def _create_refresh_receipt(self):
+        source = self._source(
+            self.supplier.id, 'receipt-good', 'fresh receipt title',
+        )
+        copied = self._copy(source, title='old receipt title')
+        product = self.Product(
+            id=987_654_321,
+            seller_id=self.seller.id,
+            nm_id=123456799,
+            vendor_code='receipt-wb',
+            title='Receipt WB product',
+        )
+        self.db.session.add(product)
+        self.db.session.flush()
+        copied.import_status = 'imported'
+        copied.product_id = product.id
+        self.db.session.commit()
+        response = self._post(
+            '/my-products/refresh-from-supplier',
+            json={'product_ids': [copied.id]},
+        )
+        self.assertEqual(response.status_code, 200)
+        token = response.get_json().get('resume_receipt')
+        self.assertIsInstance(token, str)
+        self.assertNotEqual(copied.id, product.id)
+        return token, copied, product
 
     def test_catalog_all_uses_internal_ids_not_colliding_source_ids(self):
         first_source = self._source(
@@ -457,6 +493,7 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
         payload = response.get_json()
         self.assertTrue(payload['success'])
         self.assertEqual(payload['status'], 'completed_with_errors')
+        self.assertIsInstance(payload.get('resume_receipt'), str)
         self.assertEqual(
             (payload['requested'], payload['updated'], payload['skipped'], payload['errors']),
             (3, 1, 1, 1),
@@ -502,6 +539,7 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
         payload = response.get_json()
         self.assertTrue(payload['success'])
         self.assertEqual(payload['status'], 'completed_with_errors')
+        self.assertNotIn('resume_receipt', payload)
         self.assertEqual(
             (payload['requested'], payload['updated'], payload['skipped'], payload['errors']),
             (2, 0, 0, 2),
@@ -514,6 +552,268 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
             ],
         )
         self.assertNotIn('private failure detail', response.get_data(as_text=True))
+
+    def test_supplier_refresh_receipt_resumes_mixed_result_without_writes(self):
+        good_source = self._source(
+            self.supplier.id, 'receipt-mixed-good', 'fresh good',
+        )
+        failed_source = self._source(
+            self.supplier.id, 'receipt-mixed-failed', 'fresh failed',
+        )
+        good = self._copy(good_source, title='old good')
+        failed = self._copy(failed_source, title='old failed')
+        unlinked = self._copy(None, title='unlinked title')
+        wb_product = self.Product(
+            id=987_654_322,
+            seller_id=self.seller.id,
+            nm_id=123456800,
+            vendor_code='mixed-wb',
+            title='Mixed WB product',
+        )
+        self.db.session.add(wb_product)
+        self.db.session.flush()
+        good.import_status = 'imported'
+        good.product_id = wb_product.id
+        self.db.session.commit()
+
+        from services import supplier_service
+        original_update = supplier_service._update_imported_from_supplier
+
+        def fail_one(item, supplier_product):
+            if item.id == failed.id:
+                raise RuntimeError('private mixed error detail')
+            return original_update(item, supplier_product)
+
+        with patch(
+            'services.supplier_service._update_imported_from_supplier',
+            side_effect=fail_one,
+        ):
+            post_response = self._post(
+                '/my-products/refresh-from-supplier',
+                json={'product_ids': [good.id, failed.id, unlinked.id]},
+            )
+        self.assertEqual(post_response.status_code, 200)
+        original = post_response.get_json()
+        token = original['resume_receipt']
+        self.assertNotIn('private mixed error detail', token)
+
+        good.title = 'Current good title'
+        good.external_vendor_code = 'CURRENT-GOOD'
+        failed.title = 'Current failed title'
+        failed.external_vendor_code = 'CURRENT-FAILED'
+        unlinked.title = ''
+        unlinked.external_vendor_code = ''
+        unlinked.external_id = 'CURRENT-UNLINKED'
+        self.db.session.commit()
+
+        statements = []
+
+        def observe_sql(_connection, _cursor, statement, _parameters, _context, _executemany):
+            statements.append(statement.lstrip().split(None, 1)[0].upper())
+
+        event.listen(self.engine, 'before_cursor_execute', observe_sql)
+        try:
+            response = self._get(
+                '/api/my-products/supplier-refresh-result',
+                headers={'X-Supplier-Refresh-Receipt': token},
+            )
+        finally:
+            event.remove(self.engine, 'before_cursor_execute', observe_sql)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('no-store', response.headers['Cache-Control'])
+        self.assertEqual(
+            {statement for statement in statements},
+            {'SELECT'},
+        )
+        payload = response.get_json()
+        self.assertEqual(
+            (payload['success'], payload['status'], payload['requested'],
+             payload['updated'], payload['skipped'], payload['errors']),
+            (True, 'completed_with_errors', 3, 1, 1, 1),
+        )
+        self.assertEqual(payload['items'], [
+            {'product_id': good.id, 'status': 'updated', 'reason': None},
+            {'product_id': failed.id, 'status': 'error', 'reason': 'update_failed'},
+            {'product_id': unlinked.id, 'status': 'skipped', 'reason': 'no_supplier_link'},
+        ])
+        self.assertEqual(payload['labels'], [
+            {'productId': good.id, 'label': 'Current good title · CURRENT-GOOD'},
+            {'productId': failed.id, 'label': 'Current failed title · CURRENT-FAILED'},
+            {'productId': unlinked.id, 'label': 'CURRENT-UNLINKED'},
+        ])
+        self.assertEqual(payload['wb_ready'], 1)
+        self.assertEqual(payload['wb_unavailable'], 0)
+        self.assertEqual(payload['wb_targets'], [{
+            'imported_product_id': good.id,
+            'product_id': wb_product.id,
+        }])
+        self.assertNotIn('private mixed error detail', response.get_data(as_text=True))
+
+    def test_supplier_refresh_receipt_rejects_missing_tampered_foreign_and_expired(self):
+        token, _copied, _product = self._create_refresh_receipt()
+        missing_header = self._get('/api/my-products/supplier-refresh-result')
+        self.assertEqual(missing_header.status_code, 400)
+
+        query_token = self._get(
+            '/api/my-products/supplier-refresh-result',
+            query_string={'resume_receipt': token},
+        )
+        self.assertEqual(query_token.status_code, 400)
+
+        duplicate_headers = self._get(
+            '/api/my-products/supplier-refresh-result',
+            headers=[
+                ('X-Supplier-Refresh-Receipt', token),
+                ('X-Supplier-Refresh-Receipt', token),
+            ],
+        )
+        self.assertEqual(duplicate_headers.status_code, 400)
+
+        altered_token = token[:-1] + ('A' if token[-1] != 'A' else 'B')
+        tampered = self._get(
+            '/api/my-products/supplier-refresh-result',
+            headers={'X-Supplier-Refresh-Receipt': altered_token},
+        )
+        self.assertEqual(tampered.status_code, 400)
+
+        foreign_user_model = self.User(
+            username='foreign-refresh-receipt',
+            email='foreign-refresh-receipt@test.local',
+            is_active=True,
+        )
+        foreign_user_model.set_password('synthetic-password')
+        self.db.session.add(foreign_user_model)
+        self.db.session.flush()
+        foreign_seller = self.Seller(
+            user_id=foreign_user_model.id,
+            company_name='Foreign receipt seller',
+        )
+        self.db.session.add(foreign_seller)
+        self.db.session.commit()
+        foreign_user = SimpleNamespace(
+            id=foreign_user_model.id,
+            username=foreign_user_model.username,
+            seller=foreign_seller,
+            is_authenticated=True,
+            is_active=True,
+            is_admin=False,
+        )
+        foreign = self._get(
+            '/api/my-products/supplier-refresh-result',
+            headers={'X-Supplier-Refresh-Receipt': token},
+            user=foreign_user,
+        )
+        self.assertEqual(foreign.status_code, 404)
+
+        from routes import suppliers as suppliers_routes
+        with patch.object(
+            suppliers_routes, 'SUPPLIER_REFRESH_RECEIPT_MAX_AGE_SECONDS', -1,
+        ):
+            expired = self._get(
+                '/api/my-products/supplier-refresh-result',
+                headers={'X-Supplier-Refresh-Receipt': token},
+            )
+        self.assertEqual(expired.status_code, 410)
+
+    def test_supplier_refresh_receipt_returns_404_if_any_imported_row_is_missing(self):
+        token, copied, _product = self._create_refresh_receipt()
+        self.db.session.delete(copied)
+        self.db.session.commit()
+
+        response = self._get(
+            '/api/my-products/supplier-refresh-result',
+            headers={'X-Supplier-Refresh-Receipt': token},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(response.get_json()['success'])
+
+    def test_supplier_refresh_receipt_does_not_promote_a_drifted_wb_link(self):
+        token, copied, original_product = self._create_refresh_receipt()
+        replacement = self.Product(
+            seller_id=self.seller.id,
+            nm_id=123456801,
+            vendor_code='replacement-wb',
+            title='Replacement WB product',
+        )
+        self.db.session.add(replacement)
+        self.db.session.flush()
+        copied.product_id = replacement.id
+        self.db.session.commit()
+
+        response = self._get(
+            '/api/my-products/supplier-refresh-result',
+            headers={'X-Supplier-Refresh-Receipt': token},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload['wb_ready'], 0)
+        self.assertEqual(payload['wb_unavailable'], 1)
+        self.assertEqual(payload['wb_targets'], [])
+        self.assertNotEqual(payload['wb_targets'], [{
+            'imported_product_id': copied.id,
+            'product_id': replacement.id,
+        }])
+        self.assertNotEqual(original_product.id, replacement.id)
+
+    def test_supplier_refresh_receipt_200_high_ids_stays_within_header_limit(self):
+        from routes.suppliers import (
+            SUPPLIER_REFRESH_RECEIPT_MAX_TOKEN_BYTES,
+            _issue_supplier_refresh_receipt,
+            _load_supplier_refresh_receipt,
+        )
+
+        generator = random.Random(20261121)
+
+        def unique_high_ids():
+            values = set()
+            ordered = []
+            while len(values) < 200:
+                candidate = generator.randrange(
+                    8_000_000_000_000_000_000,
+                    (1 << 63) - 1,
+                )
+                if candidate not in values:
+                    values.add(candidate)
+                    ordered.append(candidate)
+            return ordered
+
+        imported_ids = unique_high_ids()
+        wb_product_ids = unique_high_ids()
+        item_results = [
+            {'product_id': product_id, 'status': 'updated', 'reason': None}
+            for product_id in imported_ids
+        ]
+        wb_targets = [
+            {'imported_product_id': imported_id, 'product_id': wb_product_id}
+            for imported_id, wb_product_id in zip(imported_ids, wb_product_ids)
+        ]
+        with self.app.app_context():
+            token = _issue_supplier_refresh_receipt(
+                user_id=(1 << 63) - 2,
+                seller_id=(1 << 63) - 3,
+                requested_ids=imported_ids,
+                requested=200,
+                updated=200,
+                skipped=0,
+                errors=0,
+                item_results=item_results,
+                wb_targets=wb_targets,
+            )
+            self.assertIsNotNone(token)
+            self.assertLessEqual(
+                len(token.encode('utf-8')),
+                SUPPLIER_REFRESH_RECEIPT_MAX_TOKEN_BYTES,
+            )
+            loaded = _load_supplier_refresh_receipt(
+                token,
+                user_id=(1 << 63) - 2,
+                seller_id=(1 << 63) - 3,
+            )
+        self.assertEqual(loaded['ids'], imported_ids)
+        self.assertEqual(loaded['wb_targets'], wb_targets)
 
     def test_invalid_empty_and_foreign_my_products_selections_write_nothing(self):
         source = self._source(self.supplier.id, 'owned', 'fresh')
