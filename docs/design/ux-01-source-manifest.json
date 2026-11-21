@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-21T01:14:08.714608+00:00",
+  "generated_at": "2026-11-21T01:46:36.909816+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "33285f92bdfa3f88aa4de5fca9e0dc8059ca08a86cf26ed6afea8134c1d84d11"
+      "sha256": "720c9caa1d3d85401f489c60ae9989a4d3fadf704172eb424c2917ee34780e4b"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -481,7 +481,7 @@
     },
     {
       "path": "docs/design/seller-bulk-workspace-2026-11-20.md",
-      "sha256": "09a0d706268d74b77abdd0c818b3eae29b3d08b7e3c9ae0b90f1741bbb4f2d61"
+      "sha256": "3a775c4fbe863867a94a77c939e305851a453ceef9661cba6054094007669f80"
     },
     {
       "path": "docs/design/startup-migration-performance.md",
@@ -2569,11 +2569,11 @@
     },
     {
       "path": "static/my-products-beta.css",
-      "sha256": "f5dcbf0f6e1987d02600c07083702ce9ba9faad6f92749bc10502a72573c66b3"
+      "sha256": "51289eda20018bbf83c5e7b5ce8710e7ae86fe59d408c8ee77392e96c1d05d97"
     },
     {
       "path": "static/my-products-beta.js",
-      "sha256": "bfcdfdf55a77a67c82262d9b3c0665a9393d04674ed74064db370963beab5d33"
+      "sha256": "99f7a1f602989869a28e282cf6a246d4ae1180ad8ab935561ee11d1284b9f45a"
     },
     {
       "path": "static/operations-workspace.css",
@@ -2925,7 +2925,7 @@
     },
     {
       "path": "templates/analytics.html",
-      "sha256": "0ed68fefff488f936b350cb61a8677e804e3a0593960d104a8240713557d1178"
+      "sha256": "a184b94c67cdd9a366c70304746803137cfe21c62cde3d9b51e64c5b44d341a1"
     },
     {
       "path": "templates/api_logs.html",
@@ -3209,7 +3209,7 @@
     },
     {
       "path": "templates/my_products_beta.html",
-      "sha256": "52b314420f4258a5817f97edf801a68266d6c8e149da81ffbf6f5dbab469e64f"
+      "sha256": "fbc985753c5a2798f3b85edff1a2d159754411387ea655863eb74a04fbe6bb75"
     },
     {
       "path": "templates/notifications.html",
@@ -4368,6 +4368,10 @@
       "sha256": "95c52a216d9ee7aa7ec78883737d60838be37a0ebd3d65b9d027ea56871142c2"
     },
     {
+      "path": "tests/test_my_products_supplier_refresh_handoff.py",
+      "sha256": "5f85242341e9dc317cc2870309a00dd0ab1fe45657e29c4f3225280fdd99e33d"
+    },
+    {
       "path": "tests/test_orchestrator.py",
       "sha256": "a2cd4ae9d52933a65a45e915789107a344b4349bc38302dbf17bb7281c362300"
     },
@@ -4889,7 +4893,7 @@
     },
     {
       "path": "tests/test_ux01_analytics.py",
-      "sha256": "446a5ace61b51b8986d60e3a6240626a37fcb6d4c6361121149be536a887f48f"
+      "sha256": "7cdc7568c824e9ccabb637fc145748d817d957708e532fb9e542f5167634fc3e"
     },
     {
       "path": "tests/test_ux01_competitor_settings.py",
@@ -5041,7 +5045,7 @@
     },
     {
       "path": "tests/ux01/analytics_browser.py",
-      "sha256": "2bd4fbeecef86b1ab44a016f43495dfbcf6180d22eff8113c289a97efda737d2"
+      "sha256": "cbb476dec6b9e035945ec2cb9f9983f110895fbc94777bed93ea3a9d0917f03f"
     },
     {
       "path": "tests/ux01/baseline-actions.json",
@@ -5049,7 +5053,7 @@
     },
     {
       "path": "tests/ux01/bulk_workspace_browser.py",
-      "sha256": "e857b098f921b5d7c298507c1a654d947024fbcd2f645357ff1d528e03e495ce"
+      "sha256": "af136b76122c1ba037423c0097b99758e39c4eeba78fc485548f8d7606622d89"
     },
     {
       "path": "tests/ux01/common_content_browser.py",
@@ -5088,5 +5092,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "17294b3b9d7459273a2d3d37afd77e0b5ff6edb0a29e74d72489fce611233472"
+  "aggregate_sha256": "8bf09059797d9a16e8179788268c954188b0d1747435145046af04d77e057904"
 }
