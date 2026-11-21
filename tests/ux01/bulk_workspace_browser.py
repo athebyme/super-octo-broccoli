@@ -16,7 +16,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.ux01 import journey_browser as fixture
-from models import BackgroundJob, ImportedProduct, Product, Seller, SupplierProduct, db
+from models import BackgroundJob, EnrichmentJob, ImportedProduct, Product, Seller, SupplierProduct, db
 
 
 OUTPUT = Path(os.environ.get("BULK_WORKSPACE_ARTIFACTS", "/artifacts/bulk-workspace"))
@@ -26,6 +26,7 @@ MANUAL_TITLE = "Внутренний товар без поставщика"
 LOCAL_REFRESH = "/my-products/refresh-from-supplier"
 LOCAL_OZON_PREPARE = "/marketplaces/ozon/uploads/"
 LOCAL_WB_ENRICH_REVIEW = "/products/enrich-bulk"
+LOCAL_WB_ENRICH_START = "/api/products/enrich-bulk/start"
 LOCAL_SUPPLIER_IMPORT = "/supplier-catalog/import"
 
 
@@ -125,6 +126,10 @@ def refresh_ozon_button(page, count=1):
     return page.get_by_role("button", name=f"Подготовить для Ozon ({count})")
 
 
+def refresh_wb_button(page, count=1):
+    return page.get_by_role("button", name=f"Проверить характеристики WB ({count})")
+
+
 def pick_action(page, name):
     page.get_by_role("button", name="Что сделать").click()
     action = page.get_by_role("menuitem", name=name)
@@ -162,6 +167,7 @@ def run():
     checks = []
     layouts = []
     posts = []
+    wb_enrich_start_posts = []
     errors = []
     feed_gets = []
     feed_responses = []
@@ -256,6 +262,11 @@ def run():
                     route.fulfill(status=204, body=b"")
                     return
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "POST":
+            if parsed.path == LOCAL_WB_ENRICH_START:
+                wb_enrich_start_posts.append(request.post_data_json)
+                route.fulfill(status=409, content_type="application/json",
+                              body=json.dumps({"error": "synthetic browser guard"}))
+                return
             assert parsed.path in (LOCAL_REFRESH, LOCAL_OZON_PREPARE, LOCAL_WB_ENRICH_REVIEW, LOCAL_SUPPLIER_IMPORT), parsed.path
             if parsed.path in (LOCAL_WB_ENRICH_REVIEW, LOCAL_SUPPLIER_IMPORT):
                 values = parse_qs(request.post_data or "")
@@ -577,13 +588,33 @@ def run():
         open_products(page)
         page.get_by_role("checkbox", name=f"Выбрать {MAIN_TITLE}").check()
         page.locator(".mp-more-actions summary").click()
+        with fixture.app.app_context():
+            default_enrichment_jobs = EnrichmentJob.query.filter_by(
+                seller_id=fixture.FIXTURE["seller_id"],
+            ).count()
         with page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_WB_ENRICH_REVIEW
                                   and response.request.method == "POST") as review:
             page.get_by_role("button", name="Дополнить карточки на WB").click()
         assert review.value.status == 200
         assert posts[2] == {"path": LOCAL_WB_ENRICH_REVIEW, "body": {"selected_ids": [str(fixture_ids["wb_id"])]}}
         page.wait_for_url(fixture.BASE + LOCAL_WB_ENRICH_REVIEW, wait_until="domcontentloaded")
-        checks.append("ordinary_wb_enrichment_opens_local_review_with_owned_product_ids")
+        page.get_by_role("heading", name="Массовое обновление фото").wait_for()
+        default_review_fields = page.locator(".be-shell").evaluate("""element =>
+            Object.fromEntries(Array.from(element.querySelectorAll('input[x-model^="fields."]'))
+                .map(input => [input.getAttribute('x-model').slice('fields.'.length), input.checked]))
+        """)
+        assert default_review_fields == {
+            "photos": True, "title": False, "description": False,
+            "characteristics": False, "dimensions": False, "brand": False,
+        }, default_review_fields
+        page.get_by_role("button", name="Подтвердить обновление фото").wait_for()
+        with fixture.app.app_context():
+            assert EnrichmentJob.query.filter_by(
+                seller_id=fixture.FIXTURE["seller_id"],
+            ).count() == default_enrichment_jobs
+        assert not wb_enrich_start_posts
+        assert fixture.REPORT["provider_attempts"] == 0
+        checks.append("ordinary_wb_enrichment_opens_owned_review_and_keeps_photo_only_default")
 
         supplier_path = fixture.PAGE_PATHS["supplier_products"] + "&show_imported=1"
         fixture.wait_document(page, "supplier_bulk", supplier_path)
@@ -643,6 +674,107 @@ def run():
             assert persisted.title == REFRESHED_TITLE and persisted.supplier_content_revision == 2
             assert db.session.get(Product, fixture_ids["wb_id"]).title == MAIN_TITLE
         checks.append("supplier_refresh_mixed_local_update_and_skip_are_named")
+
+        # Use a second page so the WB review navigation cannot disturb the
+        # original verified result used by the existing Ozon handoff below.
+        wb_handoff_page = context.new_page()
+        wb_handoff_page.add_init_script("localStorage.setItem('sh-theme', 'dark');")
+        wb_handoff_page.set_viewport_size({"width": 320, "height": 900})
+        wb_handoff_page.on("pageerror", lambda error: errors.append(str(error)))
+        open_products(wb_handoff_page, REFRESHED_TITLE)
+        wb_handoff_page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").check()
+        wb_handoff_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
+        pick_action(wb_handoff_page, "Обновить из поставщика")
+        posts_before_wb_refresh = len(posts)
+        with wb_handoff_page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_REFRESH
+                                               and response.request.method == "POST") as wb_refresh:
+            wb_handoff_page.get_by_role("button", name="Обновить", exact=True).click()
+        assert wb_refresh.value.status == 200
+        wb_refresh_data = wb_refresh.value.json()
+        assert (wb_refresh_data["requested"], wb_refresh_data["updated"],
+                wb_refresh_data["skipped"], wb_refresh_data["errors"]) == (2, 1, 1, 0), wb_refresh_data
+        assert wb_refresh_data["wb_targets"] == [{
+            "imported_product_id": fixture_ids["local_id"],
+            "product_id": fixture_ids["wb_id"],
+        }], wb_refresh_data["wb_targets"]
+        assert posts[posts_before_wb_refresh] == {
+            "path": LOCAL_REFRESH,
+            "body": {"product_ids": [fixture_ids["local_id"], fixture_ids["manual_id"]]},
+        }
+        wb_result = wb_handoff_page.locator(".mp-refresh-result")
+        wb_result.get_by_role("heading", name="Обновление из поставщика завершено").wait_for()
+        assert wb_handoff_page.evaluate(
+            "document.activeElement === document.querySelector('.mp-refresh-result')"
+        )
+        wb_result.get_by_text("Данные поставщика сохранены в Seller Hub.").wait_for()
+        wb_result.get_by_text("Нет связи с каталогом поставщика. Данные не менялись.").wait_for()
+        wb_cta = refresh_wb_button(wb_handoff_page)
+        assert wb_cta.count() == 1
+        assert refresh_ozon_button(wb_handoff_page).count() == 1
+        verify_bounds(wb_handoff_page)
+        wb_cta_bounds = wb_cta.bounding_box()
+        assert wb_cta_bounds and wb_cta_bounds["height"] >= 44, wb_cta_bounds
+        wb_handoff_page.screenshot(
+            path=OUTPUT / "supplier-refresh-channel-actions-dark-320.png",
+            animations="disabled",
+        )
+
+        # The result CTA submits only the verified WB Product IDs to the old
+        # review route. That POST renders the review; it must not start a job.
+        wb_handoff_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
+        wb_handoff_page.evaluate("window.scrollTo(0, 0)")
+        wb_cta.focus()
+        assert wb_cta.evaluate("element => element === document.activeElement")
+        with fixture.app.app_context():
+            jobs_before_wb_review = EnrichmentJob.query.filter_by(
+                seller_id=fixture.FIXTURE["seller_id"],
+            ).count()
+        posts_before_wb_review = len(posts)
+        starts_before_wb_review = len(wb_enrich_start_posts)
+        provider_attempts_before_wb_review = fixture.REPORT["provider_attempts"]
+        with wb_handoff_page.expect_response(
+            lambda response: urlsplit(response.url).path == LOCAL_WB_ENRICH_REVIEW
+            and response.request.method == "POST",
+        ) as wb_review:
+            wb_cta.press("Enter")
+        assert wb_review.value.status == 200
+        assert posts[posts_before_wb_review:] == [{
+            "path": LOCAL_WB_ENRICH_REVIEW,
+            "body": {
+                "selected_ids": [str(fixture_ids["wb_id"])],
+                "preset": ["characteristics"],
+            },
+        }], posts[posts_before_wb_review:]
+        wb_handoff_page.wait_for_url(
+            fixture.BASE + LOCAL_WB_ENRICH_REVIEW,
+            wait_until="domcontentloaded",
+        )
+        wb_handoff_page.get_by_role("heading", name="Отправка характеристик на WB").wait_for()
+        wb_handoff_page.get_by_text("Выбрано: 1", exact=False).wait_for()
+        wb_handoff_page.get_by_role(
+            "button", name="Подтвердить отправку характеристик",
+        ).wait_for()
+        reviewed_fields = wb_handoff_page.locator(".be-shell").evaluate("""element =>
+            Object.fromEntries(Array.from(element.querySelectorAll('input[x-model^="fields."]'))
+                .map(input => [input.getAttribute('x-model').slice('fields.'.length), input.checked]))
+        """)
+        assert reviewed_fields == {
+            "photos": False, "title": False, "description": False,
+            "characteristics": True, "dimensions": True, "brand": False,
+        }, reviewed_fields
+        wb_handoff_page.screenshot(
+            path=OUTPUT / "supplier-refresh-wb-review-dark-320.png",
+            animations="disabled",
+        )
+        assert len(posts) == posts_before_wb_review + 1
+        assert len(wb_enrich_start_posts) == starts_before_wb_review
+        assert fixture.REPORT["provider_attempts"] == provider_attempts_before_wb_review == 0
+        with fixture.app.app_context():
+            assert EnrichmentJob.query.filter_by(
+                seller_id=fixture.FIXTURE["seller_id"],
+            ).count() == jobs_before_wb_review
+        checks.append("supplier_refresh_wb_handoff_posts_exact_owned_ids_to_characteristics_review_only")
+        wb_handoff_page.close()
 
         page.set_viewport_size({"width": 320, "height": 900})
         verify_bounds(page)
@@ -739,6 +871,10 @@ def run():
                 {"product_id": fixture_ids["manual_id"], "status": "skipped", "reason": "no_supplier_link"},
                 {"product_id": imported_local_id, "status": "error", "reason": "update_failed"},
             ],
+            "wb_targets": [{
+                "imported_product_id": fixture_ids["local_id"],
+                "product_id": fixture_ids["wb_id"],
+            }],
         }
         pick_action(mobile_page, "Обновить из поставщика")
         with mobile_page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_REFRESH
@@ -776,6 +912,7 @@ def run():
         summary.press("Enter")
         assert partial_result.locator("details").evaluate("element => element.open")
         assert refresh_ozon_button(mobile_page).count() == 1
+        assert refresh_wb_button(mobile_page).count() == 1
         checks.append("supplier_refresh_partial_error_has_owner_link_and_no_retry")
         checks.append("supplier_refresh_result_fits_320_and_details_are_keyboard_operable")
 
@@ -823,6 +960,7 @@ def run():
         assert unknown_result.locator(".mp-refresh-result-details").count() == 0
         assert unknown_result.get_by_role("button", name="Обновить список").count() == 1
         assert mobile_page.get_by_role("button", name=re.compile(r"^Подготовить для Ozon")).count() == 0
+        assert mobile_page.get_by_role("button", name=re.compile(r"^Проверить характеристики WB")).count() == 0
         assert unknown_result.get_by_text(MANUAL_TITLE, exact=False).count() == 0
         checks.append("supplier_refresh_unknown_result_has_count_and_one_refresh_action")
 
@@ -842,6 +980,7 @@ def run():
         assert rejected_result.locator(".mp-refresh-result-details").count() == 0
         assert rejected_result.get_by_role("button", name="Обновить список").count() == 1
         assert mobile_page.get_by_role("button", name=re.compile(r"^Подготовить для Ozon")).count() == 0
+        assert mobile_page.get_by_role("button", name=re.compile(r"^Проверить характеристики WB")).count() == 0
         assert rejected_result.get_by_text(MANUAL_TITLE, exact=False).count() == 0
         verify_bounds(mobile_page)
         checks.append("supplier_refresh_rejected_result_has_count_and_one_refresh_action")
