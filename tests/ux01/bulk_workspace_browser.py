@@ -960,7 +960,11 @@ def run():
             assert domain_writes == [], domain_writes
             assert (len(price_create_posts), len(price_decisions), len(posts)) == posts_before
             assert fixture.REPORT["provider_attempts"] == provider_attempts_before == 0
-            assert nonce_hash not in page.url
+            assert urlsplit(page.url).fragment == nonce_hash
+            assert page.evaluate("key => sessionStorage.getItem(key)", capsule_key) is None
+            assert page.evaluate("""([owner, nonce]) =>
+                window.SellerHubCommonContent.workspaceReturnFromHash('#' + nonce, {owner}) === null
+            """, [source_owner, nonce_hash.removeprefix("workspace-return=")])
 
         safe_batch_id, safe_hash, safe_receipt = create_exact_wb_batch("percent", 5)
         assert safe_receipt["status"] == "confirmed", safe_receipt
