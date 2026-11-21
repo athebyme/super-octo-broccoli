@@ -123,8 +123,20 @@ function makeApp() {
   const refs = {
     account: {focused: false, focus() { this.focused = true; }},
     error: {focused: false, focus() { this.focused = true; }},
-    result: {focused: false, focus() { this.focused = true; }},
-    resume: {focused: false, focus() { this.focused = true; }},
+    result: {
+      focused: false,
+      focusOptions: null,
+      scrollOptions: null,
+      focus(options) { this.focused = true; this.focusOptions = options || null; },
+      scrollIntoView(options) { this.scrollOptions = options; },
+    },
+    resume: {
+      focused: false,
+      focusOptions: null,
+      scrollOptions: null,
+      focus(options) { this.focused = true; this.focusOptions = options || null; },
+      scrollIntoView(options) { this.scrollOptions = options; },
+    },
     dialog: {
       open: false,
       showModal() { this.open = true; },
@@ -397,9 +409,13 @@ async function finishSupplierRefresh(data, ids) {
   const templateText = fs.readFileSync(require('node:path').join(
     require('node:path').dirname(process.argv[1]), '..', 'templates', 'my_products_beta.html',
   ), 'utf8');
+  const stylesheetText = fs.readFileSync(require('node:path').join(
+    require('node:path').dirname(process.argv[1]), 'my-products-beta.css',
+  ), 'utf8');
   assert.match(templateText, /'supplierRefreshResult': url_for\('api_my_products_supplier_refresh_result'\)/);
   assert.match(templateText, /id="supplier-refresh-result"/);
-  assert.match(templateText, /20261121-supplier-refresh-resume-1/);
+  assert.match(templateText, /20261121-supplier-refresh-resume-2/);
+  assert.match(stylesheetText, /\.mp-refresh-result\s*\{[^}]*scroll-margin-top:\s*72px/s);
 
   const receiptKey = 'supplier-refresh-resume-v1';
   const previousReceipt = 'v1.previous.receipt';
@@ -487,6 +503,8 @@ async function finishSupplierRefresh(data, ids) {
   ]);
   assert.match(restored.app.supplierRefreshResult.summary, /Недоступны исходные ссылки WB: 1/);
   assert.equal(restored.refs.result.focused, true, 'return-anchor restoration moves focus to the result');
+  sameJson(restored.refs.result.focusOptions, {preventScroll: true});
+  sameJson(restored.refs.result.scrollOptions, {block: 'start', inline: 'nearest'});
   sameJson(restored.app.selected, [777], 'the ordinary catalog selection remains independent');
   assert.equal(restorePosts, 0, 'restoration never prepares or publishes');
   assert.equal(stored.get(receiptKey), receipt, 'a read does not consume the saved receipt');

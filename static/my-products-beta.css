@@ -307,6 +307,7 @@
 /* Exact local supplier refresh has its own terminal result and item review. */
 .mp-refresh-result {
     margin: 12px 0;
+    scroll-margin-top: 72px;
     padding: 14px 16px;
     border: 1px solid var(--border);
     border-left: 3px solid var(--ok);

@@ -1338,8 +1338,12 @@
             },
             focusSupplierRefreshResume: function (result) {
                 this.$nextTick(function () {
-                    if (result) this.$refs.supplierRefreshResult?.focus();
-                    else this.$refs.supplierRefreshResume?.focus();
+                    var target = result
+                        ? this.$refs.supplierRefreshResult
+                        : this.$refs.supplierRefreshResume;
+                    if (!target) return;
+                    target.focus({ preventScroll: true });
+                    target.scrollIntoView?.({ block: 'start', inline: 'nearest' });
                 });
             },
             setSupplierRefreshResumeNote: function (message, retry, focus) {
