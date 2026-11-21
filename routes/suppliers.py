@@ -910,20 +910,23 @@ def register_supplier_routes(app):
                 'added': result.added,
                 'updated': result.updated,
                 'errors': result.errors,
+                'rows_in_file': result.total_in_csv,
+                'already_running': result.busy,
                 'duration': round(result.duration_seconds, 1)
             },
             request=request
         )
 
         if result.success:
-            flash(
-                f'Синхронизация завершена: +{result.added} новых, '
-                f'~{result.updated} обновлено, {result.errors} ошибок '
-                f'({result.duration_seconds:.1f}с)',
-                'success'
-            )
+            message = (f'Каталог поставщика обновлён. Новых позиций — {result.added}. '
+                       f'Существующих позиций обработано — {result.updated}.')
+            if result.errors:
+                message += ' Часть дополнительных проверок карточек завершилась ошибкой.'
+            flash(message, 'warning' if result.errors else 'success')
+        elif result.busy:
+            flash('Каталог этого поставщика уже обновляется.', 'warning')
         else:
-            flash(f'Ошибка синхронизации: {"; ".join(result.error_messages[:3])}', 'danger')
+            flash('Не удалось обновить каталог. Проверьте адрес, кодировку и структуру CSV.', 'danger')
 
         return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
 
@@ -4977,7 +4980,6 @@ def register_supplier_routes(app):
     @admin_required
     def admin_supplier_csv_preview(supplier_id):
         """Предпросмотр CSV файла перед синхронизацией."""
-        from services.csv_pre_validator import CSVPreValidator
         from services.supplier_service import SupplierCSVParser
 
         supplier = SupplierService.get_supplier(supplier_id)
@@ -4991,12 +4993,7 @@ def register_supplier_routes(app):
         if not raw_bytes:
             return jsonify({'error': 'Failed to download CSV'}), 400
 
-        pre_result = CSVPreValidator.validate_raw(
-            raw_bytes,
-            expected_delimiter=supplier.csv_delimiter,
-            expected_encoding=supplier.csv_encoding,
-            column_mapping=supplier.csv_column_mapping,
-        )
+        _, pre_result = parser.preflight_raw(raw_bytes)
 
         return jsonify({
             'is_valid': pre_result.is_valid,
