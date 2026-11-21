@@ -1720,6 +1720,8 @@ def run():
         ], fixture.REPORT["writes"]
         assert wb_create_report is not None
         checks.append("synthetic_supplier_refresh_review_and_wb_create_have_zero_provider_attempts_external_requests_and_http_errors")
+        page.wait_for_load_state("networkidle")
+        context.unroute_all(behavior="wait")
         context.close()
         browser.close()
 
