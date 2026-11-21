@@ -575,13 +575,34 @@ def run():
             return proxy ? proxy.items.map(item => item.id) : null;
         }""")
         assert isinstance(batch_item_ids, list) and len(batch_item_ids) == 50
-        wb_selected_ids = batch_item_ids[:2]
+        wb_selected_ids = batch_item_ids[-2:]
         assert len(wb_selected_ids) == 2 and len(set(wb_selected_ids)) == 2
         assert set(wb_selected_ids) <= persisted_product_ids
         for product_id in wb_selected_ids:
             page.locator(
                 f'.mp-row .mp-check input[type="checkbox"][value="{product_id}"]',
             ).check()
+        before_confirmation_position = page.evaluate("""() => {
+            const selectedRows = Array.from(document.querySelectorAll('.mp-row.is-selected'));
+            const rects = selectedRows.map(row => row.getBoundingClientRect());
+            return {
+                scrollY: window.scrollY,
+                viewportHeight: window.innerHeight,
+                pageHeight: document.documentElement.scrollHeight,
+                selectedCount: selectedRows.length,
+                selectedRowsVisible: rects.length === 2 && rects.every(rect =>
+                    rect.top >= 0 && rect.bottom <= window.innerHeight
+                ),
+            };
+        }""")
+        assert before_confirmation_position["scrollY"] > 0, (
+            "selecting the last two signed-batch rows must scroll the page down",
+            before_confirmation_position,
+        )
+        assert before_confirmation_position["pageHeight"] > before_confirmation_position["viewportHeight"]
+        assert before_confirmation_position["selectedCount"] == 2
+        assert before_confirmation_position["selectedRowsVisible"], before_confirmation_position
+        checks.append("last_two_signed_batch_rows_are_selected_from_a_measured_scrolled_position")
         selected_before_create = page.evaluate("""() => {
             const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
             return proxy ? proxy.selected.slice() : null;
@@ -600,6 +621,11 @@ def run():
         wb_create_action.click()
         confirmation = page.get_by_role("alertdialog")
         confirmation.wait_for(state="visible")
+        confirmation_scroll_y = page.evaluate("() => window.scrollY")
+        assert confirmation_scroll_y > 0, (
+            "confirmation should preserve the scrolled batch context",
+            confirmation_scroll_y,
+        )
 
         from services.upload_readiness_validator import validate_product_upload_readiness
         from services.wb_product_importer import WBProductImporter
@@ -684,6 +710,33 @@ def run():
             assert set(create_post["body"]["product_ids"]) <= persisted_product_ids
             checks.append("signed_import_batch_posts_one_exact_two_product_wb_create_request")
 
+            job_panel = page.locator(".shk-job")
+            job_panel.wait_for(state="visible")
+            page.evaluate("""() => new Promise(resolve =>
+                requestAnimationFrame(() => requestAnimationFrame(resolve)))""")
+            job_position_before_screenshot = page.evaluate("""() => {
+                const panel = document.querySelector('.shk-job');
+                const mobileHeader = document.querySelector('.mobile-header');
+                if (!panel || !mobileHeader) return null;
+                const panelRect = panel.getBoundingClientRect();
+                const headerRect = mobileHeader.getBoundingClientRect();
+                const panelStyle = getComputedStyle(panel);
+                return {
+                    focused: document.activeElement === panel,
+                    outlineStyle: panelStyle.outlineStyle,
+                    outlineWidth: parseFloat(panelStyle.outlineWidth) || 0,
+                    scrollY: window.scrollY,
+                    panelTop: panelRect.top,
+                    panelBottom: panelRect.bottom,
+                    panelLeft: panelRect.left,
+                    panelRight: panelRect.right,
+                    headerBottom: headerRect.bottom,
+                    headerPosition: getComputedStyle(mobileHeader).position,
+                    viewportWidth: document.documentElement.clientWidth,
+                    viewportHeight: window.innerHeight,
+                };
+            }""")
+
             expected_status_path = JOB_STATUS_PREFIX + job_uid
             terminal_status_values = {"completed", "completed_with_errors", "failed", "cancelled"}
             deadline = time.monotonic() + 15
@@ -758,7 +811,20 @@ def run():
             terminal_title = page.locator(".shk-job-title")
             terminal_title.wait_for(state="visible")
             assert terminal_title.inner_text() == "Завершено с ошибками"
-            job_panel = page.locator(".shk-job")
+            assert job_position_before_screenshot is not None
+            assert job_position_before_screenshot["focused"], job_position_before_screenshot
+            assert job_position_before_screenshot["outlineStyle"] != "none"
+            assert job_position_before_screenshot["outlineWidth"] >= 2, job_position_before_screenshot
+            assert job_position_before_screenshot["headerPosition"] == "fixed"
+            assert job_position_before_screenshot["panelTop"] >= job_position_before_screenshot["headerBottom"]
+            assert job_position_before_screenshot["panelBottom"] <= job_position_before_screenshot["viewportHeight"]
+            assert job_position_before_screenshot["panelLeft"] >= 0
+            assert job_position_before_screenshot["panelRight"] <= job_position_before_screenshot["viewportWidth"]
+            assert job_position_before_screenshot["scrollY"] < confirmation_scroll_y, (
+                "accepted create should bring the result panel into view from the deep batch position",
+                job_position_before_screenshot,
+            )
+            checks.append("accepted_create_focuses_and_reveals_progress_below_fixed_mobile_header")
             assert job_panel.get_by_text("2 из 2", exact=True).count() == 1
             assert job_panel.locator(".shk-job-stat.is-ok").inner_text() == "Успешно: 1"
             assert job_panel.locator(".shk-job-stat.is-danger").inner_text() == "С ошибкой: 1"
