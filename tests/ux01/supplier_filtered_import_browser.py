@@ -314,6 +314,30 @@ def seed_supplier_update_review_rows(fixture_ids, imported_source_ids):
         }
 
 
+def assert_supplier_warning_contrast(page, selector):
+    initial_theme = page.evaluate("document.documentElement.dataset.theme")
+    for theme in ("light", "dark"):
+        page.evaluate("(theme) => document.documentElement.dataset.theme = theme", theme)
+        ratio = page.locator(selector).evaluate("""(element) => {
+            const style = getComputedStyle(element);
+            const luminance = color => {
+                const rgb = color.match(/[0-9]+(?:[.][0-9]+)?/g).slice(0, 3).map(
+                    value => {
+                        const component = Number(value) / 255;
+                        return component <= 0.04045
+                            ? component / 12.92 : ((component + 0.055) / 1.055) ** 2.4;
+                    }
+                );
+                return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+            };
+            const foreground = luminance(style.color), background = luminance(style.backgroundColor);
+            return (Math.max(foreground, background) + 0.05) /
+                (Math.min(foreground, background) + 0.05);
+        }""")
+        assert ratio >= 4.5, (selector, theme, ratio)
+    page.evaluate("(theme) => document.documentElement.dataset.theme = theme", initial_theme)
+
+
 def run():
     fixture_ids = seed_supplier_products()
     checks = []
@@ -1271,6 +1295,9 @@ def run():
         assert detail_row.count() == 1
         assert detail_row.get_attribute("data-local-product-id") == str(review_fixture["detail_copy_id"])
         assert detail_row.get_attribute("data-row-state") == "changed"
+        assert_supplier_warning_contrast(
+            page, '[data-row-state="changed"] [data-supplier-review-state]',
+        )
         assert supplier_review_posts[-1]["body"].get("product_ids") == [
             str(review_fixture["detail_source_id"]),
         ]
@@ -1308,12 +1335,14 @@ def run():
         assert stale_confirm.value.status == 409
         page.locator("[data-supplier-review-recheck]").wait_for(state="visible")
         assert page.locator("[data-supplier-review-confirm]").count() == 0
+        assert_supplier_warning_contrast(page, '[data-supplier-update-review] [role="alert"]')
         with fixture.app.app_context():
             detail_copy = db.session.get(ImportedProduct, review_fixture["detail_copy_id"])
             detail_source = db.session.get(SupplierProduct, review_fixture["detail_source_id"])
             assert (detail_copy.title, detail_copy.updated_at) == before_detail
             assert detail_source.title == "R42 detail source changed after review"
         checks.append("supplier_source_drift_returns_409_without_local_write")
+        checks.append("supplier_review_warning_and_stale_notice_meet_aa_in_both_themes")
 
         # One checked source ID remains exact through review and explicit confirm.
         selected_filters = dict(FILTERS)
