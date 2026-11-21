@@ -22,7 +22,11 @@ from models import (
     BackgroundJob, Notification, AgentChangeSnapshot, Marketplace,
     SellerMarketplaceAccount, MarketplaceListing, MarketplaceProductDraft,
 )
-from services.supplier_service import SupplierService
+from services.supplier_service import (
+    SupplierRefreshReviewStale,
+    SupplierService,
+    supplier_refresh_product_label,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +38,11 @@ SUPPLIER_REFRESH_RECEIPT_TOKEN_SALT = 'supplier-refresh-result-receipt-v1'
 SUPPLIER_REFRESH_RECEIPT_MAX_AGE_SECONDS = 60 * 60
 SUPPLIER_REFRESH_RECEIPT_MAX_TOKEN_BYTES = 7_500
 SUPPLIER_REFRESH_RECEIPT_HEADER = 'X-Supplier-Refresh-Receipt'
+SUPPLIER_REFRESH_REVIEW_TOKEN_SALT = 'supplier-refresh-review-v1'
+SUPPLIER_REFRESH_REVIEW_MAX_AGE_SECONDS = 10 * 60
+SUPPLIER_REFRESH_REVIEW_MAX_TOKEN_BYTES = 8 * 1024
+SUPPLIER_REFRESH_REVIEW_MAX_BODY_BYTES = 256 * 1024
+SUPPLIER_REFRESH_REVIEW_MAX_RESPONSE_BYTES = 512 * 1024
 SUPPLIER_REFRESH_LABEL_MAX_CHARS = 2_048
 SUPPLIER_REFRESH_STATUS_REASONS = {
     'updated': None,
@@ -403,6 +412,99 @@ class SupplierRefreshReceiptError(ValueError):
         self.status_code = status_code
 
 
+class SupplierRefreshReviewTokenError(ValueError):
+    """A supplier refresh review token is invalid, expired, or out of scope."""
+
+    def __init__(self, message, *, status_code=400, code='supplier_refresh_review_token_invalid'):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+
+
+def _supplier_refresh_review_serializer():
+    return URLSafeTimedSerializer(
+        current_app.secret_key,
+        salt=SUPPLIER_REFRESH_REVIEW_TOKEN_SALT,
+    )
+
+
+def _issue_supplier_refresh_review_token(*, user_id, seller_id, ids, digest):
+    if (
+        type(user_id) is not int or user_id <= 0 or user_id > MAX_SIGNED_SQLITE_ID
+        or type(seller_id) is not int or seller_id <= 0 or seller_id > MAX_SIGNED_SQLITE_ID
+        or not isinstance(digest, str) or re.fullmatch(r'[0-9a-f]{64}', digest) is None
+    ):
+        return None
+    try:
+        normalized_ids = _bulk_product_ids(ids)
+    except ValueError:
+        return None
+    if any(product_id > MAX_SIGNED_SQLITE_ID for product_id in normalized_ids):
+        return None
+    token = _supplier_refresh_review_serializer().dumps({
+        'v': 1,
+        'user_id': user_id,
+        'seller_id': seller_id,
+        'ids': normalized_ids,
+        'digest': digest,
+    })
+    if len(token.encode('utf-8')) > SUPPLIER_REFRESH_REVIEW_MAX_TOKEN_BYTES:
+        return None
+    return token
+
+
+def _load_supplier_refresh_review_token(token, *, user_id, seller_id):
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token.encode('utf-8')) > SUPPLIER_REFRESH_REVIEW_MAX_TOKEN_BYTES
+    ):
+        raise SupplierRefreshReviewTokenError('Проверка обновления недоступна')
+    try:
+        payload = _supplier_refresh_review_serializer().loads(
+            token,
+            max_age=SUPPLIER_REFRESH_REVIEW_MAX_AGE_SECONDS,
+        )
+    except SignatureExpired as exc:
+        raise SupplierRefreshReviewTokenError(
+            'Проверка обновления истекла. Откройте её заново.',
+            status_code=409,
+            code='supplier_refresh_review_stale',
+        ) from exc
+    except BadSignature as exc:
+        raise SupplierRefreshReviewTokenError(
+            'Проверка обновления недействительна',
+        ) from exc
+    if not isinstance(payload, dict) or set(payload) != {
+        'v', 'user_id', 'seller_id', 'ids', 'digest',
+    }:
+        raise SupplierRefreshReviewTokenError('Проверка обновления недействительна')
+    if (
+        type(payload.get('v')) is not int or payload['v'] != 1
+        or type(payload.get('user_id')) is not int
+        or type(payload.get('seller_id')) is not int
+        or payload['user_id'] <= 0 or payload['seller_id'] <= 0
+        or payload['user_id'] > MAX_SIGNED_SQLITE_ID
+        or payload['seller_id'] > MAX_SIGNED_SQLITE_ID
+        or not isinstance(payload.get('digest'), str)
+        or re.fullmatch(r'[0-9a-f]{64}', payload['digest']) is None
+    ):
+        raise SupplierRefreshReviewTokenError('Проверка обновления недействительна')
+    if payload['user_id'] != user_id or payload['seller_id'] != seller_id:
+        raise SupplierRefreshReviewTokenError(
+            'Проверка обновления недоступна', status_code=404,
+        )
+    try:
+        ids = _bulk_product_ids(payload.get('ids'))
+    except ValueError as exc:
+        raise SupplierRefreshReviewTokenError(
+            'Проверка обновления недействительна',
+        ) from exc
+    if any(product_id > MAX_SIGNED_SQLITE_ID for product_id in ids):
+        raise SupplierRefreshReviewTokenError('Проверка обновления недействительна')
+    return {'ids': ids, 'digest': payload['digest']}
+
+
 def _supplier_refresh_receipt_serializer():
     return URLSafeTimedSerializer(
         current_app.secret_key,
@@ -609,17 +711,6 @@ def _supplier_refresh_result_no_store(view):
         response.headers['Expires'] = '0'
         return response
     return wrapped
-
-
-def _supplier_refresh_product_label(imported_product):
-    title = imported_product.title.strip() if isinstance(imported_product.title, str) else ''
-    vendor_code = imported_product.external_vendor_code or imported_product.external_id or ''
-    vendor_code = vendor_code.strip() if isinstance(vendor_code, str) else ''
-    if title and vendor_code and title != vendor_code:
-        label = f'{title} · {vendor_code}'
-    else:
-        label = title or vendor_code or 'Товар из выбранного списка'
-    return label[:SUPPLIER_REFRESH_LABEL_MAX_CHARS]
 
 
 def _redirect_after_supplier_import(
@@ -4814,6 +4905,62 @@ def register_supplier_routes(app):
             'unchanged_count': unchanged,
         })
 
+    @app.route('/api/my-products/supplier-refresh-preview', methods=['POST'])
+    @_supplier_refresh_result_no_store
+    @login_required
+    @seller_required
+    def api_my_products_supplier_refresh_preview():
+        """Read and sign an exact bounded supplier refresh review."""
+        if (
+            request.content_length is not None
+            and request.content_length > SUPPLIER_REFRESH_REVIEW_MAX_BODY_BYTES
+        ):
+            return jsonify({
+                'success': False,
+                'error': 'Список для проверки слишком большой',
+            }), 413
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or set(payload) != {'product_ids'}:
+            return jsonify({
+                'success': False,
+                'error': 'Ожидается точный список выбранных карточек',
+            }), 400
+        try:
+            ids = _bulk_product_ids(payload.get('product_ids'))
+            if any(product_id > MAX_SIGNED_SQLITE_ID for product_id in ids):
+                raise ValueError('Список карточек содержит некорректный ID')
+            preview = SupplierService.preview_imported_products(
+                current_user.seller.id, ids,
+            )
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+        review_token = _issue_supplier_refresh_review_token(
+            user_id=current_user.id,
+            seller_id=current_user.seller.id,
+            ids=ids,
+            digest=preview.get('review_digest'),
+        )
+        if not review_token:
+            return jsonify({
+                'success': False,
+                'error': 'Не удалось сохранить проверку выбранных карточек',
+            }), 500
+        response_payload = {
+            'success': True,
+            'requested': preview['requested'],
+            'eligible': preview['eligible'],
+            'changed': preview['changed'],
+            'skipped': preview['skipped'],
+            'items': preview['items'],
+            'review_token': review_token,
+        }
+        if len(json.dumps(response_payload, ensure_ascii=False).encode('utf-8')) > SUPPLIER_REFRESH_REVIEW_MAX_RESPONSE_BYTES:
+            return jsonify({
+                'success': False,
+                'error': 'Слишком много данных для показа проверки; сократите выбор',
+            }), 413
+        return jsonify(response_payload)
+
     @app.route('/my-products/refresh-from-supplier', methods=['POST'])
     @login_required
     @seller_required
@@ -4828,7 +4975,16 @@ def register_supplier_routes(app):
         # Без этой ветки JSON-клиент получал redirect и трактовал его как
         # истёкшую сессию.
         wants_json = request.is_json
+        review_digest = None
         if wants_json:
+            if (
+                request.content_length is not None
+                and request.content_length > SUPPLIER_REFRESH_REVIEW_MAX_BODY_BYTES
+            ):
+                return jsonify({
+                    'success': False,
+                    'error': 'Список для обновления слишком большой',
+                }), 413
             payload = request.get_json(silent=True)
             if not isinstance(payload, dict):
                 return jsonify({
@@ -4837,6 +4993,25 @@ def register_supplier_routes(app):
                 }), 400
             try:
                 ids = _bulk_product_ids(payload.get('product_ids'))
+                if any(product_id > MAX_SIGNED_SQLITE_ID for product_id in ids):
+                    raise ValueError('Список карточек содержит некорректный ID')
+                if 'review_token' in payload:
+                    if set(payload) != {'product_ids', 'review_token'}:
+                        raise ValueError('Проверка обновления недействительна')
+                    review = _load_supplier_refresh_review_token(
+                        payload.get('review_token'),
+                        user_id=current_user.id,
+                        seller_id=seller.id,
+                    )
+                    if review['ids'] != ids:
+                        raise ValueError('Выбранные карточки не совпадают с проверкой')
+                    review_digest = review['digest']
+            except SupplierRefreshReviewTokenError as exc:
+                return jsonify({
+                    'success': False,
+                    'error': str(exc),
+                    'code': exc.code,
+                }), exc.status_code
             except ValueError as exc:
                 return jsonify({'success': False, 'error': str(exc)}), 400
         else:
@@ -4851,7 +5026,18 @@ def register_supplier_routes(app):
                 return _redirect_seller_my_products(request.args)
 
         try:
-            result = SupplierService.update_imported_products(seller.id, ids)
+            if review_digest is None:
+                result = SupplierService.update_imported_products(seller.id, ids)
+            else:
+                result = SupplierService.update_imported_products(
+                    seller.id, ids, expected_review_digest=review_digest,
+                )
+        except SupplierRefreshReviewStale:
+            return jsonify({
+                'success': False,
+                'error': 'Данные изменились после просмотра. Обновите проверку.',
+                'code': 'supplier_refresh_review_stale',
+            }), 409
         except ValueError as exc:
             if wants_json:
                 return jsonify({
@@ -5021,7 +5207,7 @@ def register_supplier_routes(app):
         labels = [
             {
                 'productId': product_id,
-                'label': _supplier_refresh_product_label(imported_by_id[product_id]),
+                'label': supplier_refresh_product_label(imported_by_id[product_id]),
             }
             for product_id in ids
         ]

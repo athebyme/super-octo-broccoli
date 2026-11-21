@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Exact seller/supplier scope and terminal feedback for supplier refresh."""
 
+import json
 import os
 import random
 import tempfile
@@ -146,9 +147,10 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
         self.db.session.flush()
         return row
 
-    def _post(self, path, data=None, *, json=None):
-        with patch('flask_login.utils._get_user', return_value=self.user), \
-                patch('routes.suppliers.current_user', self.user):
+    def _post(self, path, data=None, *, json=None, user=None):
+        active_user = user or self.user
+        with patch('flask_login.utils._get_user', return_value=active_user), \
+                patch('routes.suppliers.current_user', active_user):
             return self.client.post(path, data=data, json=json)
 
     def _get(self, path, *, headers=None, user=None, query_string=None):
@@ -814,6 +816,339 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
             )
         self.assertEqual(loaded['ids'], imported_ids)
         self.assertEqual(loaded['wb_targets'], wb_targets)
+
+    def test_refresh_preview_is_ordered_read_only_and_hides_source_payloads(self):
+        source = self._source(
+            self.supplier.id, 'preview-linked', 'Fresh supplier title',
+        )
+        source.description = 'Private supplier description'
+        source.supplier_price = 0.0
+        source.supplier_quantity = 0
+        source.photo_urls_json = json.dumps([
+            'https://supplier-private.example/photo.jpg',
+        ])
+        source.characteristics_json = json.dumps([
+            {'name': 'Secret attribute', 'value': 'Secret value'},
+        ], ensure_ascii=False)
+        source.original_data_json = json.dumps({
+            'title': 'Fresh supplier title',
+            'description': 'Private supplier description',
+            'photo_urls': ['https://supplier-private.example/photo.jpg'],
+            'raw_secret': 'do-not-return-this-source-body',
+        }, ensure_ascii=False)
+        linked = self._copy(source, title='Old seller title')
+        linked.supplier_price = 7.5
+        linked.supplier_quantity = 3
+        unlinked = self._copy(None, title='Unlinked seller title')
+        self.db.session.commit()
+        linked_id, unlinked_id, source_id = linked.id, unlinked.id, source.id
+
+        response = self._post(
+            '/api/my-products/supplier-refresh-preview',
+            json={'product_ids': [unlinked_id, linked_id]},
+        )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertIn('no-store', response.headers['Cache-Control'])
+        payload = response.get_json()
+        self.assertEqual(
+            (payload['requested'], payload['eligible'], payload['changed'], payload['skipped']),
+            (2, 1, 1, 1),
+        )
+        self.assertNotIn('review_digest', payload)
+        self.assertIsInstance(payload['review_token'], str)
+        self.assertLessEqual(len(payload['review_token'].encode('utf-8')), 8192)
+        self.assertEqual(
+            [(row['product_id'], row['state']) for row in payload['items']],
+            [(unlinked_id, 'unlinked'), (linked_id, 'changed')],
+        )
+        self.assertEqual(payload['items'][0]['changes'], [])
+        changes = {item['field']: item for item in payload['items'][1]['changes']}
+        self.assertEqual(
+            (changes['title']['before'], changes['title']['after']),
+            ('Old seller title', 'Fresh supplier title'),
+        )
+        self.assertEqual(
+            (changes['purchase_price']['before'], changes['purchase_price']['after']),
+            ('7.5', '0'),
+        )
+        self.assertEqual(
+            (changes['supplier_quantity']['before'], changes['supplier_quantity']['after']),
+            ('3', '0'),
+        )
+        for field in ('description', 'photos', 'characteristics', 'source_snapshot'):
+            if field in changes:
+                self.assertEqual((changes[field]['before'], changes[field]['after']), (None, None))
+        response_text = response.get_data(as_text=True)
+        for secret in (
+            'Private supplier description',
+            'supplier-private.example',
+            'Secret attribute',
+            'Secret value',
+            'do-not-return-this-source-body',
+        ):
+            self.assertNotIn(secret, response_text)
+        self.assertFalse(self.db.session.new, 'projection rows must remain unattached')
+        self.db.session.expire_all()
+        self.db.session.refresh(linked)
+        self.db.session.refresh(source)
+        self.assertEqual(linked.title, 'Old seller title')
+        self.assertEqual(linked.supplier_price, 7.5)
+        self.assertEqual(linked.supplier_quantity, 3)
+        self.assertIsNone(linked.original_data)
+        self.assertEqual(source.id, source_id)
+        self.assertEqual(source.title, 'Fresh supplier title')
+
+    def test_reviewed_refresh_applies_real_projection_and_preserves_manual_override(self):
+        source = self._source(
+            self.supplier.id, 'review-apply', 'Fresh inherited title',
+        )
+        source.description = 'Never disclose this description'
+        source.description_source = 'csv'
+        source.supplier_price = 0.0
+        source.supplier_quantity = 0
+        source.photo_urls_json = json.dumps([
+            'https://supplier-private.example/new-photo.jpg',
+        ])
+        source.characteristics_json = None
+        source.original_data_json = json.dumps({
+            'title': source.title,
+            'description': source.description,
+            'photo_urls': ['https://supplier-private.example/new-photo.jpg'],
+        }, ensure_ascii=False)
+        source.content_revision = 3
+        copied = self._copy(source, title='Seller-owned title')
+        copied.description = 'Seller-owned description'
+        copied.photo_urls = json.dumps(['https://seller-private.example/old.jpg'])
+        copied.characteristics = json.dumps([
+            {'name': 'Old field', 'value': 'Old value'},
+        ], ensure_ascii=False)
+        copied.supplier_price = 12.5
+        copied.supplier_quantity = 4
+        copied.content_overrides_json = json.dumps({
+            'schema_version': 1,
+            'fields': {
+                'title': {
+                    'value': 'Seller-owned title',
+                    'inherited_value': 'Old inherited title',
+                    'inherited_origin': 'source',
+                    'edited_by_user_id': self.user.id,
+                    'edited_at': '2026-11-21T00:00:00',
+                    'edit_version': 1,
+                },
+                'description': {
+                    'value': 'Seller-owned description',
+                    'inherited_value': 'Old supplier description',
+                    'inherited_origin': 'source',
+                    'edited_by_user_id': self.user.id,
+                    'edited_at': '2026-11-21T00:00:00',
+                    'edit_version': 1,
+                },
+            },
+        }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        self.db.session.commit()
+
+        preview = self._post(
+            '/api/my-products/supplier-refresh-preview',
+            json={'product_ids': [copied.id]},
+        )
+        self.assertEqual(preview.status_code, 200, preview.get_json())
+        token = preview.get_json()['review_token']
+        rows = preview.get_json()['items']
+        fields = {change['field']: change for change in rows[0]['changes']}
+        self.assertEqual(rows[0]['state'], 'changed')
+        self.assertNotIn('title', fields, 'effective manual title stays unchanged')
+        self.assertEqual(
+            (fields['purchase_price']['before'], fields['purchase_price']['after']),
+            ('12.5', '0'),
+        )
+        self.assertEqual(
+            (fields['supplier_quantity']['before'], fields['supplier_quantity']['after']),
+            ('4', '0'),
+        )
+        for field in ('photos', 'characteristics', 'source_snapshot'):
+            self.assertEqual((fields[field]['before'], fields[field]['after']), (None, None))
+        preview_text = preview.get_data(as_text=True)
+        self.assertNotIn('Never disclose this description', preview_text)
+        self.assertNotIn('supplier-private.example', preview_text)
+
+        applied = self._post(
+            '/my-products/refresh-from-supplier',
+            json={'product_ids': [copied.id], 'review_token': token},
+        )
+        self.assertEqual(applied.status_code, 200, applied.get_json())
+        payload = applied.get_json()
+        self.assertEqual((payload['requested'], payload['updated'], payload['skipped'], payload['errors']), (1, 1, 0, 0))
+        self.db.session.refresh(copied)
+        self.assertEqual(copied.title, 'Seller-owned title')
+        self.assertEqual(copied.description, 'Seller-owned description')
+        self.assertEqual(copied.supplier_price, 0.0)
+        self.assertEqual(copied.supplier_quantity, 0)
+        self.assertIsNone(copied.characteristics)
+        self.assertEqual(
+            json.loads(copied.photo_urls),
+            ['https://supplier-private.example/new-photo.jpg'],
+        )
+        overrides = json.loads(copied.content_overrides_json)
+        self.assertEqual(
+            overrides['fields']['title']['inherited_value'],
+            'Fresh inherited title',
+        )
+
+    def test_reviewed_refresh_stale_source_and_card_return_zero_write_409(self):
+        source = self._source(self.supplier.id, 'review-stale', 'Fresh title')
+        copied = self._copy(source, title='Old title')
+        copied.supplier_price = 5.0
+        self.db.session.commit()
+
+        source_preview = self._post(
+            '/api/my-products/supplier-refresh-preview',
+            json={'product_ids': [copied.id]},
+        )
+        source_token = source_preview.get_json()['review_token']
+        source.title = 'Changed after review'
+        source.supplier_price = 99.0
+        source.content_revision += 1
+        self.db.session.commit()
+
+        stale_source = self._post(
+            '/my-products/refresh-from-supplier',
+            json={'product_ids': [copied.id], 'review_token': source_token},
+        )
+        self.assertEqual(stale_source.status_code, 409, stale_source.get_json())
+        self.assertEqual(stale_source.get_json()['code'], 'supplier_refresh_review_stale')
+        self.db.session.refresh(copied)
+        self.assertEqual(copied.title, 'Old title')
+        self.assertEqual(copied.supplier_price, 5.0)
+
+        card_preview = self._post(
+            '/api/my-products/supplier-refresh-preview',
+            json={'product_ids': [copied.id]},
+        )
+        card_token = card_preview.get_json()['review_token']
+        copied.title = 'Seller changed after review'
+        copied.content_edit_version += 1
+        self.db.session.commit()
+
+        stale_card = self._post(
+            '/my-products/refresh-from-supplier',
+            json={'product_ids': [copied.id], 'review_token': card_token},
+        )
+        self.assertEqual(stale_card.status_code, 409, stale_card.get_json())
+        self.assertEqual(stale_card.get_json()['code'], 'supplier_refresh_review_stale')
+        self.db.session.refresh(copied)
+        self.assertEqual(copied.title, 'Seller changed after review')
+        self.assertEqual(copied.supplier_price, 5.0)
+
+    def test_reviewed_refresh_rejects_reordered_foreign_and_malformed_tokens(self):
+        first_source = self._source(self.supplier.id, 'review-first', 'fresh first')
+        second_source = self._source(self.supplier.id, 'review-second', 'fresh second')
+        first = self._copy(first_source, title='old first')
+        second = self._copy(second_source, title='old second')
+        self.db.session.commit()
+
+        preview = self._post(
+            '/api/my-products/supplier-refresh-preview',
+            json={'product_ids': [first.id, second.id]},
+        )
+        token = preview.get_json()['review_token']
+        reversed_selection = self._post(
+            '/my-products/refresh-from-supplier',
+            json={'product_ids': [second.id, first.id], 'review_token': token},
+        )
+        self.assertEqual(reversed_selection.status_code, 400)
+
+        malformed = self._post(
+            '/my-products/refresh-from-supplier',
+            json={'product_ids': [first.id], 'review_token': 'not-a-signed-token'},
+        )
+        self.assertEqual(malformed.status_code, 400)
+
+        from models import User, Seller
+        foreign_user_model = User(
+            username='foreign-refresh-review',
+            email='foreign-refresh-review@test.local',
+            is_active=True,
+        )
+        foreign_user_model.set_password('synthetic-password')
+        self.db.session.add(foreign_user_model)
+        self.db.session.flush()
+        foreign_seller = Seller(
+            user_id=foreign_user_model.id,
+            company_name='Foreign review seller',
+        )
+        self.db.session.add(foreign_seller)
+        self.db.session.flush()
+        foreign_user = SimpleNamespace(
+            id=foreign_user_model.id,
+            username=foreign_user_model.username,
+            seller=foreign_seller,
+            is_authenticated=True,
+            is_active=True,
+            is_admin=False,
+        )
+        self.db.session.commit()
+        foreign_token = self._post(
+            '/my-products/refresh-from-supplier',
+            json={'product_ids': [first.id], 'review_token': token},
+            user=foreign_user,
+        )
+        self.assertEqual(foreign_token.status_code, 404)
+        self.db.session.refresh(first)
+        self.db.session.refresh(second)
+        self.assertEqual(first.title, 'old first')
+        self.assertEqual(second.title, 'old second')
+
+    def test_reviewed_refresh_missing_scope_is_stale_and_misbound_source_is_unlinked(self):
+        source = self._source(self.supplier.id, 'review-owner', 'should not apply')
+        copied = self._copy(source, title='owned title')
+        other_source = self._source(
+            self.other_supplier.id, 'misbound-source', 'private misbound source title',
+        )
+        misbound = self._copy(
+            other_source, title='misbound local title',
+            supplier_id=self.supplier.id,
+        )
+        self.db.session.commit()
+
+        preview_misbound = self._post(
+            '/api/my-products/supplier-refresh-preview',
+            json={'product_ids': [misbound.id]},
+        )
+        self.assertEqual(preview_misbound.status_code, 200, preview_misbound.get_json())
+        misbound_payload = preview_misbound.get_json()
+        self.assertEqual(misbound_payload['items'][0]['state'], 'unlinked')
+        self.assertNotIn('private misbound source title', preview_misbound.get_data(as_text=True))
+        misbound_apply = self._post(
+            '/my-products/refresh-from-supplier',
+            json={
+                'product_ids': [misbound.id],
+                'review_token': misbound_payload['review_token'],
+            },
+        )
+        self.assertEqual(misbound_apply.status_code, 200, misbound_apply.get_json())
+        self.assertEqual(
+            (misbound_apply.get_json()['updated'], misbound_apply.get_json()['skipped']),
+            (0, 1),
+        )
+        self.db.session.refresh(misbound)
+        self.assertEqual(misbound.title, 'misbound local title')
+
+        preview = self._post(
+            '/api/my-products/supplier-refresh-preview',
+            json={'product_ids': [copied.id]},
+        )
+        token = preview.get_json()['review_token']
+        copied.seller_id = self.other_supplier.id
+        self.db.session.commit()
+        stale = self._post(
+            '/my-products/refresh-from-supplier',
+            json={'product_ids': [copied.id], 'review_token': token},
+        )
+        self.assertEqual(stale.status_code, 409, stale.get_json())
+        self.assertEqual(stale.get_json()['code'], 'supplier_refresh_review_stale')
+        self.db.session.refresh(copied)
+        self.assertEqual(copied.title, 'owned title')
 
     def test_invalid_empty_and_foreign_my_products_selections_write_nothing(self):
         source = self._source(self.supplier.id, 'owned', 'fresh')

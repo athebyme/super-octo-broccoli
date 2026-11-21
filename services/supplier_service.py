@@ -14,7 +14,9 @@ import codecs
 import copy
 import json
 import hashlib
+import hmac
 import logging
+import math
 import os
 import re
 import time
@@ -24,6 +26,7 @@ from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from io import StringIO
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
@@ -197,6 +200,240 @@ class BulkActionResult:
     processed: int = 0
     errors: int = 0
     error_messages: list = field(default_factory=list)
+
+
+class SupplierRefreshReviewStale(ValueError):
+    """The selected supplier refresh no longer matches its reviewed state."""
+
+
+SUPPLIER_REFRESH_REVIEW_PRODUCT_FIELDS = (
+    "title", "description", "photo_urls", "characteristics",
+    "content_overrides_json", "category", "all_categories",
+    "mapped_wb_category", "wb_subject_id", "category_confidence",
+    "brand", "resolved_brand_id", "brand_status", "country", "gender",
+    "colors", "sizes", "materials", "supplier_price", "supplier_quantity",
+    "recommended_retail_price", "barcodes", "original_data",
+    "processed_photos", "ai_attributes", "ai_seo_title", "ai_keywords",
+    "ai_bullets", "supplier_content_revision",
+)
+SUPPLIER_REFRESH_REVIEW_SOURCE_FIELDS = (
+    "id", "supplier_id", "external_id", "created_at", "content_revision",
+    "title", "description", "description_source", "ai_description",
+    "brand", "resolved_brand_id", "category", "all_categories",
+    "wb_category_name", "wb_subject_id", "category_confidence", "country",
+    "gender", "colors_json", "sizes_json", "materials_json",
+    "characteristics_json", "ai_marketplace_json", "supplier_price",
+    "supplier_quantity", "recommended_retail_price", "barcodes_json",
+    "barcode", "photo_urls_json", "processed_photos_json",
+    "dimensions_json", "original_data_json", "ai_seo_title",
+    "ai_keywords_json", "ai_bullets_json",
+)
+
+
+def _supplier_refresh_review_scalar(value):
+    if isinstance(value, datetime):
+        return value.isoformat(timespec="microseconds")
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, float) and not math.isfinite(value):
+        return f"nonfinite:{value}"
+    return value
+
+
+def _supplier_refresh_review_values(instance, fields):
+    return {
+        field: _supplier_refresh_review_scalar(getattr(instance, field, None))
+        for field in fields
+    }
+
+
+def _supplier_refresh_digest(payload):
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _supplier_refresh_source_matches(imported_product):
+    source = getattr(imported_product, "supplier_product", None)
+    return bool(
+        source is not None
+        and source.id == imported_product.supplier_product_id
+        and imported_product.supplier_id is not None
+        and source.supplier_id == imported_product.supplier_id
+    )
+
+
+def supplier_refresh_product_label(imported_product):
+    title = imported_product.title.strip() if isinstance(imported_product.title, str) else ""
+    vendor_code = imported_product.external_vendor_code or imported_product.external_id or ""
+    vendor_code = vendor_code.strip() if isinstance(vendor_code, str) else ""
+    if title and vendor_code and title != vendor_code:
+        label = f"{title} · {vendor_code}"
+    else:
+        label = title or vendor_code or "Товар из выбранного списка"
+    return label[:2_048]
+
+
+def supplier_refresh_preview_label(imported_product):
+    return supplier_refresh_product_label(imported_product)[:256]
+
+
+def _supplier_refresh_clone(imported_product):
+    """Copy only supplier-mutated values into an unattached projection row."""
+    clone = ImportedProduct()
+    fields = set(SUPPLIER_REFRESH_REVIEW_PRODUCT_FIELDS) | {
+        "seller_id", "supplier_id", "supplier_product_id", "external_id",
+        "source_type", "content_edit_version",
+    }
+    for field in fields:
+        setattr(clone, field, copy.deepcopy(getattr(imported_product, field, None)))
+    # The common-content writer guard applies to persisted rows. This clone is
+    # deliberately transient, so projection cannot register or write a row.
+    clone.id = None
+    return clone
+
+
+def _supplier_refresh_common_value(imported_product, field):
+    columns = {
+        "title": "title",
+        "description": "description",
+        "photos": "photo_urls",
+        "characteristics": "characteristics",
+    }
+    value = getattr(imported_product, columns[field], None)
+    if field in {"photos", "characteristics"} and isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError, RecursionError):
+            return value
+    return value
+
+
+def _supplier_refresh_safe_text(value, *, limit=96):
+    if value is None or value == "":
+        return None
+    if isinstance(value, (dict, list, tuple)):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, Decimal):
+        value = format(value, "f")
+    elif isinstance(value, float):
+        value = format(value, ".15g")
+    elif not isinstance(value, str):
+        value = str(value)
+    value = " ".join(value.split())
+    return value[:limit] if value else None
+
+
+def _supplier_refresh_preview_changes(imported_product, projected):
+    """Return value fields plus null/null group markers; never expose raw JSON."""
+    changes = []
+
+    def add_value(field, before, after, *, limit=96):
+        if before != after:
+            changes.append({
+                "field": field,
+                "before": _supplier_refresh_safe_text(before, limit=limit),
+                "after": _supplier_refresh_safe_text(after, limit=limit),
+            })
+
+    def add_group(field, before, after):
+        if before != after:
+            changes.append({"field": field, "before": None, "after": None})
+
+    add_value(
+        "title",
+        _supplier_refresh_common_value(imported_product, "title"),
+        _supplier_refresh_common_value(projected, "title"),
+        limit=120,
+    )
+    add_group(
+        "description",
+        _supplier_refresh_common_value(imported_product, "description"),
+        _supplier_refresh_common_value(projected, "description"),
+    )
+    add_group(
+        "photos",
+        (
+            _supplier_refresh_common_value(imported_product, "photos"),
+            imported_product.processed_photos,
+        ),
+        (
+            _supplier_refresh_common_value(projected, "photos"),
+            projected.processed_photos,
+        ),
+    )
+    add_group(
+        "characteristics",
+        _supplier_refresh_common_value(imported_product, "characteristics"),
+        _supplier_refresh_common_value(projected, "characteristics"),
+    )
+    add_group(
+        "category",
+        (
+            imported_product.category, imported_product.all_categories,
+            imported_product.mapped_wb_category, imported_product.wb_subject_id,
+            imported_product.category_confidence,
+        ),
+        (
+            projected.category, projected.all_categories,
+            projected.mapped_wb_category, projected.wb_subject_id,
+            projected.category_confidence,
+        ),
+    )
+    add_value(
+        "purchase_price",
+        imported_product.supplier_price,
+        projected.supplier_price,
+        limit=32,
+    )
+    add_value(
+        "supplier_quantity",
+        imported_product.supplier_quantity,
+        projected.supplier_quantity,
+        limit=32,
+    )
+
+    detail_fields = (
+        "brand", "resolved_brand_id", "brand_status", "country", "gender",
+        "colors", "sizes", "materials", "barcodes", "recommended_retail_price",
+        "ai_attributes", "ai_seo_title", "ai_keywords", "ai_bullets",
+    )
+    add_group(
+        "product_details",
+        _supplier_refresh_review_values(imported_product, detail_fields),
+        _supplier_refresh_review_values(projected, detail_fields),
+    )
+    add_group(
+        "source_snapshot",
+        (
+            imported_product.original_data,
+            imported_product.content_overrides_json,
+            imported_product.supplier_content_revision,
+        ),
+        (
+            projected.original_data,
+            projected.content_overrides_json,
+            projected.supplier_content_revision,
+        ),
+    )
+
+    if not changes and (
+        _supplier_refresh_review_values(
+            imported_product, SUPPLIER_REFRESH_REVIEW_PRODUCT_FIELDS,
+        )
+        != _supplier_refresh_review_values(
+            projected, SUPPLIER_REFRESH_REVIEW_PRODUCT_FIELDS,
+        )
+    ):
+        changes.append({"field": "product_details", "before": None, "after": None})
+    return changes
 
 
 # ============================================================================
@@ -2296,12 +2533,175 @@ class SupplierService:
             raise
 
     @staticmethod
-    def _apply_supplier_updates(imported_products: List[ImportedProduct]) -> ImportResult:
-        """Обновить ровно переданные локальные карточки с savepoint на строку."""
+    def _validate_imported_product_ids(seller_id, imported_product_ids):
+        if (
+            isinstance(seller_id, bool)
+            or not isinstance(seller_id, int)
+            or seller_id <= 0
+        ):
+            raise ValueError("Некорректный продавец")
+        if not isinstance(imported_product_ids, list):
+            raise ValueError("Ожидается точный список карточек")
+        if len(imported_product_ids) > 200:
+            raise ValueError("За один раз можно выбрать не более 200 карточек")
+        if any(
+            isinstance(product_id, bool)
+            or not isinstance(product_id, int)
+            or product_id <= 0
+            or product_id > (1 << 63) - 1
+            for product_id in imported_product_ids
+        ):
+            raise ValueError("Список карточек содержит некорректный ID")
+        if len(set(imported_product_ids)) != len(imported_product_ids):
+            raise ValueError("Список карточек содержит повторяющиеся ID")
+
+    @staticmethod
+    def _ordered_imported_products(seller_id, imported_product_ids):
+        rows = ImportedProduct.query.options(
+            selectinload(ImportedProduct.supplier_product)
+        ).filter(
+            ImportedProduct.seller_id == seller_id,
+            ImportedProduct.id.in_(imported_product_ids),
+        ).all()
+        by_id = {row.id: row for row in rows}
+        if len(by_id) != len(imported_product_ids):
+            raise ValueError("Часть выбранных карточек недоступна")
+        return [by_id[product_id] for product_id in imported_product_ids]
+
+    @staticmethod
+    def _supplier_refresh_preview_for_rows(seller_id, imported_product_ids, rows):
+        items = []
+        digest_rows = []
+        eligible = 0
+        changed = 0
+        skipped = 0
+        for imported_product in rows:
+            source = imported_product.supplier_product
+            linked_source = source if _supplier_refresh_source_matches(imported_product) else None
+            product_identity = {
+                "id": imported_product.id,
+                "seller_id": imported_product.seller_id,
+                "product_id": imported_product.product_id,
+                "supplier_id": imported_product.supplier_id,
+                "supplier_product_id": imported_product.supplier_product_id,
+                "external_id": imported_product.external_id,
+                "external_vendor_code": imported_product.external_vendor_code,
+                "source_type": imported_product.source_type,
+                "import_status": imported_product.import_status,
+                "created_at": _supplier_refresh_review_scalar(imported_product.created_at),
+                "updated_at": _supplier_refresh_review_scalar(imported_product.updated_at),
+                "content_edit_version": imported_product.content_edit_version,
+            }
+            product_before = _supplier_refresh_review_values(
+                imported_product, SUPPLIER_REFRESH_REVIEW_PRODUCT_FIELDS,
+            )
+            source_identity = None
+            if source is not None:
+                source_identity = {
+                    "id": source.id,
+                    "supplier_id": source.supplier_id,
+                    "external_id": source.external_id,
+                    "vendor_code": source.vendor_code,
+                }
+            base = {
+                "product_identity": product_identity,
+                "product_before": product_before,
+                "source_identity": source_identity,
+            }
+            if linked_source is None:
+                skipped += 1
+                items.append({
+                    "product_id": imported_product.id,
+                    "label": supplier_refresh_preview_label(imported_product),
+                    "state": "unlinked",
+                    "changes": [],
+                })
+                digest_rows.append({
+                    **base,
+                    "state": "unlinked",
+                    "source": None,
+                    "projected": None,
+                })
+                continue
+
+            eligible += 1
+            projected = _supplier_refresh_clone(imported_product)
+            try:
+                _update_imported_from_supplier(projected, linked_source)
+            except Exception:
+                raise ValueError("Не удалось проверить данные выбранных карточек") from None
+            projected_values = _supplier_refresh_review_values(
+                projected, SUPPLIER_REFRESH_REVIEW_PRODUCT_FIELDS,
+            )
+            row_changed = product_before != projected_values
+            if row_changed:
+                changed += 1
+            try:
+                display_changes = _supplier_refresh_preview_changes(
+                    imported_product, projected,
+                )
+            except Exception:
+                raise ValueError("Не удалось проверить данные выбранных карточек") from None
+            if row_changed and not display_changes:
+                display_changes = [{
+                    "field": "product_details",
+                    "before": None,
+                    "after": None,
+                }]
+            items.append({
+                "product_id": imported_product.id,
+                "label": supplier_refresh_preview_label(imported_product),
+                "state": "changed" if row_changed else "unchanged",
+                "changes": display_changes,
+            })
+            digest_rows.append({
+                **base,
+                "state": "linked",
+                "source": _supplier_refresh_review_values(
+                    linked_source, SUPPLIER_REFRESH_REVIEW_SOURCE_FIELDS,
+                ),
+                "projected": projected_values,
+            })
+
+        digest = _supplier_refresh_digest({
+            "v": 1,
+            "seller_id": seller_id,
+            "ids": imported_product_ids,
+            "rows": digest_rows,
+        })
+        return {
+            "requested": len(imported_product_ids),
+            "eligible": eligible,
+            "changed": changed,
+            "skipped": skipped,
+            "items": items,
+            "review_digest": digest,
+        }
+
+    @staticmethod
+    def preview_imported_products(seller_id, imported_product_ids):
+        """Read-only exact supplier refresh preview and private review digest."""
+        SupplierService._validate_imported_product_ids(seller_id, imported_product_ids)
+        if not imported_product_ids:
+            raise ValueError("Не выбраны товары")
+        rows = SupplierService._ordered_imported_products(
+            seller_id, imported_product_ids,
+        )
+        return SupplierService._supplier_refresh_preview_for_rows(
+            seller_id, imported_product_ids, rows,
+        )
+
+    @staticmethod
+    def _apply_supplier_updates(
+        imported_products: List[ImportedProduct], *, require_matching_supplier=False,
+    ) -> ImportResult:
+        """Обновить exact rows с savepoint на строку."""
         result = ImportResult(total_requested=len(imported_products))
 
         for imp in imported_products:
-            if not imp.supplier_product_id or not imp.supplier_product:
+            if not imp.supplier_product_id or not imp.supplier_product or (
+                require_matching_supplier and not _supplier_refresh_source_matches(imp)
+            ):
                 result.skipped += 1
                 result.item_results.append({
                     "product_id": imp.id,
@@ -2355,48 +2755,48 @@ class SupplierService:
     def update_imported_products(
         seller_id: int,
         imported_product_ids: List[int],
+        *,
+        expected_review_digest: Optional[str] = None,
     ) -> ImportResult:
-        """Обновить exact seller-owned ImportedProduct IDs.
-
-        Пустой список означает ноль выбранных товаров и никогда не
-        расширяется до всего каталога.
-        """
-        if (
-            isinstance(seller_id, bool)
-            or not isinstance(seller_id, int)
-            or seller_id <= 0
-        ):
-            raise ValueError("Некорректный продавец")
-        if not isinstance(imported_product_ids, list):
-            raise ValueError("Ожидается точный список карточек")
-        if len(imported_product_ids) > 200:
-            raise ValueError("За один раз можно обновить не более 200 карточек")
-        if any(
-            isinstance(product_id, bool)
-            or not isinstance(product_id, int)
-            or product_id <= 0
-            for product_id in imported_product_ids
-        ):
-            raise ValueError("Список карточек содержит некорректный ID")
-        if len(set(imported_product_ids)) != len(imported_product_ids):
-            raise ValueError("Список карточек содержит повторяющиеся ID")
+        """Apply an exact seller-owned refresh, optionally under reviewed state."""
+        SupplierService._validate_imported_product_ids(
+            seller_id, imported_product_ids,
+        )
         if not imported_product_ids:
             return ImportResult()
+        if expected_review_digest is not None and (
+            not isinstance(expected_review_digest, str)
+            or len(expected_review_digest) != 64
+            or any(char not in "0123456789abcdef" for char in expected_review_digest)
+        ):
+            raise ValueError("Проверка обновления недействительна")
 
         SupplierService._begin_supplier_update_transaction()
         try:
-            rows = ImportedProduct.query.options(
-                selectinload(ImportedProduct.supplier_product)
-            ).filter(
-                ImportedProduct.seller_id == seller_id,
-                ImportedProduct.id.in_(imported_product_ids),
-            ).all()
-            by_id = {row.id: row for row in rows}
-            if len(by_id) != len(imported_product_ids):
-                raise ValueError("Часть выбранных карточек недоступна")
-
-            ordered_rows = [by_id[product_id] for product_id in imported_product_ids]
-            return SupplierService._apply_supplier_updates(ordered_rows)
+            try:
+                ordered_rows = SupplierService._ordered_imported_products(
+                    seller_id, imported_product_ids,
+                )
+            except ValueError:
+                if expected_review_digest is not None:
+                    raise SupplierRefreshReviewStale(
+                        "Выбранные данные изменились после просмотра"
+                    ) from None
+                raise
+            if expected_review_digest is not None:
+                current_review = SupplierService._supplier_refresh_preview_for_rows(
+                    seller_id, imported_product_ids, ordered_rows,
+                )
+                if not hmac.compare_digest(
+                    current_review["review_digest"], expected_review_digest,
+                ):
+                    raise SupplierRefreshReviewStale(
+                        "Выбранные данные изменились после просмотра"
+                    )
+            return SupplierService._apply_supplier_updates(
+                ordered_rows,
+                require_matching_supplier=expected_review_digest is not None,
+            )
         except Exception:
             db.session.rollback()
             raise
