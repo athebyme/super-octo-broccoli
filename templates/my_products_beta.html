@@ -48,7 +48,7 @@
     <header class="shk-head">
         <div>
             <h1 class="shk-head-title">{{ supplierRefreshBatchMode ? 'Обновление из каталога' : (importBatchMode ? 'Товары из импорта' : 'Мои товары') }}</h1>
-            <p class="shk-head-sub" v-if="supplierRefreshBatchMode">Выбор передан из классического списка. Список будет проверен заново; обновление начнётся только после отдельного просмотра и подтверждения.</p>
+            <p class="shk-head-sub" v-if="supplierRefreshBatchMode">Выбор из классического списка будет проверен заново. Вы сможете посмотреть изменения перед применением.</p>
             <p class="shk-head-sub" v-if="importBatchMode">Выберите товары из этой подборки для массовых действий.</p>
             <p class="shk-head-sub" v-if="!importBatchMode && !supplierRefreshBatchMode">Выберите товары для массовых действий.</p>
         </div>
@@ -458,5 +458,5 @@
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261121-price-result-return-r41') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261121-supplier-refresh-review-r40') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-supplier-catalog-review-r44') }}"></script>
 {% endblock %}
