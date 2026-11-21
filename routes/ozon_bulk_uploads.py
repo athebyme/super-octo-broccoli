@@ -880,7 +880,7 @@ def retry(job_uid: str):
 
 
 @ozon_bulk_uploads_bp.route("/review", methods=["GET"])
-@ozon_bulk_uploads_bp.route("/api/review", methods=["GET"])
+@ozon_bulk_uploads_bp.route("/api/review", methods=["GET"], endpoint="review_api")
 @login_required
 def review():
     from services.ozon_upload_review import OzonUploadReviewService
