@@ -8,6 +8,7 @@
 <div class="pricing-workspace max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="batchDetailApp()">
     {% set pricing_workspace_current = 'wb-history' %}
     {% include 'partials/pricing_workspace_nav.html' %}
+    {% include 'partials/wb_price_result_return.html' %}
     <p class="pricing-lane-note">Старая цена — сохранённый снимок до подготовки пакета; она не подтверждает цену на витрине сейчас. Новая цена — предложение WB, а статус отправки и сверки указан отдельно.</p>
 
     <!-- Хлебные крошки -->
@@ -17,17 +18,9 @@
             <li>/</li>
             <li><a href="{{ url_for('prices.prices_history') }}" class="hover:text-indigo-600">История</a></li>
             <li>/</li>
-            <li class="text-gray-900">Батч #{{ batch.id }}</li>
+            <li class="text-gray-900">Партия №{{ batch.id }}</li>
         </ol>
     </nav>
-
-    <!-- Герой -->
-    <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
-        <div class="relative">
-            <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">{{ batch.name or 'Изменение цен' }}</h1>
-            <p class="mt-2 text-sm text-gray-400">Батч #{{ batch.id }} - детали операции изменения цен</p>
-        </div>
-    </div>
 
     <!-- Детали батча -->
     <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
@@ -104,6 +97,7 @@
             <div class="mt-4 md:mt-0 md:ml-6 flex flex-wrap gap-2">
                 {% if batch.status == 'pending_review' %}
                 <a href="{{ url_for('prices.batch_confirm', batch_id=batch.id) }}"
+                   data-price-result-same-batch-link
                    class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-yellow-600 hover:bg-yellow-700">
                     <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>

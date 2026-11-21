@@ -2,7 +2,7 @@
 
 {% block title %}Изменить цены - Seller Hub{% endblock %}
 
-{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}">{% if selection_handoff and not selection_error %}<script src="{{ url_for('static', filename='common-product-content.js', v='20261121-price-workspace-return-r39') }}"></script>{% endif %}{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}">{% if selection_handoff and not selection_error %}<script src="{{ url_for('static', filename='common-product-content.js', v='20261121-price-result-return-r41') }}"></script>{% endif %}{% endblock %}
 
 {% block content %}
 {% if selection_error %}
@@ -521,6 +521,38 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
             return href || fallback;
         },
 
+        exactBatchResult(data) {
+            const batchId = data?.batch_id;
+            if (!this.selectionHandoff || data?.success !== true ||
+                !Number.isSafeInteger(batchId) || batchId <= 0 ||
+                !['pending_review', 'confirmed'].includes(data.status) ||
+                !Array.isArray(this.handoffProductIds) || !this.handoffProductIds.length ||
+                !data.stats || data.stats.total !== this.handoffProductIds.length ||
+                this.selectedIds.length !== this.handoffProductIds.length ||
+                this.selectedIds.some((id, index) => id !== this.handoffProductIds[index])) return null;
+
+            const suffix = data.status === 'pending_review' ? '/confirm' : '';
+            const path = '/prices/batch/' + batchId + suffix;
+            return {href: path, canonicalRedirect: data.redirect === path};
+        },
+
+        bindExactBatchReturn(data, canonicalRedirect) {
+            if (!canonicalRedirect || !this.selectionHandoff) return '';
+            const helper = window.SellerHubCommonContent?.bindPriceWorkspaceResult;
+            if (typeof helper !== 'function') return '';
+            const hash = window.location.hash;
+            const bound = helper(hash, {
+                owner: this.workspaceReturn.owner,
+                priceTarget: {
+                    channel: 'wb',
+                    ids: this.handoffProductIds.slice(),
+                    accountId: null,
+                },
+                priceResult: {channel: 'wb', batchId: data.batch_id},
+            });
+            return bound === hash && /^#workspace-return=[a-f0-9]{32}$/.test(bound) ? bound : '';
+        },
+
         // Источник цен (маркетплейс / локальная БД)
         useMarketplacePrices: false,
         syncingWb: false,
@@ -914,11 +946,22 @@ function priceChangeApp(selectionHandoff = false, handoffProductIds = [], worksp
 
                 const data = await response.json();
 
-                if (data.success) {
+                if (response.ok && data.success) {
+                    let resultHref = data.redirect;
+                    let returnHash = '';
+                    if (this.selectionHandoff) {
+                        const result = this.exactBatchResult(data);
+                        if (!result) {
+                            this.requestError = 'Партия могла сохраниться, но ответ не содержит точного результата. Проверьте историю цен; повторная отправка заблокирована.';
+                            return;
+                        }
+                        resultHref = result.href;
+                        returnHash = this.bindExactBatchReturn(data, result.canonicalRedirect);
+                    }
                     // Очищаем выбор после успешного создания
                     this.clearSelection();
                     // Переходим на страницу батча
-                    window.location.href = data.redirect;
+                    window.location.href = resultHref + returnHash;
                 } else if (this.selectionHandoff) {
                     this.requestError = data.error || 'Состав выбора изменился. Вернитесь в каталог.';
                 } else {

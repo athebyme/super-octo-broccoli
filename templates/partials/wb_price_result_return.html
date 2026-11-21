@@ -1,0 +1,61 @@
+<script src="{{ url_for('static', filename='common-product-content.js', v='20261121-price-result-return-r41') }}"></script>
+<div data-price-result-return-container>
+    <a data-price-workspace-return hidden style="display:none"
+       href="{{ url_for('seller_my_products_beta') }}"
+       class="sh-btn sh-btn--secondary mt-4 inline-flex min-h-[44px] items-center">
+        Вернуться к товарам
+    </a>
+</div>
+<script>
+(function () {
+    'use strict';
+    function initializeReturn() {
+        var helper = window.SellerHubCommonContent &&
+            window.SellerHubCommonContent.priceResultWorkspaceReturnHref;
+        if (typeof helper !== 'function') return;
+
+        var owner = {{ ((current_user.id|string) ~ ':' ~ (current_user.seller.id|string))|tojson }};
+        var batchId = {{ batch.id|tojson }};
+        var href = helper(window.location.hash, {
+            owner: owner,
+            priceResult: {channel: 'wb', batchId: batchId},
+            workspaceUrl: '/my-products/beta',
+        });
+        if (typeof href !== 'string' || !href) return;
+        var match = href.match(/#workspace-return=([a-f0-9]{32})$/);
+        if (!match) return;
+
+        var link = document.querySelector('[data-price-workspace-return]');
+        if (link) {
+            link.href = href;
+            link.style.removeProperty('display');
+            link.hidden = false;
+        }
+
+        var nonce = match[1];
+        var form = document.querySelector('form[data-price-result-confirm-form]');
+        if (form) {
+            var marker = form.querySelector('input[name="workspace_return"]');
+            if (marker) marker.value = nonce;
+        }
+
+        document.querySelectorAll('[data-price-result-same-batch-link]').forEach(function (anchor) {
+            try {
+                var target = new URL(anchor.href, window.location.origin);
+                var expected = '/prices/batch/' + batchId + '/confirm';
+                if (target.origin === window.location.origin && target.pathname === expected &&
+                    !target.username && !target.password && !target.search && !target.hash) {
+                    target.hash = 'workspace-return=' + nonce;
+                    anchor.href = target.pathname + target.hash;
+                }
+            } catch (_) {}
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initializeReturn, {once: true});
+    } else {
+        initializeReturn();
+    }
+})();
+</script>

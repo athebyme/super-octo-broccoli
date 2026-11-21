@@ -55,6 +55,26 @@ from services.product_selection import (
 prices_bp = Blueprint('prices', __name__, url_prefix='/prices')
 MAX_EXACT_QUERY_LENGTH = MAX_BULK_PRODUCT_SELECTION * 20 - 1
 MAX_JS_SAFE_PRODUCT_ID = (1 << 53) - 1
+PRICE_WORKSPACE_RETURN_NONCE_RE = re.compile(r'^[a-f0-9]{32}$')
+
+
+def _price_workspace_return_nonce(form):
+    """Read the optional, navigation-only marker from one explicit WB form."""
+    values = form.getlist('workspace_return')
+    if len(values) != 1:
+        return ''
+    value = values[0]
+    if isinstance(value, str) and PRICE_WORKSPACE_RETURN_NONCE_RE.fullmatch(value):
+        return value
+    return ''
+
+
+def _price_batch_redirect(endpoint: str, batch_id: int, nonce: str = '') -> str:
+    """Build a fixed same-batch redirect with an optional inert return fragment."""
+    target = url_for(endpoint, batch_id=batch_id)
+    if nonce and PRICE_WORKSPACE_RETURN_NONCE_RE.fullmatch(nonce):
+        target += '#workspace-return=' + nonce
+    return target
 
 
 def get_current_seller():
@@ -797,10 +817,16 @@ def batch_confirm(batch_id: int):
         id=batch_id,
         seller_id=seller.id
     ).first_or_404()
+    workspace_return = (
+        _price_workspace_return_nonce(request.form)
+        if request.method == 'POST' else ''
+    )
 
     if batch.status != 'pending_review':
         flash('Этот батч не требует подтверждения', 'info')
-        return redirect(url_for('prices.batch_detail', batch_id=batch_id))
+        return redirect(_price_batch_redirect(
+            'prices.batch_detail', batch_id, workspace_return,
+        ))
 
     settings = get_or_create_settings(seller.id)
 
@@ -816,7 +842,9 @@ def batch_confirm(batch_id: int):
         if action == 'confirm':
             if settings.require_comment_for_dangerous and not comment:
                 flash('Требуется комментарий для подтверждения опасных изменений', 'warning')
-                return redirect(url_for('prices.batch_confirm', batch_id=batch_id))
+                return redirect(_price_batch_redirect(
+                    'prices.batch_confirm', batch_id, workspace_return,
+                ))
 
             batch.status = 'confirmed'
             batch.confirmed_at = datetime.utcnow()
@@ -825,12 +853,18 @@ def batch_confirm(batch_id: int):
             db.session.commit()
 
             flash('Изменения подтверждены', 'success')
-            return redirect(url_for('prices.batch_detail', batch_id=batch_id))
+            return redirect(_price_batch_redirect(
+                'prices.batch_detail', batch_id, workspace_return,
+            ))
 
         elif action == 'reject':
             batch.status = 'cancelled'
             db.session.commit()
             flash('Изменения отклонены', 'info')
+            if workspace_return:
+                return redirect(_price_batch_redirect(
+                    'prices.batch_detail', batch_id, workspace_return,
+                ))
             return redirect(url_for('prices.prices_dashboard'))
 
     return render_template(

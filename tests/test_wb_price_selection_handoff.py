@@ -1,12 +1,18 @@
 """Exact seller-owned product handoff into the legacy WB price workflow."""
 
 import os
+from pathlib import Path
+import shutil
+import subprocess
 import unittest
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import event
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class SafePriceHandoffTest(unittest.TestCase):
@@ -207,7 +213,7 @@ class SafePriceHandoffTest(unittest.TestCase):
         self.assertIn(f'priceChangeApp(true, [{ids[0]}, {ids[1]}]'.encode(), exact.data)
         self.assertIn(b'data-price-workspace-return', exact.data)
         self.assertIn('Вернуться к товарам'.encode(), exact.data)
-        self.assertIn(b'common-product-content.js?v=20261121-price-workspace-return-r39', exact.data)
+        self.assertIn(b'common-product-content.js?v=20261121-price-result-return-r41', exact.data)
         self.assertNotIn('Синхронизировать с WB'.encode(), exact.data)
         self.assertNotIn('Сначала синхронизируйте цены'.encode(), exact.data)
         self.assertIn('if (this.selectionHandoff || this.syncingWb) return;'.encode(), exact.data)
@@ -286,9 +292,192 @@ class SafePriceHandoffTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertTrue(payload['success'])
+        self.assertEqual(
+            payload['redirect'], f"/prices/batch/{payload['batch_id']}",
+        )
         from models import PriceChangeBatch
         batch = self.db.session.get(PriceChangeBatch, payload['batch_id'])
         self.assertEqual([item.product_id for item in batch.items], [self.second.id])
+
+    def _pending_review_batch(self, name):
+        from models import PriceChangeBatch, PriceChangeItem, SafePriceChangeSettings
+
+        settings = SafePriceChangeSettings.query.filter_by(
+            seller_id=self.seller.id,
+        ).first()
+        if settings is None:
+            settings = SafePriceChangeSettings(
+                seller_id=self.seller.id,
+                mode='confirm',
+                require_comment_for_dangerous=False,
+            )
+            self.db.session.add(settings)
+        else:
+            settings.mode = 'confirm'
+            settings.require_comment_for_dangerous = False
+        batch = PriceChangeBatch(
+            seller_id=self.seller.id,
+            name=name,
+            change_type='set',
+            change_value=2000,
+            status='pending_review',
+            has_dangerous_changes=True,
+            total_items=1,
+            dangerous_count=1,
+        )
+        self.db.session.add(batch)
+        self.db.session.flush()
+        self.db.session.add(PriceChangeItem(
+            batch_id=batch.id,
+            product_id=self.first.id,
+            nm_id=self.first.nm_id,
+            vendor_code=self.first.vendor_code,
+            product_title=self.first.title,
+            old_price=1000,
+            new_price=2000,
+            price_change_amount=1000,
+            price_change_percent=100,
+            safety_level='dangerous',
+        ))
+        self.db.session.commit()
+        return batch
+
+    def test_confirm_and_reject_relay_only_the_navigation_marker(self):
+        from models import PriceChangeBatch
+
+        nonce = '0123456789abcdef0123456789abcdef'
+        confirm_batch = self._pending_review_batch('Confirm route result')
+        confirm_page = self._request_as_owner(
+            'get', f'/prices/batch/{confirm_batch.id}/confirm',
+        )
+        self.assertEqual(confirm_page.status_code, 200)
+        self.assertIn(b'data-price-result-confirm-form', confirm_page.data)
+        self.assertIn(b'name="action" value="reject" formnovalidate', confirm_page.data)
+        self.assertNotIn(b'name="action" value="confirm" formnovalidate', confirm_page.data)
+        self.assertIn(b'priceResultWorkspaceReturnHref', confirm_page.data)
+        self.assertIn(b'20261121-price-result-return-r41', confirm_page.data)
+
+        confirmed = self._request_as_owner(
+            'post', f'/prices/batch/{confirm_batch.id}/confirm',
+            data={'action': 'confirm', 'workspace_return': nonce},
+        )
+        self.assertEqual(confirmed.status_code, 302)
+        self.assertEqual(
+            confirmed.location,
+            f'/prices/batch/{confirm_batch.id}#workspace-return={nonce}',
+        )
+        self.assertEqual(
+            self.db.session.get(PriceChangeBatch, confirm_batch.id).status,
+            'confirmed',
+        )
+        confirmed_detail = self._request_as_owner(
+            'get', f'/prices/batch/{confirm_batch.id}',
+        )
+        self.assertEqual(confirmed_detail.status_code, 200)
+        self.assertIn(b'data-price-workspace-return', confirmed_detail.data)
+
+        reject_batch = self._pending_review_batch('Reject route result')
+        rejected = self._request_as_owner(
+            'post', f'/prices/batch/{reject_batch.id}/confirm',
+            data={'action': 'reject', 'workspace_return': nonce},
+        )
+        self.assertEqual(rejected.status_code, 302)
+        self.assertEqual(
+            rejected.location,
+            f'/prices/batch/{reject_batch.id}#workspace-return={nonce}',
+        )
+        self.assertEqual(
+            self.db.session.get(PriceChangeBatch, reject_batch.id).status,
+            'cancelled',
+        )
+        rejected_detail = self._request_as_owner(
+            'get', f'/prices/batch/{reject_batch.id}',
+        )
+        self.assertEqual(rejected_detail.status_code, 200)
+        self.assertIn(b'data-price-workspace-return', rejected_detail.data)
+
+    def test_legacy_reject_redirect_does_not_accept_a_malformed_marker(self):
+        batch = self._pending_review_batch('Legacy direct result')
+        rejected = self._request_as_owner(
+            'post', f'/prices/batch/{batch.id}/confirm',
+            data={'action': 'reject', 'workspace_return': 'not-a-nonce'},
+        )
+        self.assertEqual(rejected.status_code, 302)
+        self.assertEqual(rejected.location, '/prices/')
+
+    def test_client_binds_only_the_exact_canonical_committed_batch_result(self):
+        node = shutil.which('node')
+        self.assertIsNotNone(node, 'Node.js is required for the route binding contract')
+        script = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const html = fs.readFileSync(process.argv[1], 'utf8');
+const match = html.match(/<script>\s*function priceChangeApp[\s\S]*?<\/script>/);
+assert.ok(match, 'priceChangeApp script is present');
+const source = match[0].replace(/^<script>|<\/script>$/g, '')
+  .replace(/\{\{[\s\S]*?\}\}/g, '0');
+let received;
+const hash = '#workspace-return=0123456789abcdef0123456789abcdef';
+const context = {
+  URL,
+  URLSearchParams,
+  window: {
+    location: {hash, origin:'https://seller.test'},
+    SellerHubCommonContent: {
+      bindPriceWorkspaceResult(value, payload) {
+        received = {value, payload};
+        return value;
+      },
+    },
+  },
+};
+vm.createContext(context);
+vm.runInContext(source + ';globalThis.__priceChangeApp = priceChangeApp;', context);
+const app = context.__priceChangeApp(true, [7001, 7002], {
+  owner:'7:9', workspaceUrl:'/my-products/beta',
+});
+app.selectedIds = [7001, 7002];
+const data = {
+  success:true, batch_id:91, status:'pending_review', stats:{total:2},
+  redirect:'/prices/batch/91/confirm',
+};
+const exact = app.exactBatchResult(data);
+assert.equal(exact.href, '/prices/batch/91/confirm');
+assert.equal(exact.canonicalRedirect, true);
+assert.equal(app.bindExactBatchReturn(data, exact.canonicalRedirect), hash);
+assert.equal(received.value, hash);
+assert.deepEqual(JSON.parse(JSON.stringify(received.payload)), {
+  owner:'7:9',
+  priceTarget:{channel:'wb', ids:[7001, 7002], accountId:null},
+  priceResult:{channel:'wb', batchId:91},
+});
+
+for (const redirect of [
+  'https://outside.test/prices/batch/91/confirm',
+  '//outside.test/prices/batch/91/confirm',
+  '/prices/batch/92/confirm',
+  '/prices/batch/91/confirm?next=/outside',
+  '/prices/batch/91/confirm#other',
+]) {
+  const changed = {...data, redirect};
+  const candidate = app.exactBatchResult(changed);
+  assert.equal(candidate.href, '/prices/batch/91/confirm');
+  assert.equal(candidate.canonicalRedirect, false);
+  assert.equal(app.bindExactBatchReturn(changed, candidate.canonicalRedirect), '');
+}
+assert.equal(app.exactBatchResult({...data, status:'applied'}), null);
+assert.equal(app.exactBatchResult({...data, stats:{total:1}}), null);
+app.selectedIds = [7002, 7001];
+assert.equal(app.exactBatchResult(data), null);
+"""
+        result = subprocess.run(
+            [node, '-e', script, str(ROOT / 'templates/prices_change.html')],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '')
 
     def test_drift_before_calculation_returns_409_without_a_batch(self):
         import routes.safe_prices as safe_prices
