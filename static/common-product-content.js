@@ -12,6 +12,7 @@
     var WORKSPACE_RETURN_V2_CAPSULE_KEYS = [
         'v', 'nonce', 'owner', 'expiresAt', 'priceTarget', 'selectionIds', 'scope', 'batch',
     ];
+    var WORKSPACE_RETURN_V3_CAPSULE_KEYS = WORKSPACE_RETURN_V2_CAPSULE_KEYS.concat('priceResult');
 
     function workspaceReturnNow(options) {
         if (options && typeof options.now === 'function') return options.now();
@@ -97,12 +98,44 @@
             workspaceReturnSameOrderedIds(left.ids, right.ids);
     }
 
+    function workspaceReturnPriceResult(result) {
+        if (!workspaceReturnPlainObject(result)) return null;
+        var keys = Object.keys(result).sort().join(',');
+        if (result.channel === 'wb' && keys === 'batchId,channel' &&
+            Number.isSafeInteger(result.batchId) && result.batchId > 0) {
+            return { channel: 'wb', batchId: result.batchId };
+        }
+        if (result.channel === 'ozon' && keys === 'accountId,channel,proposalIds' &&
+            Number.isSafeInteger(result.accountId) && result.accountId > 0 &&
+            workspaceReturnIdList(result.proposalIds, 100)) {
+            return {
+                channel: 'ozon',
+                accountId: result.accountId,
+                proposalIds: result.proposalIds.slice().sort(function (left, right) { return left - right; }),
+            };
+        }
+        return null;
+    }
+
+    function workspaceReturnResultMatchesTarget(result, target) {
+        return result && result.channel === target.channel && (result.channel === 'wb' || (
+            result.accountId === target.accountId && result.proposalIds.length <= target.ids.length
+        ));
+    }
+
+    function workspaceReturnResultsEqual(stored, expected) {
+        if (stored.channel !== expected.channel) return false;
+        return stored.channel === 'wb' ? stored.batchId === expected.batchId :
+            stored.accountId === expected.accountId &&
+            workspaceReturnSameOrderedIds(stored.proposalIds, expected.proposalIds);
+    }
+
     function workspaceReturnCapsuleValid(capsule) {
         try {
             if (!workspaceReturnPlainObject(capsule)) return false;
-            var expectedKeys = capsule.v === 1
-                ? WORKSPACE_RETURN_V1_CAPSULE_KEYS
-                : capsule.v === 2 ? WORKSPACE_RETURN_V2_CAPSULE_KEYS : null;
+            var expectedKeys = capsule.v === 1 ? WORKSPACE_RETURN_V1_CAPSULE_KEYS :
+                capsule.v === 2 ? WORKSPACE_RETURN_V2_CAPSULE_KEYS :
+                    capsule.v === 3 ? WORKSPACE_RETURN_V3_CAPSULE_KEYS : null;
             if (!expectedKeys || Object.keys(capsule).length !== expectedKeys.length ||
                 !expectedKeys.every(function (key) {
                     return Object.prototype.hasOwnProperty.call(capsule, key);
@@ -121,11 +154,13 @@
                     /^[A-Za-z0-9_.-]+$/.test(capsule.batch)
                 ));
             if (!commonValid) return false;
-            return capsule.v === 1
-                ? workspaceReturnIdList(capsule.editorIds, 50)
-                : workspaceReturnPriceTargetValid(capsule.priceTarget) &&
-                    capsule.selectionIds.length > 0 &&
-                    capsule.selectionIds.length === capsule.priceTarget.ids.length;
+            if (capsule.v === 1) return workspaceReturnIdList(capsule.editorIds, 50);
+            if (!workspaceReturnPriceTargetValid(capsule.priceTarget) ||
+                capsule.selectionIds.length !== capsule.priceTarget.ids.length) return false;
+            if (capsule.v === 2) return true;
+            var result = workspaceReturnPriceResult(capsule.priceResult);
+            return Boolean(workspaceReturnResultMatchesTarget(result, capsule.priceTarget) &&
+                workspaceReturnResultsEqual(capsule.priceResult, result));
         } catch (_) {
             return false;
         }
@@ -158,15 +193,19 @@
             capsule.priceTarget = payload.priceTarget;
         }
         if (!workspaceReturnCapsuleValid(capsule)) return null;
+        return workspaceReturnWrite(capsule, options) ? nonce : null;
+    }
+
+    function workspaceReturnWrite(capsule, options) {
         try {
             var encoded = JSON.stringify(capsule);
-            if (workspaceReturnByteLength(encoded) > WORKSPACE_RETURN_MAX_BYTES) return null;
+            if (workspaceReturnByteLength(encoded) > WORKSPACE_RETURN_MAX_BYTES) return false;
             var storage = workspaceReturnStorage(options);
-            if (!storage || typeof storage.setItem !== 'function') return null;
+            if (!storage || typeof storage.setItem !== 'function') return false;
             storage.setItem(WORKSPACE_RETURN_SESSION_KEY, encoded);
-            return nonce;
+            return true;
         } catch (_) {
-            return null;
+            return false;
         }
     }
 
@@ -226,7 +265,7 @@
                 (capsule.v !== 1 ||
                     !workspaceReturnSameOrderedIds(capsule.editorIds, options.editorIds))) ||
             (hasPriceTarget &&
-                (capsule.v !== 2 ||
+                (capsule.v === 1 ||
                     !workspaceReturnPriceTargetsEqual(capsule.priceTarget, options.priceTarget)))) {
             consumeWorkspaceReturn(match[1], options);
             return null;
@@ -241,7 +280,33 @@
             owner: payload.owner,
             priceTarget: payload.priceTarget,
         }));
-        if (!returnCapsule) return '';
+        return returnCapsule ? workspaceReturnHref(returnCapsule) : '';
+    }
+
+    function bindPriceWorkspaceResult(hash, payload, options) {
+        if (!workspaceReturnPlainObject(payload) || !workspaceReturnPriceTargetValid(payload.priceTarget)) return '';
+        var result = workspaceReturnPriceResult(payload.priceResult);
+        if (!workspaceReturnResultMatchesTarget(result, payload.priceTarget)) return '';
+        var capsule = workspaceReturnFromHash(hash, Object.assign({}, options || {}, {
+            owner: payload.owner,
+            priceTarget: payload.priceTarget,
+        }));
+        if (!capsule) return '';
+        capsule.v = 3;
+        capsule.priceResult = result;
+        return workspaceReturnWrite(capsule, options) ? hash : '';
+    }
+
+    function priceResultWorkspaceReturnHref(hash, payload, options) {
+        if (!workspaceReturnPlainObject(payload) || payload.workspaceUrl !== '/my-products/beta') return '';
+        var result = workspaceReturnPriceResult(payload.priceResult);
+        if (!result) return '';
+        var capsule = workspaceReturnFromHash(hash, Object.assign({}, options || {}, { owner: payload.owner }));
+        return capsule && capsule.v === 3 && workspaceReturnResultsEqual(capsule.priceResult, result)
+            ? workspaceReturnHref(capsule) : '';
+    }
+
+    function workspaceReturnHref(returnCapsule) {
         try {
             var query = new URLSearchParams();
             if (returnCapsule.batch !== null) {
@@ -323,6 +388,8 @@
             storeWorkspaceReturn: storeWorkspaceReturn,
             workspaceReturnFromHash: workspaceReturnFromHash,
             priceWorkspaceReturnHref: priceWorkspaceReturnHref,
+            bindPriceWorkspaceResult: bindPriceWorkspaceResult,
+            priceResultWorkspaceReturnHref: priceResultWorkspaceReturnHref,
             consumeWorkspaceReturn: consumeWorkspaceReturn,
             WORKSPACE_RETURN_SESSION_KEY: WORKSPACE_RETURN_SESSION_KEY,
             selectionUrl: selectionUrl,
@@ -337,6 +404,8 @@
         global.SellerHubCommonContent.storeWorkspaceReturn = storeWorkspaceReturn;
         global.SellerHubCommonContent.workspaceReturnFromHash = workspaceReturnFromHash;
         global.SellerHubCommonContent.priceWorkspaceReturnHref = priceWorkspaceReturnHref;
+        global.SellerHubCommonContent.bindPriceWorkspaceResult = bindPriceWorkspaceResult;
+        global.SellerHubCommonContent.priceResultWorkspaceReturnHref = priceResultWorkspaceReturnHref;
         global.SellerHubCommonContent.consumeWorkspaceReturn = consumeWorkspaceReturn;
         global.SellerHubCommonContent.selectionUrl = selectionUrl;
         global.SellerHubCommonContent.serializeFieldChange = serializeFieldChange;

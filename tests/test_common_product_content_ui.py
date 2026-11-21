@@ -158,7 +158,8 @@ def test_workspace_return_capsule_is_single_slot_bounded_and_identity_bound():
 const assert = require('node:assert/strict');
 const {
     storeWorkspaceReturn, workspaceReturnFromHash, consumeWorkspaceReturn,
-    priceWorkspaceReturnHref, WORKSPACE_RETURN_SESSION_KEY,
+    priceWorkspaceReturnHref, bindPriceWorkspaceResult, priceResultWorkspaceReturnHref,
+    WORKSPACE_RETURN_SESSION_KEY,
 } = require('./static/common-product-content.js');
 
 function storage() {
@@ -315,6 +316,33 @@ assert.equal(priceWorkspaceReturnHref(
     priceOptions,
 ), '', 'return path is fixed to the exact same-site Beta route');
 
+const wbHash = '#workspace-return=' + priceNonce;
+const wbResult = {channel: 'wb', batchId: 8324};
+const wbResultPayload = {owner, priceResult: wbResult, workspaceUrl: '/my-products/beta'};
+assert.equal(priceResultWorkspaceReturnHref(wbHash, wbResultPayload, priceOptions), '',
+    'an original price selection alone does not authorize a return link on any batch');
+assert.equal(bindPriceWorkspaceResult(wbHash, {
+    owner, priceTarget: wbTarget, priceResult: {...wbResult, batchId: '8324'},
+}, priceOptions), '');
+assert.equal(bindPriceWorkspaceResult(wbHash, {
+    owner, priceTarget: wbTarget, priceResult: wbResult,
+}, priceOptions), wbHash);
+const boundWbCapsule = workspaceReturnFromHash(wbHash, {...priceOptions, owner});
+assert.deepEqual(boundWbCapsule, {...priceCapsule, v: 3, priceResult: wbResult},
+    'binding a result preserves the original selection, filters, nonce, and expiry');
+assert.equal(priceResultWorkspaceReturnHref(wbHash, wbResultPayload, priceOptions), priceHref);
+assert.equal(priceWorkspaceReturnHref(wbHash, {owner, priceTarget: wbTarget, workspaceUrl: '/my-products/beta'},
+    priceOptions), priceHref, 'history can return to the exact original price form');
+assert.equal(priceResultWorkspaceReturnHref(wbHash, {
+    ...wbResultPayload, priceResult: {...wbResult, batchId: 8325},
+}, priceOptions), '', 'another owned WB batch cannot reuse the result link');
+assert.equal(priceResultWorkspaceReturnHref(wbHash, wbResultPayload, priceOptions), priceHref,
+    'visiting another owned batch does not discard the current return');
+assert.equal(priceResultWorkspaceReturnHref(wbHash, wbResultPayload, {
+    ...priceOptions, now: boundWbCapsule.expiresAt,
+}), '', 'result binding does not extend expiry');
+assert.equal(priceStorage.getItem(WORKSPACE_RETURN_SESSION_KEY), null);
+
 const targetMismatch = storage();
 const mismatchNonce = storeWorkspaceReturn(pricePayload, {...options, storage: targetMismatch});
 assert.equal(workspaceReturnFromHash('#workspace-return=' + mismatchNonce, {
@@ -350,6 +378,42 @@ assert.equal(workspaceReturnFromHash('#workspace-return=' + ozonNonce, {
     priceTarget: {channel: 'ozon', ids: [9101, 9102], accountId: 33},
 }), null, 'the selected Ozon account is part of the exact return target');
 assert.equal(ozonStorage.getItem(WORKSPACE_RETURN_SESSION_KEY), null);
+
+const ozonResultStorage = storage();
+const ozonResultOptions = {...options, storage: ozonResultStorage};
+const ozonResultHash = '#workspace-return=' + storeWorkspaceReturn({
+    ...pricePayload, priceTarget: ozonTarget,
+}, ozonResultOptions);
+const ozonResult = {channel: 'ozon', accountId: 32, proposalIds: [4305, 4302]};
+const bindOzonPayload = {owner, priceTarget: ozonTarget, priceResult: ozonResult};
+const ozonResultPayload = {owner, priceResult: ozonResult, workspaceUrl: '/my-products/beta'};
+assert.equal(bindPriceWorkspaceResult(ozonResultHash, {
+    ...bindOzonPayload, priceResult: {...ozonResult, accountId: 33},
+}, ozonResultOptions), '', 'a receipt for a different account cannot bind a result');
+assert.equal(bindPriceWorkspaceResult(ozonResultHash, {
+    ...bindOzonPayload, priceResult: {...ozonResult, proposalIds: [4302, 4305, 4306]},
+}, ozonResultOptions), '', 'the number of saved proposals cannot exceed the source selection');
+assert.equal(bindPriceWorkspaceResult(ozonResultHash, bindOzonPayload, ozonResultOptions), ozonResultHash);
+const boundOzonCapsule = workspaceReturnFromHash(ozonResultHash, {...ozonResultOptions, owner});
+assert.deepEqual(boundOzonCapsule.priceResult, {...ozonResult, proposalIds: [4302, 4305]},
+    'result IDs represent an unordered exact set');
+assert.equal(priceResultWorkspaceReturnHref(ozonResultHash, ozonResultPayload, ozonResultOptions),
+    '/my-products/beta?import_batch=signed-import-batch-token' + ozonResultHash);
+for (const wrongResult of [
+    {...ozonResult, accountId: 33},
+    {...ozonResult, proposalIds: [4302]},
+    {...ozonResult, proposalIds: [4302, 4302]},
+    {...ozonResult, proposalIds: [4302, 4306]},
+    wbResult,
+]) {
+    assert.equal(priceResultWorkspaceReturnHref(ozonResultHash, {
+        ...ozonResultPayload, priceResult: wrongResult,
+    }, ozonResultOptions), '', 'restoring a matching price result requires the entire saved set and account');
+}
+assert.equal(priceResultWorkspaceReturnHref(ozonResultHash, {
+    ...ozonResultPayload, owner: '44:9',
+}, ozonResultOptions), '', 'another owner cannot restore the same exact Ozon result');
+assert.equal(ozonResultStorage.getItem(WORKSPACE_RETURN_SESSION_KEY), null);
 
 assert.equal(storeWorkspaceReturn({...pricePayload, priceTarget: {
     channel: 'wb', ids: [1], accountId: 9,
