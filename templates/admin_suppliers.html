@@ -181,15 +181,9 @@
                                 <a href="{{ url_for('admin_supplier_edit', supplier_id=s.id) }}"
                                    class="text-indigo-600 hover:text-indigo-900">Редактировать</a>
                                 <a href="{{ url_for('admin_supplier_products', supplier_id=s.id) }}"
-                                   class="text-purple-600 hover:text-purple-900">Товары</a>
+                                   class="text-purple-600 hover:text-purple-900">Каталог</a>
                                 <a href="{{ url_for('admin_supplier_sellers', supplier_id=s.id) }}"
                                    class="text-blue-600 hover:text-blue-900">Продавцы</a>
-
-                                <form method="POST" action="{{ url_for('admin_supplier_sync', supplier_id=s.id) }}"
-                                      class="inline"
-                                      onsubmit="return confirm('Запустить синхронизацию каталога {{ s.name }}?')">
-                                    <button type="submit" class="text-green-600 hover:text-green-900">Синхронизация</button>
-                                </form>
 
                                 <form method="POST" action="{{ url_for('admin_supplier_toggle', supplier_id=s.id) }}"
                                       class="inline">
