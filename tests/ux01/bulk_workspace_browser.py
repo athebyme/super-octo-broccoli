@@ -24,6 +24,7 @@ MAIN_TITLE = "Карточка WB с обновлением поставщика
 REFRESHED_TITLE = "Обновлённое название из каталога поставщика"
 MANUAL_TITLE = "Внутренний товар без поставщика"
 LOCAL_REFRESH = "/my-products/refresh-from-supplier"
+LOCAL_REFRESH_PREVIEW = "/api/my-products/supplier-refresh-preview"
 LOCAL_REFRESH_RESULT = "/api/my-products/supplier-refresh-result"
 LOCAL_OZON_PREPARE = "/marketplaces/ozon/uploads/"
 LOCAL_WB_ENRICH_REVIEW = "/products/enrich-bulk"
@@ -43,8 +44,10 @@ def seed_bulk_selection():
         supplier_item = db.session.get(SupplierProduct, fixture.FIXTURE["supplier_product_id"])
         supplier_item.content_revision = 2
         supplier_item.title = REFRESHED_TITLE
+        supplier_item.supplier_quantity = 0
         original = db.session.get(ImportedProduct, fixture.FIXTURE["source_id"])
         original.title = MAIN_TITLE
+        original.supplier_quantity = 3
         original.product_id = wb_product.id
         original.wb_nm_id = wb_product.nm_id
         original.import_status = "imported"
@@ -219,6 +222,39 @@ def is_supplier_refresh_result(response):
     return parsed.path == LOCAL_REFRESH_RESULT and response.request.method == "GET"
 
 
+def is_supplier_refresh_preview(response):
+    parsed = urlsplit(response.url)
+    return parsed.path == LOCAL_REFRESH_PREVIEW and response.request.method == "POST"
+
+
+def open_supplier_refresh_preview(page, expected_ids, preview_posts):
+    """Open the real no-provider review and keep its signed token only in RAM."""
+    page.get_by_role("button", name="Что сделать").click()
+    action = page.get_by_role("menuitem", name="Обновить из поставщика")
+    assert action.is_enabled()
+    with page.expect_response(is_supplier_refresh_preview) as response_info:
+        action.click()
+    response = response_info.value
+    assert response.status == 200
+    preview = response.json()
+    assert preview.get("success") is True
+    assert preview.get("requested") == len(expected_ids)
+    assert preview_posts[-1] == {"product_ids": expected_ids}
+    assert [item.get("product_id") for item in preview.get("items", [])] == expected_ids
+    review_token = preview.get("review_token")
+    assert isinstance(review_token, str) and review_token
+    dialog = page.get_by_role("dialog", name="Проверка обновления из поставщика")
+    dialog.wait_for(state="visible")
+    dialog.locator(".mp-supplier-refresh-item").first.wait_for(state="visible")
+    return dialog, preview
+
+
+def assert_supplier_refresh_token_applied(preview, apply_tokens):
+    """Compare capabilities in memory without adding them to reports or posts."""
+    assert apply_tokens
+    assert apply_tokens[-1] == preview["review_token"]
+
+
 def filter_bulk_results(page):
     with page.expect_response(lambda response: feed_matches(response, {"has_photos": "yes"})) as photos:
         page.get_by_label("Фото").select_option("yes")
@@ -241,6 +277,8 @@ def run():
     checks = []
     layouts = []
     posts = []
+    refresh_preview_posts = []
+    refresh_apply_tokens = []
     wb_enrich_start_posts = []
     errors = []
     feed_gets = []
@@ -347,13 +385,27 @@ def run():
                 route.fulfill(status=409, content_type="application/json",
                               body=json.dumps({"error": "synthetic browser guard"}))
                 return
-            assert parsed.path in (LOCAL_REFRESH, LOCAL_OZON_PREPARE, LOCAL_WB_ENRICH_REVIEW, LOCAL_SUPPLIER_IMPORT), parsed.path
+            assert parsed.path in (LOCAL_REFRESH, LOCAL_REFRESH_PREVIEW, LOCAL_OZON_PREPARE,
+                                   LOCAL_WB_ENRICH_REVIEW, LOCAL_SUPPLIER_IMPORT), parsed.path
             if parsed.path in (LOCAL_WB_ENRICH_REVIEW, LOCAL_SUPPLIER_IMPORT):
                 values = parse_qs(request.post_data or "")
                 assert values.pop("csrf_token", []), parsed.path
             else:
                 values = request.post_data_json
-            posts.append({"path": parsed.path, "body": values})
+            if parsed.path == LOCAL_REFRESH_PREVIEW:
+                assert set(values) == {"product_ids"}
+                refresh_preview_posts.append({"product_ids": values["product_ids"]})
+                route.fulfill(response=route.fetch(max_redirects=0))
+                return
+            if parsed.path == LOCAL_REFRESH:
+                assert set(values) == {"product_ids", "review_token"}
+                refresh_apply_tokens.append(values["review_token"])
+                # Review capabilities stay in memory and are excluded from
+                # mutation diagnostics, which are also used as test evidence.
+                safe_values = {"product_ids": values["product_ids"]}
+                posts.append({"path": parsed.path, "body": safe_values})
+            else:
+                posts.append({"path": parsed.path, "body": values})
             if parsed.path == LOCAL_REFRESH and refresh_response_override is not None:
                 response_body = refresh_response_override
                 response_status = refresh_response_status
@@ -714,18 +766,20 @@ def run():
 
         open_products(page)
         page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
-        pick_action(page, "Обновить из поставщика")
-        page.get_by_role("button", name="Обновить", exact=True).click()
-        page.get_by_text("В запросе товаров: 1.", exact=False).wait_for()
-        assert posts == [{"path": LOCAL_REFRESH,
-                          "body": {"product_ids": [fixture_ids["manual_id"]]}}], posts
+        refresh_posts_before_unlinked = sum(post["path"] == LOCAL_REFRESH for post in posts)
+        dialog, unlinked_preview = open_supplier_refresh_preview(
+            page, [fixture_ids["manual_id"]], refresh_preview_posts,
+        )
+        assert (unlinked_preview["eligible"], unlinked_preview["changed"],
+                unlinked_preview["skipped"]) == (0, 0, 1)
+        assert unlinked_preview["items"][0]["state"] == "unlinked"
+        assert dialog.get_by_text(MANUAL_TITLE, exact=False).is_visible()
+        assert dialog.get_by_text("Нет связи с каталогом поставщика", exact=True).is_visible()
+        assert dialog.get_by_role("button", name="Обновить", exact=True).count() == 0
+        dialog.get_by_role("button", name="Вернуться", exact=True).click()
+        assert not dialog.is_visible()
+        assert sum(post["path"] == LOCAL_REFRESH for post in posts) == refresh_posts_before_unlinked
         checks.append("ordinary_local_refresh_reports_zero_and_exact_selection")
-        refresh_result = page.locator(".mp-refresh-result")
-        refresh_result.wait_for()
-        assert refresh_result.get_by_role("heading", name="Нет карточек для обновления").count() == 1
-        refresh_result.get_by_text("Карточки и итог (1)").click()
-        refresh_result.get_by_text(MANUAL_TITLE, exact=False).wait_for()
-        refresh_result.get_by_text("Нет связи с каталогом поставщика. Данные не менялись.").wait_for()
         assert page.locator(".shk-job").count() == 0
         assert page.get_by_role("button", name=re.compile(r"^Подготовить для Ozon")).count() == 0
         checks.append("supplier_refresh_skip_has_exact_named_reason_without_generic_job")
@@ -743,7 +797,7 @@ def run():
                                   and response.request.method == "POST") as completed:
             prepare.click()
         assert completed.value.status == 202
-        prepared = posts[1]
+        prepared = posts[0]
         assert prepared["path"] == LOCAL_OZON_PREPARE
         assert prepared["body"]["imported_product_ids"] == [fixture_ids["manual_id"]]
         assert prepared["body"]["account_id"] == fixture.FIXTURE["account_id"]
@@ -769,7 +823,7 @@ def run():
                                   and response.request.method == "POST") as review:
             page.get_by_role("button", name="Дополнить карточки на WB").click()
         assert review.value.status == 200
-        assert posts[2] == {"path": LOCAL_WB_ENRICH_REVIEW, "body": {"selected_ids": [str(fixture_ids["wb_id"])]}}
+        assert posts[1] == {"path": LOCAL_WB_ENRICH_REVIEW, "body": {"selected_ids": [str(fixture_ids["wb_id"])]}}
         page.wait_for_url(fixture.BASE + LOCAL_WB_ENRICH_REVIEW, wait_until="domcontentloaded")
         page.get_by_role("heading", name="Массовое обновление фото").wait_for()
         assert page.get_by_role(
@@ -835,8 +889,8 @@ def run():
         }""")
         assert batch_feed.value.status == 200
         batch_data = batch_feed.value.json()
-        assert posts[3]["body"]["product_ids"] == [str(fixture_ids["import_id"])]
-        assert "update_product_ids" not in posts[3]["body"]
+        assert posts[2]["body"]["product_ids"] == [str(fixture_ids["import_id"])]
+        assert "update_product_ids" not in posts[2]["body"]
         with fixture.app.app_context():
             imported_local = ImportedProduct.query.filter_by(
                 seller_id=fixture.FIXTURE["seller_id"],
@@ -967,15 +1021,15 @@ def run():
         assert page.locator(".mp-list article.mp-row input[type=checkbox]:checked").evaluate_all(
             "boxes => boxes.map(box => Number(box.value))"
         ) == [imported_local_id]
-        assert len(posts) == 4, posts
+        assert len(posts) == 3, posts
         checks.append("signed_import_batch_common_content_return_reuses_exact_server_token_and_selection")
-        assert len(posts) == 4 and not errors, errors
+        assert len(posts) == 3 and not errors, errors
 
         # The original early-photo check still covers the classic page after
         # leaving the receipt-scoped workspace explicitly.
         posts_before_classic = len(posts)
         fixture.wait_document(page, "classic_after_supplier_import", "/my-products")
-        assert len(posts) == posts_before_classic == 4
+        assert len(posts) == posts_before_classic == 3
         assert not errors, errors
         checks.append("classic_products_after_supplier_import_remains_error_free")
 
@@ -997,13 +1051,21 @@ def run():
         assert resume_route == LOCAL_REFRESH_RESULT
         page.get_by_role("checkbox", name=f"Выбрать {MAIN_TITLE}").check()
         page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
-        pick_action(page, "Обновить из поставщика")
         refresh_posts_before_success = sum(post["path"] == LOCAL_REFRESH for post in posts)
         posts_before_mixed_refresh = len(posts)
+        dialog, mixed_preview = open_supplier_refresh_preview(
+            page, [fixture_ids["local_id"], fixture_ids["manual_id"]],
+            refresh_preview_posts,
+        )
+        assert (mixed_preview["eligible"], mixed_preview["changed"],
+                mixed_preview["skipped"]) == (1, 1, 1)
+        assert mixed_preview["items"][0]["state"] == "changed"
+        assert mixed_preview["items"][1]["state"] == "unlinked"
         with page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_REFRESH
                                   and response.request.method == "POST") as mixed_refresh:
-            page.get_by_role("button", name="Обновить", exact=True).click()
+            dialog.get_by_role("button", name="Обновить", exact=True).click()
         assert mixed_refresh.value.status == 200
+        assert_supplier_refresh_token_applied(mixed_preview, refresh_apply_tokens)
         mixed_data = mixed_refresh.value.json()
         assert (mixed_data["requested"], mixed_data["updated"], mixed_data["skipped"],
                 mixed_data["errors"]) == (2, 1, 1, 0), mixed_data
@@ -1236,7 +1298,7 @@ def run():
         assert prepared_from_refresh["body"]["imported_product_ids"] == [fixture_ids["local_id"]]
         assert prepared_from_refresh["body"]["account_id"] == fixture.FIXTURE["account_id"]
         assert re.fullmatch(r"[a-f0-9]{32}", prepared_from_refresh["body"]["request_key"])
-        assert prepared_from_refresh["body"]["request_key"] != posts[1]["body"]["request_key"]
+        assert prepared_from_refresh["body"]["request_key"] != posts[0]["body"]["request_key"]
         assert prepared_from_refresh["body"]["confirm_prepare"] is True
         assert "confirm_write" not in prepared_from_refresh["body"]
         handoff_job_path = refreshed_prepare.value.headers["location"]
@@ -1295,6 +1357,139 @@ def run():
         assert page.locator(".mp-refresh-result").count() == 0
         checks.append("supplier_refresh_hide_clears_receipt_before_reload_without_restore_or_refresh")
 
+        # The actual review is a local, read-only preview. Exercise the mixed
+        # linked/unlinked selection at 320px before any apply changes its title.
+        preview_context = browser.new_context(viewport={"width": 320, "height": 900})
+        preview_context.add_init_script("localStorage.setItem('sh-theme', 'dark');")
+        preview_context.add_cookies([fixture.synthetic_login_cookie()])
+        preview_context.route("**/*", bridge)
+        preview_page = preview_context.new_page()
+        preview_page.on("pageerror", lambda error: errors.append(str(error)))
+        open_products(preview_page)
+        preview_page.get_by_role("checkbox", name=f"Выбрать {MAIN_TITLE}").check()
+        preview_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
+        preview_posts_before = len(refresh_preview_posts)
+        refresh_posts_before_cancel = sum(post["path"] == LOCAL_REFRESH for post in posts)
+        dialog, mobile_preview = open_supplier_refresh_preview(
+            preview_page, [fixture_ids["local_id"], fixture_ids["manual_id"]],
+            refresh_preview_posts,
+        )
+        assert len(refresh_preview_posts) == preview_posts_before + 1
+        assert (mobile_preview["eligible"], mobile_preview["changed"],
+                mobile_preview["skipped"]) == (1, 1, 1)
+        changed_item, unlinked_item = mobile_preview["items"]
+        assert changed_item["state"] == "changed"
+        assert any(change.get("field") == "title"
+                   and change.get("before") == MAIN_TITLE
+                   and change.get("after") == REFRESHED_TITLE
+                   for change in changed_item["changes"])
+        assert any(change.get("field") == "supplier_quantity"
+                   and change.get("after") == "0"
+                   for change in changed_item["changes"])
+        assert unlinked_item["state"] == "unlinked"
+        changed_row = dialog.locator(".mp-supplier-refresh-item.is-changed").filter(
+            has_text=MAIN_TITLE,
+        )
+        title_change = changed_row.locator(".mp-supplier-refresh-changes > div").filter(
+            has_text="Название",
+        )
+        quantity_change = changed_row.locator(".mp-supplier-refresh-changes > div").filter(
+            has_text="Остаток у поставщика",
+        )
+        assert title_change.locator("dd").inner_text().count("→") == 1
+        assert MAIN_TITLE in title_change.locator("dd").inner_text()
+        assert REFRESHED_TITLE in title_change.locator("dd").inner_text()
+        quantity_text = quantity_change.locator("dd").inner_text()
+        assert "3" in quantity_text and "0" in quantity_text and "→" in quantity_text
+        assert dialog.get_by_text("Выбрано", exact=True).is_visible()
+        assert dialog.get_by_text("Можно обновить", exact=True).is_visible()
+        assert dialog.get_by_text("Изменятся", exact=True).is_visible()
+        assert dialog.get_by_text("Без связи", exact=True).is_visible()
+        assert dialog.get_by_text(MAIN_TITLE, exact=True).is_visible()
+        assert dialog.get_by_text(REFRESHED_TITLE, exact=True).is_visible()
+        assert dialog.get_by_text("Название", exact=True).is_visible()
+        assert dialog.get_by_text("Остаток у поставщика", exact=True).is_visible()
+        assert dialog.get_by_text("0", exact=True).is_visible()
+        assert dialog.get_by_text(MANUAL_TITLE, exact=True).is_visible()
+        assert dialog.get_by_text("Нет связи с каталогом поставщика", exact=True).is_visible()
+        assert mobile_preview["review_token"] not in dialog.inner_text()
+        verify_bounds(preview_page)
+        preview_geometry = preview_page.evaluate("""() => {
+            const dialog = document.querySelector('dialog.mp-supplier-refresh-dialog');
+            const rect = dialog.getBoundingClientRect();
+            return {width: document.documentElement.clientWidth, height: window.innerHeight,
+                    left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom};
+        }""")
+        assert preview_geometry["width"] == 320, preview_geometry
+        assert preview_geometry["left"] >= -1 and preview_geometry["right"] <= 321, preview_geometry
+        assert preview_geometry["top"] >= 0 and preview_geometry["bottom"] <= preview_geometry["height"] + 1, preview_geometry
+        preview_page.screenshot(
+            path=OUTPUT / "supplier-refresh-preview-mixed-dark-320.png",
+            animations="disabled",
+        )
+        dialog.get_by_role("button", name="Вернуться", exact=True).click()
+        assert not dialog.is_visible()
+        assert sum(post["path"] == LOCAL_REFRESH for post in posts) == refresh_posts_before_cancel
+        assert len(posts) == 3, posts
+        assert selected_browser_state(preview_page)["selected"] == [
+            fixture_ids["local_id"], fixture_ids["manual_id"],
+        ]
+        checks.append("supplier_refresh_preview_cancel_has_zero_apply")
+        checks.append("supplier_refresh_preview_exact_mixed_unlinked_zero_quantity_fits_320")
+
+        # A real source change after review invalidates its capability. The
+        # existing local item must remain untouched when the server returns 409.
+        preview_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").uncheck()
+        with fixture.app.app_context():
+            source_before_stale = db.session.get(SupplierProduct, fixture_ids["refresh_source_id"])
+            old_source_title = source_before_stale.title
+            old_source_revision = source_before_stale.content_revision
+            target_before_stale = db.session.get(ImportedProduct, fixture_ids["local_id"])
+            target_state_before_stale = (
+                target_before_stale.title,
+                target_before_stale.supplier_content_revision,
+                target_before_stale.supplier_quantity,
+                target_before_stale.supplier_price,
+            )
+        stale_dialog, stale_preview = open_supplier_refresh_preview(
+            preview_page, [fixture_ids["local_id"]], refresh_preview_posts,
+        )
+        with fixture.app.app_context():
+            stale_source = db.session.get(SupplierProduct, fixture_ids["refresh_source_id"])
+            stale_source.title = "Изменено после предпросмотра"
+            stale_source.content_revision = old_source_revision + 1
+            db.session.commit()
+        with preview_page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_REFRESH
+                                         and response.request.method == "POST") as stale_apply:
+            stale_dialog.get_by_role("button", name="Обновить", exact=True).click()
+        assert stale_apply.value.status == 409
+        assert_supplier_refresh_token_applied(stale_preview, refresh_apply_tokens)
+        assert posts[-1] == {"path": LOCAL_REFRESH,
+                             "body": {"product_ids": [fixture_ids["local_id"]]}}
+        stale_dialog.get_by_role("alert").get_by_text(
+            "Данные товаров изменились. Проверьте обновление снова.", exact=True,
+        ).wait_for()
+        assert stale_dialog.get_by_role("button", name="Проверить снова", exact=True).is_visible()
+        assert stale_dialog.get_by_role("button", name="Обновить", exact=True).count() == 0
+        with fixture.app.app_context():
+            unchanged_target = db.session.get(ImportedProduct, fixture_ids["local_id"])
+            assert (
+                unchanged_target.title,
+                unchanged_target.supplier_content_revision,
+                unchanged_target.supplier_quantity,
+                unchanged_target.supplier_price,
+            ) == target_state_before_stale
+            stale_source = db.session.get(SupplierProduct, fixture_ids["refresh_source_id"])
+            stale_source.title = old_source_title
+            stale_source.content_revision = old_source_revision
+            db.session.commit()
+        stale_dialog.get_by_role("button", name="Вернуться", exact=True).click()
+        assert not stale_dialog.is_visible()
+        assert sum(post["path"] == LOCAL_REFRESH for post in posts) == refresh_posts_before_cancel + 1
+        assert fixture.REPORT["provider_attempts"] == 0
+        checks.append("supplier_refresh_stale_source_review_returns_409_without_atomic_apply")
+        preview_context.close()
+
         # Start a separate mobile browser context at 320px. Do not resize a
         # desktop page across the shared sidebar breakpoint for this check.
         mobile_context = browser.new_context(viewport={"width": 320, "height": 900})
@@ -1329,11 +1524,18 @@ def run():
                 "product_id": fixture_ids["wb_id"],
             }],
         }
-        pick_action(mobile_page, "Обновить из поставщика")
+        partial_dialog, partial_preview = open_supplier_refresh_preview(
+            mobile_page,
+            [fixture_ids["local_id"], fixture_ids["manual_id"], imported_local_id],
+            refresh_preview_posts,
+        )
+        assert partial_preview["requested"] == 3
+        assert partial_preview["skipped"] == 1
         with mobile_page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_REFRESH
                                          and response.request.method == "POST") as partial_refresh:
-            mobile_page.get_by_role("button", name="Обновить", exact=True).click()
+            partial_dialog.get_by_role("button", name="Обновить", exact=True).click()
         assert partial_refresh.value.status == 200
+        assert_supplier_refresh_token_applied(partial_preview, refresh_apply_tokens)
         assert posts[-1] == {"path": LOCAL_REFRESH,
                              "body": {"product_ids": [fixture_ids["local_id"], fixture_ids["manual_id"],
                                                         imported_local_id]}}
@@ -1396,17 +1598,21 @@ def run():
 
         # Unknown and rejected requests show the submitted count and refresh
         # action once, without duplicating a generic row for every selection.
-        mobile_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
+        mobile_page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").check()
         refresh_response_override = {
             "success": True, "status": "completed", "requested": 1,
             "updated": 1, "skipped": 0, "errors": 0, "items": [],
         }
-        pick_action(mobile_page, "Обновить из поставщика")
+        unknown_dialog, unknown_preview = open_supplier_refresh_preview(
+            mobile_page, [fixture_ids["local_id"]], refresh_preview_posts,
+        )
+        assert unknown_preview["eligible"] == 1 and unknown_preview["skipped"] == 0
         with mobile_page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_REFRESH
                                          and response.request.method == "POST"):
-            mobile_page.get_by_role("button", name="Обновить", exact=True).click()
+            unknown_dialog.get_by_role("button", name="Обновить", exact=True).click()
+        assert_supplier_refresh_token_applied(unknown_preview, refresh_apply_tokens)
         assert posts[-1] == {"path": LOCAL_REFRESH,
-                             "body": {"product_ids": [fixture_ids["manual_id"]]}}
+                             "body": {"product_ids": [fixture_ids["local_id"]]}}
         unknown_result = mobile_page.locator(".mp-refresh-result")
         unknown_result.get_by_role("heading", name="Итог обновления не подтверждён").wait_for()
         unknown_result.get_by_text("В запросе товаров: 1.", exact=False).wait_for()
@@ -1414,19 +1620,23 @@ def run():
         assert unknown_result.get_by_role("button", name="Обновить список").count() == 1
         assert mobile_page.get_by_role("button", name=re.compile(r"^Подготовить для Ozon")).count() == 0
         assert mobile_page.get_by_role("button", name=re.compile(r"^Проверить характеристики WB")).count() == 0
-        assert unknown_result.get_by_text(MANUAL_TITLE, exact=False).count() == 0
+        assert unknown_result.get_by_text(REFRESHED_TITLE, exact=False).count() == 0
         checks.append("supplier_refresh_unknown_result_has_count_and_one_refresh_action")
 
-        mobile_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
+        mobile_page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").check()
         refresh_response_override = {"success": False, "error": "synthetic rejection"}
         refresh_response_status = 422
-        pick_action(mobile_page, "Обновить из поставщика")
+        rejected_dialog, rejected_preview = open_supplier_refresh_preview(
+            mobile_page, [fixture_ids["local_id"]], refresh_preview_posts,
+        )
+        assert rejected_preview["eligible"] == 1 and rejected_preview["skipped"] == 0
         with mobile_page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_REFRESH
                                          and response.request.method == "POST") as rejected_refresh:
-            mobile_page.get_by_role("button", name="Обновить", exact=True).click()
+            rejected_dialog.get_by_role("button", name="Обновить", exact=True).click()
         assert rejected_refresh.value.status == 422
+        assert_supplier_refresh_token_applied(rejected_preview, refresh_apply_tokens)
         assert posts[-1] == {"path": LOCAL_REFRESH,
-                             "body": {"product_ids": [fixture_ids["manual_id"]]}}
+                             "body": {"product_ids": [fixture_ids["local_id"]]}}
         rejected_result = mobile_page.locator(".mp-refresh-result")
         rejected_result.get_by_role("heading", name="Выбранные товары не обновлялись").wait_for()
         rejected_result.get_by_text("В запросе товаров: 1.", exact=False).wait_for()
@@ -1434,7 +1644,7 @@ def run():
         assert rejected_result.get_by_role("button", name="Обновить список").count() == 1
         assert mobile_page.get_by_role("button", name=re.compile(r"^Подготовить для Ozon")).count() == 0
         assert mobile_page.get_by_role("button", name=re.compile(r"^Проверить характеристики WB")).count() == 0
-        assert rejected_result.get_by_text(MANUAL_TITLE, exact=False).count() == 0
+        assert rejected_result.get_by_text(REFRESHED_TITLE, exact=False).count() == 0
         verify_bounds(mobile_page)
         checks.append("supplier_refresh_rejected_result_has_count_and_one_refresh_action")
         mobile_context.close()

@@ -107,6 +107,7 @@
 
     var MAX_BULK_SELECTION = 200;
     var MAX_OZON_PRICE_HANDOFF = 100;
+    var SUPPLIER_REFRESH_PREVIEW_TIMEOUT_MS = 12000;
     var WORKSPACE_RETURN_SCOPE_KEYS = [
         'activeTab', 'search', 'supplier', 'has_photos', 'stock', 'sort', 'visibleCount',
     ];
@@ -484,6 +485,110 @@
         };
     }
 
+    var SUPPLIER_REFRESH_PREVIEW_FIELDS = {
+        title: 'Название',
+        purchase_price: 'Закупочная цена',
+        supplier_quantity: 'Остаток у поставщика',
+        description: 'Описание',
+        photos: 'Фото',
+        characteristics: 'Характеристики',
+        category: 'Категория',
+        product_details: 'Подробности товара',
+        source_snapshot: 'Данные источника',
+    };
+    var SUPPLIER_REFRESH_GROUP_FIELDS = new Set([
+        'description', 'photos', 'characteristics', 'category',
+        'product_details', 'source_snapshot',
+    ]);
+    function validSupplierRefreshPreview(data, ids) {
+        if (!data || data.success !== true || !Array.isArray(ids) || !ids.length ||
+            !nonnegativeCount(data.requested) || data.requested !== ids.length ||
+            !nonnegativeCount(data.eligible) || !nonnegativeCount(data.changed) ||
+            !nonnegativeCount(data.skipped) ||
+            data.eligible + data.skipped !== data.requested ||
+            data.changed > data.eligible || !Array.isArray(data.items) ||
+            data.items.length !== ids.length || typeof data.review_token !== 'string' ||
+            !data.review_token.trim() || data.review_token.length > 8192 ||
+            /[\u0000-\u001f\u007f]/.test(data.review_token)) return null;
+
+        var changedCount = 0;
+        var skippedCount = 0;
+        var eligibleCount = 0;
+        var items = [];
+        for (var i = 0; i < data.items.length; i += 1) {
+            var item = data.items[i];
+            if (!item || !Number.isSafeInteger(item.product_id) ||
+                item.product_id !== ids[i] || typeof item.label !== 'string' ||
+                !item.label.trim() || item.label.length > 2048 ||
+                !['changed', 'unchanged', 'unlinked'].includes(item.state) ||
+                !Array.isArray(item.changes) || item.changes.length > 9) return null;
+
+            var seenFields = new Set();
+            var changes = [];
+            for (var j = 0; j < item.changes.length; j += 1) {
+                var change = item.changes[j];
+                if (!change || !Object.prototype.hasOwnProperty.call(
+                        SUPPLIER_REFRESH_PREVIEW_FIELDS, change.field) ||
+                    seenFields.has(change.field)) return null;
+                var groupOnly = SUPPLIER_REFRESH_GROUP_FIELDS.has(change.field);
+                if (groupOnly) {
+                    if (change.before !== null || change.after !== null) return null;
+                } else if (![null, 'string', 'number'].includes(
+                        change.before === null ? null : typeof change.before) ||
+                    ![null, 'string', 'number'].includes(
+                        change.after === null ? null : typeof change.after) ||
+                    (typeof change.before === 'number' && !Number.isFinite(change.before)) ||
+                    (typeof change.after === 'number' && !Number.isFinite(change.after)) ||
+                    (typeof change.before === 'string' && change.before.length > 2048) ||
+                    (typeof change.after === 'string' && change.after.length > 2048)) return null;
+                seenFields.add(change.field);
+                changes.push({
+                    field: change.field,
+                    label: SUPPLIER_REFRESH_PREVIEW_FIELDS[change.field],
+                    groupOnly: groupOnly,
+                    before: change.before,
+                    after: change.after,
+                });
+            }
+
+            if ((item.state === 'changed' && !changes.length) ||
+                (item.state !== 'changed' && changes.length)) return null;
+            if (item.state === 'changed') changedCount += 1;
+            else if (item.state === 'unlinked') skippedCount += 1;
+            else eligibleCount += 1;
+            if (item.state === 'changed') eligibleCount += 1;
+            items.push({
+                productId: item.product_id,
+                label: item.label,
+                state: item.state,
+                stateLabel: item.state === 'changed'
+                    ? 'Есть изменения'
+                    : item.state === 'unchanged'
+                        ? 'Без изменений'
+                        : 'Нет связи с каталогом поставщика',
+                changes: changes,
+            });
+        }
+        if (changedCount !== data.changed || skippedCount !== data.skipped ||
+            eligibleCount !== data.eligible) return null;
+
+        return {
+            requested: data.requested,
+            eligible: data.eligible,
+            changed: data.changed,
+            skipped: data.skipped,
+            items: items,
+            reviewToken: data.review_token,
+        };
+    }
+
+    function supplierRefreshPreviewValue(value) {
+        if (value === null || value === '') return '—';
+        var text = String(value).replace(/\s+/g, ' ').trim();
+        if (!text) return '—';
+        return text.length > 160 ? text.slice(0, 157) + '…' : text;
+    }
+
     var TABS = [
         { key: '', label: 'Все', countKey: 'all' },
         { key: 'pending', label: 'В работе', countKey: 'pending' },
@@ -628,6 +733,7 @@
                 job: null,
                 jobTitle: 'Выполняем',
                 supplierRefreshResult: null,
+                supplierRefreshReview: null,
                 supplierRefreshResumeNote: '',
                 supplierRefreshResumeRetry: false,
                 supplierRefreshRestoreLoading: false,
@@ -853,6 +959,7 @@
                 var self = this;
                 var next = (value || '').trim().slice(0, 200);
                 if (next !== this.filters.search) {
+                    this.cancelSupplierRefreshReview({ restoreFocus: false });
                     this.cancelFilteredSelect();
                     this.selected = [];
                 }
@@ -869,6 +976,11 @@
                         !sameOrderedIds(next, this._selectAllSelectionSnapshot)) {
                         this.cancelFilteredSelect();
                     }
+                    var review = this.supplierRefreshReview;
+                    if (review && review.phase !== 'applying' &&
+                        !sameOrderedIds(next, review.selectionIds)) {
+                        this.cancelSupplierRefreshReview({ restoreFocus: false });
+                    }
                 },
             },
             ozonError: function (value) {
@@ -877,6 +989,7 @@
         },
 
         mounted: function () {
+            this._supplierRefreshUnmounted = false;
             this._supplierRefreshReturnAnchor = !!(window.location &&
                 window.location.hash === '#supplier-refresh-result');
             if (!this.importBatchMode) this.restoreSupplierRefreshResult();
@@ -891,6 +1004,8 @@
             if (this._abort) this._abort.abort();
             if (this._loadMoreAbort) this._loadMoreAbort.abort();
             this.cancelSupplierRefreshRestore();
+            this._supplierRefreshUnmounted = true;
+            this.cancelSupplierRefreshReview({ restoreFocus: false, force: true });
             this.cancelFilteredSelect();
         },
 
@@ -1022,6 +1137,7 @@
             },
             load: function () {
                 var self = this;
+                this.cancelSupplierRefreshReview({ restoreFocus: false });
                 var workspaceReturn = this.workspaceReturnPending ? workspaceReturnCapsule : null;
                 if (workspaceReturn && !this.workspaceReturnScopeMatches(workspaceReturn.scope)) {
                     this.workspaceReturnChanged();
@@ -1585,6 +1701,14 @@
                     this.error = 'Для одного запуска выберите допустимый набор товаров и повторите действие.';
                     return;
                 }
+                if (action.key === 'refresh_supplier') {
+                    this.openSupplierRefreshReview(
+                        effectIds,
+                        selectionIds,
+                        selectedProductLabels(chosen, effectIds),
+                    );
+                    return;
+                }
                 this.confirm = {
                     open: true,
                     key: action.key,
@@ -1646,6 +1770,284 @@
                 this.confirm.productIds = [];
                 this.confirm.selectionIds = [];
                 this.confirm.labels = [];
+            },
+            openSupplierRefreshReview: function (ids, selectionIds, labels) {
+                if (this.supplierRefreshReview &&
+                    this.supplierRefreshReview.phase === 'applying') return false;
+                this.cancelSupplierRefreshReview({ restoreFocus: false });
+                if (!Array.isArray(ids) || !ids.length || ids.length > MAX_BULK_SELECTION ||
+                    ids.some(function (id) { return !Number.isSafeInteger(id) || id <= 0; }) ||
+                    new Set(ids).size !== ids.length ||
+                    !sameOrderedIds(ids, selectionIds) || !sameOrderedIds(this.selected, selectionIds) ||
+                    this.loading || this.itemsScope !== this.feedScopeKey() ||
+                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) {
+                    this.error = 'Список или выбор изменился. Обновите список и отметьте товары заново.';
+                    return false;
+                }
+                var active = document.activeElement;
+                var trigger = null;
+                if (active && typeof active.closest === 'function') {
+                    var actionRoot = active.closest('.shk-actions');
+                    var detailsRoot = active.closest('.mp-more-actions');
+                    trigger = actionRoot
+                        ? actionRoot.querySelector('button[aria-haspopup="menu"]')
+                        : detailsRoot ? detailsRoot.querySelector('summary') : null;
+                }
+                if (!trigger && active && active.isConnected !== false && active !== document.body) {
+                    trigger = active;
+                }
+                this._supplierRefreshTrigger = trigger && trigger !== document.body ? trigger : null;
+                var generation = (this._supplierRefreshDialogGeneration || 0) + 1;
+                this._supplierRefreshDialogGeneration = generation;
+                this.supplierRefreshReview = {
+                    generation: generation,
+                    phase: 'loading',
+                    error: '',
+                    requested: ids.length,
+                    eligible: null,
+                    changed: null,
+                    skipped: null,
+                    items: [],
+                    reviewToken: '',
+                    productIds: ids.slice(),
+                    selectionIds: selectionIds.slice(),
+                    labels: Array.isArray(labels) ? labels.map(function (entry) {
+                        return { productId: entry.productId, label: entry.label };
+                    }) : [],
+                    scope: this.feedScopeKey(),
+                };
+                this.$nextTick(function () {
+                    var dialog = this.$refs.supplierRefreshDialog;
+                    var review = this.supplierRefreshReview;
+                    if (!review || review.generation !== generation || !dialog) return;
+                    if (!sameOrderedIds(this.selected, review.selectionIds) ||
+                        this.feedScopeKey() !== review.scope || this.itemsScope !== review.scope) {
+                        this.cancelSupplierRefreshReview({ restoreFocus: false });
+                        return;
+                    }
+                    if (!dialog.open) dialog.showModal();
+                    this.$refs.supplierRefreshCancel?.focus();
+                });
+                this.loadSupplierRefreshPreview();
+                return true;
+            },
+            supplierRefreshReviewIsCurrent: function (review) {
+                return !!review && this.supplierRefreshReview &&
+                    this.supplierRefreshReview.generation === review.generation &&
+                    this.feedScopeKey() === review.scope && this.itemsScope === review.scope &&
+                    sameOrderedIds(this.selected, review.selectionIds);
+            },
+            loadSupplierRefreshPreview: function () {
+                var review = this.supplierRefreshReview;
+                if (!review || !this.supplierRefreshReviewIsCurrent(review)) {
+                    this.cancelSupplierRefreshReview({ restoreFocus: false });
+                    this.error = 'Список или выбор изменился. Отметьте товары заново и проверьте их ещё раз.';
+                    return false;
+                }
+                if (this._supplierRefreshPreviewTimer) {
+                    clearTimeout(this._supplierRefreshPreviewTimer);
+                    this._supplierRefreshPreviewTimer = null;
+                }
+                if (this._supplierRefreshPreviewAbort) this._supplierRefreshPreviewAbort.abort();
+                var self = this;
+                var abort = new AbortController();
+                this._supplierRefreshPreviewAbort = abort;
+                var timedOut = false;
+                var timer = setTimeout(function () {
+                    timedOut = true;
+                    abort.abort();
+                }, SUPPLIER_REFRESH_PREVIEW_TIMEOUT_MS);
+                this._supplierRefreshPreviewTimer = timer;
+                review.phase = 'loading';
+                review.error = '';
+                review.eligible = null;
+                review.changed = null;
+                review.skipped = null;
+                review.items = [];
+                review.reviewToken = '';
+                function isCurrent() {
+                    return self._supplierRefreshPreviewAbort === abort &&
+                        self.supplierRefreshReviewIsCurrent(review);
+                }
+                var request;
+                try {
+                    request = this.$api.post(
+                        this.urls.supplierRefreshPreview,
+                        { product_ids: review.productIds.slice() },
+                        { signal: abort.signal },
+                    );
+                } catch (err) {
+                    request = Promise.reject(err);
+                }
+                return Promise.resolve(request).then(function (data) {
+                    if (!isCurrent()) return null;
+                    if (timedOut) {
+                        review.phase = 'error';
+                        review.error = 'Проверка заняла больше 12 секунд. Список не менялся. Повторите проверку.';
+                        self.focusSupplierRefreshReviewRetry();
+                        return null;
+                    }
+                    var preview = validSupplierRefreshPreview(data, review.productIds);
+                    if (!preview) {
+                        review.phase = 'error';
+                        review.error = 'Ответ не подтвердил точный состав и порядок выбранных товаров. Проверьте обновление ещё раз.';
+                        self.focusSupplierRefreshReviewRetry();
+                        return null;
+                    }
+                    review.requested = preview.requested;
+                    review.eligible = preview.eligible;
+                    review.changed = preview.changed;
+                    review.skipped = preview.skipped;
+                    review.items = preview.items;
+                    review.reviewToken = preview.reviewToken;
+                    review.phase = 'ready';
+                    return preview;
+                }).catch(function (err) {
+                    if (!isCurrent()) return null;
+                    review.phase = err && err.status === 409 ? 'stale' : 'error';
+                    review.error = timedOut
+                        ? 'Проверка заняла больше 12 секунд. Список не менялся. Повторите проверку.'
+                        : err && err.status === 409
+                            ? 'Список или данные товаров изменились. Проверьте обновление снова.'
+                            : 'Не удалось проверить изменения. Повторите проверку перед обновлением.';
+                    self.focusSupplierRefreshReviewRetry();
+                    return null;
+                }).finally(function () {
+                    clearTimeout(timer);
+                    if (self._supplierRefreshPreviewTimer === timer) {
+                        self._supplierRefreshPreviewTimer = null;
+                    }
+                    if (self._supplierRefreshPreviewAbort === abort) {
+                        self._supplierRefreshPreviewAbort = null;
+                    }
+                });
+            },
+            focusSupplierRefreshReviewRetry: function () {
+                this.$nextTick(function () {
+                    this.$refs.supplierRefreshReviewRetry?.focus();
+                });
+            },
+            cancelSupplierRefreshReview: function (options) {
+                var review = this.supplierRefreshReview;
+                if (review && review.phase === 'applying' && !(options && options.force)) return false;
+                var abort = this._supplierRefreshPreviewAbort;
+                this._supplierRefreshPreviewAbort = null;
+                if (this._supplierRefreshPreviewTimer) {
+                    clearTimeout(this._supplierRefreshPreviewTimer);
+                    this._supplierRefreshPreviewTimer = null;
+                }
+                this._supplierRefreshDialogGeneration = (this._supplierRefreshDialogGeneration || 0) + 1;
+                if (abort) abort.abort();
+                var dialog = this.$refs.supplierRefreshDialog;
+                if (dialog && dialog.open) dialog.close();
+                this.supplierRefreshReview = null;
+                var trigger = this._supplierRefreshTrigger;
+                this._supplierRefreshTrigger = null;
+                if ((!options || options.restoreFocus !== false) && trigger &&
+                    trigger.isConnected !== false && typeof trigger.focus === 'function') {
+                    trigger.focus();
+                }
+                return true;
+            },
+            supplierRefreshValueLabel: function (value) {
+                return supplierRefreshPreviewValue(value);
+            },
+            confirmSupplierRefreshReview: function () {
+                var self = this;
+                var review = this.supplierRefreshReview;
+                if (!review || review.phase !== 'ready' || review.eligible < 1 ||
+                    !review.reviewToken || !this.supplierRefreshReviewIsCurrent(review)) {
+                    if (review && review.phase !== 'applying') {
+                        review.phase = 'stale';
+                        review.error = 'Список или выбор изменился. Проверьте обновление снова.';
+                        review.reviewToken = '';
+                        this.focusSupplierRefreshReviewRetry();
+                    }
+                    return false;
+                }
+                var ids = review.productIds.slice();
+                var selectionAtReview = review.selectionIds.slice();
+                var labelsAtReview = review.labels.map(function (entry) {
+                    return Object.assign({}, entry);
+                });
+                var reviewToken = review.reviewToken;
+                review.phase = 'applying';
+                review.error = '';
+                this.clearSupplierRefreshResult();
+
+                var request;
+                try {
+                    request = this.$api.post(this.urls.refreshFromSupplier, {
+                        product_ids: ids,
+                        review_token: reviewToken,
+                    });
+                } catch (err) {
+                    request = Promise.reject(err);
+                }
+                return Promise.resolve(request).then(function (data) {
+                    var currentReview = self.supplierRefreshReview;
+                    if (!currentReview || currentReview.generation !== review.generation) {
+                        if (self._supplierRefreshUnmounted) {
+                            var lateOutcome = supplierRefreshOutcome(
+                                data, ids, labelsAtReview, self.urls.commonContent || '',
+                            );
+                            if (lateOutcome && lateOutcome.updated > 0) {
+                                saveSupplierRefreshReceipt(data.resume_receipt);
+                            }
+                        }
+                        return null;
+                    }
+                    if (sameOrderedIds(self.selected, selectionAtReview)) self.selected = [];
+                    var outcome = supplierRefreshOutcome(
+                        data, ids, labelsAtReview, self.urls.commonContent || '',
+                    );
+                    self.cancelSupplierRefreshReview({ restoreFocus: false, force: true });
+                    if (outcome) {
+                        if (outcome.updated > 0 &&
+                            !saveSupplierRefreshReceipt(data.resume_receipt)) {
+                            outcome.resumeWarning = 'Этот итог нельзя будет восстановить после перехода.';
+                        }
+                        self.supplierRefreshResult = outcome;
+                        self.load();
+                        self.loadFacets();
+                    } else {
+                        self.supplierRefreshResult = supplierRefreshNotice(
+                            'unknown', labelsAtReview.length,
+                            'Ответ не подтвердил итог. Обновите список перед следующим запуском.',
+                        );
+                    }
+                    self.$nextTick(function () {
+                        self.$refs.supplierRefreshResult?.focus();
+                    });
+                    return outcome;
+                }).catch(function (err) {
+                    var currentReview = self.supplierRefreshReview;
+                    if (!currentReview || currentReview.generation !== review.generation) return null;
+                    if (err && err.status === 409 &&
+                        err.code === 'supplier_refresh_review_stale') {
+                        currentReview.phase = 'stale';
+                        currentReview.reviewToken = '';
+                        currentReview.error = 'Данные товаров изменились. Проверьте обновление снова.';
+                        self.focusSupplierRefreshReviewRetry();
+                        return null;
+                    }
+                    if (sameOrderedIds(self.selected, selectionAtReview)) self.selected = [];
+                    var rejected = Number.isInteger(err && err.status) && err.status >= 400 &&
+                        err.status < 500 && !(err && err.code === 'auth_required') &&
+                        err.status !== 409;
+                    self.cancelSupplierRefreshReview({ restoreFocus: false, force: true });
+                    self.supplierRefreshResult = supplierRefreshNotice(
+                        rejected ? 'rejected' : 'unknown',
+                        labelsAtReview.length,
+                        rejected
+                            ? 'Сервер отклонил запрос. Обновите список и выберите товары заново.'
+                            : 'Сервер не подтвердил итог. Обновите список перед следующим запуском.',
+                    );
+                    self.$nextTick(function () {
+                        self.$refs.supplierRefreshResult?.focus();
+                    });
+                    return null;
+                });
             },
             cancelSupplierRefreshRestore: function () {
                 var abort = this._supplierRefreshRestoreAbort;
@@ -1792,8 +2194,6 @@
                 var key = this.confirm.key;
                 var ids = Array.isArray(this.confirm.productIds) ? this.confirm.productIds.slice() : [];
                 var selectionAtReview = Array.isArray(this.confirm.selectionIds) ? this.confirm.selectionIds.slice() : [];
-                var labelsAtReview = Array.isArray(this.confirm.labels)
-                    ? this.confirm.labels.map(function (entry) { return Object.assign({}, entry); }) : [];
                 if (!key || !ids.length || ids.length > MAX_BULK_SELECTION) return;
                 if (!sameIds(this.selected, selectionAtReview)) {
                     this.confirm.open = false;
@@ -1809,9 +2209,6 @@
                 if (key === 'push_wb') {
                     this.jobTitle = 'Отправляем на Wildberries';
                     request = this.$api.post(this.urls.pushToWb, { product_ids: ids });
-                } else if (key === 'refresh_supplier') {
-                    this.clearSupplierRefreshResult();
-                    request = this.$api.post(this.urls.refreshFromSupplier, { product_ids: ids });
                 } else if (key === 'audit') {
                     this.jobTitle = 'Сверяем с Wildberries';
                     request = this.$api.post(this.urls.wbAudit, { product_ids: ids });
@@ -1823,28 +2220,6 @@
 
                 request.then(function (data) {
                     self.confirm.open = false;
-                    if (key === 'refresh_supplier') {
-                        var outcome = supplierRefreshOutcome(data, ids, labelsAtReview, self.urls.commonContent || '');
-                        if (sameIds(self.selected, selectionAtReview)) self.selected = [];
-                        if (outcome) {
-                            if (outcome.updated > 0 &&
-                                !saveSupplierRefreshReceipt(data.resume_receipt)) {
-                                outcome.resumeWarning = 'Этот итог нельзя будет восстановить после перехода.';
-                            }
-                            self.supplierRefreshResult = outcome;
-                            self.load();
-                            self.loadFacets();
-                        } else {
-                            self.supplierRefreshResult = supplierRefreshNotice(
-                                'unknown', labelsAtReview.length,
-                                'Ответ не подтвердил итог. Обновите список перед следующим запуском.',
-                            );
-                        }
-                        self.$nextTick(function () {
-                            self.$refs.supplierRefreshResult?.focus();
-                        });
-                        return;
-                    }
                     if (sameIds(self.selected, selectionAtReview)) self.selected = [];
                     if (data.job_uid || data.job_id) {
                         self.trackJob(data.job_uid || data.job_id, ids.length);
@@ -1872,23 +2247,7 @@
                     }
                 }).catch(function (err) {
                     self.confirm.open = false;
-                    if (key === 'refresh_supplier') {
-                        var rejected = Number.isInteger(err && err.status) && err.status >= 400 && err.status < 500 &&
-                            !(err && err.code === 'auth_required');
-                        if (sameIds(self.selected, selectionAtReview)) self.selected = [];
-                        self.supplierRefreshResult = supplierRefreshNotice(
-                            rejected ? 'rejected' : 'unknown',
-                            labelsAtReview.length,
-                            rejected
-                                ? 'Сервер отклонил запрос. Обновите список и выберите товары заново.'
-                                : 'Сервер не подтвердил итог. Обновите список перед следующим запуском.',
-                        );
-                        self.$nextTick(function () {
-                            self.$refs.supplierRefreshResult?.focus();
-                        });
-                    } else {
-                        self.error = err.message || 'Действие не выполнено';
-                    }
+                    self.error = err.message || 'Действие не выполнено';
                 }).finally(function () {
                     self.confirm.busy = false;
                     self.confirm.productIds = [];

@@ -5,7 +5,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261121-wb-create-terminal-r33-css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261121-supplier-refresh-review-r40') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
     'wbConnected': wb_connected,
@@ -22,6 +22,7 @@
         'pushToWb': url_for('seller_push_to_wb_bulk'),
         'wbAudit': url_for('seller_wb_audit_start'),
         'refreshFromSupplier': url_for('my_products_refresh_from_supplier'),
+        'supplierRefreshPreview': url_for('api_my_products_supplier_refresh_preview'),
         'supplierRefreshResult': url_for('api_my_products_supplier_refresh_result'),
         'deleteBulk': url_for('seller_delete_imported_products_bulk'),
         'enrichBulk': url_for('products_enrich_bulk'),
@@ -343,6 +344,69 @@
                 :details="confirm.details" :confirm-label="confirm.label"
                 :danger="confirm.danger" :busy="confirm.busy"
                 @confirm="runAction" @cancel="cancelAction"></sh-confirm>
+    <dialog ref="supplierRefreshDialog" class="mp-supplier-refresh-dialog"
+            aria-labelledby="mp-supplier-refresh-dialog-title"
+            :aria-busy="supplierRefreshReview && ['loading', 'applying'].includes(supplierRefreshReview.phase) ? 'true' : 'false'"
+            @cancel.prevent="cancelSupplierRefreshReview()">
+        <div class="mp-supplier-refresh-dialog-head">
+            <h2 id="mp-supplier-refresh-dialog-title">Проверка обновления из поставщика</h2>
+        </div>
+        <p class="mp-supplier-refresh-local-note">Изменения останутся в Seller Hub. Данные на площадках не меняются.</p>
+        <dl v-if="supplierRefreshReview" class="mp-supplier-refresh-counts" aria-label="Состав проверки">
+            <div><dt>Выбрано</dt><dd>{{ supplierRefreshReview.requested }}</dd></div>
+            <div><dt>Можно обновить</dt><dd>{{ supplierRefreshReview.eligible === null ? '—' : supplierRefreshReview.eligible }}</dd></div>
+            <div><dt>Изменятся</dt><dd>{{ supplierRefreshReview.changed === null ? '—' : supplierRefreshReview.changed }}</dd></div>
+            <div><dt>Без связи</dt><dd>{{ supplierRefreshReview.skipped === null ? '—' : supplierRefreshReview.skipped }}</dd></div>
+        </dl>
+        <p v-if="supplierRefreshReview && supplierRefreshReview.phase === 'loading'"
+           class="mp-supplier-refresh-status" role="status" aria-live="polite">
+            Проверяем изменения выбранных товаров…
+        </p>
+        <div v-if="supplierRefreshReview && supplierRefreshReview.error"
+             class="mp-supplier-refresh-error" role="alert" aria-live="assertive">
+            <p>{{ supplierRefreshReview.error }}</p>
+            <button ref="supplierRefreshReviewRetry" type="button" class="mp-supplier-refresh-retry"
+                    :disabled="supplierRefreshReview.phase === 'loading'"
+                    @click="loadSupplierRefreshPreview()">
+                {{ supplierRefreshReview.phase === 'stale' ? 'Проверить снова' : 'Повторить проверку' }}
+            </button>
+        </div>
+        <div v-if="supplierRefreshReview && supplierRefreshReview.items.length"
+             class="mp-supplier-refresh-list" role="region"
+             aria-label="Изменения по выбранным товарам" tabindex="0">
+            <ul>
+                <li v-for="item in supplierRefreshReview.items" :key="item.productId"
+                    class="mp-supplier-refresh-item" :class="'is-' + item.state">
+                    <div class="mp-supplier-refresh-item-head">
+                        <strong>{{ item.label }}</strong>
+                        <span>{{ item.stateLabel }}</span>
+                    </div>
+                    <dl v-if="item.changes.length" class="mp-supplier-refresh-changes">
+                        <div v-for="change in item.changes" :key="change.field"
+                             :class="{'is-group': change.groupOnly}">
+                            <dt>{{ change.label }}</dt>
+                            <dd v-if="change.groupOnly">Эти данные обновятся</dd>
+                            <dd v-else>
+                                <span>{{ supplierRefreshValueLabel(change.before) }}</span>
+                                <span class="mp-supplier-refresh-arrow" aria-hidden="true">→</span>
+                                <span>{{ supplierRefreshValueLabel(change.after) }}</span>
+                            </dd>
+                        </div>
+                    </dl>
+                </li>
+            </ul>
+        </div>
+        <div class="mp-supplier-refresh-actions">
+            <button ref="supplierRefreshCancel" type="button" class="sh-btn sh-btn--secondary"
+                    :disabled="supplierRefreshReview && supplierRefreshReview.phase === 'applying'"
+                    @click="cancelSupplierRefreshReview()">Вернуться</button>
+            <button v-if="supplierRefreshReview && supplierRefreshReview.phase === 'ready' && supplierRefreshReview.eligible > 0"
+                    type="button" class="sh-btn sh-btn--primary"
+                    @click="confirmSupplierRefreshReview()">Обновить</button>
+            <button v-else-if="supplierRefreshReview && supplierRefreshReview.phase === 'applying'"
+                    type="button" class="sh-btn sh-btn--primary" disabled>Обновляем…</button>
+        </div>
+    </dialog>
     <dialog ref="ozonDialog" class="mp-ozon-dialog" aria-labelledby="mp-ozon-dialog-title" @cancel.prevent="closeOzonDialog">
         <div class="mp-ozon-dialog-head"><div><p class="mp-ozon-eyebrow">Ozon · локальная подготовка</p><h2 id="mp-ozon-dialog-title">Подготовить {{ ozonIds.length }} {{ $fmt.plural(ozonIds.length, 'товар', 'товара', 'товаров') }}</h2></div><button type="button" class="mp-ozon-close" aria-label="Закрыть" :disabled="!!ozonBusy" @click="closeOzonDialog">×</button></div>
         <p>Подготовим локальные черновики для выбранного магазина Ozon. Отправку подтвердите отдельно после проверки карточек.</p>
@@ -385,5 +449,5 @@
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261121-price-workspace-return-r39') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261121-price-workspace-return-r39') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261121-supplier-refresh-review-r40') }}"></script>
 {% endblock %}

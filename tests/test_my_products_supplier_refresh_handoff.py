@@ -24,6 +24,7 @@ const boot = {
     feed: '/api/my-products',
     workspace: '/my-products/beta',
     refreshFromSupplier: '/my-products/refresh-from-supplier',
+    supplierRefreshPreview: '/api/my-products/supplier-refresh-preview',
     supplierRefreshResult: '/api/my-products/supplier-refresh-result',
     commonContent: '/my-products/common-content',
     enrichBulk: '/products/enrich-bulk',
@@ -142,12 +143,22 @@ function makeApp() {
       showModal() { this.open = true; },
       close() { this.open = false; },
     },
+    supplierRefreshDialog: {
+      open: false,
+      showModal() { this.open = true; },
+      close() { this.open = false; },
+    },
+    supplierRefreshCancel: {focused: false, focus() { this.focused = true; }},
+    supplierRefreshRetry: {focused: false, focus() { this.focused = true; }},
   };
   app.$refs = {
     ozonAccount: refs.account,
     ozonError: refs.error,
     supplierRefreshResult: refs.result,
     supplierRefreshResume: refs.resume,
+    supplierRefreshDialog: refs.supplierRefreshDialog,
+    supplierRefreshCancel: refs.supplierRefreshCancel,
+    supplierRefreshReviewRetry: refs.supplierRefreshRetry,
     ozonDialog: refs.dialog,
   };
   app.$nextTick = function (callback) { callback.call(this); };
@@ -166,19 +177,47 @@ function makeApp() {
   return {app, refs};
 }
 
+function supplierPreview(ids, overrides = {}) {
+  const items = ids.map(product_id => ({
+    product_id,
+    label: 'Product ' + product_id,
+    state: 'changed',
+    changes: [{field: 'title', before: 'Old title', after: 'New title'}],
+  }));
+  return Object.assign({
+    success: true,
+    requested: ids.length,
+    eligible: ids.length,
+    changed: ids.length,
+    skipped: 0,
+    items,
+    review_token: 'preview.review.token',
+  }, overrides);
+}
+
 function setSupplierOutcome(app, data, ids) {
   app.selected = ids.slice();
-  app.confirm = {
-    open: true,
-    busy: false,
-    key: 'refresh_supplier',
+  app._supplierRefreshDialogGeneration = 1;
+  app.supplierRefreshReview = {
+    generation: 1,
+    phase: 'ready',
+    error: '',
+    requested: ids.length,
+    eligible: ids.length,
+    changed: ids.length,
+    skipped: 0,
+    items: supplierPreview(ids).items,
+    reviewToken: 'preview.review.token',
     productIds: ids.slice(),
     selectionIds: ids.slice(),
     labels: ids.map(id => ({productId: id, label: 'Product ' + id})),
+    scope: 'current',
   };
+  app.$refs.supplierRefreshDialog.open = true;
   app.$api.post = function (url, body) {
     assert.equal(url, '/my-products/refresh-from-supplier');
     sameJson(body.product_ids, ids);
+    assert.equal(body.review_token, 'preview.review.token');
     return Promise.resolve(data);
   };
 }
@@ -214,12 +253,197 @@ function makeFeedApp(definition, getResponse) {
 async function finishSupplierRefresh(data, ids) {
   const {app, refs} = makeApp();
   setSupplierOutcome(app, data, ids);
-  app.runAction();
+  app.confirmSupplierRefreshReview();
   await new Promise(resolve => setImmediate(resolve));
   return {app, refs};
 }
 
 (async () => {
+  const previewSelection = [202, 101];
+  const reviewed = makeApp();
+  reviewed.app.items = [
+    {id: 101, title: 'Product 101', import_status: 'validated'},
+    {id: 202, title: 'Product 202', import_status: 'validated'},
+  ];
+  reviewed.app.selected = previewSelection.slice();
+  const previewCalls = [];
+  let applyCalls = 0;
+  const reviewResponse = supplierPreview(previewSelection, {
+    changed: 2,
+    items: [
+      {product_id: 202, label: 'Product 202', state: 'changed', changes: [
+        {field: 'title', before: 'Old name', after: 'New name'},
+        {field: 'purchase_price', before: '0', after: '19.90'},
+        {field: 'supplier_quantity', before: 3, after: 0},
+        {field: 'description', before: null, after: null},
+      ]},
+      {product_id: 101, label: 'Product 101', state: 'changed', changes: [
+        {field: 'photos', before: null, after: null},
+      ]},
+    ],
+  });
+  reviewed.app.$api.post = function (url, body, options) {
+    previewCalls.push({url, body, signal: !!options?.signal});
+    if (url === '/api/my-products/supplier-refresh-preview') {
+      sameJson(body.product_ids, previewSelection);
+      assert.equal(previewCalls.length, 1);
+      return Promise.resolve(reviewResponse);
+    }
+    assert.equal(url, '/my-products/refresh-from-supplier');
+    applyCalls += 1;
+    sameJson(body.product_ids, previewSelection);
+    assert.equal(body.review_token, 'preview.review.token');
+    return Promise.resolve({
+      success: true,
+      status: 'completed',
+      requested: 2,
+      updated: 2,
+      skipped: 0,
+      errors: 0,
+      items: previewSelection.map(product_id => ({product_id, status: 'updated', reason: null})),
+    });
+  };
+  reviewed.app.startAction({key: 'refresh_supplier'});
+  assert.equal(reviewed.refs.supplierRefreshDialog.open, true,
+    'the native preview dialog opens before the read-only preview completes');
+  assert.equal(reviewed.app.supplierRefreshReview.phase, 'loading');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reviewed.app.supplierRefreshReview.phase, 'ready');
+  assert.equal(previewCalls.length, 1, 'opening review performs one preview POST');
+  assert.equal(previewCalls[0].url, '/api/my-products/supplier-refresh-preview');
+  assert.equal(previewCalls[0].signal, true, 'preview read has an abort signal');
+  assert.equal(applyCalls, 0, 'preview never applies without the explicit confirmation');
+  assert.equal(reviewed.app.supplierRefreshReview.items[0].changes[1].label, 'Закупочная цена');
+  assert.equal(reviewed.app.supplierRefreshReview.items[0].changes[2].label, 'Остаток у поставщика');
+  assert.equal(reviewed.app.supplierRefreshReview.items[0].changes[3].groupOnly, true);
+  assert.equal(reviewed.app.supplierRefreshValueLabel(0), '0', 'numeric zero remains visible');
+  await reviewed.app.confirmSupplierRefreshReview();
+  assert.equal(applyCalls, 1, 'the explicit confirm sends exactly one apply');
+  assert.equal(reviewed.refs.supplierRefreshDialog.open, false);
+  assert.equal(reviewed.app.supplierRefreshResult.kind, 'complete');
+
+  const invalidPreviews = [
+    supplierPreview([11, 22], {items: supplierPreview([22, 11]).items}),
+    supplierPreview([11, 22], {eligible: 1}),
+    supplierPreview([11, 22], {review_token: ''}),
+    supplierPreview([11, 22], {items: [
+      {product_id: 11, label: 'A', state: 'changed', changes: [{field: 'unknown', before: null, after: null}]},
+      supplierPreview([11, 22]).items[1],
+    ]}),
+    supplierPreview([11, 22], {items: [
+      {product_id: 11, label: 'A', state: 'changed', changes: [{field: 'photos', before: 'old', after: null}]},
+      supplierPreview([11, 22]).items[1],
+    ]}),
+  ];
+  for (const invalidPreview of invalidPreviews) {
+    const malformed = makeApp();
+    malformed.app.items = [{id: 11, title: 'A'}, {id: 22, title: 'B'}];
+    malformed.app.selected = [11, 22];
+    let malformedApplyCalls = 0;
+    malformed.app.$api.post = function (url) {
+      if (url === '/api/my-products/supplier-refresh-preview') return Promise.resolve(invalidPreview);
+      malformedApplyCalls += 1;
+      return Promise.resolve({});
+    };
+    malformed.app.startAction({key: 'refresh_supplier'});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(malformed.app.supplierRefreshReview.phase, 'error');
+    assert.equal(malformedApplyCalls, 0, 'malformed preview cannot reach the apply endpoint');
+    assert.equal(malformed.refs.supplierRefreshRetry.focused, true,
+      'an invalid preview directs focus to the read-only retry');
+  }
+
+  const unlinked = makeApp();
+  unlinked.app.items = [{id: 31, title: 'No supplier'}, {id: 32, title: 'No supplier 2'}];
+  unlinked.app.selected = [31, 32];
+  let unlinkedApplyCalls = 0;
+  unlinked.app.$api.post = function (url) {
+    if (url === '/api/my-products/supplier-refresh-preview') {
+      return Promise.resolve(supplierPreview([31, 32], {
+        eligible: 0, changed: 0, skipped: 2,
+        items: [31, 32].map(product_id => ({
+          product_id, label: 'No supplier', state: 'unlinked', changes: [],
+        })),
+      }));
+    }
+    unlinkedApplyCalls += 1;
+    return Promise.resolve({});
+  };
+  unlinked.app.startAction({key: 'refresh_supplier'});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(unlinked.app.supplierRefreshReview.phase, 'ready');
+  assert.equal(unlinked.app.supplierRefreshReview.eligible, 0);
+  assert.equal(unlinked.app.confirmSupplierRefreshReview(), false);
+  assert.equal(unlinkedApplyCalls, 0, 'all-unlinked review exposes no apply path');
+  unlinked.app.cancelSupplierRefreshReview();
+  assert.equal(unlinked.refs.supplierRefreshDialog.open, false);
+
+  let resolveLatePreview;
+  const cancelledPreview = makeApp();
+  cancelledPreview.app.items = [{id: 41, title: 'A'}];
+  cancelledPreview.app.selected = [41];
+  cancelledPreview.app.$api.post = function () {
+    return new Promise(resolve => { resolveLatePreview = resolve; });
+  };
+  cancelledPreview.app.startAction({key: 'refresh_supplier'});
+  assert.equal(cancelledPreview.refs.supplierRefreshDialog.open, true);
+  cancelledPreview.app.cancelSupplierRefreshReview();
+  resolveLatePreview(supplierPreview([41]));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(cancelledPreview.app.supplierRefreshReview, null,
+    'a preview arriving after cancel cannot restore the dialog');
+  assert.equal(cancelledPreview.app.supplierRefreshResult, null);
+
+  let resolveScopePreview;
+  const changedScopePreview = makeApp();
+  changedScopePreview.app.items = [{id: 42, title: 'A'}];
+  changedScopePreview.app.selected = [42];
+  changedScopePreview.app.$api.post = function () {
+    return new Promise(resolve => { resolveScopePreview = resolve; });
+  };
+  changedScopePreview.app.startAction({key: 'refresh_supplier'});
+  component.watch.searchInput.call(changedScopePreview.app, 'new scope');
+  assert.equal(changedScopePreview.app.supplierRefreshReview, null,
+    'changing search scope closes and invalidates a pending review');
+  resolveScopePreview(supplierPreview([42]));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(changedScopePreview.app.supplierRefreshReview, null,
+    'a late preview cannot restore after scope changes');
+
+  const staleApply = makeApp();
+  staleApply.app.selected = [51];
+  staleApply.app._supplierRefreshDialogGeneration = 1;
+  staleApply.app.supplierRefreshReview = {
+    generation: 1, phase: 'ready', error: '', requested: 1, eligible: 1, changed: 1, skipped: 0,
+    items: supplierPreview([51]).items, reviewToken: 'old.review.token',
+    productIds: [51], selectionIds: [51], labels: [{productId: 51, label: 'Product 51'}], scope: 'current',
+  };
+  staleApply.refs.supplierRefreshDialog.open = true;
+  let stalePreviewReads = 0;
+  let staleApplyWrites = 0;
+  staleApply.app.$api.post = function (url, body) {
+    if (url === '/api/my-products/supplier-refresh-preview') {
+      stalePreviewReads += 1;
+      return Promise.resolve(supplierPreview([51], {review_token: 'new.review.token'}));
+    }
+    staleApplyWrites += 1;
+    assert.equal(body.review_token, 'old.review.token');
+    return Promise.reject(Object.assign(new Error('stale preview'), {
+      status: 409, code: 'supplier_refresh_review_stale',
+    }));
+  };
+  await staleApply.app.confirmSupplierRefreshReview();
+  assert.equal(staleApply.app.supplierRefreshReview.phase, 'stale');
+  assert.equal(staleApply.app.supplierRefreshReview.reviewToken, '');
+  assert.equal(staleApply.app.supplierRefreshReview.error,
+    'Данные товаров изменились. Проверьте обновление снова.');
+  assert.equal(staleApplyWrites, 1);
+  await staleApply.app.loadSupplierRefreshPreview();
+  assert.equal(stalePreviewReads, 1, '409 offers a fresh preview read only');
+  assert.equal(staleApplyWrites, 1, 'stale apply is never retried');
+  assert.equal(staleApply.app.supplierRefreshReview.phase, 'ready');
+  assert.equal(staleApply.app.supplierRefreshReview.reviewToken, 'new.review.token');
+
   const ids = [101, 202, 303];
   const {app, refs} = makeApp();
   setSupplierOutcome(app, {
@@ -237,7 +461,7 @@ async function finishSupplierRefresh(data, ids) {
       {product_id: 202, status: 'skipped', reason: 'no_supplier_link'},
     ],
   }, ids);
-  app.runAction();
+  app.confirmSupplierRefreshReview();
   await new Promise(resolve => setImmediate(resolve));
 
   assert.equal(app.supplierRefreshResult.kind, 'partial');
@@ -416,9 +640,13 @@ async function finishSupplierRefresh(data, ids) {
     require('node:path').dirname(process.argv[1]), 'my-products-beta.css',
   ), 'utf8');
   assert.match(templateText, /'supplierRefreshResult': url_for\('api_my_products_supplier_refresh_result'\)/);
+  assert.match(templateText, /'supplierRefreshPreview': url_for\('api_my_products_supplier_refresh_preview'\)/);
   assert.match(templateText, /id="supplier-refresh-result"/);
-  assert.match(templateText, /filename='my-products-beta\.css', v='20261121-wb-create-terminal-r33-css'/);
-  assert.match(templateText, /filename='my-products-beta\.js', v='20261121-price-workspace-return-r39'/);
+  assert.match(templateText, /<dialog ref="supplierRefreshDialog" class="mp-supplier-refresh-dialog"/);
+  assert.match(templateText, /aria-labelledby="mp-supplier-refresh-dialog-title"/);
+  assert.match(templateText, /Данные на площадках не меняются/);
+  assert.match(templateText, /filename='my-products-beta\.css', v='20261121-supplier-refresh-review-r40'/);
+  assert.match(templateText, /filename='my-products-beta\.js', v='20261121-supplier-refresh-review-r40'/);
   assert.match(templateText, /filename='common-product-content\.js', v='20261121-price-workspace-return-r39'/);
   assert.match(commonTemplateText, /filename='common-product-content\.js', v='20261121-common-content-workspace-return-r36'/);
   assert.match(stylesheetText, /\.mp-refresh-result\s*\{[^}]*scroll-margin-top:\s*72px/s);
@@ -433,12 +661,13 @@ async function finishSupplierRefresh(data, ids) {
   confirmOnly.app.items = [{id: 101, title: 'Product 101', import_status: 'validated'}];
   confirmOnly.app.selected = [101];
   confirmOnly.app.startAction({key: 'refresh_supplier'});
-  assert.equal(confirmOnly.app.confirm.open, true);
+  assert.equal(confirmOnly.refs.supplierRefreshDialog.open, true);
+  assert.equal(confirmOnly.app.supplierRefreshReview.phase, 'loading');
   assert.equal(stored.get(receiptKey), previousReceipt,
-    'opening confirmation must retain the prior result receipt');
+    'opening preview must retain the prior result receipt');
   assert.equal(confirmOnly.app.supplierRefreshResult, priorResult,
-    'opening confirmation must retain the prior visible result');
-  confirmOnly.app.cancelAction();
+    'opening preview must retain the prior visible result');
+  confirmOnly.app.cancelSupplierRefreshReview();
   assert.equal(stored.get(receiptKey), previousReceipt,
     'cancel before POST must retain the prior result receipt');
   assert.equal(confirmOnly.app.supplierRefreshResult, priorResult,
@@ -456,7 +685,7 @@ async function finishSupplierRefresh(data, ids) {
     items: [{product_id: 101, status: 'updated', reason: null}],
   }, [101]);
   stored.set(receiptKey, previousReceipt);
-  postResult.app.runAction();
+  postResult.app.confirmSupplierRefreshReview();
   assert.equal(stored.has(receiptKey), false,
     'starting the actual supplier POST clears the old receipt immediately');
   await new Promise(resolve => setImmediate(resolve));
@@ -475,7 +704,7 @@ async function finishSupplierRefresh(data, ids) {
     resume_receipt: 'x'.repeat(7501),
     items: [{product_id: 101, status: 'updated', reason: null}],
   }, [101]);
-  oversizedReceipt.app.runAction();
+  oversizedReceipt.app.confirmSupplierRefreshReview();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(stored.has(receiptKey), false, 'oversized receipts are never persisted');
   assert.match(oversizedReceipt.app.supplierRefreshResult.resumeWarning, /нельзя будет восстановить/);
