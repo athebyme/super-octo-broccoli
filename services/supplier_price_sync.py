@@ -12,6 +12,7 @@ from sqlalchemy import and_
 
 from models import ImportedProduct, SellerSupplier, Supplier, SupplierProduct, db
 from services.supplier_price_feed import (
+    SupplierPriceFeed,
     SupplierPriceFeedError,
     SupplierPriceRow,
     read_supplier_price_feed,
@@ -93,18 +94,29 @@ def _source_identity(external_id: Optional[str]) -> Optional[int]:
     return None
 
 
-def _validate_feed(feed: Any) -> dict[int, SupplierPriceRow]:
+def _validate_feed(feed: Any) -> tuple[dict[int, SupplierPriceRow], frozenset[int]]:
     """Apply a bounded envelope check around the reader's typed contract."""
-    if not isinstance(feed, dict):
+    if not isinstance(feed, SupplierPriceFeed):
         raise ValueError("invalid_feed")
-    if len(feed) > MAX_SOURCE_ROWS:
+    rows = feed.rows
+    conflicts = feed.conflicting_ids
+    if not isinstance(rows, dict) or not isinstance(conflicts, frozenset):
+        raise ValueError("invalid_feed")
+    if len(rows) + len(conflicts) > MAX_SOURCE_ROWS:
         raise ValueError("feed_too_large")
-    for source_id, row in feed.items():
+    for source_id, row in rows.items():
         if type(source_id) is not int or source_id <= 0:
             raise ValueError("invalid_source_identity")
         if not isinstance(row, SupplierPriceRow):
             raise ValueError("invalid_feed_row")
-    return feed
+    for source_id in conflicts:
+        if type(source_id) is not int or source_id <= 0:
+            raise ValueError("invalid_source_identity")
+    safe_rows = {
+        source_id: row for source_id, row in rows.items()
+        if source_id not in conflicts
+    }
+    return safe_rows, conflicts
 
 
 def _is_due(last_attempt: Optional[datetime], interval_minutes: Any, now: datetime) -> bool:
@@ -171,6 +183,7 @@ def _claim_supplier(supplier_id: int, *, automatic: bool, now: datetime):
         supplier.last_price_sync_attempt_at = claim_at
         supplier.last_price_sync_status = "running"
         supplier.last_price_sync_error = None
+        supplier.last_price_sync_conflict_count = None
         db.session.commit()
         return snapshot, None
     except Exception:
@@ -230,6 +243,7 @@ def _apply_feed(
     supplier_id: int,
     snapshot: dict,
     feed: dict[int, SupplierPriceRow],
+    conflicting_ids: frozenset[int],
     *,
     automatic: bool,
     now: datetime,
@@ -401,16 +415,23 @@ def _apply_feed(
                 seller_rows_updated += 1
 
         supplier.last_price_sync_at = now
-        supplier.last_price_sync_status = "success"
-        supplier.last_price_sync_error = None
+        supplier.last_price_sync_status = "partial" if conflicting_ids else "success"
+        supplier.last_price_sync_error = "ambiguous_source_rows" if conflicting_ids else None
+        supplier.last_price_sync_conflict_count = len(conflicting_ids)
         db.session.commit()
 
+        total_source_rows = len(set(feed).union(conflicting_ids))
         result = _result(
             success=True,
-            total_in_csv=len(feed),
+            total_in_csv=total_source_rows,
             updated=data_bearing_count,
-            skipped=max(0, len(feed) - data_bearing_count),
+            skipped=max(0, total_source_rows - data_bearing_count),
+            errors=len(conflicting_ids),
+            error_messages=(
+                ["ambiguous_source_rows"] if conflicting_ids else []
+            ),
             seller_rows_updated=seller_rows_updated,
+            conflicting_source_rows=len(conflicting_ids),
             duration_seconds=max(0.0, time.monotonic() - started_at),
         )
         return result
@@ -446,7 +467,7 @@ def sync_supplier_price_feed(supplier_id: int, *, automatic: bool = False):
             encoding=snapshot["encoding"],
             delimiter=snapshot["delimiter"],
         )
-        normalized_feed = _validate_feed(source_feed)
+        normalized_feed, conflicting_ids = _validate_feed(source_feed)
     except Exception as error:
         if isinstance(error, SupplierPriceFeedError):
             code = _safe_error_code(error)
@@ -468,6 +489,7 @@ def sync_supplier_price_feed(supplier_id: int, *, automatic: bool = False):
             supplier_id,
             snapshot,
             normalized_feed,
+            conflicting_ids,
             automatic=automatic,
             now=datetime.utcnow(),
             started_at=started_at,

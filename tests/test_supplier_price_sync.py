@@ -21,7 +21,11 @@ from models import (
     db,
 )
 from migrations.migrate_add_price_stock_sync import migrate
-from services.supplier_price_feed import SupplierPriceFeedError, SupplierPriceRow
+from services.supplier_price_feed import (
+    SupplierPriceFeed,
+    SupplierPriceFeedError,
+    SupplierPriceRow,
+)
 from services.supplier_price_sync import (
     run_auto_supplier_price_sync_tick,
     sync_supplier_price_feed,
@@ -122,12 +126,22 @@ class SupplierPriceSyncTest(unittest.TestCase):
         values.update(overrides)
         return SupplierPriceRow(**values)
 
+    @staticmethod
+    def _feed(rows=None, conflicts=()):
+        return SupplierPriceFeed(
+            rows=rows or {},
+            conflicting_ids=frozenset(conflicts),
+        )
+
     def test_feed_failure_is_rate_limited_and_retains_good_facts(self):
         supplier = self._supplier(auto_sync_prices=True, auto_sync_interval_minutes=5)
         product = self._product(supplier, supplier_price=44.0, supplier_quantity=6)
         good_supplier_sync = datetime.utcnow() - timedelta(days=1)
         good_row_sync = datetime.utcnow() - timedelta(hours=2)
         supplier.last_price_sync_at = good_supplier_sync
+        supplier.last_price_sync_status = "partial"
+        supplier.last_price_sync_error = "ambiguous_source_rows"
+        supplier.last_price_sync_conflict_count = 2
         product.last_price_sync_at = good_row_sync
         db.session.commit()
 
@@ -141,6 +155,7 @@ class SupplierPriceSyncTest(unittest.TestCase):
             self.assertTrue(supplier.last_price_sync_attempt_at)
             self.assertEqual(supplier.last_price_sync_status, "failed")
             self.assertEqual(supplier.last_price_sync_error, "http_status")
+            self.assertIsNone(supplier.last_price_sync_conflict_count)
             self.assertEqual(supplier.last_price_sync_at, good_supplier_sync)
             self.assertEqual(product.supplier_price, 44.0)
             self.assertEqual(product.supplier_quantity, 6)
@@ -177,7 +192,7 @@ class SupplierPriceSyncTest(unittest.TestCase):
 
         with patch(
             "services.supplier_price_sync.read_supplier_price_feed",
-            return_value={123: self._row(price=20.0, quantity=0)},
+            return_value=self._feed({123: self._row(price=20.0, quantity=0)}),
         ):
             result = sync_supplier_price_feed(supplier.id)
 
@@ -212,7 +227,7 @@ class SupplierPriceSyncTest(unittest.TestCase):
 
         with patch(
             "services.supplier_price_sync.read_supplier_price_feed",
-            return_value={123: self._row(price=0, quantity=None)},
+            return_value=self._feed({123: self._row(price=0, quantity=None)}),
         ):
             result = sync_supplier_price_feed(supplier.id)
         self.assertTrue(result.success)
@@ -224,7 +239,7 @@ class SupplierPriceSyncTest(unittest.TestCase):
         db.session.commit()
         with patch(
             "services.supplier_price_sync.read_supplier_price_feed",
-            return_value={123: self._row(price=None, quantity=0)},
+            return_value=self._feed({123: self._row(price=None, quantity=0)}),
         ):
             result = sync_supplier_price_feed(supplier.id)
         self.assertTrue(result.success)
@@ -254,7 +269,7 @@ class SupplierPriceSyncTest(unittest.TestCase):
 
         with patch(
             "services.supplier_price_sync.read_supplier_price_feed",
-            return_value={123: self._row(price=None, quantity=0)},
+            return_value=self._feed({123: self._row(price=None, quantity=0)}),
         ):
             result = sync_supplier_price_feed(supplier.id)
 
@@ -277,7 +292,7 @@ class SupplierPriceSyncTest(unittest.TestCase):
         with (
             patch(
                 "services.supplier_price_sync.read_supplier_price_feed",
-                return_value={123: self._row(price=35.0, quantity=5)},
+                return_value=self._feed({123: self._row(price=35.0, quantity=5)}),
             ),
             patch("services.supplier_price_sync.MAX_IMPORTED_TARGETS", 0),
         ):
@@ -310,7 +325,7 @@ class SupplierPriceSyncTest(unittest.TestCase):
 
         with patch(
             "services.supplier_price_sync.read_supplier_price_feed",
-            return_value={123: row},
+            return_value=self._feed({123: row}),
         ):
             automatic_result = sync_supplier_price_feed(supplier.id, automatic=True)
 
@@ -322,7 +337,7 @@ class SupplierPriceSyncTest(unittest.TestCase):
 
         with patch(
             "services.supplier_price_sync.read_supplier_price_feed",
-            return_value={123: row},
+            return_value=self._feed({123: row}),
         ):
             manual_result = sync_supplier_price_feed(supplier.id)
 
@@ -332,6 +347,85 @@ class SupplierPriceSyncTest(unittest.TestCase):
         self.assertEqual(product.barcode, "new-barcode")
         self.assertEqual(product.recommended_retail_price, 42.0)
 
+    def test_conflicting_source_id_is_quarantined_and_partial_state_recovers(self):
+        supplier = self._supplier()
+        safe_product = self._product(
+            supplier,
+            external_id="101",
+            supplier_price=10.0,
+            supplier_quantity=2,
+        )
+        conflict_observed_at = datetime.utcnow() - timedelta(days=3)
+        conflict_product = self._product(
+            supplier,
+            external_id="202",
+            supplier_price=40.0,
+            supplier_quantity=4,
+            last_price_sync_at=conflict_observed_at,
+        )
+        seller = self._seller(supplier, active=True, username="ambiguous-feed")
+        safe_copy = self._imported(seller, supplier, safe_product, price=10.0, quantity=2)
+        conflict_copy = self._imported(
+            seller, supplier, conflict_product, price=40.0, quantity=4,
+        )
+        db.session.commit()
+
+        # Even if a producer accidentally supplies a candidate row for a
+        # quarantined ID, conflicting_ids wins and no first/last value applies.
+        partial_feed = self._feed(
+            {
+                101: self._row(price=15.0, quantity=3),
+                202: self._row(price=999.0, quantity=99),
+            },
+            conflicts={202},
+        )
+        with patch(
+            "services.supplier_price_sync.read_supplier_price_feed",
+            return_value=partial_feed,
+        ):
+            result = sync_supplier_price_feed(supplier.id)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.errors, 1)
+        self.assertEqual(result.conflicting_source_rows, 1)
+        self.assertEqual(result.total_in_csv, 2)
+        self.assertEqual(result.skipped, 1)
+        self.assertEqual(result.error_messages, ["ambiguous_source_rows"])
+        self.assertEqual(supplier.last_price_sync_status, "partial")
+        self.assertEqual(supplier.last_price_sync_error, "ambiguous_source_rows")
+        self.assertEqual(supplier.last_price_sync_conflict_count, 1)
+        self.assertGreater(supplier.last_price_sync_at, conflict_observed_at)
+        self.assertEqual(safe_product.supplier_price, 15.0)
+        self.assertEqual(safe_product.supplier_quantity, 3)
+        self.assertEqual(safe_copy.supplier_price, 15.0)
+        self.assertEqual(safe_copy.supplier_quantity, 3)
+        self.assertEqual(conflict_product.supplier_price, 40.0)
+        self.assertEqual(conflict_product.supplier_quantity, 4)
+        self.assertEqual(conflict_product.last_price_sync_at, conflict_observed_at)
+        self.assertEqual(conflict_copy.supplier_price, 40.0)
+        self.assertEqual(conflict_copy.supplier_quantity, 4)
+
+        with patch(
+            "services.supplier_price_sync.read_supplier_price_feed",
+            return_value=self._feed({
+                101: self._row(price=16.0, quantity=4),
+                202: self._row(price=42.0, quantity=5),
+            }),
+        ):
+            recovered = sync_supplier_price_feed(supplier.id)
+
+        self.assertTrue(recovered.success)
+        self.assertEqual(recovered.errors, 0)
+        self.assertEqual(recovered.conflicting_source_rows, 0)
+        self.assertEqual(recovered.error_messages, [])
+        self.assertEqual(supplier.last_price_sync_status, "success")
+        self.assertIsNone(supplier.last_price_sync_error)
+        self.assertEqual(supplier.last_price_sync_conflict_count, 0)
+        self.assertEqual(conflict_product.supplier_price, 42.0)
+        self.assertEqual(conflict_product.supplier_quantity, 5)
+        self.assertEqual(conflict_copy.supplier_price, 42.0)
+        self.assertEqual(conflict_copy.supplier_quantity, 5)
+
     def test_collision_fails_closed_and_identity_matching_is_anchored(self):
         supplier = self._supplier()
         first = self._product(supplier, external_id="123", supplier_price=10.0)
@@ -340,7 +434,7 @@ class SupplierPriceSyncTest(unittest.TestCase):
 
         with patch(
             "services.supplier_price_sync.read_supplier_price_feed",
-            return_value={123: self._row(price=99.0)},
+            return_value=self._feed({123: self._row(price=99.0)}),
         ):
             result = sync_supplier_price_feed(supplier.id)
         self.assertFalse(result.success)
@@ -353,7 +447,7 @@ class SupplierPriceSyncTest(unittest.TestCase):
         db.session.commit()
         with patch(
             "services.supplier_price_sync.read_supplier_price_feed",
-            return_value={123: self._row(price=99.0)},
+            return_value=self._feed({123: self._row(price=99.0)}),
         ):
             result = sync_supplier_price_feed(other.id)
         self.assertFalse(result.success)
@@ -371,7 +465,7 @@ class SupplierPriceSyncTest(unittest.TestCase):
             current = Supplier.query.filter_by(id=supplier.id).populate_existing().first()
             current.price_file_url = "https://supplier.invalid/replaced.csv"
             db.session.commit()
-            return {123: self._row(price=88.0)}
+            return self._feed({123: self._row(price=88.0)})
 
         with patch(
             "services.supplier_price_sync.read_supplier_price_feed",
@@ -402,7 +496,7 @@ class SupplierPriceSyncTest(unittest.TestCase):
         db.session.commit()
         with patch(
             "services.supplier_price_sync.read_supplier_price_feed",
-            return_value={123: self._row(price=21.0)},
+            return_value=self._feed({123: self._row(price=21.0)}),
         ):
             result = sync_supplier_price_feed(supplier.id)
         self.assertTrue(result.success)
@@ -444,7 +538,7 @@ class SupplierPriceSyncTest(unittest.TestCase):
 
         with patch(
             "services.supplier_price_sync.read_supplier_price_feed",
-            return_value={123: self._row()},
+            return_value=self._feed({123: self._row()}),
         ) as reader:
             result = run_auto_supplier_price_sync_tick(self.app)
 
@@ -508,6 +602,7 @@ class SupplierPriceSyncMigrationTest(unittest.TestCase):
             connection.close()
 
             self.assertIn("last_price_sync_attempt_at", supplier_columns)
+            self.assertIn("last_price_sync_conflict_count", supplier_columns)
             self.assertEqual(supplier_values, (successful_at, None))
             self.assertEqual(product_values, (1, "123"))
         finally:
