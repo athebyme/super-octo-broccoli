@@ -409,13 +409,19 @@ async function finishSupplierRefresh(data, ids) {
   const templateText = fs.readFileSync(require('node:path').join(
     require('node:path').dirname(process.argv[1]), '..', 'templates', 'my_products_beta.html',
   ), 'utf8');
+  const commonTemplateText = fs.readFileSync(require('node:path').join(
+    require('node:path').dirname(process.argv[1]), '..', 'templates', 'common_product_content.html',
+  ), 'utf8');
   const stylesheetText = fs.readFileSync(require('node:path').join(
     require('node:path').dirname(process.argv[1]), 'my-products-beta.css',
   ), 'utf8');
   assert.match(templateText, /'supplierRefreshResult': url_for\('api_my_products_supplier_refresh_result'\)/);
   assert.match(templateText, /id="supplier-refresh-result"/);
   assert.match(templateText, /filename='my-products-beta\.css', v='20261121-wb-create-terminal-r33-css'/);
-  assert.match(templateText, /filename='my-products-beta\.js', v='20261121-wb-create-terminal-r33'/);
+  assert.match(templateText, /filename='my-products-beta\.js', v='20261121-common-content-workspace-return-r36'/);
+  const commonHelperAsset = /filename='common-product-content\.js', v='20261121-common-content-workspace-return-r36'/;
+  assert.match(templateText, commonHelperAsset);
+  assert.match(commonTemplateText, commonHelperAsset);
   assert.match(stylesheetText, /\.mp-refresh-result\s*\{[^}]*scroll-margin-top:\s*72px/s);
 
   const receiptKey = 'supplier-refresh-resume-v1';
