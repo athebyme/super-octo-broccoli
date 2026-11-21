@@ -1,11 +1,11 @@
-"""Synthetic browser proof for supplier import selection and WB create result.
+"""Synthetic browser proof for supplier selection, review, and WB create.
 
 Uses the isolated app, SQLite fixture, network-denying browser bridge, and
 synthetic seller session from ``journey_browser``. It covers exact local
-supplier refresh review/confirm alongside the normal import form and one exact
-WB bulk-create POST. A scoped fake importer supplies deterministic WB outcomes
-after the real route and BackgroundJob worker perform their normal
-seller scope/readiness checks.
+supplier catalog and classic-to-beta refresh review/confirm alongside the
+normal import form and one exact WB bulk-create POST. A scoped fake importer
+supplies deterministic WB outcomes after the real route and BackgroundJob
+worker perform their normal seller scope/readiness checks.
 
 Run with the repository venv and Chromium installed. The summary is written to
 ``/artifacts/supplier-filtered-import.json`` by default.
@@ -34,6 +34,7 @@ from models import (
     SellerSupplier,
     Supplier,
     SupplierProduct,
+    User,
     db,
 )
 
@@ -45,6 +46,9 @@ REPORT_PATH = Path(os.environ.get(
 IMPORT_PATH = "/supplier-catalog/import"
 SUPPLIER_REVIEW_PATH = "/supplier-catalog/update/review"
 SUPPLIER_CONFIRM_PATH = "/supplier-catalog/update/confirm"
+SUPPLIER_REFRESH_HANDOFF_PATH = "/my-products/refresh-from-supplier/review"
+SUPPLIER_REFRESH_PREVIEW_PATH = "/api/my-products/supplier-refresh-preview"
+SUPPLIER_REFRESH_APPLY_PATH = "/my-products/refresh-from-supplier"
 WB_CREATE_PATH = "/my-products/push-to-wb-bulk"
 JOB_STATUS_PREFIX = "/api/jobs/"
 FILTERS = {
@@ -286,8 +290,14 @@ def run():
     fixture_ids = seed_supplier_products()
     checks = []
     posts = []
+    supplier_handoff_posts = []
+    supplier_handoff_responses = []
     supplier_review_posts = []
     supplier_confirm_posts = []
+    supplier_refresh_preview_posts = []
+    supplier_refresh_preview_responses = []
+    supplier_refresh_apply_posts = []
+    supplier_refresh_apply_responses = []
     wb_create_posts = []
     product_feed_reads = []
     facet_reads = []
@@ -311,7 +321,7 @@ def run():
                 except Exception:
                     raise AssertionError("local product feed request failed") from None
                 payload = None
-                if "import_batch" in query:
+                if "import_batch" in query or "supplier_refresh_batch" in query:
                     try:
                         payload = response.json()
                     except Exception:
@@ -320,6 +330,7 @@ def run():
                     "sequence": next_event(),
                     "query_keys": tuple(sorted(query)),
                     "batch_tokens": tuple(query.get("import_batch", [])),
+                    "supplier_refresh_tokens": tuple(query.get("supplier_refresh_batch", [])),
                     "status": response.status,
                     "payload": payload,
                 })
@@ -372,6 +383,9 @@ def run():
                 IMPORT_PATH,
                 SUPPLIER_REVIEW_PATH,
                 SUPPLIER_CONFIRM_PATH,
+                SUPPLIER_REFRESH_HANDOFF_PATH,
+                SUPPLIER_REFRESH_PREVIEW_PATH,
+                SUPPLIER_REFRESH_APPLY_PATH,
                 WB_CREATE_PATH,
             }, (
                 request.method, parsed.path,
@@ -380,6 +394,7 @@ def run():
                 IMPORT_PATH,
                 SUPPLIER_REVIEW_PATH,
                 SUPPLIER_CONFIRM_PATH,
+                SUPPLIER_REFRESH_HANDOFF_PATH,
             }:
                 body = parse_qs(request.post_data or "", keep_blank_values=True)
                 assert body.get("csrf_token"), "supplier local form must carry CSRF"
@@ -387,8 +402,28 @@ def run():
                     posts.append({"path": parsed.path, "body": body})
                 elif parsed.path == SUPPLIER_REVIEW_PATH:
                     supplier_review_posts.append({"path": parsed.path, "body": body})
+                elif parsed.path == SUPPLIER_REFRESH_HANDOFF_PATH:
+                    supplier_handoff_posts.append({
+                        "path": parsed.path,
+                        "query": parse_qs(parsed.query, keep_blank_values=True),
+                        "body": body,
+                    })
                 else:
                     supplier_confirm_posts.append({"path": parsed.path, "body": body})
+            elif parsed.path in {
+                SUPPLIER_REFRESH_PREVIEW_PATH,
+                SUPPLIER_REFRESH_APPLY_PATH,
+            }:
+                assert "application/json" in (request.headers.get("content-type") or "")
+                assert request.headers.get("x-csrftoken"), "supplier refresh API POST must carry CSRF"
+                try:
+                    body = request.post_data_json
+                except Exception:
+                    raise AssertionError("supplier refresh API POST must carry JSON") from None
+                if parsed.path == SUPPLIER_REFRESH_PREVIEW_PATH:
+                    supplier_refresh_preview_posts.append({"path": parsed.path, "body": body})
+                else:
+                    supplier_refresh_apply_posts.append({"path": parsed.path, "body": body})
             else:
                 assert "application/json" in (request.headers.get("content-type") or "")
                 assert request.headers.get("x-csrftoken"), "WB create POST must carry CSRF"
@@ -402,9 +437,46 @@ def run():
                     "body": body,
                 })
             response = route.fetch(max_redirects=0)
-            if parsed.path != SUPPLIER_REVIEW_PATH:
+            if parsed.path == SUPPLIER_REFRESH_HANDOFF_PATH:
+                supplier_handoff_responses.append({
+                    "status": response.status,
+                    "location": response.headers.get("location", ""),
+                })
+                if response.status != 303:
+                    fixture.REPORT["unexpected_http"].append({
+                        "path": parsed.path, "status": response.status,
+                    })
+            elif parsed.path == SUPPLIER_REFRESH_PREVIEW_PATH:
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = None
+                supplier_refresh_preview_responses.append({
+                    "status": response.status, "payload": payload,
+                })
+                if response.status != 200:
+                    fixture.REPORT["unexpected_http"].append({
+                        "path": parsed.path, "status": response.status,
+                    })
+            elif parsed.path == SUPPLIER_REFRESH_APPLY_PATH:
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = None
+                supplier_refresh_apply_responses.append({
+                    "status": response.status, "payload": payload,
+                })
+                if response.status != 200:
+                    fixture.REPORT["unexpected_http"].append({
+                        "path": parsed.path, "status": response.status,
+                    })
+            if parsed.path not in {
+                SUPPLIER_REVIEW_PATH,
+                SUPPLIER_REFRESH_HANDOFF_PATH,
+                SUPPLIER_REFRESH_PREVIEW_PATH,
+            }:
                 fixture.REPORT["writes"].append({"method": "POST", "path": parsed.path})
-            elif response.status != 200:
+            if parsed.path == SUPPLIER_REVIEW_PATH and response.status != 200:
                 fixture.REPORT["unexpected_http"].append({
                     "path": parsed.path, "status": response.status,
                 })
@@ -607,9 +679,15 @@ def run():
             "redirect must carry one bounded signed import batch",
         )
         batch_token = batch_tokens[0]
-        safe_page_errors = lambda: [
-            error.replace(batch_token, "[redacted]") for error in page_errors
-        ]
+        safe_page_tokens = [batch_token]
+
+        def safe_page_errors():
+            messages = []
+            for error in page_errors:
+                for token in safe_page_tokens:
+                    error = error.replace(token, "[redacted]")
+                messages.append(error)
+            return messages
 
         def assert_batch_page(expected_product_ids):
             page.get_by_role("heading", name="Товары из импорта", exact=True).wait_for()
@@ -1346,6 +1424,235 @@ def run():
             "confirm_post_count": len(supplier_confirm_posts),
         }
 
+        # Classic updates hand off the exact checked IDs to beta. The handoff
+        # and exact feed read are read-only; the existing action opens preview,
+        # then its separate confirmation applies only Seller Hub data.
+        handoff_ids = [
+            review_fixture["selected_copy_id"],
+            review_fixture["current_copy_id"],
+        ]
+        with fixture.app.app_context():
+            for source_id in (
+                review_fixture["selected_source_id"],
+                review_fixture["current_source_id"],
+            ):
+                source = db.session.get(SupplierProduct, source_id)
+                source.content_revision = int(source.content_revision or 1) + 1
+            db.session.commit()
+
+            def handoff_snapshot():
+                return {
+                    row.id: (row.title, row.supplier_content_revision, row.updated_at)
+                    for row in ImportedProduct.query.filter(
+                        ImportedProduct.seller_id == fixture.FIXTURE["seller_id"],
+                        ImportedProduct.id.in_(handoff_ids),
+                    ).order_by(ImportedProduct.id).all()
+                }
+
+            handoff_before = handoff_snapshot()
+
+        handoff_filters = {
+            "updates": "1",
+            "search": "R28 Mass batch",
+            "supplier": str(fixture_ids["supplier_id"]),
+            "sort": "title",
+        }
+        page.set_viewport_size({"width": 1280, "height": 900})
+        response = page.goto(
+            fixture.BASE + "/my-products?" + urlencode(handoff_filters),
+            wait_until="domcontentloaded",
+        )
+        assert response and response.status == 200
+        page.wait_for_load_state("networkidle")
+        classic_rows = page.locator("tr[data-product-id]")
+        classic_ids = [
+            int(value) for value in classic_rows.evaluate_all(
+                "rows => rows.map(row => row.dataset.productId)",
+            )
+        ]
+        assert len(classic_ids) == 2 and set(classic_ids) == set(handoff_ids)
+        for product_id in classic_ids:
+            page.locator(
+                f'tr[data-product-id="{product_id}"] input[type="checkbox"]',
+            ).check()
+        classic_form = page.locator('[data-supplier-refresh-review-handoff="bulk"]')
+        assert classic_form.is_visible()
+        classic_selection = classic_form.evaluate("""form => {
+            const data = new FormData(form);
+            return {ids: data.getAll('selected_ids'), csrf: data.getAll('csrf_token'), action: form.action};
+        }""")
+        assert classic_selection["ids"] == [str(product_id) for product_id in classic_ids]
+        assert classic_selection["csrf"] and classic_selection["csrf"][0]
+        assert parse_qs(urlsplit(classic_selection["action"]).query) == {
+            "updates": ["1"],
+            "search": [handoff_filters["search"]],
+            "supplier": [str(fixture_ids["supplier_id"])],
+            "sort": ["title"],
+        }
+
+        writes_before_handoff = len(fixture.REPORT["writes"])
+        feeds_before_handoff = len(product_feed_reads)
+        facets_before_handoff = len(facet_reads)
+        with page.expect_response(
+            lambda r: urlsplit(r.url).path == SUPPLIER_REFRESH_HANDOFF_PATH
+            and r.request.method == "POST",
+        ) as handoff_response:
+            classic_form.get_by_role(
+                "button", name=re.compile("Проверить применение в мои карточки"),
+            ).click()
+        assert handoff_response.value.status == 303
+        assert len(supplier_handoff_posts) == len(supplier_handoff_responses) == 1
+        handoff_post = supplier_handoff_posts[0]
+        assert set(handoff_post["body"]) == {"csrf_token", "selected_ids"}
+        assert handoff_post["body"].get("selected_ids") == [
+            str(product_id) for product_id in classic_ids
+        ]
+        assert handoff_post["query"] == {
+            key: [value] for key, value in handoff_filters.items()
+        }
+        location = urlsplit(supplier_handoff_responses[0]["location"])
+        token_values = parse_qs(location.query, keep_blank_values=True)
+        assert supplier_handoff_responses[0]["status"] == 303
+        assert location.path == "/my-products/beta"
+        assert set(token_values) == {"supplier_refresh_batch"}
+        assert len(token_values["supplier_refresh_batch"]) == 1
+        supplier_handoff_token = token_values["supplier_refresh_batch"][0]
+        assert 0 < len(supplier_handoff_token) <= 8192
+        safe_page_tokens.append(supplier_handoff_token)
+
+        from routes.suppliers import _load_supplier_refresh_handoff_token
+        with fixture.app.app_context():
+            owner = User.query.filter_by(username=fixture.USERNAME).one()
+            signed_scope = _load_supplier_refresh_handoff_token(
+                supplier_handoff_token,
+                user_id=owner.id,
+                seller_id=fixture.FIXTURE["seller_id"],
+            )
+            assert signed_scope["ids"] == classic_ids
+            assert signed_scope["return_args"] == {
+                "updates": 1,
+                "search": handoff_filters["search"],
+                "supplier": fixture_ids["supplier_id"],
+                "sort": "title",
+            }
+
+        page.locator('#my-products-app[data-supplier-refresh-handoff="active"]').wait_for()
+        page.wait_for_load_state("networkidle")
+        beta_location = urlsplit(page.url)
+        assert beta_location.path == "/my-products/beta"
+        beta_token_values = parse_qs(beta_location.query, keep_blank_values=True)
+        assert set(beta_token_values) == {"supplier_refresh_batch"}
+        assert beta_token_values["supplier_refresh_batch"] == [supplier_handoff_token], (
+            "beta URL must retain the exact signed selection",
+        )
+        assert page.get_by_role("heading", name="Обновление из каталога").count() == 1
+        return_link = page.locator("[data-supplier-refresh-return]")
+        return_url = urlsplit(return_link.get_attribute("href"))
+        assert return_url.path == "/my-products"
+        assert parse_qs(return_url.query) == {
+            "updates": ["1"],
+            "search": [handoff_filters["search"]],
+            "supplier": [str(fixture_ids["supplier_id"])],
+            "sort": ["title"],
+        }
+        supplier_reads = [
+            read for read in product_feed_reads[feeds_before_handoff:]
+            if supplier_handoff_token in read["supplier_refresh_tokens"]
+        ]
+        assert len(supplier_reads) == 1
+        assert len(product_feed_reads[feeds_before_handoff:]) == 1
+        assert len(facet_reads) == facets_before_handoff
+        exact_feed = supplier_reads[0]
+        assert exact_feed["query_keys"] == ("supplier_refresh_batch",)
+        assert exact_feed["status"] == 200
+        assert exact_feed["payload"]["success"] is True
+        assert exact_feed["payload"]["supplier_refresh_batch_count"] == 2
+        assert [item["id"] for item in exact_feed["payload"]["items"]] == classic_ids
+        beta_state = page.evaluate("""() => {
+            const app = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return app ? {loading: app.loading, mode: app.supplierRefreshBatchMode,
+                ids: app.items.map(item => item.id), selected: app.selected.slice()} : null;
+        }""")
+        assert beta_state == {
+            "loading": False, "mode": True, "ids": classic_ids, "selected": classic_ids,
+        }
+        assert supplier_refresh_preview_posts == []
+        assert supplier_refresh_apply_posts == []
+        assert len(fixture.REPORT["writes"]) == writes_before_handoff
+        with fixture.app.app_context():
+            assert handoff_snapshot() == handoff_before
+
+        page.get_by_role("button", name="Что сделать", exact=True).click()
+        with page.expect_response(
+            lambda r: urlsplit(r.url).path == SUPPLIER_REFRESH_PREVIEW_PATH
+            and r.request.method == "POST",
+        ) as preview_response:
+            page.get_by_role(
+                "menuitem", name=re.compile("Обновить из поставщика"),
+            ).click()
+        assert preview_response.value.status == 200
+        review_dialog = page.locator(
+            'dialog[aria-labelledby="mp-supplier-refresh-dialog-title"]',
+        )
+        review_dialog.wait_for(state="visible")
+        assert "Изменения останутся в Seller Hub" in review_dialog.inner_text()
+        assert len(supplier_refresh_preview_posts) == 1
+        assert supplier_refresh_preview_posts[0]["body"] == {"product_ids": classic_ids}
+        assert supplier_refresh_preview_responses[0]["status"] == 200
+        preview_payload = supplier_refresh_preview_responses[0]["payload"]
+        assert preview_payload["requested"] == preview_payload["eligible"] == 2
+        assert preview_payload["changed"] == 2
+        assert [item["product_id"] for item in preview_payload["items"]] == classic_ids
+        assert supplier_refresh_apply_posts == []
+        assert len(fixture.REPORT["writes"]) == writes_before_handoff
+        with fixture.app.app_context():
+            assert handoff_snapshot() == handoff_before
+
+        with page.expect_response(
+            lambda r: urlsplit(r.url).path == SUPPLIER_REFRESH_APPLY_PATH
+            and r.request.method == "POST",
+        ) as apply_response:
+            review_dialog.get_by_role("button", name="Обновить", exact=True).click()
+        assert apply_response.value.status == 200
+        assert len(supplier_refresh_apply_posts) == len(supplier_refresh_apply_responses) == 1
+        apply_body = supplier_refresh_apply_posts[0]["body"]
+        assert set(apply_body) == {"product_ids", "review_token"}
+        assert apply_body["product_ids"] == classic_ids
+        assert 0 < len(apply_body["review_token"]) <= 8192
+        apply_payload = supplier_refresh_apply_responses[0]["payload"]
+        assert apply_payload["success"] is True
+        assert (
+            apply_payload["requested"], apply_payload["updated"],
+            apply_payload["skipped"], apply_payload["errors"],
+        ) == (2, 2, 0, 0)
+        assert [item["product_id"] for item in apply_payload["items"]] == classic_ids
+        page.locator("#supplier-refresh-result").wait_for()
+        with fixture.app.app_context():
+            for product_id in classic_ids:
+                imported = db.session.get(ImportedProduct, product_id)
+                source = db.session.get(SupplierProduct, imported.supplier_product_id)
+                assert imported.supplier_content_revision == source.content_revision
+
+        with page.expect_navigation(wait_until="domcontentloaded"):
+            return_link.click()
+        returned_location = urlsplit(page.url)
+        assert returned_location.path == "/my-products"
+        assert parse_qs(returned_location.query) == {
+            "updates": ["1"],
+            "search": [handoff_filters["search"]],
+            "supplier": [str(fixture_ids["supplier_id"])],
+            "sort": ["title"],
+        }
+        assert "supplier_refresh_batch" not in parse_qs(returned_location.query)
+        assert len(supplier_refresh_preview_posts) == len(supplier_refresh_apply_posts) == 1
+        checks.append("classic_refresh_handoff_keeps_exact_order_until_explicit_beta_review_and_filtered_return")
+        supplier_refresh_handoff_report = {
+            "selected_count": len(classic_ids),
+            "reviewed_count": preview_payload["requested"],
+            "updated_count": apply_payload["updated"],
+            "returned_filters": parse_qs(returned_location.query),
+        }
+
         assert not safe_page_errors(), "batch browser reported a JavaScript error"
         assert fixture.REPORT["provider_attempts"] == 0
         assert fixture.REPORT["unexpected_external_requests"] == []
@@ -1356,20 +1663,22 @@ def run():
             {"method": "POST", "path": SUPPLIER_CONFIRM_PATH},
             {"method": "POST", "path": SUPPLIER_CONFIRM_PATH},
             {"method": "POST", "path": SUPPLIER_CONFIRM_PATH},
+            {"method": "POST", "path": SUPPLIER_REFRESH_APPLY_PATH},
         ], fixture.REPORT["writes"]
         assert wb_create_report is not None
-        checks.append("synthetic_supplier_import_reviews_and_wb_create_have_zero_provider_attempts_external_requests_and_http_errors")
+        checks.append("synthetic_supplier_refresh_review_and_wb_create_have_zero_provider_attempts_external_requests_and_http_errors")
         context.close()
         browser.close()
 
     return {
         "status": "passed",
-        "scope": "synthetic_supplier_import_review_and_terminal_wb_bulk_create",
+        "scope": "synthetic_supplier_refresh_review_and_classic_beta_handoff",
         "checks": checks,
         "provider_attempts": fixture.REPORT["provider_attempts"],
         "selected_count": len(selected_ids),
         "imported_count": imported_count,
         "supplier_catalog_review": supplier_review_report,
+        "supplier_refresh_handoff": supplier_refresh_handoff_report,
         "wb_create": wb_create_report,
         "screenshots": [
             freshness_screenshot,
