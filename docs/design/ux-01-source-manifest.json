@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-21T08:13:39.195494+00:00",
+  "generated_at": "2026-11-21T08:20:32.204794+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "b1649404554cc6c30be4713f888833f116a9a40cb2b8ec71a7ceed00027fa042"
+      "sha256": "fd3ee8252e38d5869fca85a7247161408d3266ad9e42f12cf4d6de751da515eb"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -481,7 +481,7 @@
     },
     {
       "path": "docs/design/seller-bulk-workspace-2026-11-20.md",
-      "sha256": "5506fb5ca981b4e672bf18524eb4a944160d786e10a74f107a3b78468548cbb1"
+      "sha256": "fa673d57170c250ffb40e2db51562fc27e88377d8301f968868edff351f26d1f"
     },
     {
       "path": "docs/design/startup-migration-performance.md",
@@ -1161,7 +1161,7 @@
     },
     {
       "path": "migrations/migrate_add_price_stock_sync.py",
-      "sha256": "f3831e81fc3ebdeeb835ec09bcb56bfa2034e7f97357a6b1d8aab3a257558fb5"
+      "sha256": "74ce313aa31d9605a47b4957565e2515b397b9e6853c5c151110124c48651d13"
     },
     {
       "path": "migrations/migrate_add_product_defaults.py",
@@ -1273,7 +1273,7 @@
     },
     {
       "path": "models.py",
-      "sha256": "91a76a9d08edb29eec51e4fc58448ab28d97d918a0422ac5e3b21b6dde8f239f"
+      "sha256": "1723577ee879bd7ff08876acd7aa8023c8f4535e09e62ec1a384ae39d117f995"
     },
     {
       "path": "plan.md",
@@ -1485,7 +1485,7 @@
     },
     {
       "path": "routes/suppliers.py",
-      "sha256": "9dd1c9b6cbbf709dae09574a74e620896f5949a8b1196ae4827c2f717148f32f"
+      "sha256": "65aaad86f149f56644c33e7890a936bfdfb9acac939f384f7793addfa0175df9"
     },
     {
       "path": "routes/telegram_alerts.py",
@@ -1729,7 +1729,7 @@
     },
     {
       "path": "seller_platform.py",
-      "sha256": "8b1f8db362164284ac371aa1631ab066fa2f5f54f775ca3590124ba8b735f12d"
+      "sha256": "48d7e4b09d9e242372161acb3c1eb937d8499a9f3c1ab7b5a5716be37820e890"
     },
     {
       "path": "services/__init__.py",
@@ -2361,15 +2361,15 @@
     },
     {
       "path": "services/supplier_price_feed.py",
-      "sha256": "795525d92aca4efe5b9a61c301a1db72ce5d513b56c281a74faea2418cb18fc2"
+      "sha256": "46cde351136d8bc47cdcaddbc95fcfd9507e10f0c53931fb5d9fa08a6de76496"
     },
     {
       "path": "services/supplier_price_sync.py",
-      "sha256": "17bbe3c49328788de90be2d02c64d0694823146396d6bdcac6bfa477a65736fc"
+      "sha256": "c10924678a78c955abe681f7312c32742b3214c83de2ebc4d8ad95c0be5f35c0"
     },
     {
       "path": "services/supplier_service.py",
-      "sha256": "cb7bc64a6b2442a81cea83509fb5d8dc5f5da5b5bb114621064be8c786bcab4b"
+      "sha256": "d6a13c8a29f4926bc05821970a5849cc797838eb47b922c61e0cedae75e2f179"
     },
     {
       "path": "services/supplier_update_hub.py",
@@ -2889,7 +2889,7 @@
     },
     {
       "path": "templates/admin_supplier_form.html",
-      "sha256": "aefc7c24834c378bdb612288c193d53c299a627051d2dd0d1299bf9314fcf1a1"
+      "sha256": "0f69d39bbbe6b2ef3a84827e38daa7802f84838d9a5b1c8cf56a547e0787c0c0"
     },
     {
       "path": "templates/admin_supplier_marketplaces.html",
@@ -3349,7 +3349,7 @@
     },
     {
       "path": "templates/partials/supplier_feed_freshness.html",
-      "sha256": "189db28661032bbdfec53be56118923d798426149fb89603fa29825779e274d7"
+      "sha256": "b4f14d320a27bd44182e387a94d40bf85ff75231e93c1f411681c2dad267aa48"
     },
     {
       "path": "templates/partials/tasks_tray.html",
@@ -4853,7 +4853,7 @@
     },
     {
       "path": "tests/test_supplier_feed_status_ui.py",
-      "sha256": "da5dd5038350a81b7862702d1ccb30d352724bd81f68afb4c4981176c1d42a97"
+      "sha256": "793c94b2aa9381b593f0d27a3f23325b7eccfe39e4b78afd03123a738a9cbd06"
     },
     {
       "path": "tests/test_supplier_flash_profile.py",
@@ -4869,11 +4869,11 @@
     },
     {
       "path": "tests/test_supplier_price_feed.py",
-      "sha256": "fde84e73b3fb3d91d44afd363f8c375969b61c2b522120bbb9f7ce298ee2e409"
+      "sha256": "9443a9c25210ecca3f437e4f30ea0112779faf5a312959d5e0f93ee1c95ee95c"
     },
     {
       "path": "tests/test_supplier_price_sync.py",
-      "sha256": "fcb8415055116ee22fa8be018e027accbada2328c0e96020aae30b51ca297b33"
+      "sha256": "e34dea50e85e8233a8cb381d543e36d3b98cb8800491ab362663bd7d2c8827a1"
     },
     {
       "path": "tests/test_supplier_product_detail_facts.py",
@@ -5124,5 +5124,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "4527f2cd3aeb85d498a6d9fc05db514db892af58b0f99a821aaee3b600304869"
+  "aggregate_sha256": "9f4a1d3a088b6ca5e7e2548195742f75653200bf03f69f9a1efc83c8c5b971c9"
 }
