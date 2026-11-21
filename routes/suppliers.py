@@ -8,6 +8,7 @@ import logging
 import secrets
 from datetime import datetime
 from functools import wraps
+from urllib.parse import urlsplit
 
 from flask import (
     Blueprint, render_template, redirect, url_for, flash,
@@ -43,6 +44,9 @@ SUPPLIER_REFRESH_REVIEW_MAX_AGE_SECONDS = 10 * 60
 SUPPLIER_REFRESH_REVIEW_MAX_TOKEN_BYTES = 8 * 1024
 SUPPLIER_REFRESH_REVIEW_MAX_BODY_BYTES = 256 * 1024
 SUPPLIER_REFRESH_REVIEW_MAX_RESPONSE_BYTES = 512 * 1024
+SUPPLIER_CATALOG_UPDATE_REVIEW_TOKEN_SALT = 'supplier-catalog-update-review-v1'
+SUPPLIER_CATALOG_UPDATE_REVIEW_MAX_AGE_SECONDS = 10 * 60
+SUPPLIER_CATALOG_UPDATE_REVIEW_MAX_TOKEN_BYTES = 8 * 1024
 SUPPLIER_REFRESH_STATUS_REASONS = {
     'updated': None,
     'skipped': 'no_supplier_link',
@@ -502,6 +506,218 @@ def _load_supplier_refresh_review_token(token, *, user_id, seller_id):
     if any(product_id > MAX_SIGNED_SQLITE_ID for product_id in ids):
         raise SupplierRefreshReviewTokenError('Проверка обновления недействительна')
     return {'ids': ids, 'digest': payload['digest']}
+
+
+class SupplierCatalogUpdateReviewTokenError(ValueError):
+    """A local supplier catalog review is invalid, expired, or out of scope."""
+
+    def __init__(self, message, *, status_code=400):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _supplier_catalog_update_review_serializer():
+    return URLSafeTimedSerializer(
+        current_app.secret_key,
+        salt=SUPPLIER_CATALOG_UPDATE_REVIEW_TOKEN_SALT,
+    )
+
+
+def _issue_supplier_catalog_update_review_token(
+    *, user_id, seller_id, supplier_id, source_ids, review_digest,
+):
+    if (
+        type(user_id) is not int or user_id <= 0 or user_id > MAX_SIGNED_SQLITE_ID
+        or type(seller_id) is not int or seller_id <= 0 or seller_id > MAX_SIGNED_SQLITE_ID
+        or type(supplier_id) is not int or supplier_id <= 0 or supplier_id > MAX_SIGNED_SQLITE_ID
+        or not isinstance(review_digest, str)
+        or re.fullmatch(r'[0-9a-f]{64}', review_digest) is None
+    ):
+        return None
+    if source_ids is not None:
+        try:
+            source_ids = _bulk_product_ids(source_ids)
+        except ValueError:
+            return None
+        if len(source_ids) > MAX_BULK_PRODUCTS or any(
+            product_id > MAX_SIGNED_SQLITE_ID for product_id in source_ids
+        ):
+            return None
+        scope = 'source_ids'
+    else:
+        scope = 'all'
+
+    token = _supplier_catalog_update_review_serializer().dumps({
+        'v': 1,
+        'user_id': user_id,
+        'seller_id': seller_id,
+        'supplier_id': supplier_id,
+        'scope': scope,
+        'source_ids': source_ids,
+        'review_digest': review_digest,
+    })
+    if len(token.encode('utf-8')) > SUPPLIER_CATALOG_UPDATE_REVIEW_MAX_TOKEN_BYTES:
+        return None
+    return token
+
+
+def _load_supplier_catalog_update_review_token(
+    token, *, user_id, seller_id, supplier_id,
+):
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token.encode('utf-8')) > SUPPLIER_CATALOG_UPDATE_REVIEW_MAX_TOKEN_BYTES
+    ):
+        raise SupplierCatalogUpdateReviewTokenError(
+            'Проверка обновления недоступна',
+        )
+    try:
+        payload = _supplier_catalog_update_review_serializer().loads(
+            token,
+            max_age=SUPPLIER_CATALOG_UPDATE_REVIEW_MAX_AGE_SECONDS,
+        )
+    except SignatureExpired as exc:
+        raise SupplierCatalogUpdateReviewTokenError(
+            'Срок проверки истёк. Откройте её заново.', status_code=409,
+        ) from exc
+    except BadSignature as exc:
+        raise SupplierCatalogUpdateReviewTokenError(
+            'Проверка обновления недействительна',
+        ) from exc
+
+    if not isinstance(payload, dict) or set(payload) != {
+        'v', 'user_id', 'seller_id', 'supplier_id', 'scope',
+        'source_ids', 'review_digest',
+    }:
+        raise SupplierCatalogUpdateReviewTokenError(
+            'Проверка обновления недействительна',
+        )
+    if (
+        type(payload.get('v')) is not int or payload['v'] != 1
+        or any(
+            type(payload.get(field)) is not int
+            or payload[field] <= 0
+            or payload[field] > MAX_SIGNED_SQLITE_ID
+            for field in ('user_id', 'seller_id', 'supplier_id')
+        )
+        or not isinstance(payload.get('review_digest'), str)
+        or re.fullmatch(r'[0-9a-f]{64}', payload['review_digest']) is None
+    ):
+        raise SupplierCatalogUpdateReviewTokenError(
+            'Проверка обновления недействительна',
+        )
+    if (
+        payload['user_id'] != user_id
+        or payload['seller_id'] != seller_id
+        or payload['supplier_id'] != supplier_id
+    ):
+        raise SupplierCatalogUpdateReviewTokenError(
+            'Проверка недоступна', status_code=404,
+        )
+
+    if payload['scope'] == 'all' and payload['source_ids'] is None:
+        source_ids = None
+    elif payload['scope'] == 'source_ids':
+        try:
+            source_ids = _bulk_product_ids(payload['source_ids'])
+        except ValueError as exc:
+            raise SupplierCatalogUpdateReviewTokenError(
+                'Проверка обновления недействительна',
+            ) from exc
+        if len(source_ids) > MAX_BULK_PRODUCTS or any(
+            product_id > MAX_SIGNED_SQLITE_ID for product_id in source_ids
+        ):
+            raise SupplierCatalogUpdateReviewTokenError(
+                'Проверка обновления недействительна',
+            )
+    else:
+        raise SupplierCatalogUpdateReviewTokenError(
+            'Проверка обновления недействительна',
+        )
+
+    return {
+        'scope': payload['scope'],
+        'source_ids': source_ids,
+        'review_digest': payload['review_digest'],
+    }
+
+
+def _supplier_catalog_update_scope_from_form(form):
+    supplier_values = form.getlist('supplier_id')
+    if len(supplier_values) != 1 or not supplier_values[0].isdecimal():
+        raise ValueError('Не указан корректный поставщик')
+    supplier_id = int(supplier_values[0])
+    if supplier_id <= 0 or supplier_id > MAX_SIGNED_SQLITE_ID:
+        raise ValueError('Не указан корректный поставщик')
+
+    selected_ids_raw = form.getlist('update_product_ids')
+    fallback_ids_raw = form.getlist('product_ids')
+    if selected_ids_raw and fallback_ids_raw:
+        raise ValueError('Смешаны два списка товаров. Обновите страницу.')
+    all_values = form.getlist('update_all_for_supplier')
+    update_all = all_values == ['1']
+    if all_values and not update_all:
+        raise ValueError('Некорректный режим выбора товаров')
+
+    raw_ids = selected_ids_raw or fallback_ids_raw
+    if update_all:
+        if raw_ids:
+            raise ValueError('Выберите либо карточки, либо весь каталог поставщика')
+        return supplier_id, None
+    if not raw_ids:
+        raise ValueError('Не выбраны карточки для проверки')
+    try:
+        source_ids = _form_bulk_product_ids(raw_ids)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+    if any(source_id > MAX_SIGNED_SQLITE_ID for source_id in source_ids):
+        raise ValueError('Список товаров поставщика содержит некорректный ID')
+    return supplier_id, source_ids
+
+
+def _safe_supplier_catalog_update_return(supplier_id, candidate):
+    fallback = url_for('supplier_catalog_products', supplier_id=supplier_id)
+    if not isinstance(candidate, str) or not candidate:
+        return fallback
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return fallback
+    product_path = f'/supplier-catalog/{supplier_id}/products'
+    if (
+        parsed.scheme or parsed.netloc or parsed.path.startswith('//')
+        or not (
+            parsed.path == url_for('supplier_catalog')
+            or parsed.path == product_path
+            or re.fullmatch(re.escape(product_path) + r'/[1-9][0-9]*', parsed.path)
+        )
+    ):
+        return fallback
+    return parsed.path + (f'?{parsed.query}' if parsed.query else '') + (
+        f'#{parsed.fragment}' if parsed.fragment else ''
+    )
+
+
+def _render_supplier_catalog_update_review(
+    *, supplier, source_ids, preview, review_token, return_to,
+    error=None, status=200, allow_recheck=True,
+):
+    response = make_response(render_template(
+        'supplier_catalog_update_review.html',
+        supplier=supplier,
+        source_ids=source_ids,
+        update_all=source_ids is None,
+        preview=preview,
+        review_token=review_token,
+        return_to=return_to,
+        error=error,
+        allow_recheck=allow_recheck,
+    ), status)
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 
 def _supplier_refresh_receipt_serializer():
@@ -4746,6 +4962,228 @@ def register_supplier_routes(app):
     # -------------------------------------------------------------------
     # Обновление существующих товаров из базы поставщика
     # -------------------------------------------------------------------
+    @app.route('/supplier-catalog/update/review', methods=['POST'])
+    @login_required
+    @seller_required
+    def supplier_catalog_update_review():
+        """Read and sign a seller-local supplier update before applying it."""
+        seller = current_user.seller
+        try:
+            supplier_id, source_ids = _supplier_catalog_update_scope_from_form(
+                request.form,
+            )
+        except ValueError as exc:
+            supplier_id = request.form.get('supplier_id', type=int)
+            flash(str(exc), 'warning')
+            if supplier_id and supplier_id > 0:
+                return redirect(_safe_supplier_catalog_update_return(
+                    supplier_id, request.form.get('return_to'),
+                ))
+            return 'Некорректный выбор поставщика', 400
+
+        supplier = Supplier.query.filter_by(id=supplier_id).first()
+        if supplier is None:
+            abort(404)
+        active_connection = SellerSupplier.query.filter_by(
+            seller_id=seller.id,
+            supplier_id=supplier_id,
+            is_active=True,
+        ).first()
+        if active_connection is None:
+            abort(404)
+        return_to = _safe_supplier_catalog_update_return(
+            supplier_id, request.form.get('return_to'),
+        )
+        try:
+            preview = SupplierService.preview_supplier_products(
+                seller.id,
+                supplier_id,
+                source_ids,
+                details_limit=50,
+            )
+        except ValueError as exc:
+            flash(str(exc), 'warning')
+            return redirect(return_to)
+
+        review_token = None
+        if preview.get('changed', 0) > 0:
+            review_token = _issue_supplier_catalog_update_review_token(
+                user_id=current_user.id,
+                seller_id=seller.id,
+                supplier_id=supplier_id,
+                source_ids=source_ids,
+                review_digest=preview.get('review_digest'),
+            )
+            if not review_token:
+                return _render_supplier_catalog_update_review(
+                    supplier=supplier,
+                    source_ids=source_ids,
+                    preview=preview,
+                    review_token=None,
+                    return_to=return_to,
+                    error='Не удалось подготовить проверку. Обновите страницу и повторите выбор.',
+                    status=500,
+                )
+
+        return _render_supplier_catalog_update_review(
+            supplier=supplier,
+            source_ids=source_ids,
+            preview=preview,
+            review_token=review_token,
+            return_to=return_to,
+        )
+
+    @app.route('/supplier-catalog/update/confirm', methods=['POST'])
+    @login_required
+    @seller_required
+    def supplier_catalog_update_confirm():
+        """Recheck and apply only the exact reviewed seller-local source scope."""
+        seller = current_user.seller
+        try:
+            supplier_id, source_ids = _supplier_catalog_update_scope_from_form(
+                request.form,
+            )
+        except ValueError as exc:
+            supplier_id = request.form.get('supplier_id', type=int)
+            if supplier_id and supplier_id > 0:
+                supplier = Supplier.query.filter_by(id=supplier_id).first()
+                if supplier is not None:
+                    active_connection = SellerSupplier.query.filter_by(
+                        seller_id=seller.id,
+                        supplier_id=supplier_id,
+                        is_active=True,
+                    ).first()
+                    if active_connection is None:
+                        abort(404)
+                    return _render_supplier_catalog_update_review(
+                        supplier=supplier,
+                        source_ids=None,
+                        preview=None,
+                        review_token=None,
+                        return_to=_safe_supplier_catalog_update_return(
+                            supplier_id, request.form.get('return_to'),
+                        ),
+                        error=str(exc),
+                        status=400,
+                        allow_recheck=False,
+                    )
+            return 'Некорректная проверка обновления', 400
+
+        supplier = Supplier.query.filter_by(id=supplier_id).first()
+        if supplier is None:
+            abort(404)
+        active_connection = SellerSupplier.query.filter_by(
+            seller_id=seller.id,
+            supplier_id=supplier_id,
+            is_active=True,
+        ).first()
+        if active_connection is None:
+            abort(404)
+        return_to = _safe_supplier_catalog_update_return(
+            supplier_id, request.form.get('return_to'),
+        )
+        token_values = request.form.getlist('review_token')
+        if len(token_values) != 1:
+            return _render_supplier_catalog_update_review(
+                supplier=supplier,
+                source_ids=source_ids,
+                preview=None,
+                review_token=None,
+                return_to=return_to,
+                error='Проверка обновления недоступна. Откройте её заново.',
+                status=409,
+            )
+        try:
+            review = _load_supplier_catalog_update_review_token(
+                token_values[0],
+                user_id=current_user.id,
+                seller_id=seller.id,
+                supplier_id=supplier_id,
+            )
+        except SupplierCatalogUpdateReviewTokenError as exc:
+            return _render_supplier_catalog_update_review(
+                supplier=supplier,
+                source_ids=source_ids,
+                preview=None,
+                review_token=None,
+                return_to=return_to,
+                error=str(exc),
+                status=exc.status_code,
+            )
+
+        submitted_scope = 'all' if source_ids is None else 'source_ids'
+        if review['scope'] != submitted_scope or review['source_ids'] != source_ids:
+            return _render_supplier_catalog_update_review(
+                supplier=supplier,
+                source_ids=source_ids,
+                preview=None,
+                review_token=None,
+                return_to=return_to,
+                error='Выбор товаров не совпадает с проверкой. Откройте её заново.',
+                status=409,
+            )
+
+        try:
+            result = SupplierService.update_supplier_products(
+                seller.id,
+                supplier_id,
+                source_ids,
+                expected_review_digest=review['review_digest'],
+            )
+        except SupplierRefreshReviewStale:
+            try:
+                current_preview = SupplierService.preview_supplier_products(
+                    seller.id,
+                    supplier_id,
+                    source_ids,
+                    details_limit=50,
+                )
+            except ValueError:
+                current_preview = None
+            return _render_supplier_catalog_update_review(
+                supplier=supplier,
+                source_ids=source_ids,
+                preview=current_preview,
+                review_token=None,
+                return_to=return_to,
+                error='Данные или доступ к поставщику изменились после проверки. Проверьте обновление заново.',
+                status=409,
+            )
+        except ValueError as exc:
+            return _render_supplier_catalog_update_review(
+                supplier=supplier,
+                source_ids=source_ids,
+                preview=None,
+                review_token=None,
+                return_to=return_to,
+                error=f'Проверка больше не подходит: {exc}',
+                status=409,
+            )
+        except Exception as exc:
+            db.session.rollback()
+            logger.exception(
+                'Reviewed supplier catalog update did not commit for seller %s (%s)',
+                seller.id,
+                type(exc).__name__,
+            )
+            return _render_supplier_catalog_update_review(
+                supplier=supplier,
+                source_ids=source_ids,
+                preview=None,
+                review_token=None,
+                return_to=return_to,
+                error='Локальное обновление не сохранено. Откройте проверку заново.',
+                status=500,
+            )
+
+        flash(
+            f'Локально обновлено: {result.imported}, пропущено: '
+            f'{result.skipped}, ошибок: {result.errors}. '
+            'Карточки WB и Ozon не менялись.',
+            'success' if result.errors == 0 and result.skipped == 0 else 'warning',
+        )
+        return redirect(return_to)
+
     @app.route('/supplier-catalog/update', methods=['POST'])
     @login_required
     @seller_required

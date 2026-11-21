@@ -224,14 +224,14 @@
                     </svg>
                 </a>
                 {% if item.imported_count > 0 %}
-                <form method="POST" action="{{ url_for('supplier_catalog_update') }}">
+                <form method="POST" action="{{ url_for('supplier_catalog_update_review') }}">
                     <input type="hidden" name="supplier_id" value="{{ s.id }}">
                     <input type="hidden" name="update_all_for_supplier" value="1">
+                    <input type="hidden" name="return_to" value="{{ url_for('supplier_catalog') }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit"
-                            onclick="return confirm('Применить сохранённые данные каталога поставщика к {{ item.imported_count }} вашим локальным карточкам? Новая загрузка у поставщика не выполняется. Карточки WB и Ozon не изменятся.')"
                             class="sc-update-btn"
-                            title="Применить текущее сохранённое состояние каталога к вашим локальным карточкам. Новая загрузка у поставщика не выполняется.">Применить сохранённые данные</button>
+                            title="Сначала проверить локальные изменения для всех карточек этого поставщика.">Проверить обновления ({{ item.imported_count }})</button>
                 </form>
                 {% endif %}
             </div>

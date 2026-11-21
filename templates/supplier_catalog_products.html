@@ -174,8 +174,10 @@
         <form method="POST" action="{{ url_for('supplier_catalog_import') }}" id="supplier-import-form" class="hidden">
             <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
         </form>
-        <form method="POST" action="{{ url_for('supplier_catalog_update') }}" id="supplier-update-form" class="hidden">
+        <form method="POST" action="{{ url_for('supplier_catalog_update_review') }}" id="supplier-update-form" class="hidden">
             <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
+            <input type="hidden" name="return_to" value="{{ request.full_path }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         </form>
 
         {% if selection_review %}
@@ -289,12 +291,11 @@
                     </div>
                     <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
                         <button type="submit" form="supplier-update-form" disabled
-                                onclick="return confirm('Применить выбранные данные из сохранённого каталога в локальные карточки? Новая загрузка у поставщика не выполняется. На WB и Ozon ничего не отправляется.')"
                                 class="sh-btn sh-btn--secondary sh-btn--sm"
                                 style="border-color:var(--warn-border);color:var(--warn)"
                                 :disabled="updateSelected.length === 0"
                                 aria-describedby="update-selection-count">
-                            Применить выбранное <span x-text="'(' + updateSelected.length + ')'">(0)</span>
+                            Проверить выбранное <span x-text="'(' + updateSelected.length + ')'">(0)</span>
                         </button>
                         <p id="update-selection-count" class="text-xs" style="color:var(--text-muted)" aria-live="polite">
                             С новыми данными: {{ action_counts.updatable }}. <span x-text="updateSelected.length + ' выбрано'">0 выбрано</span>
