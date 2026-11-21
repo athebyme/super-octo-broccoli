@@ -374,25 +374,11 @@
             supplierRefreshOzonIds: function () {
                 var result = this.supplierRefreshResult;
                 if (!result || !['complete', 'partial'].includes(result.kind) ||
-                    !Array.isArray(result.entries) ||
-                    !Number.isSafeInteger(result.requested) || result.requested <= 0 ||
-                    result.entries.length !== result.requested ||
-                    !Number.isSafeInteger(result.updated) || result.updated < 0 ||
-                    !Number.isSafeInteger(result.skipped) || result.skipped < 0 ||
-                    !Number.isSafeInteger(result.errors) || result.errors < 0 ||
-                    result.updated + result.skipped + result.errors !== result.requested ||
-                    (result.kind === 'partial') !== (result.errors > 0)) return [];
+                    !Array.isArray(result.entries)) return [];
 
-                var seen = new Set();
-                var updatedIds = [];
-                for (var i = 0; i < result.entries.length; i += 1) {
-                    var entry = result.entries[i];
-                    if (!entry || !Number.isSafeInteger(entry.productId) ||
-                        entry.productId <= 0 || seen.has(entry.productId) ||
-                        !['updated', 'skipped', 'error'].includes(entry.status)) return [];
-                    seen.add(entry.productId);
-                    if (entry.status === 'updated') updatedIds.push(entry.productId);
-                }
+                var updatedIds = result.entries
+                    .filter(function (entry) { return entry && entry.status === 'updated'; })
+                    .map(function (entry) { return entry.productId; });
                 return updatedIds.length === result.updated ? updatedIds : [];
             },
             ozonPreparationDisabled: function () {
@@ -1196,13 +1182,11 @@
                 this.loadFacets();
             },
             prepareRefreshedForOzon: function (event) {
-                var result = this.supplierRefreshResult;
-                if (!this.ozonEnabled || !result ||
-                    !['complete', 'partial'].includes(result.kind) ||
-                    !this.supplierRefreshOzonIds.length) return;
+                var productIds = this.supplierRefreshOzonIds;
+                if (!productIds.length) return;
 
                 return this.openOzonPreparation(
-                    this.supplierRefreshOzonIds,
+                    productIds,
                     event && event.currentTarget,
                 );
             },

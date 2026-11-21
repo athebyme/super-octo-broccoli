@@ -173,7 +173,7 @@ function setSupplierOutcome(app, data, ids) {
     kind: 'complete', requested: 1, updated: 1, skipped: 0, errors: 0,
     entries: [{productId: 101, status: 'updated'}],
   };
-  assert.equal(unavailable.app.prepareRefreshedForOzon(), undefined);
+  assert.equal(unavailable.app.prepareRefreshedForOzon(), false);
   assert.equal(unavailable.refs.dialog.open, false);
 
   const ordinary = makeApp();
