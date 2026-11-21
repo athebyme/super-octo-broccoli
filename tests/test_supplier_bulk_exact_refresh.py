@@ -1236,6 +1236,227 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
             ).scalar_one()
         self.assertEqual(persisted_title, 'old title')
 
+    def test_reviewed_supplier_all_preview_and_apply_are_not_capped_at_200(self):
+        rows = [self._copy(
+            None,
+            title=f'unlinked {index}',
+        ) for index in range(201)]
+        self.db.session.commit()
+
+        from services.supplier_service import SupplierService
+
+        preview = SupplierService.preview_supplier_products(
+            self.seller.id,
+            self.supplier.id,
+            None,
+            details_limit=12,
+        )
+
+        self.assertEqual(preview['scope'], 'all')
+        self.assertIsNone(preview['source_requested'])
+        self.assertEqual(
+            (preview['requested'], preview['eligible'], preview['changed'], preview['skipped']),
+            (201, 0, 0, 201),
+        )
+        self.assertEqual(preview['details_limit'], 12)
+        self.assertEqual(len(preview['items']), 12)
+        self.assertTrue(preview['items_truncated'])
+        self.assertEqual(
+            [item['product_id'] for item in preview['items']],
+            sorted(row.id for row in rows)[:12],
+        )
+
+        result = SupplierService.update_supplier_products(
+            self.seller.id,
+            self.supplier.id,
+            None,
+            expected_review_digest=preview['review_digest'],
+        )
+
+        self.assertEqual(
+            (result.total_requested, result.imported, result.skipped, result.errors),
+            (201, 0, 201, 0),
+        )
+
+    def test_reviewed_source_updates_all_201_local_copies(self):
+        source = self._source(
+            self.supplier.id, 'reviewed-many-copies', 'fresh title',
+        )
+        rows = [self._copy(source, title='old title') for _ in range(201)]
+        self.db.session.commit()
+
+        from services.supplier_service import SupplierService
+
+        preview = SupplierService.preview_supplier_products(
+            self.seller.id,
+            self.supplier.id,
+            [source.id],
+            details_limit=7,
+        )
+
+        self.assertEqual(preview['scope'], 'source_ids')
+        self.assertEqual(preview['source_requested'], 1)
+        self.assertEqual(
+            (preview['requested'], preview['eligible'], preview['changed'], preview['skipped']),
+            (201, 201, 201, 0),
+        )
+        self.assertEqual(len(preview['items']), 7)
+        self.assertTrue(preview['items_truncated'])
+
+        result = SupplierService.update_supplier_products(
+            self.seller.id,
+            self.supplier.id,
+            [source.id],
+            expected_review_digest=preview['review_digest'],
+        )
+
+        self.assertEqual(
+            (result.total_requested, result.imported, result.skipped, result.errors),
+            (201, 201, 0, 0),
+        )
+        for row in rows:
+            self.db.session.refresh(row)
+            self.assertEqual(row.title, 'fresh title')
+
+    def test_reviewed_supplier_scope_detects_drift_beyond_details_sample(self):
+        source = self._source(
+            self.supplier.id, 'reviewed-beyond-sample', 'fresh title',
+        )
+        first = self._copy(source, title='old first')
+        second = self._copy(source, title='old second')
+        self.db.session.commit()
+
+        from services.supplier_service import (
+            SupplierRefreshReviewStale,
+            SupplierService,
+        )
+
+        preview = SupplierService.preview_supplier_products(
+            self.seller.id,
+            self.supplier.id,
+            [source.id],
+            details_limit=1,
+        )
+        self.assertEqual(len(preview['items']), 1)
+        self.assertTrue(preview['items_truncated'])
+        self.assertEqual(preview['items'][0]['product_id'], first.id)
+
+        second.title = 'seller changed after preview'
+        self.db.session.commit()
+
+        with self.assertRaises(SupplierRefreshReviewStale):
+            SupplierService.update_supplier_products(
+                self.seller.id,
+                self.supplier.id,
+                [source.id],
+                expected_review_digest=preview['review_digest'],
+            )
+
+        self.db.session.refresh(first)
+        self.db.session.refresh(second)
+        self.assertEqual(first.title, 'old first')
+        self.assertEqual(second.title, 'seller changed after preview')
+
+    def test_reviewed_supplier_scope_stales_on_revoked_access_and_is_seller_scoped(self):
+        source = self._source(
+            self.supplier.id, 'reviewed-revoked-access', 'fresh title',
+        )
+        copied = self._copy(source, title='old title')
+        self.db.session.commit()
+
+        from services.supplier_service import (
+            SupplierRefreshReviewStale,
+            SupplierService,
+        )
+
+        preview = SupplierService.preview_supplier_products(
+            self.seller.id,
+            self.supplier.id,
+            [source.id],
+        )
+        connection = self.SellerSupplier.query.filter_by(
+            seller_id=self.seller.id,
+            supplier_id=self.supplier.id,
+        ).one()
+        connection.is_active = False
+        self.db.session.commit()
+
+        with self.assertRaises(SupplierRefreshReviewStale):
+            SupplierService.update_supplier_products(
+                self.seller.id,
+                self.supplier.id,
+                [source.id],
+                expected_review_digest=preview['review_digest'],
+            )
+        self.db.session.refresh(copied)
+        self.assertEqual(copied.title, 'old title')
+
+    def test_reviewed_supplier_preview_rejects_foreign_source_and_excludes_foreign_copy(self):
+        from models import Seller, User
+
+        foreign_user_model = User(
+            username='foreign-reviewed-catalog',
+            email='foreign-reviewed-catalog@test.local',
+            is_active=True,
+        )
+        foreign_user_model.set_password('synthetic-password')
+        self.db.session.add(foreign_user_model)
+        self.db.session.flush()
+        foreign_seller = Seller(
+            user_id=foreign_user_model.id,
+            company_name='Foreign catalog seller',
+        )
+        self.db.session.add(foreign_seller)
+        self.db.session.flush()
+
+        owned_source = self._source(
+            self.supplier.id, 'owned-source-no-local-copy', 'owned source',
+        )
+        foreign_copy = self.ImportedProduct(
+            seller_id=foreign_seller.id,
+            supplier_id=self.supplier.id,
+            supplier_product_id=owned_source.id,
+            external_id='foreign-copy',
+            title='foreign old title',
+        )
+        foreign_source = self._source(
+            self.other_supplier.id, 'foreign-source', 'foreign source',
+        )
+        self.db.session.add(foreign_copy)
+        self.db.session.commit()
+        foreign_copy_id = foreign_copy.id
+
+        from services.supplier_service import SupplierService
+
+        with self.assertRaisesRegex(ValueError, 'не относится к этому поставщику'):
+            SupplierService.preview_supplier_products(
+                self.seller.id,
+                self.supplier.id,
+                [foreign_source.id],
+            )
+        with self.assertRaisesRegex(ValueError, 'не импортированы'):
+            SupplierService.preview_supplier_products(
+                self.seller.id,
+                self.supplier.id,
+                [owned_source.id],
+            )
+
+        all_preview = SupplierService.preview_supplier_products(
+            self.seller.id,
+            self.supplier.id,
+            None,
+        )
+        self.assertEqual(all_preview['requested'], 0)
+        result = SupplierService.update_supplier_products(
+            self.seller.id,
+            self.supplier.id,
+            None,
+            expected_review_digest=all_preview['review_digest'],
+        )
+        self.assertEqual(result.total_requested, 0)
+        foreign_copy = self.db.session.get(self.ImportedProduct, foreign_copy_id)
+        self.assertEqual(foreign_copy.title, 'foreign old title')
+
     def test_explicit_all_mode_has_no_selected_batch_cap(self):
         rows = [self.ImportedProduct(
             seller_id=self.seller.id,
