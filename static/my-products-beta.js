@@ -20,6 +20,42 @@
     var importBatchInvalid = importBatchMode && (
         !hasImportBatchToken || !importBatchToken || importBatchToken.length > 8192
     );
+    var supplierRefreshReceiptKey = 'supplier-refresh-resume-v1';
+    var MAX_SUPPLIER_REFRESH_RECEIPT = 7500;
+    function validSupplierRefreshReceipt(value) {
+        return typeof value === 'string' && value.length > 0 &&
+            value.length <= MAX_SUPPLIER_REFRESH_RECEIPT && /^[A-Za-z0-9_.-]+$/.test(value);
+    }
+    function readSupplierRefreshReceipt() {
+        try {
+            var value = sessionStorage.getItem(supplierRefreshReceiptKey);
+            if (value === null) return { receipt: null, storageError: false };
+            if (!validSupplierRefreshReceipt(value)) {
+                sessionStorage.removeItem(supplierRefreshReceiptKey);
+                return { receipt: null, storageError: false };
+            }
+            return { receipt: value, storageError: false };
+        } catch (_) {
+            return { receipt: null, storageError: true };
+        }
+    }
+    function saveSupplierRefreshReceipt(value) {
+        if (!validSupplierRefreshReceipt(value)) return false;
+        try {
+            sessionStorage.setItem(supplierRefreshReceiptKey, value);
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+    function clearSupplierRefreshReceipt(expectedValue) {
+        try {
+            if (expectedValue === undefined ||
+                sessionStorage.getItem(supplierRefreshReceiptKey) === expectedValue) {
+                sessionStorage.removeItem(supplierRefreshReceiptKey);
+            }
+        } catch (_) {}
+    }
     var ozonPendingKey = 'ozon-source-prepare-v1';
     function readOzonPending() {
         try { return JSON.parse(sessionStorage.getItem(ozonPendingKey) || 'null'); }
@@ -252,6 +288,20 @@
         return productIds;
     }
 
+    function supplierRefreshWbExtension(data, updatedIds) {
+        var productIds = exactSupplierRefreshWbProductIds(data, updatedIds);
+        if (!productIds) return { productIds: null, unavailable: 0 };
+        if (data.wb_unavailable === undefined) {
+            return { productIds: productIds, unavailable: 0 };
+        }
+        if (!nonnegativeCount(data.wb_unavailable) ||
+            !nonnegativeCount(data.wb_ready) ||
+            data.wb_ready + data.wb_unavailable > updatedIds.length) {
+            return { productIds: null, unavailable: 0 };
+        }
+        return { productIds: productIds, unavailable: data.wb_unavailable };
+    }
+
     function supplierRefreshOutcome(data, ids, labels, commonContentUrl) {
         if (!data || data.success !== true ||
             !['completed', 'completed_with_errors'].includes(data.status) ||
@@ -319,6 +369,10 @@
         var updatedIds = ids.filter(function (id) {
             return rowsById.get(id).status === 'updated';
         });
+        var wbExtension = supplierRefreshWbExtension(data, updatedIds);
+        if (wbExtension.unavailable > 0) {
+            summary += ' Недоступны исходные ссылки WB: ' + wbExtension.unavailable + '.';
+        }
         return {
             kind: data.errors ? 'partial' : 'complete',
             title: title,
@@ -327,9 +381,42 @@
             updated: data.updated,
             skipped: data.skipped,
             errors: data.errors,
+            wbUnavailable: wbExtension.unavailable,
             entries: ids.map(function (id) { return rowsById.get(id); }),
-            wbProductIds: exactSupplierRefreshWbProductIds(data, updatedIds),
+            wbProductIds: wbExtension.productIds,
         };
+    }
+
+    function exactSupplierRefreshResumeLabels(data) {
+        if (!data || !Array.isArray(data.labels) ||
+            data.labels.length < 1 || data.labels.length > MAX_BULK_SELECTION) return null;
+        var ids = [];
+        var labels = [];
+        var seen = new Set();
+        for (var i = 0; i < data.labels.length; i += 1) {
+            var entry = data.labels[i];
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+            var keys = Object.keys(entry).sort();
+            if (keys.length !== 2 || keys[0] !== 'label' || keys[1] !== 'productId' ||
+                !Number.isSafeInteger(entry.productId) || entry.productId <= 0 ||
+                seen.has(entry.productId) || typeof entry.label !== 'string' ||
+                !entry.label.trim() || entry.label.length > 2048) return null;
+            seen.add(entry.productId);
+            ids.push(entry.productId);
+            labels.push({ productId: entry.productId, label: entry.label });
+        }
+        return { ids: ids, labels: labels };
+    }
+
+    function restoredSupplierRefreshOutcome(data, commonContentUrl) {
+        var submitted = exactSupplierRefreshResumeLabels(data);
+        if (!submitted) return null;
+        var outcome = supplierRefreshOutcome(data, submitted.ids, submitted.labels, commonContentUrl);
+        if (!outcome || outcome.updated < 1) return null;
+        outcome.saved = true;
+        outcome.title = 'Сохранённый итог обновления из поставщика';
+        outcome.summary = 'Сохранённый результат. ' + outcome.summary;
+        return outcome;
     }
 
     function supplierRefreshNotice(kind, requested, message) {
@@ -402,6 +489,9 @@
                 job: null,
                 jobTitle: 'Выполняем',
                 supplierRefreshResult: null,
+                supplierRefreshResumeNote: '',
+                supplierRefreshResumeRetry: false,
+                supplierRefreshRestoreLoading: false,
                 confirm: {
                     open: false, key: null, title: '', message: '',
                     details: [], label: 'Продолжить', danger: false, busy: false,
@@ -648,6 +738,9 @@
         },
 
         mounted: function () {
+            this._supplierRefreshReturnAnchor = !!(window.location &&
+                window.location.hash === '#supplier-refresh-result');
+            if (!this.importBatchMode) this.restoreSupplierRefreshResult();
             this.load();
             if (!this.importBatchMode) this.loadFacets();
         },
@@ -655,6 +748,7 @@
             if (this._jobTimer) clearInterval(this._jobTimer);
             if (this._abort) this._abort.abort();
             if (this._loadMoreAbort) this._loadMoreAbort.abort();
+            this.cancelSupplierRefreshRestore();
             this.cancelFilteredSelect();
         },
 
@@ -1187,10 +1281,10 @@
                     selectionIds: selectionIds.slice(),
                     labels: selectedProductLabels(chosen, effectIds),
                 };
-                if (action.key === 'refresh_supplier') this.supplierRefreshResult = null;
             },
-            postSelectionForm: function (url, productIds, preset) {
+            postSelectionForm: function (url, productIds, preset, fromSupplierRefresh) {
                 if (preset !== undefined && preset !== 'characteristics') return false;
+                if (fromSupplierRefresh && preset !== 'characteristics') return false;
                 var csrf = document.querySelector('meta[name="csrf-token"]')?.content;
                 if (!csrf) {
                     this.error = 'Защита формы недоступна. Обновите страницу и повторите действие.';
@@ -1218,6 +1312,13 @@
                     presetInput.value = 'characteristics';
                     form.appendChild(presetInput);
                 }
+                if (fromSupplierRefresh === true) {
+                    var sourceInput = document.createElement('input');
+                    sourceInput.type = 'hidden';
+                    sourceInput.name = 'from_supplier_refresh';
+                    sourceInput.value = '1';
+                    form.appendChild(sourceInput);
+                }
                 document.body.appendChild(form);
                 form.submit();
                 return true;
@@ -1228,6 +1329,141 @@
                 this.confirm.productIds = [];
                 this.confirm.selectionIds = [];
                 this.confirm.labels = [];
+            },
+            cancelSupplierRefreshRestore: function () {
+                var abort = this._supplierRefreshRestoreAbort;
+                this._supplierRefreshRestoreAbort = null;
+                if (abort) abort.abort();
+                this.supplierRefreshRestoreLoading = false;
+            },
+            focusSupplierRefreshResume: function (result) {
+                this.$nextTick(function () {
+                    if (result) this.$refs.supplierRefreshResult?.focus();
+                    else this.$refs.supplierRefreshResume?.focus();
+                });
+            },
+            setSupplierRefreshResumeNote: function (message, retry, focus) {
+                this.supplierRefreshResumeNote = message;
+                this.supplierRefreshResumeRetry = !!retry;
+                if (focus && this._supplierRefreshReturnAnchor) {
+                    this.focusSupplierRefreshResume(false);
+                }
+            },
+            clearSupplierRefreshResult: function () {
+                this.cancelSupplierRefreshRestore();
+                clearSupplierRefreshReceipt();
+                this.supplierRefreshResult = null;
+                this.supplierRefreshResumeNote = '';
+                this.supplierRefreshResumeRetry = false;
+            },
+            hideSupplierRefreshResult: function () { this.clearSupplierRefreshResult(); },
+            restoreSupplierRefreshResult: function () {
+                if (this.importBatchMode) return false;
+                this.cancelSupplierRefreshRestore();
+                var stored = readSupplierRefreshReceipt();
+                this.supplierRefreshResumeNote = '';
+                this.supplierRefreshResumeRetry = false;
+
+                if (!stored.receipt) {
+                    if (this._supplierRefreshReturnAnchor) {
+                        var missingMessage = stored.storageError
+                            ? 'Сохранённый итог недоступен в этой вкладке.'
+                            : 'Сохранённый итог обновления истёк или недоступен.';
+                        this.setSupplierRefreshResumeNote(missingMessage, false, true);
+                    }
+                    return false;
+                }
+
+                var receipt = stored.receipt;
+                var resultUrl = this.urls && this.urls.supplierRefreshResult;
+                if (typeof resultUrl !== 'string' || !resultUrl) {
+                    this.setSupplierRefreshResumeNote(
+                        'Не удалось проверить сохранённый итог. Повторите чтение.', true, true,
+                    );
+                    return false;
+                }
+                try {
+                    var parsedResultUrl = new URL(resultUrl, window.location.origin);
+                    if (parsedResultUrl.origin !== window.location.origin ||
+                        parsedResultUrl.username || parsedResultUrl.password || parsedResultUrl.hash) {
+                        throw new Error('invalid result URL');
+                    }
+                    resultUrl = parsedResultUrl.pathname + parsedResultUrl.search;
+                } catch (_) {
+                    this.setSupplierRefreshResumeNote(
+                        'Не удалось проверить сохранённый итог. Обновите страницу и повторите чтение.', false, true,
+                    );
+                    return false;
+                }
+
+                var self = this;
+                var abort = new AbortController();
+                this._supplierRefreshRestoreAbort = abort;
+                this.supplierRefreshRestoreLoading = true;
+                this.supplierRefreshResumeNote = 'Загружаем сохранённый итог обновления…';
+                this.supplierRefreshResumeRetry = false;
+                var timer = setTimeout(function () { abort.abort(); }, 10000);
+                var isCurrent = function () {
+                    return self._supplierRefreshRestoreAbort === abort;
+                };
+                var transientMessage = 'Не удалось загрузить сохранённый итог. Повторите чтение.';
+                return fetch(resultUrl, {
+                    method: 'GET',
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    redirect: 'manual',
+                    signal: abort.signal,
+                    headers: {
+                        Accept: 'application/json',
+                        'X-Supplier-Refresh-Receipt': receipt,
+                    },
+                }).then(function (response) {
+                    if (!isCurrent()) return null;
+                    if ([400, 404, 410].indexOf(response.status) !== -1) {
+                        clearSupplierRefreshReceipt(receipt);
+                        self.supplierRefreshRestoreLoading = false;
+                        if (self._supplierRefreshReturnAnchor) {
+                            self.setSupplierRefreshResumeNote(
+                                'Сохранённый итог обновления истёк или недоступен.', false, true,
+                            );
+                        } else {
+                            self.supplierRefreshResumeNote = '';
+                        }
+                        return null;
+                    }
+                    if (!response.ok || response.redirected || response.type === 'opaqueredirect' ||
+                        !(response.headers?.get('content-type') || '').includes('application/json')) {
+                        self.setSupplierRefreshResumeNote(transientMessage, true, true);
+                        return null;
+                    }
+                    return response.json().then(function (data) {
+                        if (!isCurrent()) return null;
+                        var outcome = restoredSupplierRefreshOutcome(
+                            data, self.urls.commonContent || '',
+                        );
+                        if (!outcome) {
+                            self.setSupplierRefreshResumeNote(transientMessage, true, true);
+                            return null;
+                        }
+                        self.supplierRefreshResult = outcome;
+                        self.supplierRefreshResumeNote = '';
+                        self.supplierRefreshResumeRetry = false;
+                        if (self._supplierRefreshReturnAnchor) {
+                            self.focusSupplierRefreshResume(true);
+                        }
+                        return outcome;
+                    });
+                }).catch(function () {
+                    if (!isCurrent()) return null;
+                    self.setSupplierRefreshResumeNote(transientMessage, true, true);
+                    return null;
+                }).finally(function () {
+                    clearTimeout(timer);
+                    if (self._supplierRefreshRestoreAbort === abort) {
+                        self._supplierRefreshRestoreAbort = null;
+                        self.supplierRefreshRestoreLoading = false;
+                    }
+                });
             },
             runAction: function () {
                 var self = this;
@@ -1247,13 +1483,13 @@
                     return;
                 }
                 this.confirm.busy = true;
-                if (key === 'refresh_supplier') this.supplierRefreshResult = null;
 
                 var request;
                 if (key === 'push_wb') {
                     this.jobTitle = 'Отправляем на Wildberries';
                     request = this.$api.post(this.urls.pushToWb, { product_ids: ids });
                 } else if (key === 'refresh_supplier') {
+                    this.clearSupplierRefreshResult();
                     request = this.$api.post(this.urls.refreshFromSupplier, { product_ids: ids });
                 } else if (key === 'audit') {
                     this.jobTitle = 'Сверяем с Wildberries';
@@ -1270,6 +1506,10 @@
                         var outcome = supplierRefreshOutcome(data, ids, labelsAtReview, self.urls.commonContent || '');
                         if (sameIds(self.selected, selectionAtReview)) self.selected = [];
                         if (outcome) {
+                            if (outcome.updated > 0 &&
+                                !saveSupplierRefreshReceipt(data.resume_receipt)) {
+                                outcome.resumeWarning = 'Этот итог нельзя будет восстановить после перехода.';
+                            }
                             self.supplierRefreshResult = outcome;
                             self.load();
                             self.loadFacets();
@@ -1354,6 +1594,7 @@
                     this.urls.enrichBulk,
                     productIds.slice(),
                     'characteristics',
+                    true,
                 );
             },
             openOzonPreparation: function (productIds, returnFocus) {

@@ -24,6 +24,7 @@ const boot = {
     feed: '/api/my-products',
     workspace: '/my-products/beta',
     refreshFromSupplier: '/my-products/refresh-from-supplier',
+    supplierRefreshResult: '/api/my-products/supplier-refresh-result',
     commonContent: '/my-products/common-content',
     enrichBulk: '/products/enrich-bulk',
   },
@@ -34,10 +35,16 @@ const fakeWindow = {
     mount(_selector, value) { component = value; return value; },
   },
   crypto: {randomUUID() { return 'a'.repeat(32); }},
-  location: {search: ''},
+  location: {search: '', hash: '', origin: 'https://seller.example'},
 };
 const stored = new Map();
 const submittedForms = [];
+const fetchCalls = [];
+let fetchHandler = () => Promise.reject(new Error('unexpected fetch'));
+const fakeFetch = (url, options) => {
+  fetchCalls.push({url, options});
+  return fetchHandler(url, options);
+};
 const fakeDocument = {
   activeElement: null,
   querySelector(selector) {
@@ -62,6 +69,7 @@ const context = {
     setItem(key, value) { stored.set(key, value); },
     removeItem(key) { stored.delete(key); },
   },
+  fetch: fakeFetch,
   AbortController,
   URL,
   URLSearchParams,
@@ -78,12 +86,45 @@ function sameJson(left, right) {
   assert.deepEqual(JSON.parse(JSON.stringify(left)), JSON.parse(JSON.stringify(right)));
 }
 
+function jsonResponse(status, data) {
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    redirected: false,
+    type: 'basic',
+    headers: {get(name) { return name.toLowerCase() === 'content-type' ? 'application/json' : null; }},
+    json() { return Promise.resolve(data); },
+  };
+}
+
+function savedRefreshResponse() {
+  return {
+    success: true,
+    status: 'completed_with_errors',
+    requested: 4,
+    updated: 2,
+    skipped: 1,
+    errors: 1,
+    wb_ready: 1,
+    wb_unavailable: 1,
+    wb_targets: [{imported_product_id: 101, product_id: 9101}],
+    items: [
+      {product_id: 404, status: 'error', reason: 'update_failed'},
+      {product_id: 303, status: 'updated', reason: null},
+      {product_id: 202, status: 'skipped', reason: 'no_supplier_link'},
+      {product_id: 101, status: 'updated', reason: null},
+    ],
+    labels: [101, 202, 303, 404].map(productId => ({productId, label: 'Product ' + productId})),
+  };
+}
+
 function makeApp() {
   const app = Object.assign(component.data(), component.methods);
   const refs = {
     account: {focused: false, focus() { this.focused = true; }},
     error: {focused: false, focus() { this.focused = true; }},
     result: {focused: false, focus() { this.focused = true; }},
+    resume: {focused: false, focus() { this.focused = true; }},
     dialog: {
       open: false,
       showModal() { this.open = true; },
@@ -94,6 +135,7 @@ function makeApp() {
     ozonAccount: refs.account,
     ozonError: refs.error,
     supplierRefreshResult: refs.result,
+    supplierRefreshResume: refs.resume,
     ozonDialog: refs.dialog,
   };
   app.$nextTick = function (callback) { callback.call(this); };
@@ -203,6 +245,7 @@ async function finishSupplierRefresh(data, ids) {
     ['csrf_token', 'csrf-test-token'],
     ['selected_ids', '9001'],
     ['preset', 'characteristics'],
+    ['from_supplier_refresh', '1'],
   ]);
   sameJson(app.selected, [999]);
 
@@ -251,6 +294,7 @@ async function finishSupplierRefresh(data, ids) {
     ['selected_ids', '9101'],
     ['selected_ids', '9303'],
     ['preset', 'characteristics'],
+    ['from_supplier_refresh', '1'],
   ]);
 
   const malformedExtensions = [
@@ -275,6 +319,22 @@ async function finishSupplierRefresh(data, ids) {
     assert.equal(wbApp.checkRefreshedWbCharacteristics(), false);
     assert.equal(submittedForms.length, formCount);
   }
+
+  const invalidWbCount = await finishSupplierRefresh({
+    success: true,
+    status: 'completed',
+    requested: 1,
+    updated: 1,
+    skipped: 0,
+    errors: 0,
+    wb_ready: 1,
+    wb_unavailable: 1,
+    wb_targets: [wbTarget(101, 9101)],
+    items: [{product_id: 101, status: 'updated', reason: null}],
+  }, [101]);
+  sameJson(invalidWbCount.app.supplierRefreshOzonIds, [101]);
+  sameJson(invalidWbCount.app.supplierRefreshWbProductIds, []);
+  assert.doesNotMatch(invalidWbCount.app.supplierRefreshResult.summary, /исходных ссылок WB/);
 
   const disconnected = await finishSupplierRefresh({
     ...multiBase,
@@ -333,6 +393,182 @@ async function finishSupplierRefresh(data, ids) {
   sameJson(ordinary.app.ozonIds, selection);
   sameJson(ordinary.app.selected, selection);
   assert.equal(ordinary.refs.dialog.open, true, 'the ordinary Ozon action still uses the shared dialog helper');
+
+  const templateText = fs.readFileSync(require('node:path').join(
+    require('node:path').dirname(process.argv[1]), '..', 'templates', 'my_products_beta.html',
+  ), 'utf8');
+  assert.match(templateText, /'supplierRefreshResult': url_for\('api_my_products_supplier_refresh_result'\)/);
+  assert.match(templateText, /id="supplier-refresh-result"/);
+  assert.match(templateText, /20261121-supplier-refresh-resume-1/);
+
+  const receiptKey = 'supplier-refresh-resume-v1';
+  const previousReceipt = 'v1.previous.receipt';
+  const nextReceipt = 'v1.next.receipt';
+  stored.set(receiptKey, previousReceipt);
+  const confirmOnly = makeApp();
+  const priorResult = {kind: 'complete', entries: [], updated: 1};
+  confirmOnly.app.supplierRefreshResult = priorResult;
+  confirmOnly.app.items = [{id: 101, title: 'Product 101', import_status: 'validated'}];
+  confirmOnly.app.selected = [101];
+  confirmOnly.app.startAction({key: 'refresh_supplier'});
+  assert.equal(confirmOnly.app.confirm.open, true);
+  assert.equal(stored.get(receiptKey), previousReceipt,
+    'opening confirmation must retain the prior result receipt');
+  assert.equal(confirmOnly.app.supplierRefreshResult, priorResult,
+    'opening confirmation must retain the prior visible result');
+  confirmOnly.app.cancelAction();
+  assert.equal(stored.get(receiptKey), previousReceipt,
+    'cancel before POST must retain the prior result receipt');
+  assert.equal(confirmOnly.app.supplierRefreshResult, priorResult,
+    'cancel before POST must retain the prior visible result');
+
+  const postResult = makeApp();
+  setSupplierOutcome(postResult.app, {
+    success: true,
+    status: 'completed',
+    requested: 1,
+    updated: 1,
+    skipped: 0,
+    errors: 0,
+    resume_receipt: nextReceipt,
+    items: [{product_id: 101, status: 'updated', reason: null}],
+  }, [101]);
+  stored.set(receiptKey, previousReceipt);
+  postResult.app.runAction();
+  assert.equal(stored.has(receiptKey), false,
+    'starting the actual supplier POST clears the old receipt immediately');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stored.get(receiptKey), nextReceipt,
+    'only the verified updated result receipt is stored, as a raw token');
+  assert.equal(postResult.app.supplierRefreshResult.resumeWarning, undefined);
+
+  const oversizedReceipt = makeApp();
+  setSupplierOutcome(oversizedReceipt.app, {
+    success: true,
+    status: 'completed',
+    requested: 1,
+    updated: 1,
+    skipped: 0,
+    errors: 0,
+    resume_receipt: 'x'.repeat(7501),
+    items: [{product_id: 101, status: 'updated', reason: null}],
+  }, [101]);
+  oversizedReceipt.app.runAction();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stored.has(receiptKey), false, 'oversized receipts are never persisted');
+  assert.match(oversizedReceipt.app.supplierRefreshResult.resumeWarning, /нельзя будет восстановить/);
+
+  const receipt = 'v1.saved.receipt_1';
+  stored.set(receiptKey, receipt);
+  fakeWindow.location.hash = '#supplier-refresh-result';
+  fetchCalls.length = 0;
+  fetchHandler = (url, options) => {
+    assert.equal(url, '/api/my-products/supplier-refresh-result');
+    assert.equal(options.method, 'GET');
+    assert.equal(options.credentials, 'same-origin');
+    assert.equal(options.cache, 'no-store');
+    assert.equal(options.headers['X-Supplier-Refresh-Receipt'], receipt);
+    assert.ok(options.signal);
+    return Promise.resolve(jsonResponse(200, savedRefreshResponse()));
+  };
+  const restored = makeApp();
+  restored.app._supplierRefreshReturnAnchor = true;
+  restored.app.selected = [777];
+  let restorePosts = 0;
+  restored.app.$api.post = function () { restorePosts += 1; return Promise.resolve({}); };
+  await restored.app.restoreSupplierRefreshResult();
+  assert.equal(fetchCalls.length, 1, 'restoring one tab result performs one bounded GET');
+  assert.equal(restored.app.supplierRefreshResult.saved, true);
+  assert.equal(restored.app.supplierRefreshResult.title, 'Сохранённый итог обновления из поставщика');
+  sameJson(restored.app.supplierRefreshOzonIds, [101, 303]);
+  sameJson(restored.app.supplierRefreshWbProductIds, [9101]);
+  sameJson(restored.app.supplierRefreshResult.entries.map(row => [row.productId, row.label]), [
+    [101, 'Product 101'], [202, 'Product 202'], [303, 'Product 303'], [404, 'Product 404'],
+  ]);
+  assert.match(restored.app.supplierRefreshResult.summary, /Недоступны исходные ссылки WB: 1/);
+  assert.equal(restored.refs.result.focused, true, 'return-anchor restoration moves focus to the result');
+  sameJson(restored.app.selected, [777], 'the ordinary catalog selection remains independent');
+  assert.equal(restorePosts, 0, 'restoration never prepares or publishes');
+  assert.equal(stored.get(receiptKey), receipt, 'a read does not consume the saved receipt');
+
+  const foreignUrl = makeApp();
+  foreignUrl.app.urls = Object.assign({}, foreignUrl.app.urls, {
+    supplierRefreshResult: 'https://foreign.example/receipt',
+  });
+  const beforeForeignUrl = fetchCalls.length;
+  await foreignUrl.app.restoreSupplierRefreshResult();
+  assert.equal(fetchCalls.length, beforeForeignUrl, 'a foreign result URL is never requested');
+  assert.equal(foreignUrl.app.supplierRefreshResumeRetry, false);
+
+  const invalidLabels = makeApp();
+  stored.set(receiptKey, receipt);
+  invalidLabels.app._supplierRefreshReturnAnchor = true;
+  fetchHandler = () => Promise.resolve(jsonResponse(200, {
+    ...savedRefreshResponse(),
+    labels: [{productId: 101, label: 'Product 101'}, {productId: 101, label: 'duplicate'}],
+  }));
+  await invalidLabels.app.restoreSupplierRefreshResult();
+  assert.equal(invalidLabels.app.supplierRefreshResult, null);
+  assert.equal(invalidLabels.app.supplierRefreshResumeRetry, true,
+    'invalid server labels must leave a read-only retry available');
+  assert.equal(stored.get(receiptKey), receipt,
+    'a malformed transient read retains its receipt for read-only retry');
+
+  const retryRead = makeApp();
+  retryRead.app._supplierRefreshReturnAnchor = true;
+  fetchHandler = () => Promise.reject(new TypeError('network unavailable'));
+  await retryRead.app.restoreSupplierRefreshResult();
+  assert.equal(retryRead.app.supplierRefreshResumeRetry, true);
+  fetchHandler = () => Promise.resolve(jsonResponse(200, savedRefreshResponse()));
+  await retryRead.app.restoreSupplierRefreshResult();
+  assert.equal(retryRead.app.supplierRefreshResult.saved, true,
+    'the retry repeats only the read and can recover the saved outcome');
+
+  const expired = makeApp();
+  expired.app._supplierRefreshReturnAnchor = true;
+  fetchHandler = () => Promise.resolve(jsonResponse(410, {}));
+  await expired.app.restoreSupplierRefreshResult();
+  assert.equal(stored.has(receiptKey), false, 'an expired receipt is discarded');
+  assert.match(expired.app.supplierRefreshResumeNote, /истёк или недоступен/);
+  assert.equal(expired.app.supplierRefreshResumeRetry, false);
+  assert.doesNotMatch(expired.app.supplierRefreshResumeNote, /повторите обновление/);
+
+  let resolveStaleRead;
+  stored.set(receiptKey, receipt);
+  const hidden = makeApp();
+  hidden.app._supplierRefreshReturnAnchor = true;
+  fetchHandler = () => new Promise(resolve => { resolveStaleRead = resolve; });
+  const staleRead = hidden.app.restoreSupplierRefreshResult();
+  hidden.app.hideSupplierRefreshResult();
+  assert.equal(stored.has(receiptKey), false, 'hiding clears the saved receipt');
+  resolveStaleRead(jsonResponse(200, savedRefreshResponse()));
+  await staleRead;
+  assert.equal(hidden.app.supplierRefreshResult, null,
+    'a response arriving after hide cannot restore a result');
+
+  let resolveUnmountedRead;
+  stored.set(receiptKey, receipt);
+  const unmounted = makeApp();
+  fetchHandler = () => new Promise(resolve => { resolveUnmountedRead = resolve; });
+  const unmountedRead = unmounted.app.restoreSupplierRefreshResult();
+  component.beforeUnmount.call(unmounted.app);
+  resolveUnmountedRead(jsonResponse(200, savedRefreshResponse()));
+  await unmountedRead;
+  assert.equal(unmounted.app.supplierRefreshResult, null,
+    'a response arriving after unmount cannot restore a result');
+
+  stored.set(receiptKey, receipt);
+  fakeWindow.location.hash = '';
+  const batchReceiptDefinition = remount('batch-receipt', '?import_batch=batch-receipt');
+  const batchRestore = makeFeedApp(batchReceiptDefinition, {success: true, items: [], pagination: {}});
+  const fetchCountBeforeBatch = fetchCalls.length;
+  batchReceiptDefinition.mounted.call(batchRestore.app);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fetchCalls.length, fetchCountBeforeBatch,
+    'import batch mode never restores an unrelated supplier receipt');
+  assert.equal(stored.get(receiptKey), receipt,
+    'import batch mode leaves the other tab result token untouched');
+  boot.importBatch = null;
 
   const batchToken = 'supplier-import-receipt-7';
   const batchPage = {
@@ -462,6 +698,14 @@ async function finishSupplierRefresh(data, ids) {
     'handoff_and_dismissal_leave_general_selection_unchanged_and_restore_focus',
     'unknown_rejected_zero_inconsistent_pending_and_disabled_states_do_not_open_the_dialog',
     'ordinary_ozon_action_reuses_shared_preparation_helper',
+    'supplier_refresh_receipt_is_tab_scoped_and_replaced_only_after_verified_post',
+    'cancel_before_supplier_post_keeps_receipt_and_actual_post_replaces_it',
+    'supplier_refresh_resume_reads_exact_labels_and_restores_result_without_mutation',
+    'transient_resume_failure_keeps_receipt_for_read_only_retry',
+    'expired_resume_receipt_is_cleared_and_reported_on_return_anchor',
+    'hide_and_unmount_fence_stale_resume_responses',
+    'supplier_refresh_wb_handoff_marks_its_fixed_return_flow',
+    'import_batch_mode_does_not_restore_supplier_receipt',
     'import_receipt_mode_reads_one_exact_authorized_page_without_auto_selection',
     'import_receipt_mode_uses_explicit_exact_selection_and_allows_exclusion',
     'invalid_or_stale_import_receipts_clear_rows_and_never_fall_back_to_global_feed',
