@@ -372,6 +372,13 @@
 .mp-refresh-result-wb:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
 .mp-refresh-result-reload { margin-top:10px; color:var(--accent-text); }
 
+#my-products-app .shk-job {
+    scroll-margin-top:72px;
+}
+#my-products-app .shk-job:focus {
+    outline:2px solid var(--focus-outline);
+    outline-offset:2px;
+}
 #my-products-app .shk-job-close:focus-visible,
 #my-products-app .shk-job-result > .sh-btn:focus-visible {
     outline:2px solid var(--focus-outline);

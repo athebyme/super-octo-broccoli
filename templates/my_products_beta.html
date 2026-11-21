@@ -138,7 +138,8 @@
         </div>
     </section>
 
-    <sh-job-progress :job="job" :title="jobTitle" @check-status="recheckJob" @dismiss="dismissJob"></sh-job-progress>
+    <sh-job-progress ref="jobProgress" :job="job" :title="jobTitle"
+                     @check-status="recheckJob" @dismiss="dismissJob"></sh-job-progress>
 
     <!-- Вкладки: одно состояние — одна вкладка, со счётчиком -->
     <nav v-if="!importBatchMode" class="mp-tabs" aria-label="Статус карточек">

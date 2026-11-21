@@ -764,7 +764,7 @@
             },
         },
         template: `
-            <div v-if="job" class="shk-job" :class="tone ? 'shk-job--' + tone : ''"
+            <div v-if="job" class="shk-job" :class="tone ? 'shk-job--' + tone : ''" tabindex="-1"
                  :role="finished ? 'status' : null" :aria-live="finished ? 'polite' : null"
                  :aria-atomic="finished ? 'true' : null">
                 <div class="shk-job-head">

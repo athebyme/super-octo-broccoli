@@ -100,7 +100,7 @@
         if (job.status === 'failed') job.message = 'Задача не завершена.';
         if (job.status === 'cancelled') job.message = 'Операция отменена.';
         if (job.status === 'unknown') {
-            job.message = 'Не удалось прочитать статус. Результат неизвестен. «Проверить статус» выполнит только чтение того же запуска.';
+            job.message = 'Проверьте статус этого запуска перед новой отправкой.';
         }
         return job;
     }
@@ -431,7 +431,6 @@
         if (!outcome || outcome.updated < 1) return null;
         outcome.saved = true;
         outcome.title = 'Сохранённый итог обновления из поставщика';
-        outcome.summary = 'Сохранённый результат. ' + outcome.summary;
         return outcome;
     }
 
@@ -1547,7 +1546,9 @@
                     if (sameIds(self.selected, selectionAtReview)) self.selected = [];
                     if (data.job_uid || data.job_id) {
                         self.trackJob(data.job_uid || data.job_id, ids.length);
+                        self.focusJobProgress();
                     } else {
+                        self.stopJobTracking();
                         var updated = typeof data.updated === 'number' ? data.updated : null;
                         var deleted = typeof data.deleted === 'number' ? data.deleted : null;
                         var skipped = typeof data.skipped === 'number' ? data.skipped : 0;
@@ -1565,6 +1566,7 @@
                         };
                         self.load();
                         self.loadFacets();
+                        self.focusJobProgress();
                     }
                 }).catch(function (err) {
                     self.confirm.open = false;
@@ -1773,7 +1775,7 @@
                 var unknownResult = function () {
                     return Object.assign({}, self.job || {}, {
                         status: 'unknown',
-                        message: 'Не удалось прочитать статус. Результат неизвестен. «Проверить статус» выполнит только чтение того же запуска.',
+                        message: 'Проверьте статус этого запуска перед новой отправкой.',
                     });
                 };
                 var poll = function () {
@@ -1816,6 +1818,17 @@
                 this.loadFacets();
                 return true;
             },
+            focusJobProgress: function () {
+                this.$nextTick(function () {
+                    var component = this.$refs.jobProgress;
+                    var target = component && component.$el;
+                    if (!target || typeof target.focus !== 'function') return;
+                    target.focus({ preventScroll: true });
+                    if (typeof target.scrollIntoView === 'function') {
+                        target.scrollIntoView({ block: 'start', inline: 'nearest' });
+                    }
+                });
+            },
             recheckJob: function () {
                 var current = this.job;
                 if (!current || current.status !== 'unknown' || current.checking || !current.job_uid) return;
@@ -1837,7 +1850,7 @@
                     if (!job) {
                         self.job = Object.assign({}, self.job, {
                             checking: false,
-                            message: 'Не удалось подтвердить статус. Результат остаётся неизвестным; проверка повторяет только чтение этого запуска.',
+                            message: 'Не удалось проверить статус. Попробуйте ещё раз.',
                         });
                         return;
                     }
@@ -1851,13 +1864,13 @@
                     }
                     self.job = Object.assign({}, self.job, {
                         checking: false,
-                        message: 'Не удалось подтвердить статус. Результат остаётся неизвестным; проверка повторяет только чтение этого запуска.',
+                        message: 'Не удалось проверить статус. Попробуйте ещё раз.',
                     });
                 }).catch(function () {
                     if (!isCurrent()) return;
                     self.job = Object.assign({}, self.job, {
                         checking: false,
-                        message: 'Не удалось подтвердить статус. Результат остаётся неизвестным; проверка повторяет только чтение этого запуска.',
+                        message: 'Не удалось проверить статус. Попробуйте ещё раз.',
                     });
                 }).finally(function () {
                     clearTimeout(requestTimer);
