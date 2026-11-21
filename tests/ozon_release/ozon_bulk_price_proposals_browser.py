@@ -1273,7 +1273,7 @@ try:
             mobile_summary.focus()
             mobile_summary.press("Enter")
             assert mobile_nav.evaluate("element => element.open")
-            mobile_links.wait_for(state="visible")
+            mobile_links.first.wait_for(state="visible")
             link_accessibility = mobile_links.evaluate_all("""links => links.map(link => ({
                 label:link.innerText.trim(), href:link.getAttribute('href'),
                 current:link.getAttribute('aria-current'), visible:link.getClientRects().length > 0,
@@ -1294,6 +1294,7 @@ try:
         assert report["provider_attempts"] == nav_provider_attempts_before == 0
         assert report["provider_write_callbacks"] == nav_provider_writes_before == 0
         assert report["external"] == nav_external_before
+        passed("ozon_mobile_exact_result_nav_fits_320x640_and_stays_read_only")
 
         def open_result_probe(target_url, mutation=None, expected_status=200):
             probe = context.new_page()
