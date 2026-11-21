@@ -8,8 +8,8 @@
 <script type="application/json" id="our-bootstrap">{{ {
     'review': review,
     'urls': {
-        'html': '/marketplaces/ozon/uploads/review',
-        'api': '/marketplaces/ozon/uploads/api/review',
+        'html': url_for('ozon_bulk_uploads.review'),
+        'api': url_for('ozon_bulk_uploads.review_api'),
         'publish': url_for('ozon_bulk_uploads.create_from_drafts'),
         'byRequest': url_for('ozon_bulk_uploads.find_by_request'),
         'runBase': url_for('ozon_bulk_uploads.detail', job_uid='JOB_UID').replace('JOB_UID', ''),
