@@ -693,6 +693,7 @@ def run():
         wb_refresh_data = wb_refresh.value.json()
         assert (wb_refresh_data["requested"], wb_refresh_data["updated"],
                 wb_refresh_data["skipped"], wb_refresh_data["errors"]) == (2, 1, 1, 0), wb_refresh_data
+        assert wb_refresh_data["wb_ready"] == 1
         assert wb_refresh_data["wb_targets"] == [{
             "imported_product_id": fixture_ids["local_id"],
             "product_id": fixture_ids["wb_id"],
@@ -702,12 +703,23 @@ def run():
             "body": {"product_ids": [fixture_ids["local_id"], fixture_ids["manual_id"]]},
         }
         wb_result = wb_handoff_page.locator(".mp-refresh-result")
-        wb_result.get_by_role("heading", name="Обновление из поставщика завершено").wait_for()
+        wb_result.get_by_role(
+            "heading", name="Обновление из поставщика завершено", exact=True,
+        ).wait_for()
         assert wb_handoff_page.evaluate(
             "document.activeElement === document.querySelector('.mp-refresh-result')"
         )
-        wb_result.get_by_text("Данные поставщика сохранены в Seller Hub.").wait_for()
-        wb_result.get_by_text("Нет связи с каталогом поставщика. Данные не менялись.").wait_for()
+        wb_result.get_by_text("Карточки и итог (2)", exact=True).click()
+        wb_result.locator(".mp-refresh-result-details").get_by_text(
+            REFRESHED_TITLE, exact=True,
+        ).wait_for()
+        wb_result.locator(".mp-refresh-result-details").get_by_text(
+            MANUAL_TITLE, exact=True,
+        ).wait_for()
+        wb_result.get_by_text("Данные поставщика сохранены в Seller Hub.", exact=True).wait_for()
+        wb_result.get_by_text(
+            "Нет связи с каталогом поставщика. Данные не менялись.", exact=True,
+        ).wait_for()
         wb_cta = refresh_wb_button(wb_handoff_page)
         assert wb_cta.count() == 1
         assert refresh_ozon_button(wb_handoff_page).count() == 1
@@ -749,10 +761,12 @@ def run():
             fixture.BASE + LOCAL_WB_ENRICH_REVIEW,
             wait_until="domcontentloaded",
         )
-        wb_handoff_page.get_by_role("heading", name="Отправка характеристик на WB").wait_for()
+        wb_handoff_page.get_by_role(
+            "heading", name="Отправка характеристик на WB", exact=True,
+        ).wait_for()
         wb_handoff_page.get_by_text("Выбрано: 1", exact=False).wait_for()
         wb_handoff_page.get_by_role(
-            "button", name="Подтвердить отправку характеристик",
+            "button", name="Подтвердить отправку характеристик", exact=True,
         ).wait_for()
         reviewed_fields = wb_handoff_page.locator(".be-shell").evaluate("""element =>
             Object.fromEntries(Array.from(element.querySelectorAll('input[x-model^="fields."]'))
@@ -866,6 +880,7 @@ def run():
             "updated": 1,
             "skipped": 1,
             "errors": 1,
+            "wb_ready": 1,
             "items": [
                 {"product_id": fixture_ids["local_id"], "status": "updated", "reason": None},
                 {"product_id": fixture_ids["manual_id"], "status": "skipped", "reason": "no_supplier_link"},
