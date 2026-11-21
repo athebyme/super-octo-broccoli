@@ -138,7 +138,13 @@ def _failure_result(code: str, started_at: float, *, busy: bool = False):
     return result
 
 
-def _claim_supplier(supplier_id: int, *, automatic: bool, now: datetime):
+def _claim_supplier(
+    supplier_id: int,
+    *,
+    automatic: bool,
+    now: datetime,
+    expected_config: Optional[dict] = None,
+):
     """Commit a durable run claim and return the config snapshot/token."""
     _begin_writer_transaction()
     try:
@@ -150,6 +156,15 @@ def _claim_supplier(supplier_id: int, *, automatic: bool, now: datetime):
         if supplier is None:
             db.session.rollback()
             return None, "supplier_not_found"
+        if expected_config is not None:
+            current_config = {
+                "price_file_url": supplier.price_file_url,
+                "encoding": supplier.price_file_encoding or "cp1251",
+                "delimiter": supplier.price_file_delimiter or ";",
+            }
+            if not isinstance(expected_config, dict) or current_config != expected_config:
+                db.session.rollback()
+                return None, "source_changed"
         if automatic and (not supplier.is_active or not supplier.auto_sync_prices):
             db.session.rollback()
             return None, "automatic_sync_disabled"
@@ -440,13 +455,21 @@ def _apply_feed(
         raise
 
 
-def sync_supplier_price_feed(supplier_id: int, *, automatic: bool = False):
+def sync_supplier_price_feed(
+    supplier_id: int,
+    *,
+    automatic: bool = False,
+    expected_config: Optional[dict] = None,
+):
     """Claim, read, validate, and atomically apply one supplier price feed."""
     started_at = time.monotonic()
     now = datetime.utcnow()
     try:
         snapshot, claim_error = _claim_supplier(
-            supplier_id, automatic=automatic, now=now,
+            supplier_id,
+            automatic=automatic,
+            now=now,
+            expected_config=expected_config,
         )
     except Exception as error:
         if _is_database_busy(error):

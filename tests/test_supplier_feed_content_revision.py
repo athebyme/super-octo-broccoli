@@ -2,6 +2,7 @@
 
 import copy
 import json
+import time
 import unittest
 from contextlib import contextmanager
 from datetime import datetime
@@ -31,7 +32,9 @@ from services.supplier_service import (
     SupplierService,
     _copy_to_imported_product,
     _supplier_catalog_sync_lock,
+    supplier_catalog_config_digest,
 )
+from services.supplier_price_sync import sync_supplier_price_feed
 
 
 class SupplierFeedContentRevisionTest(unittest.TestCase):
@@ -357,6 +360,155 @@ class SupplierFeedContentRevisionTest(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(transaction_states, [False])
         photo_warm.assert_not_called()
+
+    def test_expected_config_change_prevents_catalog_get(self):
+        with patch.object(SupplierCSVParser, 'fetch_csv_raw') as fetch_raw:
+            result = SupplierService._sync_from_csv_locked(
+                self.supplier_id,
+                start_time=time.time(),
+                expected_config_digest='0' * 64,
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.catalog_error_code, 'source_changed')
+        self.assertEqual(result.price_followup_status, 'skipped')
+        fetch_raw.assert_not_called()
+
+    def test_config_change_at_pre_http_recheck_blocks_catalog_get(self):
+        initial_digest = supplier_catalog_config_digest(
+            db.session.get(Supplier, self.supplier_id),
+        )
+        original_digest = supplier_catalog_config_digest
+        digest_calls = []
+
+        def change_config_during_recheck(supplier):
+            digest_calls.append(True)
+            if len(digest_calls) == 2:
+                supplier.csv_source_url = 'fixture://changed'
+                db.session.commit()
+            return original_digest(supplier)
+
+        with patch(
+            'services.supplier_service.supplier_catalog_config_digest',
+            side_effect=change_config_during_recheck,
+        ), patch.object(SupplierCSVParser, 'fetch_csv_raw') as fetch_raw:
+            result = SupplierService._sync_from_csv_locked(
+                self.supplier_id,
+                start_time=time.time(),
+                expected_config_digest=initial_digest,
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.catalog_error_code, 'source_changed')
+        self.assertEqual(len(digest_calls), 2)
+        fetch_raw.assert_not_called()
+
+    def test_raw_checkpoint_runs_atomically_and_failure_rolls_back_catalog(self):
+        previous_sync = datetime(2026, 10, 3, 12, 0)
+        supplier = db.session.get(Supplier, self.supplier_id)
+        supplier.last_sync_at = previous_sync
+        db.session.commit()
+
+        callback_observations = []
+
+        def checkpoint(result, raw_at):
+            callback_observations.append((
+                db.session().in_transaction(),
+                result.added,
+                raw_at,
+                SupplierProduct.query.filter_by(
+                    supplier_id=self.supplier_id,
+                ).count(),
+            ))
+            current = db.session.get(Supplier, self.supplier_id)
+            self.assertEqual(current.last_sync_at, raw_at)
+            current.name = 'must roll back'
+            raise RuntimeError('synthetic checkpoint failure')
+
+        with self._sync_patches(self._row()):
+            result = SupplierService._sync_from_csv_locked(
+                self.supplier_id,
+                start_time=time.time(),
+                raw_checkpoint=checkpoint,
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.catalog_error_code, 'raw_checkpoint_failed')
+        self.assertEqual(result.price_followup_status, 'skipped')
+        self.assertEqual(len(callback_observations), 1)
+        self.assertEqual(callback_observations[0][0:2], (True, 1))
+        self.assertIsInstance(callback_observations[0][2], datetime)
+        self.assertEqual(callback_observations[0][3], 1)
+        db.session.expire_all()
+        supplier = db.session.get(Supplier, self.supplier_id)
+        self.assertEqual(supplier.name, 'Fixture supplier')
+        self.assertEqual(supplier.last_sync_at, previous_sync)
+        self.assertEqual(supplier.last_sync_status, 'failed')
+        self.assertEqual(SupplierProduct.query.filter_by(
+            supplier_id=self.supplier_id,
+        ).count(), 0)
+
+    def test_catalog_price_followup_uses_original_effective_config(self):
+        supplier = db.session.get(Supplier, self.supplier_id)
+        supplier.price_file_url = 'https://prices.invalid/original.csv'
+        supplier.price_file_encoding = 'utf-8'
+        supplier.price_file_delimiter = '|'
+        db.session.commit()
+
+        with self._sync_patches(self._row()), patch.object(
+            SupplierService,
+            'sync_prices_and_stock',
+            return_value=SimpleNamespace(
+                success=True,
+                updated=1,
+                conflicting_source_rows=2,
+                error_messages=[],
+                busy=False,
+            ),
+        ) as price_followup:
+            result = SupplierService.sync_from_csv(self.supplier_id)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.price_followup_status, 'partial')
+        self.assertEqual(result.price_followup_conflicts, 2)
+        self.assertEqual(
+            price_followup.call_args.kwargs['expected_config'],
+            {
+                'price_file_url': 'https://prices.invalid/original.csv',
+                'encoding': 'utf-8',
+                'delimiter': '|',
+            },
+        )
+
+    def test_price_writer_rejects_changed_expected_config_before_get(self):
+        supplier = db.session.get(Supplier, self.supplier_id)
+        supplier.price_file_url = 'https://prices.invalid/current.csv'
+        supplier.price_file_encoding = 'utf-8'
+        supplier.price_file_delimiter = '|'
+        db.session.commit()
+        expected = {
+            'price_file_url': 'https://prices.invalid/original.csv',
+            'encoding': 'utf-8',
+            'delimiter': '|',
+        }
+
+        with patch(
+            'services.supplier_price_sync.read_supplier_price_feed',
+        ) as read_feed:
+            result = sync_supplier_price_feed(
+                self.supplier_id,
+                expected_config=expected,
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_messages, ['source_changed'])
+        read_feed.assert_not_called()
+
+    def test_config_digest_is_available_on_module_and_service(self):
+        supplier = db.session.get(Supplier, self.supplier_id)
+        digest = supplier_catalog_config_digest(supplier)
+        self.assertRegex(digest, r'^[0-9a-f]{64}$')
+        self.assertEqual(SupplierService.supplier_catalog_config_digest(supplier), digest)
 
     def _make_imported_copy_and_channel_snapshots(self, source):
         wb_product = Product(

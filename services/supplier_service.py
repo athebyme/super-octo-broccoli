@@ -131,6 +131,44 @@ class SyncResult:
     seller_rows_updated: int = 0
     busy: bool = False
     conflicting_source_rows: int = 0
+    catalog_error_code: Optional[str] = None
+    price_followup_status: Optional[str] = None
+    price_followup_conflicts: Optional[int] = None
+
+
+def _supplier_catalog_config_snapshot(supplier) -> dict:
+    """Return the canonical, effective config used by catalog and price reads."""
+    return {
+        'supplier_id': getattr(supplier, 'id', None),
+        'code': getattr(supplier, 'code', None),
+        'csv_source_url': getattr(supplier, 'csv_source_url', None),
+        'csv_delimiter': getattr(supplier, 'csv_delimiter', None) or ';',
+        'csv_encoding': getattr(supplier, 'csv_encoding', None) or 'cp1251',
+        'csv_column_mapping': copy.deepcopy(
+            getattr(supplier, 'csv_column_mapping', None),
+        ),
+        'csv_has_header': bool(getattr(supplier, 'csv_has_header', False)),
+        'is_active': bool(getattr(supplier, 'is_active', False)),
+        'price_file_url': getattr(supplier, 'price_file_url', None),
+        'price_file_encoding': (
+            getattr(supplier, 'price_file_encoding', None) or 'cp1251'
+        ),
+        'price_file_delimiter': (
+            getattr(supplier, 'price_file_delimiter', None) or ';'
+        ),
+    }
+
+
+def supplier_catalog_config_digest(supplier) -> str:
+    """Hash the effective supplier source config without retaining its values."""
+    canonical = json.dumps(
+        _supplier_catalog_config_snapshot(supplier),
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(',', ':'),
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
 
 @dataclass
@@ -1058,6 +1096,8 @@ def _supplier_catalog_sync_lock(supplier_id: int):
 class SupplierService:
     """Основной сервисный класс для работы с поставщиками"""
 
+    supplier_catalog_config_digest = staticmethod(supplier_catalog_config_digest)
+
     # -----------------------------------------------------------------------
     # CRUD поставщиков
     # -----------------------------------------------------------------------
@@ -1197,6 +1237,7 @@ class SupplierService:
                     success=False,
                     busy=True,
                     error_messages=["Обновление каталога этого поставщика уже выполняется"],
+                    price_followup_status='skipped',
                 )
             return SupplierService._sync_from_csv_locked(
                 supplier_id, price_data=price_data, start_time=start_time,
@@ -1208,31 +1249,45 @@ class SupplierService:
         *,
         price_data: Dict[str, float] = None,
         start_time: float,
+        expected_config_digest: Optional[str] = None,
+        raw_checkpoint=None,
     ) -> SyncResult:
         result = SyncResult()
-        supplier = db.session.get(Supplier, supplier_id)
+        supplier = (
+            Supplier.query.filter_by(id=supplier_id)
+            .populate_existing()
+            .first()
+        )
         if not supplier:
             result.success = False
             result.error_messages.append("Поставщик не найден")
+            result.catalog_error_code = 'supplier_not_found'
+            result.price_followup_status = 'skipped'
             return result
 
-        config = {
-            'id': supplier.id,
-            'code': supplier.code,
-            'csv_source_url': supplier.csv_source_url,
-            'csv_delimiter': supplier.csv_delimiter,
-            'csv_encoding': supplier.csv_encoding,
-            'csv_column_mapping': copy.deepcopy(supplier.csv_column_mapping),
-            'csv_has_header': bool(supplier.csv_has_header),
-            'is_active': bool(supplier.is_active),
-            'price_file_url': supplier.price_file_url,
-        }
+        config = _supplier_catalog_config_snapshot(supplier)
+        config_digest = supplier_catalog_config_digest(supplier)
+        if (
+            expected_config_digest is not None
+            and expected_config_digest != config_digest
+        ):
+            result.success = False
+            result.catalog_error_code = 'source_changed'
+            result.price_followup_status = 'skipped'
+            result.error_messages.append("Настройки источника изменились до начала чтения каталога")
+            return result
+
         parser_supplier = SimpleNamespace(**copy.deepcopy(config))
         supplier.last_sync_status = 'running'
         supplier.last_sync_error = None
         db.session.commit()
 
-        def mark_failed(message: str, *, error_count: int = 1) -> SyncResult:
+        def mark_failed(
+            message: str,
+            *,
+            code: str,
+            error_count: int = 1,
+        ) -> SyncResult:
             db.session.rollback()
             result.success = False
             result.duration_seconds = time.time() - start_time
@@ -1240,6 +1295,8 @@ class SupplierService:
             result.added = 0
             result.updated = 0
             result.error_messages = [message]
+            result.catalog_error_code = code
+            result.price_followup_status = 'skipped'
             try:
                 current = db.session.get(Supplier, supplier_id)
                 if current:
@@ -1251,11 +1308,46 @@ class SupplierService:
                 logger.error("Could not persist failed catalog status for supplier %s", supplier_id)
             return result
 
-        # The status commit above closes the ORM transaction before network IO.
+        # Re-read after committing running and close that read transaction before
+        # HTTP so the admitted config remains current at the start of the read.
+        try:
+            db.session.rollback()
+            live_supplier = (
+                Supplier.query.filter_by(id=supplier_id)
+                .populate_existing()
+                .first()
+            )
+            current_digest = (
+                supplier_catalog_config_digest(live_supplier)
+                if live_supplier else None
+            )
+            config_still_current = (
+                current_digest == config_digest
+                and (
+                    expected_config_digest is None
+                    or current_digest == expected_config_digest
+                )
+            )
+            db.session.rollback()
+        except Exception:
+            db.session.rollback()
+            return mark_failed(
+                "Не удалось повторно проверить настройки источника",
+                code='catalog_config_check_failed',
+            )
+        if not config_still_current:
+            return mark_failed(
+                "Настройки источника изменились до начала чтения каталога",
+                code='source_changed',
+            )
+
         parser = SupplierCSVParser(parser_supplier)
         raw_bytes = parser.fetch_csv_raw()
         if raw_bytes is None:
-            return mark_failed("Не удалось скачать CSV каталога")
+            return mark_failed(
+                "Не удалось скачать CSV каталога",
+                code='catalog_fetch_failed',
+            )
 
         parsed_products, pre_result = parser.preflight_raw(raw_bytes)
         if not pre_result.is_valid:
@@ -1267,10 +1359,13 @@ class SupplierService:
                 pre_result.errors[0]
                 if pre_result.errors else "CSV каталога не прошёл полную проверку"
             )
-            return mark_failed(message)
+            return mark_failed(message, code='catalog_validation_failed')
         result.total_in_csv = len(parsed_products)
         if not parsed_products:
-            return mark_failed("CSV каталог не содержит товаров")
+            return mark_failed(
+                "CSV каталог не содержит товаров",
+                code='catalog_empty',
+            )
 
         # Admin settings can change while the body is being read. Revalidate
         # the exact source/parser configuration before opening the apply phase.
@@ -1284,24 +1379,25 @@ class SupplierService:
                 # Take the writer reservation before the supplier re-read so a
                 # config update cannot race between comparison and raw apply.
                 db.session.execute(text('BEGIN IMMEDIATE'))
-            live_supplier = db.session.get(Supplier, supplier_id)
-            current_config = None
-            if live_supplier:
-                current_config = {
-                    'id': live_supplier.id,
-                    'code': live_supplier.code,
-                    'csv_source_url': live_supplier.csv_source_url,
-                    'csv_delimiter': live_supplier.csv_delimiter,
-                    'csv_encoding': live_supplier.csv_encoding,
-                    'csv_column_mapping': copy.deepcopy(live_supplier.csv_column_mapping),
-                    'csv_has_header': bool(live_supplier.csv_has_header),
-                    'is_active': bool(live_supplier.is_active),
-                    'price_file_url': live_supplier.price_file_url,
-                }
-            if current_config != config:
-                return mark_failed("Настройки источника изменились во время чтения каталога")
+            live_supplier = (
+                Supplier.query.filter_by(id=supplier_id)
+                .populate_existing()
+                .first()
+            )
+            current_digest = (
+                supplier_catalog_config_digest(live_supplier)
+                if live_supplier else None
+            )
+            if current_digest != config_digest:
+                return mark_failed(
+                    "Настройки источника изменились во время чтения каталога",
+                    code='source_changed',
+                )
         except Exception:
-            return mark_failed("Не удалось повторно проверить настройки источника")
+            return mark_failed(
+                "Не удалось повторно проверить настройки источника",
+                code='catalog_config_check_failed',
+            )
 
         try:
             existing_map = {
@@ -1393,18 +1489,34 @@ class SupplierService:
             live_supplier.total_products = SupplierProduct.query.filter_by(
                 supplier_id=supplier_id,
             ).count()
-            live_supplier.last_sync_at = datetime.utcnow()
+            raw_at = datetime.utcnow()
+            live_supplier.last_sync_at = raw_at
             live_supplier.last_sync_status = 'success'
             live_supplier.last_sync_error = None
             live_supplier.last_sync_duration = result.duration_seconds
             # Every raw row, revision, and freshness timestamp is one commit.
+            if raw_checkpoint is not None:
+                try:
+                    raw_checkpoint(result, raw_at)
+                except Exception as exc:
+                    logger.error(
+                        "Catalog raw checkpoint failed for supplier %s (%s)",
+                        config['code'], type(exc).__name__,
+                    )
+                    return mark_failed(
+                        "Не удалось сохранить checkpoint синхронизации каталога",
+                        code='raw_checkpoint_failed',
+                    )
             db.session.commit()
         except Exception as exc:
             logger.error(
                 "Atomic catalog apply failed for supplier %s (%s)",
                 config['code'], type(exc).__name__,
             )
-            return mark_failed("Не удалось применить полный CSV каталог")
+            return mark_failed(
+                "Не удалось применить полный CSV каталог",
+                code='catalog_apply_failed',
+            )
 
         # Optional post-processing starts only after raw catalog facts have a
         # durable success timestamp. A failure here never rolls those facts back.
@@ -1485,21 +1597,48 @@ class SupplierService:
             )
 
         # Preserve the established bounded price/stock follow-on lane.
-        if config['price_file_url']:
+        price_url = config['price_file_url']
+        if isinstance(price_url, str) and price_url.strip():
             try:
                 price_result = SupplierService.sync_prices_and_stock(
-                    supplier_id, force=True,
+                    supplier_id,
+                    force=True,
+                    expected_config={
+                        'price_file_url': price_url,
+                        'encoding': config['price_file_encoding'],
+                        'delimiter': config['price_file_delimiter'],
+                    },
+                )
+                code = (
+                    price_result.error_messages[0]
+                    if price_result.error_messages else None
                 )
                 if price_result.success:
+                    conflicts = price_result.conflicting_source_rows
+                    result.price_followup_conflicts = (
+                        conflicts if type(conflicts) is int and conflicts >= 0 else None
+                    )
+                    result.price_followup_status = (
+                        'partial' if result.price_followup_conflicts else 'success'
+                    )
                     logger.info(
                         "Supplier price follow-up %s: updated=%s",
                         config['code'], price_result.updated,
                     )
+                elif price_result.busy or code in ('sync_busy', 'database_busy'):
+                    result.price_followup_status = 'busy'
+                elif code in ('source_changed', 'configuration_changed'):
+                    result.price_followup_status = 'source_changed'
+                else:
+                    result.price_followup_status = 'failed'
             except Exception as exc:
+                result.price_followup_status = 'failed'
                 logger.warning(
                     "Supplier price follow-up failed for %s (%s)",
                     config['code'], type(exc).__name__,
                 )
+        else:
+            result.price_followup_status = 'skipped'
 
         logger.info(
             "Catalog sync %s: added=%s updated=%s rows=%s duration=%.1fs",
@@ -1513,7 +1652,12 @@ class SupplierService:
     # -----------------------------------------------------------------------
 
     @staticmethod
-    def sync_prices_and_stock(supplier_id: int, force: bool = False) -> SyncResult:
+    def sync_prices_and_stock(
+        supplier_id: int,
+        force: bool = False,
+        *,
+        expected_config: Optional[dict] = None,
+    ) -> SyncResult:
         """Read and apply one complete supplier price feed.
 
         The legacy force flag remains accepted. Each admitted check now reads
@@ -1521,7 +1665,10 @@ class SupplierService:
         """
         from services.supplier_price_sync import sync_supplier_price_feed
 
-        return sync_supplier_price_feed(supplier_id)
+        return sync_supplier_price_feed(
+            supplier_id,
+            expected_config=expected_config,
+        )
 
     @staticmethod
     def get_price_stock_stats(supplier_id: int) -> dict:
