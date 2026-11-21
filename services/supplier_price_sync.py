@@ -519,4 +519,3 @@ def run_auto_supplier_price_sync_tick(flask_app) -> Optional[Any]:
         except Exception as error:
             logger.warning("Automatic supplier price tick failed (%s)", type(error).__name__)
             return _failure_result("tick_failed", time.monotonic())
-
