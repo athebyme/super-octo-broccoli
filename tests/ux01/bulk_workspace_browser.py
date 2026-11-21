@@ -710,12 +710,12 @@ def run():
             "document.activeElement === document.querySelector('.mp-refresh-result')"
         )
         wb_result.get_by_text("Карточки и итог (2)", exact=True).click()
-        wb_result.locator(".mp-refresh-result-details").get_by_text(
-            REFRESHED_TITLE, exact=True,
-        ).wait_for()
-        wb_result.locator(".mp-refresh-result-details").get_by_text(
-            MANUAL_TITLE, exact=True,
-        ).wait_for()
+        updated_title = wb_result.locator(".mp-refresh-result-item.is-ok strong")
+        updated_title.wait_for()
+        assert REFRESHED_TITLE in updated_title.inner_text()
+        skipped_title = wb_result.locator(".mp-refresh-result-item.is-muted strong")
+        skipped_title.wait_for()
+        assert MANUAL_TITLE in skipped_title.inner_text()
         wb_result.get_by_text("Данные поставщика сохранены в Seller Hub.", exact=True).wait_for()
         wb_result.get_by_text(
             "Нет связи с каталогом поставщика. Данные не менялись.", exact=True,
