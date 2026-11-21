@@ -233,7 +233,13 @@ def run():
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "GET":
             if parsed.path == "/api/my-products":
                 query = parse_qs(parsed.query, keep_blank_values=True)
-                feed_gets.append(query)
+                # The signed import-batch token is a short-lived capability.
+                # Keep it out of diagnostics and persisted runner evidence.
+                safe_query = {
+                    key: value for key, value in query.items()
+                    if key != "import_batch"
+                }
+                feed_gets.append(safe_query)
                 if delay_next_full_select and query.get("per_page") == ["200"]:
                     delay_next_full_select = False
                     server_delay_next_full_select = True
@@ -246,7 +252,7 @@ def run():
                     body = response.json()
                     body["pagination"]["total"] = over_limit_initial_total
                     body["pagination"]["has_next"] = True
-                    remember_feed_response(query, response.status, body)
+                    remember_feed_response(safe_query, response.status, body)
                     route.fulfill(status=response.status, content_type="application/json",
                                   body=json.dumps(body))
                     return
@@ -266,7 +272,7 @@ def run():
                         "total": 201, "pages": 2, "per_page": 200,
                         "has_next": True,
                     })
-                    remember_feed_response(query, response.status, body)
+                    remember_feed_response(safe_query, response.status, body)
                     route.fulfill(status=response.status, content_type="application/json",
                                   body=json.dumps(body))
                     return
@@ -276,7 +282,7 @@ def run():
                         body = response.json()
                     except Exception:
                         body = None
-                    remember_feed_response(query, response.status, body)
+                    remember_feed_response(safe_query, response.status, body)
                     if response.status >= 400:
                         fixture.REPORT["unexpected_http"].append({
                             "path": parsed.path, "status": response.status,
@@ -667,11 +673,26 @@ def run():
         assert submitted == {"importIds": [str(fixture_ids["import_id"])], "importUpdates": [],
                              "updateIds": [str(fixture_ids["refresh_source_id"])], "updateImports": []}, submitted
         checks.append("supplier_import_and_refresh_forms_carry_independent_exact_scope")
-        with page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_SUPPLIER_IMPORT
-                                  and response.request.method == "POST") as imported:
+
+        def is_supplier_import_batch_feed(response):
+            parsed = urlsplit(response.url)
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            return (parsed.path == "/api/my-products"
+                    and response.request.method == "GET"
+                    and len(query.get("import_batch", [])) == 1)
+
+        with page.expect_response(is_supplier_import_batch_feed) as batch_feed, \
+                page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_SUPPLIER_IMPORT
+                                     and response.request.method == "POST") as imported:
             page.get_by_role("button", name="Импортировать товары").click()
-        assert imported.value.status in (302, 303)
-        page.wait_for_url("**/my-products")
+        assert imported.value.status == 303
+        page.wait_for_function("""() => {
+            const tokens = new URLSearchParams(location.search).getAll('import_batch');
+            return location.pathname === '/my-products/beta' && tokens.length === 1 &&
+                tokens[0].length > 0 && new TextEncoder().encode(tokens[0]).length <= 8192;
+        }""")
+        assert batch_feed.value.status == 200
+        batch_data = batch_feed.value.json()
         assert posts[3]["body"]["product_ids"] == [str(fixture_ids["import_id"])]
         assert "update_product_ids" not in posts[3]["body"]
         with fixture.app.app_context():
@@ -684,7 +705,30 @@ def run():
             assert imported_local_title == "Позиция для импорта"
             assert db.session.get(ImportedProduct, fixture.FIXTURE["source_id"]).supplier_content_revision == 1
         checks.append("ordinary_supplier_import_saves_only_its_selected_source")
+        assert batch_data["import_batch_count"] == 1
+        assert batch_data["pagination"] == {
+            "page": 1, "per_page": 200, "pages": 1,
+            "total": 1, "has_next": False,
+        }
+        assert [item["id"] for item in batch_data["items"]] == [imported_local_id]
+        assert [item["title"] for item in batch_data["items"]] == [imported_local_title]
+        batch_rows = page.locator(".mp-list article.mp-row")
+        page.get_by_role("checkbox", name="Выбрать Позиция для импорта").wait_for()
+        assert batch_rows.count() == 1
+        assert batch_rows.locator(".mp-title").inner_text() == imported_local_title
+        assert batch_rows.locator('input[type="checkbox"]').evaluate_all(
+            "boxes => boxes.map(box => Number(box.value))"
+        ) == [imported_local_id]
+        checks.append("ordinary_supplier_import_batch_displays_exact_single_new_product")
         assert len(posts) == 4 and not errors, errors
+
+        # The original early-photo check still covers the classic page after
+        # leaving the receipt-scoped workspace explicitly.
+        posts_before_classic = len(posts)
+        fixture.wait_document(page, "classic_after_supplier_import", "/my-products")
+        assert len(posts) == posts_before_classic == 4
+        assert not errors, errors
+        checks.append("classic_products_after_supplier_import_remains_error_free")
 
         # A real local refresh uses the same fixture's linked supplier row plus
         # an unlinked row, so the browser sees both an update and an exact skip.
