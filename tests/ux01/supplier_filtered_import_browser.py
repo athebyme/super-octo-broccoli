@@ -1,10 +1,11 @@
 """Synthetic browser proof for supplier import selection and WB create result.
 
 Uses the isolated app, SQLite fixture, network-denying browser bridge, and
-synthetic seller session from ``journey_browser``. Browser writes are limited
-to the normal local supplier import form and one exact WB bulk-create POST. A
-scoped fake importer supplies deterministic WB outcomes after the real route
-and BackgroundJob worker perform their normal seller scope/readiness checks.
+synthetic seller session from ``journey_browser``. It covers exact local
+supplier refresh review/confirm alongside the normal import form and one exact
+WB bulk-create POST. A scoped fake importer supplies deterministic WB outcomes
+after the real route and BackgroundJob worker perform their normal
+seller scope/readiness checks.
 
 Run with the repository venv and Chromium installed. The summary is written to
 ``/artifacts/supplier-filtered-import.json`` by default.
@@ -42,6 +43,8 @@ REPORT_PATH = Path(os.environ.get(
     "/artifacts/supplier-filtered-import.json",
 ))
 IMPORT_PATH = "/supplier-catalog/import"
+SUPPLIER_REVIEW_PATH = "/supplier-catalog/update/review"
+SUPPLIER_CONFIRM_PATH = "/supplier-catalog/update/confirm"
 WB_CREATE_PATH = "/my-products/push-to-wb-bulk"
 JOB_STATUS_PREFIX = "/api/jobs/"
 FILTERS = {
@@ -203,10 +206,88 @@ def seed_supplier_products():
         }
 
 
+def seed_supplier_update_review_rows(fixture_ids, imported_source_ids):
+    """Seed exact selected/no-op rows and 201 tail rows for all-scope review."""
+    with fixture.app.app_context():
+        seller_id = fixture.FIXTURE["seller_id"]
+        supplier_id = fixture_ids["supplier_id"]
+        already_imported = {int(source_id) for source_id in imported_source_ids}
+        selected_source_id, current_source_id = [
+            int(source_id)
+            for source_id in fixture_ids["eligible_ids"]
+            if source_id not in already_imported
+        ][:2]
+        assert selected_source_id and current_source_id
+
+        oversized_sources = SupplierProduct.query.filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.external_id.like("R28-OVERSIZE-%"),
+        ).order_by(SupplierProduct.id).all()
+        assert len(oversized_sources) == fixture_ids["oversized_count"] == 201
+        copies = [
+            ImportedProduct(
+                seller_id=seller_id, supplier_id=supplier_id,
+                supplier_product_id=selected_source_id, supplier_content_revision=0,
+                title="R42 stale selected local title", import_status="validated",
+            ),
+            ImportedProduct(
+                seller_id=seller_id, supplier_id=supplier_id,
+                supplier_product_id=current_source_id, supplier_content_revision=0,
+                title="R42 current local seed title", import_status="validated",
+            ),
+            ImportedProduct(
+                seller_id=seller_id, supplier_id=supplier_id,
+                supplier_product_id=None, external_id="R42-UNLINKED-LOCAL",
+                title="R42 unlinked local card", import_status="validated",
+            ),
+            *[
+                ImportedProduct(
+                    seller_id=seller_id,
+                    supplier_id=supplier_id,
+                    supplier_product_id=source.id,
+                    supplier_content_revision=0,
+                    title=f"R42 stale {source.title}",
+                    import_status="validated",
+                )
+                for source in oversized_sources
+            ],
+        ]
+        db.session.add_all(copies)
+        db.session.flush()
+
+        from services.supplier_service import SupplierService
+
+        seeded_current = SupplierService.update_supplier_products(
+            seller_id,
+            supplier_id,
+            [current_source_id],
+        )
+        assert (seeded_current.total_requested, seeded_current.imported) == (1, 1)
+
+        detail_source_id = int(fixture_ids["excluded_ids"][0])
+        detail_copy = ImportedProduct.query.filter_by(
+            seller_id=seller_id,
+            supplier_product_id=detail_source_id,
+        ).one()
+        return {
+            "detail_source_id": detail_source_id,
+            "detail_copy_id": detail_copy.id,
+            "selected_source_id": selected_source_id,
+            "selected_copy_id": copies[0].id,
+            "current_source_id": current_source_id,
+            "current_copy_id": copies[1].id,
+            "unlinked_copy_id": copies[2].id,
+            "oversized_tail_source_id": oversized_sources[-1].id,
+            "oversized_tail_copy_id": copies[-1].id,
+        }
+
+
 def run():
     fixture_ids = seed_supplier_products()
     checks = []
     posts = []
+    supplier_review_posts = []
+    supplier_confirm_posts = []
     wb_create_posts = []
     product_feed_reads = []
     facet_reads = []
@@ -287,13 +368,27 @@ def run():
                 route.fulfill(response=response)
                 return
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "POST":
-            assert parsed.path in {IMPORT_PATH, WB_CREATE_PATH}, (
+            assert parsed.path in {
+                IMPORT_PATH,
+                SUPPLIER_REVIEW_PATH,
+                SUPPLIER_CONFIRM_PATH,
+                WB_CREATE_PATH,
+            }, (
                 request.method, parsed.path,
             )
-            if parsed.path == IMPORT_PATH:
+            if parsed.path in {
+                IMPORT_PATH,
+                SUPPLIER_REVIEW_PATH,
+                SUPPLIER_CONFIRM_PATH,
+            }:
                 body = parse_qs(request.post_data or "", keep_blank_values=True)
-                assert body.get("csrf_token"), "normal supplier import form must carry CSRF"
-                posts.append({"path": parsed.path, "body": body})
+                assert body.get("csrf_token"), "supplier local form must carry CSRF"
+                if parsed.path == IMPORT_PATH:
+                    posts.append({"path": parsed.path, "body": body})
+                elif parsed.path == SUPPLIER_REVIEW_PATH:
+                    supplier_review_posts.append({"path": parsed.path, "body": body})
+                else:
+                    supplier_confirm_posts.append({"path": parsed.path, "body": body})
             else:
                 assert "application/json" in (request.headers.get("content-type") or "")
                 assert request.headers.get("x-csrftoken"), "WB create POST must carry CSRF"
@@ -306,8 +401,17 @@ def run():
                     "path": parsed.path,
                     "body": body,
                 })
-            fixture.REPORT["writes"].append({"method": "POST", "path": parsed.path})
             response = route.fetch(max_redirects=0)
+            if parsed.path != SUPPLIER_REVIEW_PATH:
+                fixture.REPORT["writes"].append({"method": "POST", "path": parsed.path})
+            elif response.status != 200:
+                fixture.REPORT["unexpected_http"].append({
+                    "path": parsed.path, "status": response.status,
+                })
+            if parsed.path == SUPPLIER_CONFIRM_PATH and response.status not in (303, 409):
+                fixture.REPORT["unexpected_http"].append({
+                    "path": parsed.path, "status": response.status,
+                })
             route.fulfill(response=response)
             return
         fixture.bridge(route)
@@ -351,12 +455,23 @@ def run():
         assert "Автообновление включено" in card_freshness.inner_text()
         apply_button = supplier_card.locator(".sc-update-btn")
         assert apply_button.is_visible()
-        assert apply_button.inner_text() == "Применить сохранённые данные"
-        assert "сохранённое состояние каталога" in apply_button.get_attribute("title")
-        apply_confirmation = apply_button.get_attribute("onclick") or ""
-        assert "сохранённые данные каталога поставщика" in apply_confirmation
-        assert "Новая загрузка у поставщика не выполняется" in apply_confirmation
-        assert "Карточки WB и Ozon не изменятся" in apply_confirmation
+        assert apply_button.inner_text() == "Проверить обновления (1)"
+        assert "Сначала проверить локальные изменения" in apply_button.get_attribute("title")
+        all_review_form = apply_button.locator("xpath=ancestor::form")
+        assert all_review_form.get_attribute("action") == SUPPLIER_REVIEW_PATH
+        initial_all_scope = all_review_form.evaluate("""form => {
+            const data = new FormData(form);
+            return {
+                supplierIds: data.getAll('supplier_id'),
+                all: data.getAll('update_all_for_supplier'),
+                sourceIds: data.getAll('update_product_ids'),
+                csrf: data.getAll('csrf_token'),
+            };
+        }""")
+        assert initial_all_scope["supplierIds"] == [str(fixture_ids["supplier_id"])]
+        assert initial_all_scope["all"] == ["1"]
+        assert initial_all_scope["sourceIds"] == []
+        assert initial_all_scope["csrf"] and initial_all_scope["csrf"][0]
         assert posts == [] and fixture.REPORT["writes"] == []
 
         response = page.goto(
@@ -403,7 +518,7 @@ def run():
             animations="disabled",
         )
         checks.append(
-            "supplier_feed_freshness_separates_catalog_price_and_saved_apply_is_read_only_before_write",
+            "supplier_feed_freshness_separates_catalog_price_and_all_update_opens_review_before_write",
         )
         cards = page.locator(".grid > div.p-4")
         assert cards.count() == 50, cards.count()
@@ -1025,6 +1140,212 @@ def run():
             assert ImportedProduct.query.count() == fixture_ids["imported_before"] + imported_count
         checks.append("over_200_filter_falls_back_to_50_unselected_rows_without_partial_mass_selection")
 
+        review_fixture = seed_supplier_update_review_rows(fixture_ids, selected_ids)
+
+        # Exact detail review stays read-only, and source drift rejects confirm.
+        detail_url = fixture.BASE + "/supplier-catalog/{}/products/{}".format(
+            fixture_ids["supplier_id"], review_fixture["detail_source_id"],
+        )
+        response = page.goto(detail_url, wait_until="domcontentloaded")
+        assert response and response.status == 200
+        detail_action = page.get_by_role("button", name="Проверить обновление", exact=True)
+        with fixture.app.app_context():
+            detail_copy = db.session.get(ImportedProduct, review_fixture["detail_copy_id"])
+            before_detail = (detail_copy.title, detail_copy.updated_at)
+
+        with page.expect_response(
+            lambda r: urlsplit(r.url).path == SUPPLIER_REVIEW_PATH and r.request.method == "POST",
+        ) as detail_review:
+            detail_action.click()
+        assert detail_review.value.status == 200
+        assert page.locator("[data-review-requested]").inner_text() == "1"
+        assert page.locator("[data-review-changed]").inner_text() == "1"
+        detail_row = page.locator("[data-supplier-review-row]")
+        assert detail_row.count() == 1
+        assert detail_row.get_attribute("data-local-product-id") == str(review_fixture["detail_copy_id"])
+        assert detail_row.get_attribute("data-row-state") == "changed"
+        assert supplier_review_posts[-1]["body"].get("product_ids") == [
+            str(review_fixture["detail_source_id"]),
+        ]
+        assert len(supplier_confirm_posts) == 0
+        with fixture.app.app_context():
+            detail_copy = db.session.get(ImportedProduct, review_fixture["detail_copy_id"])
+            assert (detail_copy.title, detail_copy.updated_at) == before_detail
+
+        # The review controls remain keyboard reachable at the existing 320px viewport.
+        page.locator("[data-supplier-review-return]").focus()
+        page.keyboard.press("Shift+Tab")
+        keyboard_state = page.evaluate("""() => {
+            const button = document.querySelector('[data-supplier-review-confirm]');
+            const rect = button.getBoundingClientRect();
+            return [document.activeElement === button, button.matches(':focus-visible'),
+                rect.height, rect.left, rect.right, document.documentElement.clientWidth,
+                document.documentElement.scrollWidth];
+        }""")
+        assert keyboard_state[0] and keyboard_state[1]
+        assert keyboard_state[2] >= 44 and keyboard_state[3] >= 0
+        assert keyboard_state[4] <= keyboard_state[5] and keyboard_state[6] <= keyboard_state[5] + 1
+        checks.append("supplier_review_confirm_is_keyboard_reachable_at_320px")
+
+        with fixture.app.app_context():
+            detail_source = db.session.get(SupplierProduct, review_fixture["detail_source_id"])
+            detail_source.title = "R42 detail source changed after review"
+            detail_source.content_revision += 1
+            db.session.commit()
+        with page.expect_response(
+            lambda r: urlsplit(r.url).path == SUPPLIER_CONFIRM_PATH and r.request.method == "POST",
+        ) as stale_confirm:
+            page.locator("[data-supplier-review-confirm]").click()
+        assert stale_confirm.value.status == 409
+        assert page.locator("[data-supplier-review-recheck]").count() == 1
+        with fixture.app.app_context():
+            detail_copy = db.session.get(ImportedProduct, review_fixture["detail_copy_id"])
+            detail_source = db.session.get(SupplierProduct, review_fixture["detail_source_id"])
+            assert (detail_copy.title, detail_copy.updated_at) == before_detail
+            assert detail_source.title == "R42 detail source changed after review"
+        checks.append("supplier_source_drift_returns_409_without_local_write")
+
+        # One checked source ID remains exact through review and explicit confirm.
+        response = page.goto(fixture.BASE + normal_path, wait_until="domcontentloaded")
+        assert response and response.status == 200
+        page.wait_for_load_state("networkidle")
+        selected_id = str(review_fixture["selected_source_id"])
+        page.locator(
+            f'input[form="supplier-update-form"][name="update_product_ids"][value="{selected_id}"]',
+        ).check()
+        selection = page.evaluate("""() => {
+            const data = new FormData(document.querySelector('#supplier-update-form'));
+            return [data.getAll('update_product_ids'), data.getAll('product_ids'),
+                data.getAll('update_all_for_supplier')];
+        }""")
+        assert selection == [[selected_id], [], []]
+        with fixture.app.app_context():
+            selected_copy = db.session.get(ImportedProduct, review_fixture["selected_copy_id"])
+            selected_before = (selected_copy.title, selected_copy.updated_at)
+
+        with page.expect_response(
+            lambda r: urlsplit(r.url).path == SUPPLIER_REVIEW_PATH and r.request.method == "POST",
+        ) as selected_review:
+            page.get_by_role("button", name=re.compile("Проверить выбранное")).click()
+        assert selected_review.value.status == 200
+        assert page.locator("[data-review-requested]").inner_text() == "1"
+        assert page.locator("[data-review-changed]").inner_text() == "1"
+        selected_row = page.locator("[data-supplier-review-row]")
+        assert selected_row.count() == 1
+        assert selected_row.get_attribute("data-local-product-id") == str(review_fixture["selected_copy_id"])
+        assert supplier_review_posts[-1]["body"].get("update_product_ids") == [selected_id]
+        assert not supplier_review_posts[-1]["body"].get("product_ids")
+        assert not supplier_review_posts[-1]["body"].get("update_all_for_supplier")
+        assert len(supplier_confirm_posts) == 1  # the stale detail attempt only
+        with fixture.app.app_context():
+            selected_copy = db.session.get(ImportedProduct, review_fixture["selected_copy_id"])
+            assert (selected_copy.title, selected_copy.updated_at) == selected_before
+
+        with page.expect_response(
+            lambda r: urlsplit(r.url).path == SUPPLIER_CONFIRM_PATH and r.request.method == "POST",
+        ) as selected_confirm:
+            page.locator("[data-supplier-review-confirm]").click()
+        assert selected_confirm.value.status == 303
+        assert supplier_confirm_posts[-1]["body"].get("update_product_ids") == [selected_id]
+        assert not supplier_confirm_posts[-1]["body"].get("product_ids")
+        assert not supplier_confirm_posts[-1]["body"].get("update_all_for_supplier")
+        with fixture.app.app_context():
+            selected_copy = db.session.get(ImportedProduct, review_fixture["selected_copy_id"])
+            selected_source = db.session.get(SupplierProduct, review_fixture["selected_source_id"])
+            detail_copy = db.session.get(ImportedProduct, review_fixture["detail_copy_id"])
+            assert selected_copy.title == selected_source.title
+            assert detail_copy.title == before_detail[0]
+        checks.append("supplier_checked_source_is_reviewed_before_exact_local_confirm")
+
+        # Explicit supplier-wide review keeps the full 201+ scope and bounds only details.
+        response = page.goto(fixture.BASE + "/supplier-catalog", wait_until="domcontentloaded")
+        assert response and response.status == 200
+        page.wait_for_load_state("networkidle")
+        card = page.locator(".sc-card").filter(has=page.locator(
+            f'a[href="/supplier-catalog/{fixture_ids["supplier_id"]}/products"]',
+        ))
+        all_button = card.locator(".sc-update-btn")
+        assert re.fullmatch(r"Проверить обновления \(\d+\)", all_button.inner_text())
+        with fixture.app.app_context():
+            current_copy = db.session.get(ImportedProduct, review_fixture["current_copy_id"])
+            unlinked_copy = db.session.get(ImportedProduct, review_fixture["unlinked_copy_id"])
+            current_before = current_copy.updated_at
+            unlinked_before = (unlinked_copy.title, unlinked_copy.updated_at)
+            preview_snapshot = [
+                (row.id, row.title, row.supplier_content_revision, row.updated_at)
+                for row in ImportedProduct.query.filter_by(
+                    seller_id=fixture.FIXTURE["seller_id"],
+                    supplier_id=fixture_ids["supplier_id"],
+                ).order_by(ImportedProduct.id).all()
+            ]
+        with page.expect_response(
+            lambda r: urlsplit(r.url).path == SUPPLIER_REVIEW_PATH and r.request.method == "POST",
+        ) as all_review:
+            all_button.click()
+        assert all_review.value.status == 200
+        all_body = supplier_review_posts[-1]["body"]
+        assert all_body.get("update_all_for_supplier") == ["1"]
+        assert not all_body.get("update_product_ids") and not all_body.get("product_ids")
+        requested = int(page.locator("[data-review-requested]").inner_text())
+        eligible = int(page.locator("[data-review-eligible]").inner_text())
+        changed = int(page.locator("[data-review-changed]").inner_text())
+        unchanged = int(page.locator("[data-review-already-current]").inner_text())
+        unlinked = int(page.locator("[data-review-unlinked]").inner_text())
+        skipped = int(page.locator("[data-review-skipped]").inner_text())
+        assert requested > 200 and changed > 0 and unchanged > 0 and unlinked > 0
+        assert eligible + unlinked == requested and changed + unchanged == eligible
+        assert skipped == unchanged + unlinked
+        details = page.locator("[data-supplier-review-row]")
+        rendered_details = details.count()
+        assert 0 < rendered_details <= 50
+        assert page.get_by_text(re.compile(rf"Показаны первые 50 из {requested} локальных карточек")).count() == 1
+        rendered_ids = details.evaluate_all(
+            "rows => rows.map(row => Number(row.dataset.localProductId))",
+        )
+        assert all_body.get("supplier_id") == [str(fixture_ids["supplier_id"])]
+        assert len(supplier_confirm_posts) == 2  # review itself has no write
+        with fixture.app.app_context():
+            after_review = [
+                (row.id, row.title, row.supplier_content_revision, row.updated_at)
+                for row in ImportedProduct.query.filter_by(
+                    seller_id=fixture.FIXTURE["seller_id"],
+                    supplier_id=fixture_ids["supplier_id"],
+                ).order_by(ImportedProduct.id).all()
+            ]
+        assert after_review == preview_snapshot
+
+        with page.expect_response(
+            lambda r: urlsplit(r.url).path == SUPPLIER_CONFIRM_PATH and r.request.method == "POST",
+        ) as all_confirm:
+            page.locator("[data-supplier-review-confirm]").click()
+        assert all_confirm.value.status == 303
+        assert supplier_confirm_posts[-1]["body"].get("supplier_id") == [
+            str(fixture_ids["supplier_id"]),
+        ]
+        assert supplier_confirm_posts[-1]["body"].get("update_all_for_supplier") == ["1"]
+        assert not supplier_confirm_posts[-1]["body"].get("update_product_ids")
+        assert f"Локально обновлено: {changed}, пропущено: {skipped}, ошибок: 0." in page.locator("body").inner_text()
+        with fixture.app.app_context():
+            current_copy = db.session.get(ImportedProduct, review_fixture["current_copy_id"])
+            unlinked_copy = db.session.get(ImportedProduct, review_fixture["unlinked_copy_id"])
+            tail_copy = db.session.get(ImportedProduct, review_fixture["oversized_tail_copy_id"])
+            tail_source = db.session.get(SupplierProduct, review_fixture["oversized_tail_source_id"])
+            assert tail_copy.id not in rendered_ids
+            assert current_copy.updated_at == current_before
+            assert (unlinked_copy.title, unlinked_copy.updated_at) == unlinked_before
+            assert tail_copy.title == tail_source.title
+            assert tail_copy.supplier_content_revision == tail_source.content_revision
+        checks.append("supplier_all_review_counts_full_scope_and_applies_rows_beyond_bounded_sample")
+        supplier_review_report = {
+            "all_requested": requested,
+            "all_changed": changed,
+            "all_already_current": unchanged,
+            "all_unlinked": unlinked,
+            "rendered_detail_rows": rendered_details,
+            "review_post_count": len(supplier_review_posts),
+            "confirm_post_count": len(supplier_confirm_posts),
+        }
+
         assert not safe_page_errors(), "batch browser reported a JavaScript error"
         assert fixture.REPORT["provider_attempts"] == 0
         assert fixture.REPORT["unexpected_external_requests"] == []
@@ -1032,19 +1353,23 @@ def run():
         assert fixture.REPORT["writes"] == [
             {"method": "POST", "path": IMPORT_PATH},
             {"method": "POST", "path": WB_CREATE_PATH},
+            {"method": "POST", "path": SUPPLIER_CONFIRM_PATH},
+            {"method": "POST", "path": SUPPLIER_CONFIRM_PATH},
+            {"method": "POST", "path": SUPPLIER_CONFIRM_PATH},
         ], fixture.REPORT["writes"]
         assert wb_create_report is not None
-        checks.append("synthetic_import_and_wb_create_have_zero_provider_attempts_external_requests_and_http_errors")
+        checks.append("synthetic_supplier_import_reviews_and_wb_create_have_zero_provider_attempts_external_requests_and_http_errors")
         context.close()
         browser.close()
 
     return {
         "status": "passed",
-        "scope": "synthetic_supplier_filtered_import_and_terminal_wb_bulk_create",
+        "scope": "synthetic_supplier_import_review_and_terminal_wb_bulk_create",
         "checks": checks,
         "provider_attempts": fixture.REPORT["provider_attempts"],
         "selected_count": len(selected_ids),
         "imported_count": imported_count,
+        "supplier_catalog_review": supplier_review_report,
         "wb_create": wb_create_report,
         "screenshots": [
             freshness_screenshot,
