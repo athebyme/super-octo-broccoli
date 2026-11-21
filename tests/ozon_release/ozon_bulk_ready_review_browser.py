@@ -643,10 +643,9 @@ def run_browser_journey():
         page.locator("h1").wait_for()
 
         source_doc = page.locator("#ozon-result-status").count()
-        detail_review_link = page.get_by_role(
-            "link", name=re.compile("Проверить подготовленные карточки"),
-        )
+        detail_review_link = page.locator("a[data-source-prepare-review]")
         detail_review_link.wait_for()
+        assert detail_review_link.inner_text().strip() == "Проверить перед отправкой"
         review_href = detail_review_link.get_attribute("href")
         review_parts = urlsplit(review_href)
         review_query = parse_qs(review_parts.query)
