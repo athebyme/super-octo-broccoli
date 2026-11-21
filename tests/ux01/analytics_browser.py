@@ -468,6 +468,12 @@ def run(source: str, report_path: Path, artifacts_dir: Path, chromium: str | Non
                             return grid && canvas && canvas.getBoundingClientRect().width > 0
                                 && document.querySelectorAll('.sh-stat-grid--4 .sh-stat-value').length === 4;
                         }""")
+                        scope_note = page.locator(".analytics-data-scope")
+                        scope_note.wait_for(state="visible")
+                        assert scope_note.inner_text().strip() == (
+                            "Охват сводки и таблицы — до 50 товаров WB с наибольшей суммой заказов. "
+                            "Данные для графика по дням загружаются отдельно."
+                        )
                         page.evaluate("document.fonts.ready")
                         page.evaluate("""() => {
                             const grid = document.querySelector('.sh-stat-grid--4');
@@ -607,6 +613,7 @@ def run(source: str, report_path: Path, artifacts_dir: Path, chromium: str | Non
                                     errorVisible: !!document.querySelector('.analytics-error[role=alert]'),
                                     kpiCount: document.querySelectorAll('.sh-stat-grid--4 .sh-stat-value').length,
                                     staleDataVisible: !!document.querySelector('.analytics-data'),
+                                    scopeNoteVisible: !!document.querySelector('.analytics-data-scope'),
                                     pageOverflow: root.scrollWidth > innerWidth + 1,
                                     theme: root.dataset.theme,
                                     width: innerWidth,
@@ -614,6 +621,7 @@ def run(source: str, report_path: Path, artifacts_dir: Path, chromium: str | Non
                             }""")
                             assert state["errorVisible"] and state["kpiCount"] == 0
                             assert state["staleDataVisible"] is False
+                            assert state["scopeNoteVisible"] is False
                         assert state["pageOverflow"] is False, state
                         assert state["theme"] == theme and state["width"] == width, state
                         state["scenario"] = scenario
