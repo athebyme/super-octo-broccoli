@@ -108,6 +108,43 @@ def verify_bounds(page):
     assert dimensions["scroll"] <= dimensions["viewport"] + 1, dimensions
 
 
+def verify_mobile_supplier_refresh_focus(page):
+    page.wait_for_function("""() => {
+        const result = document.querySelector('#supplier-refresh-result');
+        const header = document.querySelector('.mobile-header');
+        const title = result && result.querySelector('h2');
+        if (!result || !header || !title || document.activeElement !== result) return false;
+        const headerRect = header.getBoundingClientRect();
+        const resultRect = result.getBoundingClientRect();
+        const titleRect = title.getBoundingClientRect();
+        return getComputedStyle(header).position === 'fixed' &&
+            getComputedStyle(header).display !== 'none' &&
+            headerRect.top >= 0 && headerRect.bottom <= window.innerHeight &&
+            titleRect.top >= headerRect.bottom && titleRect.bottom <= window.innerHeight &&
+            resultRect.left >= 0 && resultRect.right <= document.documentElement.clientWidth;
+    }""")
+    geometry = page.evaluate("""() => {
+        const result = document.querySelector('#supplier-refresh-result');
+        const header = document.querySelector('.mobile-header');
+        const title = result.querySelector('h2');
+        return {
+            focused: document.activeElement === result,
+            headerBottom: header.getBoundingClientRect().bottom,
+            titleTop: title.getBoundingClientRect().top,
+            titleBottom: title.getBoundingClientRect().bottom,
+            viewportHeight: window.innerHeight,
+            resultLeft: result.getBoundingClientRect().left,
+            resultRight: result.getBoundingClientRect().right,
+            viewportWidth: document.documentElement.clientWidth,
+        };
+    }""")
+    assert geometry["focused"], geometry
+    assert geometry["titleTop"] >= geometry["headerBottom"], geometry
+    assert geometry["titleBottom"] <= geometry["viewportHeight"], geometry
+    assert geometry["resultLeft"] >= 0 and geometry["resultRight"] <= geometry["viewportWidth"], geometry
+    verify_bounds(page)
+
+
 def verify_enrichment_review_bounds(page):
     verify_bounds(page)
     geometry = page.evaluate("""() => {
@@ -937,6 +974,12 @@ def run():
             "heading", name="Сохранённый итог обновления из поставщика", exact=True,
         ).wait_for()
         restored_result.get_by_text("В запросе товаров: 2.", exact=False).wait_for()
+        verify_mobile_supplier_refresh_focus(page)
+        page.screenshot(
+            path=OUTPUT / "supplier-refresh-restored-after-wb-dark-320.png",
+            animations="disabled",
+        )
+        checks.append("supplier_refresh_wb_return_focus_clears_mobile_header_and_stays_in_bounds")
         restored_result.get_by_text("Карточки и итог (2)", exact=True).click()
         restored_result.get_by_text(REFRESHED_TITLE, exact=False).wait_for()
         restored_result.get_by_text(MANUAL_TITLE, exact=False).wait_for()
@@ -945,10 +988,6 @@ def run():
         assert refresh_ozon_button(page).count() == 1
         assert page.get_by_role("alertdialog").count() == 0
         assert sum(post["path"] == LOCAL_REFRESH for post in posts) == refresh_posts_after_success
-        page.screenshot(
-            path=OUTPUT / "supplier-refresh-restored-after-wb-dark-320.png",
-            animations="disabled",
-        )
         checks.append("supplier_refresh_wb_return_restores_signed_receipt_without_refresh_post")
 
         # Hand off the verified update from the real local mixed result. The
