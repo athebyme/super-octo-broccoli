@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-21T15:36:03.946296+00:00",
+  "generated_at": "2026-11-21T16:46:30.625849+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "621e7c5c33ad26fd1a48fac20ca16cedf299feb1749a705e21363e15779017d0"
+      "sha256": "c531665646bdb5389fbf3a5248cb9d1f8faca50c1580115b927517c26c1bba29"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -481,7 +481,7 @@
     },
     {
       "path": "docs/design/seller-bulk-workspace-2026-11-20.md",
-      "sha256": "26111e3faa9801d18b9cd4b64f41d536694ce7bcfb5515c23024e320bf14cdb4"
+      "sha256": "7487b0a5a6199df09b4e25559c83e90b4cad5e5e3394be8895044bdd840adfb3"
     },
     {
       "path": "docs/design/startup-migration-performance.md",
@@ -1489,7 +1489,7 @@
     },
     {
       "path": "routes/suppliers.py",
-      "sha256": "6599d8db302df3dccbab8bcd1a884f89188aca6382862ee4c26136568fccda13"
+      "sha256": "e295aeed6c90e48020a35ea4ccce1cdc8e5ce75a31b27c5a2e3018e42afe5ae8"
     },
     {
       "path": "routes/telegram_alerts.py",
@@ -2381,7 +2381,7 @@
     },
     {
       "path": "services/supplier_service.py",
-      "sha256": "eb6819fed20f43db390d3ae48c598d165e8ec72273b27c40b802d43f18fd6428"
+      "sha256": "087c2ba669e80093966a271701aea2cffbbf757b119c661cdb187d4f58509415"
     },
     {
       "path": "services/supplier_update_hub.py",
@@ -2589,11 +2589,11 @@
     },
     {
       "path": "static/my-products-beta.css",
-      "sha256": "c6fb09efe55766b29f50aca4d88826c8718c450e4ec596bde5a980c59cb8b1b1"
+      "sha256": "dc3bb22ef7d52de698bc611e3bca25a71edff29400d563d624194d8e7edccd67"
     },
     {
       "path": "static/my-products-beta.js",
-      "sha256": "f81d543cf0e89849eeb927f07f2e097cf57a2053fbc00689607fa9a48ac92e4d"
+      "sha256": "9a00c9d4bab5c636fb9f4008362e8e4094c2eb6fbf22eee089eb7ea928c99c76"
     },
     {
       "path": "static/operations-workspace.css",
@@ -3237,7 +3237,7 @@
     },
     {
       "path": "templates/my_products_beta.html",
-      "sha256": "3f91d501053abaad923be5f3c49d86835d51efa7b97280c065968152993cfa42"
+      "sha256": "6bed87847a821085916cb7ef10c2409554171764c58abcd33bccd72b5e2f1afb"
     },
     {
       "path": "templates/notifications.html",
@@ -4405,7 +4405,7 @@
     },
     {
       "path": "tests/test_my_products_supplier_refresh_handoff.py",
-      "sha256": "7061c8b8cfa4596012602c8c68ee78c346e22d60beac515c52dec6b5fe9be26e"
+      "sha256": "a3a08a59b070198757f1ecc0d2c75a8693ff4fa3896ba84f91ca4a001112a2ce"
     },
     {
       "path": "tests/test_orchestrator.py",
@@ -4829,7 +4829,7 @@
     },
     {
       "path": "tests/test_supplier_bulk_exact_refresh.py",
-      "sha256": "2fda109c0e94f6de55b1fc422ed4cec8209b0e8929cf367ce1332828c2000f0c"
+      "sha256": "040a1424be03be66834f5c890a21729c2f28c43c41eec096ef6205493a88eb40"
     },
     {
       "path": "tests/test_supplier_catalog_bulk_import_selection.py",
@@ -5117,7 +5117,7 @@
     },
     {
       "path": "tests/ux01/bulk_workspace_browser.py",
-      "sha256": "9616db194bfae53e0304fb062553b978711d35f76ab2eed53c050ed56b92a271"
+      "sha256": "8e02523a9f55a004e00b4db146d4d4d0676829d2422564cce071c4e8848420d3"
     },
     {
       "path": "tests/ux01/common_content_browser.py",
@@ -5156,5 +5156,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "d4f0c3277ab31e1cde4f0b63b78afc50ce686eeb1d3627e9391ddacd6e3544ad"
+  "aggregate_sha256": "6919530a9fb894ba168aa12dacad4d29d0931e2bb66e2f6842af202f22a72429"
 }
