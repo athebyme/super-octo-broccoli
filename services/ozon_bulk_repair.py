@@ -30,8 +30,11 @@ from models import (
     MarketplaceAttributeDefinition,
     MarketplaceAttributeValue,
     MarketplaceListing,
+    MarketplaceOperation,
     MarketplaceProductDraft,
     MarketplaceProductType,
+    OzonBulkUploadItem,
+    OzonBulkUploadRun,
     db,
 )
 from services.marketplace_drafts import (
@@ -153,6 +156,31 @@ class OzonBulkRepairService:
         job = OzonBulkUploadService.get_run(
             seller_id=seller_id,
             job_uid=job_uid,
+            reconcile=False,
+        )
+        run = OzonBulkUploadRun.query.filter_by(
+            job_id=job.id,
+            seller_id=seller_id,
+        ).first()
+        if run is not None:
+            if run.mode != "source_prepare":
+                error = cls._conflict(
+                    "ozon_repair_reviewed_run_not_editable",
+                    "Проверенную отправку нельзя менять; откройте исходную локальную подготовку",
+                )
+                error.status_code = 409
+                raise error
+            if run.state != "completed":
+                raise cls._conflict(
+                    "ozon_repair_run_still_active",
+                    "Дождитесь завершения локальной подготовки перед массовым исправлением",
+                )
+            return job, cls._source_prepare_document(job=job, run=run)
+        # Legacy JSON runs retain their existing reconciliation behavior. V3
+        # reads above are observations and never repair job metadata on GET.
+        job = OzonBulkUploadService.get_run(
+            seller_id=seller_id,
+            job_uid=job_uid,
             reconcile=True,
         )
         if job.status == "running":
@@ -169,7 +197,129 @@ class OzonBulkRepairService:
         return job, document
 
     @classmethod
+    def _source_prepare_document(cls, *, job, run) -> dict:
+        """Project a completed V3 source run for the existing local editor.
+
+        This is an internal adapter only. The V3 rows remain the source of
+        truth; no legacy progress JSON is read or written for this mode.
+        """
+        rows = OzonBulkUploadItem.query.filter_by(run_id=run.id).order_by(
+            OzonBulkUploadItem.ordinal,
+        ).limit(cls.MAX_ROWS + 1).all()
+        if not rows or len(rows) > cls.MAX_ROWS:
+            raise cls._conflict(
+                "ozon_repair_run_corrupt",
+                "Список локальной подготовки недоступен; черновики сохранены отдельно",
+            )
+        source_result = job.get_result()
+        account_label = (
+            source_result.get("account_label")
+            if isinstance(source_result, dict) else None
+        )
+        draft_ids = [
+            row.draft_id for row in rows
+            if row.phase in {"needs_input", "prepared"}
+            and isinstance(row.draft_id, int)
+            and not isinstance(row.draft_id, bool)
+            and row.draft_id > 0
+        ]
+        if len(draft_ids) != len(set(draft_ids)):
+            raise cls._conflict(
+                "ozon_repair_run_corrupt",
+                "Связи черновиков в локальной подготовке неоднозначны",
+            )
+        active_reviewed_ids = cls._active_reviewed_draft_ids(
+            seller_id=run.seller_id,
+            account_id=run.account_id,
+            draft_ids=draft_ids,
+        )
+        items = []
+        for row in rows:
+            items.append({
+                "source_item_id": row.id,
+                "imported_product_id": row.imported_product_id,
+                "draft_id": row.draft_id,
+                "prepared_version": row.prepared_version,
+                "reviewed_draft_id": row.reviewed_draft_id,
+                "reviewed_version": row.reviewed_version,
+                "operation_id": row.operation_id,
+                "phase": row.phase,
+                "status": (
+                    "ready_to_retry" if row.phase == "prepared" else row.phase
+                ),
+                "title": row.title_snapshot,
+                "code": row.error_code,
+                "message": row.error_message or "",
+                "active_reviewed": row.draft_id in active_reviewed_ids,
+            })
+        return {
+            "version": 3,
+            "mode": "source_prepare",
+            "run_id": run.id,
+            "account_id": run.account_id,
+            "account_label": account_label or "",
+            "items": items,
+        }
+
+    @staticmethod
+    def _active_reviewed_draft_ids(
+        *, seller_id: int, account_id: int, draft_ids: Sequence[int],
+    ) -> set:
+        """Find exact drafts still held by an accepted review or active write."""
+        exact_ids = set(draft_ids)
+        if not exact_ids:
+            return set()
+        reviewed = {
+            row[0]
+            for row in db.session.query(
+                OzonBulkUploadItem.reviewed_draft_id,
+            ).join(
+                OzonBulkUploadRun,
+                OzonBulkUploadRun.id == OzonBulkUploadItem.run_id,
+            ).filter(
+                OzonBulkUploadRun.seller_id == seller_id,
+                OzonBulkUploadRun.account_id == account_id,
+                OzonBulkUploadRun.mode == "reviewed_drafts",
+                OzonBulkUploadRun.state == "active",
+                OzonBulkUploadItem.phase == "reviewed",
+                OzonBulkUploadItem.reviewed_draft_id.in_(exact_ids),
+            ).all()
+        }
+        from services.marketplace_publications import MarketplacePublicationService
+
+        active_operations = {
+            row[0]
+            for row in db.session.query(MarketplaceOperation.draft_id).filter(
+                MarketplaceOperation.seller_id == seller_id,
+                MarketplaceOperation.account_id == account_id,
+                MarketplaceOperation.draft_id.in_(exact_ids),
+                MarketplaceOperation.status.in_(
+                    MarketplacePublicationService.ACTIVE_STATUSES
+                ),
+            ).all()
+        }
+        return reviewed | active_operations
+
+    @classmethod
     def _repairable_items(cls, document: dict) -> List[dict]:
+        if document.get("mode") == "source_prepare":
+            return [
+                item
+                for item in document["items"]
+                if (
+                    item.get("phase") in {"needs_input", "prepared"}
+                    and isinstance(item.get("draft_id"), int)
+                    and not isinstance(item.get("draft_id"), bool)
+                    and item["draft_id"] > 0
+                    and isinstance(item.get("imported_product_id"), int)
+                    and not isinstance(item.get("imported_product_id"), bool)
+                    and item["imported_product_id"] > 0
+                    and item.get("reviewed_draft_id") is None
+                    and item.get("reviewed_version") is None
+                    and item.get("operation_id") is None
+                    and item.get("active_reviewed") is not True
+                )
+            ]
         return [
             item
             for item in document["items"]
@@ -642,6 +792,14 @@ class OzonBulkRepairService:
         )
         items = cls._repairable_items(document)
         if not items:
+            if document.get("mode") == "source_prepare" and any(
+                item.get("active_reviewed") is True
+                for item in document["items"]
+            ):
+                raise cls._conflict(
+                    "ozon_repair_drafts_active_review",
+                    "Все доступные черновики уже стоят в очереди проверенной отправки",
+                )
             raise OzonBulkUploadValidationError(
                 "В запуске нет карточек для массового исправления"
             )
@@ -689,14 +847,15 @@ class OzonBulkRepairService:
                 for error in errors
                 if isinstance(error.get("code"), str)
             }
-            action = (
-                cls.ACTION_EXCLUDE
-                if (
-                    item.get("status") == "excluded"
-                    or "ozon_brand_forbidden" in error_codes
-                )
-                else cls.ACTION_REPAIR
-            )
+            if document.get("mode") == "source_prepare":
+                action = cls.ACTION_REPAIR
+            elif (
+                item.get("status") == "excluded"
+                or "ozon_brand_forbidden" in error_codes
+            ):
+                action = cls.ACTION_EXCLUDE
+            else:
+                action = cls.ACTION_REPAIR
             content = cls._stored_json(draft.content_json, {})
             commercial = cls._stored_json(draft.commercial_json, {})
             current_attributes = cls._current_attribute_values(draft)
@@ -872,7 +1031,7 @@ class OzonBulkRepairService:
                         )
                     ),
                 }
-            group["rows"].append({
+            editor_row = {
                 "draft_id": draft.id,
                 "draft_version": draft.version,
                 "imported_product_id": draft.imported_product_id,
@@ -929,7 +1088,10 @@ class OzonBulkRepairService:
                         : cls.MAX_EDITOR_VALIDATION_ERRORS
                     ]
                 ],
-            })
+            }
+            if document.get("mode") == "source_prepare":
+                editor_row["phase"] = item.get("phase")
+            group["rows"].append(editor_row)
 
         public_groups = []
         for group in groups.values():
@@ -989,7 +1151,7 @@ class OzonBulkRepairService:
                 "Для выбранных типов слишком много разных обязательных "
                 "полей; разделите карточки на более однородные партии",
             )
-        return {
+        result = {
             "job_uid": job.job_uid,
             "account_id": document["account_id"],
             "account_label": document.get("account_label") or "",
@@ -997,6 +1159,28 @@ class OzonBulkRepairService:
             "bulk_fields": bulk_fields,
             "total": sum(len(group["rows"]) for group in public_groups),
         }
+        if document.get("mode") == "source_prepare":
+            result.update({
+                "mode": "source_prepare",
+                "review_draft_ids": [
+                    item["draft_id"] for item in items
+                ],
+                "blocked_review_items": [
+                    {
+                        "draft_id": item["draft_id"],
+                        "title": item.get("title") or "Черновик Ozon",
+                        "message": (
+                            "Эта карточка уже стоит в очереди проверенной отправки. "
+                            "Сначала дождитесь результата операции Ozon."
+                        ),
+                    }
+                    for item in document["items"]
+                    if item.get("active_reviewed") is True
+                    and isinstance(item.get("draft_id"), int)
+                    and not isinstance(item.get("draft_id"), bool)
+                ],
+            })
+        return result
 
     @classmethod
     def search_dictionary_values(
@@ -1182,6 +1366,11 @@ class OzonBulkRepairService:
             seller_id=seller_id,
             job_uid=job_uid,
         )
+        if document.get("mode") == "source_prepare":
+            raise cls._conflict(
+                "ozon_repair_source_prepare_native_only",
+                "Локальную подготовку можно исправлять только в массовом редакторе",
+            )
         items = cls._repairable_items(document)
         if not items:
             raise OzonBulkUploadValidationError(
@@ -1995,6 +2184,67 @@ class OzonBulkRepairService:
         return {"status": "needs_input", "errors": bounded}
 
     @classmethod
+    def _persist_source_prepare_item(
+        cls,
+        *,
+        seller_id: int,
+        job_uid: str,
+        account_id: int,
+        source_item_id: int,
+        imported_product_id: int,
+        draft_id: int,
+        phase: str,
+        prepared_version: Optional[int],
+        error_code: Optional[str],
+        error_message: Optional[str],
+    ) -> None:
+        """Persist one local repair receipt in its exact completed V3 run."""
+        job = OzonBulkUploadService.get_run(
+            seller_id=seller_id,
+            job_uid=job_uid,
+            reconcile=False,
+        )
+        run = OzonBulkUploadRun.query.filter_by(
+            job_id=job.id,
+            seller_id=seller_id,
+            account_id=account_id,
+            mode="source_prepare",
+            state="completed",
+        ).first()
+        source_item = (
+            OzonBulkUploadItem.query.filter_by(
+                id=source_item_id,
+                run_id=run.id,
+                imported_product_id=imported_product_id,
+                draft_id=draft_id,
+            ).first()
+            if run is not None else None
+        )
+        if run is None or source_item is None:
+            raise cls._conflict(
+                "ozon_repair_source_item_changed",
+                "Исходная строка подготовки изменилась; обновите страницу",
+            )
+        if phase not in {"prepared", "needs_input"}:
+            raise ValueError("Unsupported source preparation phase")
+        source_item.phase = phase
+        source_item.prepared_version = (
+            prepared_version if phase == "prepared" else None
+        )
+        source_item.error_code = (
+            OzonBulkUploadService._safe_text(error_code, 100)
+            if error_code else None
+        )
+        source_item.error_message = (
+            OzonBulkUploadService._safe_text(error_message, 700)
+            if error_message else None
+        )
+        source_item.updated_at = datetime.utcnow()
+        # Rotation makes reconciliation commit the item receipt and derived
+        # job summary together even when status counts stay the same.
+        OzonBulkUploadService._reconcile_v3(job=job, run=run, rotate=True)
+
+    @classmethod
     def _apply_parsed_rows(
         cls,
         *,
@@ -2004,6 +2254,7 @@ class OzonBulkRepairService:
         parsed_rows: Sequence[dict],
         default_attribute_keys: Sequence[str] = (),
         corrected_by_user_id: Optional[int] = None,
+        allow_source_prepare: bool = False,
     ) -> dict:
         """Apply normalized local edits under one exact account claim."""
         job, document = cls._owned_completed_run(
@@ -2015,11 +2266,40 @@ class OzonBulkRepairService:
                 "ozon_repair_account_mismatch",
                 "Кабинет запуска изменился; обновите страницу",
             )
+        source_prepare = document.get("mode") == "source_prepare"
+        if source_prepare and not allow_source_prepare:
+            raise cls._conflict(
+                "ozon_repair_source_prepare_native_only",
+                "Локальную подготовку можно исправлять только в массовом редакторе",
+            )
+        if source_prepare and any(
+            cls._safe_text(row.get("values", {}).get("action"), 30).upper()
+            != cls.ACTION_REPAIR
+            for row in parsed_rows
+        ):
+            raise OzonBulkUploadValidationError(
+                "Для локальной подготовки доступно только действие ИСПРАВИТЬ"
+            )
         item_by_draft = {
             item["draft_id"]: item
             for item in cls._repairable_items(document)
         }
-        if any(row["draft_id"] not in item_by_draft for row in parsed_rows):
+        if source_prepare:
+            for row in parsed_rows:
+                source_item = item_by_draft.get(row["draft_id"])
+                if (
+                    source_item is None
+                    or source_item.get("imported_product_id")
+                    != row["imported_product_id"]
+                ):
+                    raise cls._conflict(
+                        "ozon_repair_row_not_in_run",
+                        "Исправление содержит черновик вне текущего запуска",
+                    )
+                # This identity comes from the durable run document, never
+                # from a browser field.
+                row["_source_item_id"] = source_item["source_item_id"]
+        elif any(row["draft_id"] not in item_by_draft for row in parsed_rows):
             raise cls._conflict(
                 "ozon_repair_row_not_in_run",
                 "Исправление содержит черновик вне текущего запуска",
@@ -2041,6 +2321,8 @@ class OzonBulkRepairService:
             "errors": [],
             "rows": [],
         }
+        if source_prepare:
+            report["mode"] = "source_prepare"
         try:
             # Re-read after the account claim. A stale editor/workbook must not
             # race a publication queued between initial render and submit.
@@ -2054,12 +2336,52 @@ class OzonBulkRepairService:
                     "ozon_repair_account_mismatch",
                     "Кабинет запуска изменился; обновите страницу",
                 )
+            if (document.get("mode") == "source_prepare") != source_prepare:
+                raise cls._conflict(
+                    "ozon_repair_run_changed",
+                    "Режим запуска изменился; обновите страницу",
+                )
             item_by_draft = {
                 item["draft_id"]: item
                 for item in cls._repairable_items(document)
             }
             for row in parsed_rows:
                 item = item_by_draft.get(row["draft_id"])
+                if source_prepare and (
+                    item is None
+                    or item.get("source_item_id") != row.get("_source_item_id")
+                    or item.get("imported_product_id")
+                    != row["imported_product_id"]
+                ):
+                    source_row = next(
+                        (
+                            candidate
+                            for candidate in document.get("items", [])
+                            if candidate.get("source_item_id")
+                            == row.get("_source_item_id")
+                        ),
+                        None,
+                    )
+                    blocked_message = (
+                        "Карточка уже стоит в очереди проверенной отправки; "
+                        "дождитесь результата операции Ozon"
+                        if source_row is not None
+                        and source_row.get("active_reviewed") is True
+                        else "Статус строки изменился; обновите страницу"
+                    )
+                    report["failed"] += 1
+                    report["rows"].append({
+                        "draft_id": row["draft_id"],
+                        "status": "failed",
+                        "message": blocked_message,
+                    })
+                    if len(report["errors"]) < 30:
+                        report["errors"].append({
+                            "row": row.get("row_number"),
+                            "draft_id": row["draft_id"],
+                            "message": blocked_message,
+                        })
+                    continue
                 if item is None:
                     report["failed"] += 1
                     report["rows"].append({"draft_id": row["draft_id"], "status": "failed",
@@ -2094,6 +2416,10 @@ class OzonBulkRepairService:
                         "Действие",
                         30,
                     ).upper()
+                    if source_prepare and action != cls.ACTION_REPAIR:
+                        raise OzonBulkUploadValidationError(
+                            "Для локальной подготовки доступно только действие ИСПРАВИТЬ"
+                        )
                     if action not in {
                         cls.ACTION_REPAIR,
                         cls.ACTION_EXCLUDE,
@@ -2189,7 +2515,40 @@ class OzonBulkRepairService:
                     )
                     item.pop("repair_error", None)
                     report[outcome["status"]] += 1
-                    OzonBulkUploadService._persist(job, document)
+                    if source_prepare:
+                        if outcome["status"] == "ready_to_retry":
+                            next_phase = "prepared"
+                            next_code = None
+                            next_message = None
+                        else:
+                            next_phase = "needs_input"
+                            first_error = next(iter(outcome["errors"]), {})
+                            next_code = (
+                                first_error.get("code")
+                                or item.get("code")
+                                or "draft_not_ready"
+                            )
+                            next_message = (
+                                first_error.get("message")
+                                or item.get("message")
+                                or "Черновик требует проверки"
+                            )
+                        cls._persist_source_prepare_item(
+                            seller_id=seller_id,
+                            job_uid=job_uid,
+                            account_id=account_id,
+                            source_item_id=row["_source_item_id"],
+                            imported_product_id=row["imported_product_id"],
+                            draft_id=draft.id,
+                            phase=next_phase,
+                            prepared_version=(
+                                draft.version if next_phase == "prepared" else None
+                            ),
+                            error_code=next_code,
+                            error_message=next_message,
+                        )
+                    else:
+                        OzonBulkUploadService._persist(job, document)
                     report["rows"].append({"draft_id": draft.id, "status": outcome["status"],
                                            "version": draft.version})
                 except MarketplaceDraftError as exc:
@@ -2204,6 +2563,8 @@ class OzonBulkRepairService:
                             "draft_id": row["draft_id"],
                             "message": safe_message,
                         })
+                    if source_prepare:
+                        continue
                     # Already committed rows remain durable. Reload both the
                     # run and exact item after rollback, then persist this
                     # row-local editor error so the UI explains the failure.
@@ -2312,6 +2673,14 @@ class OzonBulkRepairService:
                     "ozon_repair_row_not_in_run",
                     "Строка не относится к этому запуску",
                 )
+            if (
+                editor.get("mode") == "source_prepare"
+                and cls._safe_text(row.get("action"), 30).upper()
+                != cls.ACTION_REPAIR
+            ):
+                raise OzonBulkUploadValidationError(
+                    "Для локальной подготовки доступно только действие ИСПРАВИТЬ"
+                )
             product_type_id = row.get("product_type_id")
             if product_type_id is not None and (
                 isinstance(product_type_id, bool)
@@ -2379,6 +2748,7 @@ class OzonBulkRepairService:
             account_id=editor["account_id"],
             parsed_rows=parsed_rows,
             corrected_by_user_id=corrected_by_user_id,
+            allow_source_prepare=editor.get("mode") == "source_prepare",
         )
 
     @classmethod
@@ -2419,6 +2789,15 @@ class OzonBulkRepairService:
             raise cls._conflict(
                 "ozon_repair_tenant_mismatch",
                 "Таблица принадлежит другому продавцу",
+            )
+        _job, document = cls._owned_completed_run(
+            seller_id=seller_id,
+            job_uid=job_uid,
+        )
+        if document.get("mode") == "source_prepare":
+            raise cls._conflict(
+                "ozon_repair_source_prepare_native_only",
+                "Локальную подготовку можно исправлять только в массовом редакторе",
             )
 
         cards = workbook[cls.CARD_SHEET]
