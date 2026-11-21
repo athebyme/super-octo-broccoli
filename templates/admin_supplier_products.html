@@ -40,13 +40,13 @@
             <form method="POST" action="{{ url_for('admin_supplier_sync', supplier_id=supplier.id) }}" class="inline-flex shrink-0">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" onclick="return confirm('Обновить каталог из CSV? Новые товары будут добавлены, совпавшие — обновлены.')"
-                        class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">
+                        class="px-4 py-3 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">
                     Обновить каталог
                 </button>
             </form>
             {% endif %}
             <details class="min-w-0 max-w-full">
-                <summary class="cursor-pointer select-none px-4 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
+                <summary class="cursor-pointer select-none px-4 py-3 border border-gray-300 bg-white text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
                     Дополнительные действия
                 </summary>
                 <div class="mt-2 flex max-w-full flex-wrap items-center gap-2">
@@ -181,10 +181,10 @@
     </form>
 
     <!-- Таблица товаров -->
-    <form method="POST" action="{{ url_for('admin_supplier_products_bulk', supplier_id=supplier.id) }}" id="bulk-form"
+    <form method="POST" action="{{ url_for('admin_supplier_products_bulk', supplier_id=supplier.id) }}" id="bulk-form" class="w-full min-w-0"
           x-data="{ selectedAll: false, selected: [] }">
         <!-- Массовые действия -->
-        <div class="bg-white rounded-t-lg border border-b-0 border-gray-200 px-4 py-3 flex items-center gap-3">
+        <div class="bg-white rounded-t-lg border border-b-0 border-gray-200 px-4 py-3 flex flex-wrap items-center gap-3 min-w-0">
             <label class="flex items-center gap-2">
                 <input type="checkbox" x-model="selectedAll"
                        @change="selected = selectedAll ? [...document.querySelectorAll('[name=product_ids]')].map(el => el.value) : []"
@@ -207,7 +207,8 @@
                     class="px-3 py-1.5 bg-gray-600 text-white rounded-lg text-sm hover:bg-gray-700">Применить</button>
         </div>
 
-        <div class="overflow-x-auto bg-white border border-gray-200 rounded-b-lg">
+        <div class="w-full min-w-0 overflow-x-auto bg-white border border-gray-200 rounded-b-lg"
+             role="region" aria-label="Таблица товаров поставщика" tabindex="0">
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
