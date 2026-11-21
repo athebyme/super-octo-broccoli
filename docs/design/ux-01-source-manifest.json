@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-21T06:00:12.134407+00:00",
+  "generated_at": "2026-11-21T06:05:21.568147+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "0b05375e672e426dc47e817ad606bb2f5d453ffe790207f586adf604277e891f"
+      "sha256": "a7841219df19c9b6bb63f605b9a6b337c588736ebfc136bfd895bac8dfde8510"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -2569,11 +2569,11 @@
     },
     {
       "path": "static/my-products-beta.css",
-      "sha256": "0adbd79857c38acbdc70835093463c17bb2877fa615ec2443e60c16385210150"
+      "sha256": "903c89e60471e867ce0075df2a491eb1ac330235877d7953c1edb6e6752ecd6c"
     },
     {
       "path": "static/my-products-beta.js",
-      "sha256": "727836b07a56837f102b36e06c207b9a1c89d43401628a857443e5431d8aa447"
+      "sha256": "014c9daa0650e844ba23e8e5e138964a83c3c170b9129187558a6a44fb962038"
     },
     {
       "path": "static/operations-workspace.css",
@@ -3209,7 +3209,7 @@
     },
     {
       "path": "templates/my_products_beta.html",
-      "sha256": "3393dcc304090045c1a5771815f86d9f50aacf82e86b2068b49fc717fa2d8650"
+      "sha256": "16b835b9ed38d4b2869b07f292921ab7ab4e8d75c133830730a33d1e6816e1f1"
     },
     {
       "path": "templates/notifications.html",
@@ -4369,7 +4369,7 @@
     },
     {
       "path": "tests/test_my_products_supplier_refresh_handoff.py",
-      "sha256": "acb9f3581e7898f47bfbf64de6551a6ae9a78abb27bbd6bb53ffbad7fdc09f4e"
+      "sha256": "761384d51608ea786731f1c396fac853c658818c2d98336907699ea4ed47a3d9"
     },
     {
       "path": "tests/test_orchestrator.py",
@@ -5053,7 +5053,7 @@
     },
     {
       "path": "tests/ux01/bulk_workspace_browser.py",
-      "sha256": "076ab5364cc5eb6df65a2dd29e2ce7dbb215944a8658659d989d4fe369607522"
+      "sha256": "fed8525c6330556bb31f06b4f0436eaabd4aacc08bfe4a00753ac4c36c335aba"
     },
     {
       "path": "tests/ux01/common_content_browser.py",
@@ -5092,5 +5092,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "cb68d5de26fd871f8531ac2cf1ff3774274179ad8c902db5d067c9e50e4354f9"
+  "aggregate_sha256": "64b8d71ff70448ffe5cda0a22c9953a871f91d3d83a18f3405e75f2561dfb029"
 }
