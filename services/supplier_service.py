@@ -2749,6 +2749,116 @@ class SupplierService:
         }
 
     @staticmethod
+    def _supplier_catalog_refresh_preview_for_rows(
+        seller_id,
+        supplier_id,
+        supplier_product_ids,
+        connection,
+        rows,
+        *,
+        details_limit,
+    ):
+        """Build bounded display details and a full streamed scope digest."""
+        scope = (
+            {"kind": "all"}
+            if supplier_product_ids is None
+            else {
+                "kind": "source_ids",
+                "supplier_product_ids": list(supplier_product_ids),
+            }
+        )
+        source_requested = (
+            None if supplier_product_ids is None else len(supplier_product_ids)
+        )
+        digest = _supplier_catalog_refresh_review_hasher({
+            "v": 1,
+            "seller_id": seller_id,
+            "supplier_id": supplier_id,
+            "scope": scope,
+            "connection": SupplierService._supplier_catalog_refresh_connection_values(
+                connection,
+            ),
+        })
+        requested = 0
+        eligible = 0
+        changed = 0
+        unlinked = 0
+        already_current = 0
+        items = []
+        changed_product_ids = set()
+        found_source_ids = set()
+
+        for imported_product in rows:
+            if imported_product.supplier_product_id is not None:
+                found_source_ids.add(imported_product.supplier_product_id)
+            source = imported_product.supplier_product
+            if (
+                source is not None
+                and source.supplier_id != supplier_id
+            ):
+                raise ValueError("Связь карточки с поставщиком не совпадает")
+            if supplier_product_ids is not None and (
+                imported_product.supplier_id != supplier_id
+                or source is None
+                or source.supplier_id != supplier_id
+            ):
+                raise ValueError("Связь карточки с поставщиком не совпадает")
+
+            include_item = len(items) < details_limit
+            try:
+                row_review = SupplierService._supplier_refresh_preview_for_rows(
+                    seller_id,
+                    [imported_product.id],
+                    [imported_product],
+                    include_items=include_item,
+                )
+            except ValueError:
+                raise
+            except Exception:
+                raise ValueError("Не удалось проверить данные выбранных карточек") from None
+
+            requested += row_review["requested"]
+            eligible += row_review["eligible"]
+            changed += row_review["changed"]
+            unlinked += row_review["skipped"]
+            already_current += row_review["eligible"] - row_review["changed"]
+            if row_review["changed"]:
+                changed_product_ids.add(imported_product.id)
+            if include_item:
+                items.extend(row_review["items"])
+            _supplier_catalog_refresh_review_add_row(
+                digest,
+                imported_product.id,
+                row_review["review_digest"],
+            )
+
+        if supplier_product_ids is not None:
+            if not found_source_ids:
+                raise ValueError("Выбранные товары не импортированы в ваши карточки")
+            if found_source_ids != set(supplier_product_ids):
+                raise ValueError(
+                    "Часть выбранных товаров ещё не импортирована в ваши карточки"
+                )
+
+        review_digest = _supplier_catalog_refresh_review_finish(digest, requested)
+        return {
+            "scope": scope["kind"],
+            "supplier_id": supplier_id,
+            "source_requested": source_requested,
+            "requested": requested,
+            "eligible": eligible,
+            "changed": changed,
+            "skipped": unlinked + already_current,
+            "unlinked": unlinked,
+            "already_current": already_current,
+            "items": items,
+            "items_truncated": requested > len(items),
+            "details_limit": details_limit,
+            "review_digest": review_digest,
+            "_changed_product_ids": changed_product_ids,
+        }
+
+    @staticmethod
     def preview_supplier_products(
         seller_id: int,
         supplier_id: int,
@@ -2756,7 +2866,7 @@ class SupplierService:
         *,
         details_limit: int = 50,
     ) -> dict:
-        """Preview a source-ID selection or all local copies for one supplier.
+        """Preview exact source IDs or all local copies for one supplier.
 
         ``None`` is the explicit all-owned-imports scope. A list means the
         exact ordered SupplierProduct IDs selected in the supplier catalog;
@@ -2802,7 +2912,6 @@ class SupplierService:
                 raise ValueError("Список товаров поставщика содержит повторы")
             if not supplier_product_ids:
                 raise ValueError("Не выбраны товары")
-
         connection = SellerSupplier.query.filter_by(
             seller_id=seller_id,
             supplier_id=supplier_id,
@@ -2818,8 +2927,6 @@ class SupplierService:
                 seller_id=seller_id,
                 supplier_id=supplier_id,
             ).order_by(ImportedProduct.id)
-            scope = {"kind": "all"}
-            source_requested = None
         else:
             source_rows = SupplierProduct.query.filter(
                 SupplierProduct.supplier_id == supplier_id,
@@ -2833,95 +2940,22 @@ class SupplierService:
                 ImportedProduct.seller_id == seller_id,
                 ImportedProduct.supplier_product_id.in_(supplier_product_ids),
             ).order_by(ImportedProduct.id)
-            scope = {
-                "kind": "source_ids",
-                "supplier_product_ids": list(supplier_product_ids),
-            }
-            source_requested = len(supplier_product_ids)
 
-        digest = _supplier_catalog_refresh_review_hasher({
-            "v": 1,
-            "seller_id": seller_id,
-            "supplier_id": supplier_id,
-            "scope": scope,
-            "connection": SupplierService._supplier_catalog_refresh_connection_values(
-                connection,
-            ),
-        })
-        requested = 0
-        eligible = 0
-        changed = 0
-        skipped = 0
-        items = []
-        found_source_ids = set()
-
-        for imported_product in rows_query.yield_per(100):
-            if imported_product.supplier_product_id is not None:
-                found_source_ids.add(imported_product.supplier_product_id)
-            source = imported_product.supplier_product
-            if (
-                source is not None
-                and source.supplier_id != supplier_id
-            ):
-                raise ValueError("Связь карточки с поставщиком не совпадает")
-            if supplier_product_ids is not None and (
-                imported_product.supplier_id != supplier_id
-                or source is None
-                or source.supplier_id != supplier_id
-            ):
-                raise ValueError("Связь карточки с поставщиком не совпадает")
-
-            include_item = len(items) < details_limit
-            try:
-                row_review = SupplierService._supplier_refresh_preview_for_rows(
-                    seller_id,
-                    [imported_product.id],
-                    [imported_product],
-                    include_items=include_item,
-                )
-            except ValueError:
-                raise
-            except Exception:
-                raise ValueError("Не удалось проверить данные выбранных карточек") from None
-
-            requested += row_review["requested"]
-            eligible += row_review["eligible"]
-            changed += row_review["changed"]
-            skipped += row_review["skipped"]
-            if include_item:
-                items.extend(row_review["items"])
-            _supplier_catalog_refresh_review_add_row(
-                digest,
-                imported_product.id,
-                row_review["review_digest"],
-            )
-
-        if supplier_product_ids is not None:
-            if not found_source_ids:
-                raise ValueError("Выбранные товары не импортированы в ваши карточки")
-            if found_source_ids != set(supplier_product_ids):
-                raise ValueError(
-                    "Часть выбранных товаров ещё не импортирована в ваши карточки"
-                )
-
-        review_digest = _supplier_catalog_refresh_review_finish(digest, requested)
-        return {
-            "scope": scope["kind"],
-            "supplier_id": supplier_id,
-            "source_requested": source_requested,
-            "requested": requested,
-            "eligible": eligible,
-            "changed": changed,
-            "skipped": skipped,
-            "items": items,
-            "items_truncated": requested > len(items),
-            "details_limit": details_limit,
-            "review_digest": review_digest,
-        }
+        review = SupplierService._supplier_catalog_refresh_preview_for_rows(
+            seller_id,
+            supplier_id,
+            supplier_product_ids,
+            connection,
+            rows_query.yield_per(100),
+            details_limit=details_limit,
+        )
+        review.pop("_changed_product_ids", None)
+        return review
 
     @staticmethod
     def _apply_supplier_updates(
         imported_products: List[ImportedProduct], *, require_matching_supplier=False,
+        only_changed_product_ids=None,
     ) -> ImportResult:
         """Обновить exact rows с savepoint на строку."""
         result = ImportResult(total_requested=len(imported_products))
@@ -2935,6 +2969,18 @@ class SupplierService:
                     "product_id": imp.id,
                     "status": "skipped",
                     "reason": "no_supplier_link",
+                })
+                continue
+
+            if (
+                only_changed_product_ids is not None
+                and imp.id not in only_changed_product_ids
+            ):
+                result.skipped += 1
+                result.item_results.append({
+                    "product_id": imp.id,
+                    "status": "skipped",
+                    "reason": "already_current",
                 })
                 continue
 
@@ -3114,11 +3160,14 @@ class SupplierService:
                             "Связь с поставщиком изменилась после просмотра"
                         )
                     raise ValueError("Связь карточки с поставщиком не совпадает")
+                changed_product_ids = None
                 if reviewed:
-                    current_review = SupplierService.preview_supplier_products(
+                    current_review = SupplierService._supplier_catalog_refresh_preview_for_rows(
                         seller_id,
                         supplier_id,
                         None,
+                        active_connection,
+                        imported_rows,
                         details_limit=0,
                     )
                     if not hmac.compare_digest(
@@ -3127,7 +3176,12 @@ class SupplierService:
                         raise SupplierRefreshReviewStale(
                             "Выбранные данные изменились после просмотра"
                         )
-                return SupplierService._apply_supplier_updates(imported_rows)
+                    changed_product_ids = current_review["_changed_product_ids"]
+                return SupplierService._apply_supplier_updates(
+                    imported_rows,
+                    require_matching_supplier=reviewed,
+                    only_changed_product_ids=changed_product_ids,
+                )
 
             source_rows = SupplierProduct.query.filter(
                 SupplierProduct.supplier_id == supplier_id,
@@ -3182,11 +3236,14 @@ class SupplierService:
             if len(imported_rows) > 200 and not reviewed:
                 raise ValueError("Слишком много локальных копий для выбранного набора")
 
+            changed_product_ids = None
             if reviewed:
-                current_review = SupplierService.preview_supplier_products(
+                current_review = SupplierService._supplier_catalog_refresh_preview_for_rows(
                     seller_id,
                     supplier_id,
                     supplier_product_ids,
+                    active_connection,
+                    imported_rows,
                     details_limit=0,
                 )
                 if not hmac.compare_digest(
@@ -3195,8 +3252,13 @@ class SupplierService:
                     raise SupplierRefreshReviewStale(
                         "Выбранные данные изменились после просмотра"
                     )
+                changed_product_ids = current_review["_changed_product_ids"]
 
-            return SupplierService._apply_supplier_updates(imported_rows)
+            return SupplierService._apply_supplier_updates(
+                imported_rows,
+                require_matching_supplier=reviewed,
+                only_changed_product_ids=changed_product_ids,
+            )
         except Exception:
             db.session.rollback()
             raise

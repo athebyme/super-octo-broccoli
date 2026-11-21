@@ -6,6 +6,7 @@ import os
 import random
 import tempfile
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -1317,6 +1318,84 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
         for row in rows:
             self.db.session.refresh(row)
             self.assertEqual(row.title, 'fresh title')
+
+    def test_reviewed_supplier_refresh_skips_noop_without_touching_updated_at(self):
+        source = self._source(
+            self.supplier.id, 'reviewed-noop', 'fresh title',
+        )
+        changed_row = self._copy(source, title='old title')
+        current_row = self._copy(source, title='fresh title')
+        unlinked_row = self._copy(None, title='no source')
+        self.db.session.commit()
+
+        from services.supplier_service import SupplierService
+
+        # Seed every field through the same legacy transform, then restore one
+        # material difference so the reviewed write contains one update, one
+        # no-op, and one unlinked row.
+        SupplierService.update_supplier_products(
+            self.seller.id,
+            self.supplier.id,
+            [source.id],
+        )
+        self.db.session.refresh(changed_row)
+        self.db.session.refresh(current_row)
+        changed_row.title = 'old title'
+        fixed_noop_timestamp = datetime(2000, 1, 1)
+        current_row.updated_at = fixed_noop_timestamp
+        self.db.session.commit()
+
+        preview = SupplierService.preview_supplier_products(
+            self.seller.id,
+            self.supplier.id,
+            None,
+            details_limit=10,
+        )
+
+        self.assertEqual(
+            (
+                preview['requested'], preview['eligible'], preview['changed'],
+                preview['unlinked'], preview['already_current'], preview['skipped'],
+            ),
+            (3, 2, 1, 1, 1, 2),
+        )
+        self.assertEqual(
+            [(item['product_id'], item['state']) for item in preview['items']],
+            [
+                (changed_row.id, 'changed'),
+                (current_row.id, 'unchanged'),
+                (unlinked_row.id, 'unlinked'),
+            ],
+        )
+
+        result = SupplierService.update_supplier_products(
+            self.seller.id,
+            self.supplier.id,
+            None,
+            expected_review_digest=preview['review_digest'],
+        )
+
+        self.assertEqual(
+            (result.total_requested, result.imported, result.skipped, result.errors),
+            (preview['requested'], preview['changed'], preview['skipped'], 0),
+        )
+        self.assertEqual(result.item_results, [
+            {'product_id': changed_row.id, 'status': 'updated', 'reason': None},
+            {
+                'product_id': current_row.id,
+                'status': 'skipped',
+                'reason': 'already_current',
+            },
+            {
+                'product_id': unlinked_row.id,
+                'status': 'skipped',
+                'reason': 'no_supplier_link',
+            },
+        ])
+        self.db.session.refresh(changed_row)
+        self.db.session.refresh(current_row)
+        self.assertEqual(changed_row.title, 'fresh title')
+        self.assertEqual(current_row.updated_at, fixed_noop_timestamp)
 
     def test_reviewed_supplier_scope_detects_drift_beyond_details_sample(self):
         source = self._source(
