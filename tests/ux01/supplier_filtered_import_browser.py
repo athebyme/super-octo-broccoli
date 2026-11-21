@@ -315,7 +315,7 @@ def run():
             page.get_by_role("heading", name="Товары из импорта", exact=True).wait_for()
             page.wait_for_load_state("networkidle")
             location = page.evaluate("() => ({path: location.pathname, search: location.search})")
-            location_query = parse_qs(location["search"], keep_blank_values=True)
+            location_query = parse_qs(location["search"].removeprefix("?"), keep_blank_values=True)
             assert location["path"] == "/my-products/beta", "batch page path changed"
             assert set(location_query) == {"import_batch"}, "batch page lost its exact scope"
             assert location_query.get("import_batch") == [batch_token], (
@@ -443,7 +443,9 @@ def run():
             page.wait_for_load_state("networkidle")
             normal_location = page.evaluate("() => ({path: location.pathname, search: location.search})")
             assert normal_location["path"] == "/my-products/beta"
-            assert "import_batch" not in parse_qs(normal_location["search"], keep_blank_values=True)
+            assert "import_batch" not in parse_qs(
+                normal_location["search"].removeprefix("?"), keep_blank_values=True,
+            )
             assert len([read for read in product_feed_reads if "import_batch" not in read["query_keys"]]) >= 1
             assert len(facet_reads) >= 1
             assert len(posts) == 1 and fixture.REPORT["provider_attempts"] == 0
