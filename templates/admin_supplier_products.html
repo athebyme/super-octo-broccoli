@@ -38,7 +38,9 @@
         <div class="flex flex-col gap-3">
             <div class="flex flex-wrap items-start gap-2">
                 {% if supplier.csv_source_url %}
-                <form method="POST" action="{{ url_for('admin_supplier_sync', supplier_id=supplier.id) }}" class="inline-flex shrink-0">
+                <form method="POST" action="{{ url_for('admin_supplier_sync', supplier_id=supplier.id) }}"
+                      onsubmit="return confirm('Обновить каталог поставщика? Новые позиции будут добавлены, данные существующих сверятся с файлом.')"
+                      class="inline-flex shrink-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="catalog_refresh_baseline" value="{{ catalog_refresh_latest_id }}">
                     <button type="submit" data-testid="catalog-refresh-submit"
