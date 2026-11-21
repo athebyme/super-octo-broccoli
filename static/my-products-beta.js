@@ -314,6 +314,7 @@
                 ozonConfirmed: false,
                 ozonBusy: '',
                 ozonError: '',
+                ozonReturnFocus: null,
                 ozonPending: validOzonPending(savedOzon, boot.ozonAccounts || []) ? savedOzon : null,
                 ozonStorageProblem: hasOzonPending() && !validOzonPending(savedOzon, boot.ozonAccounts || []),
                 ozonRetrySameKey: false,
@@ -370,6 +371,34 @@
                     this.pagination.total > 0 &&
                     this.pagination.total <= MAX_BULK_SELECTION;
             },
+            supplierRefreshOzonIds: function () {
+                var result = this.supplierRefreshResult;
+                if (!result || !['complete', 'partial'].includes(result.kind) ||
+                    !Array.isArray(result.entries) ||
+                    !Number.isSafeInteger(result.requested) || result.requested <= 0 ||
+                    result.entries.length !== result.requested ||
+                    !Number.isSafeInteger(result.updated) || result.updated < 0 ||
+                    !Number.isSafeInteger(result.skipped) || result.skipped < 0 ||
+                    !Number.isSafeInteger(result.errors) || result.errors < 0 ||
+                    result.updated + result.skipped + result.errors !== result.requested ||
+                    (result.kind === 'partial') !== (result.errors > 0)) return [];
+
+                var seen = new Set();
+                var updatedIds = [];
+                for (var i = 0; i < result.entries.length; i += 1) {
+                    var entry = result.entries[i];
+                    if (!entry || !Number.isSafeInteger(entry.productId) ||
+                        entry.productId <= 0 || seen.has(entry.productId) ||
+                        !['updated', 'skipped', 'error'].includes(entry.status)) return [];
+                    seen.add(entry.productId);
+                    if (entry.status === 'updated') updatedIds.push(entry.productId);
+                }
+                return updatedIds.length === result.updated ? updatedIds : [];
+            },
+            ozonPreparationDisabled: function () {
+                return !this.ozonAccounts.length || !!this.ozonPending ||
+                    this.ozonStorageProblem || !!this.ozonBusy || this.ozonSessionEnded;
+            },
             /* Основные операции показываются вместе; редкие — в «Ещё». */
             actionGroups: function () {
                 var chosen = this.selectedItems;
@@ -406,7 +435,7 @@
                                     : this.ozonPending || this.ozonStorageProblem || this.ozonSessionEnded
                                         ? 'сначала проверьте сохранённый результат подготовки'
                                 : 'локальные черновики в выбранном магазине; отправка подтверждается отдельно',
-                            disabled: !underLimit || !this.ozonAccounts.length || !!this.ozonPending || this.ozonStorageProblem || !!this.ozonBusy || this.ozonSessionEnded,
+                            disabled: !underLimit || this.ozonPreparationDisabled,
                         } : null,
                         {
                             key: 'refresh_supplier',
@@ -967,19 +996,11 @@
                     return;
                 }
                 if (action.key === 'ozon') {
-                    if (this.ozonPending || this.ozonStorageProblem || this.ozonBusy || this.ozonSessionEnded) return;
                     if (!selectionIds.length || selectionIds.length > MAX_BULK_SELECTION) {
                         this.ozonError = 'Выберите от 1 до 200 товаров для одной подготовки.';
                         return;
                     }
-                    this.ozonIds = selectionIds.slice();
-                    this.ozonAccountId = this.ozonAccounts.length === 1 ? String(this.ozonAccounts[0].id) : '';
-                    this.ozonConfirmed = false;
-                    this.ozonError = '';
-                    this.$nextTick(function () {
-                        this.$refs.ozonDialog.showModal();
-                        this.$refs.ozonAccount.focus();
-                    });
+                    this.openOzonPreparation(selectionIds);
                     return;
                 }
                 if (action.key === 'common_content') {
@@ -1174,10 +1195,51 @@
                 this.load();
                 this.loadFacets();
             },
+            prepareRefreshedForOzon: function (event) {
+                var result = this.supplierRefreshResult;
+                if (!this.ozonEnabled || !result ||
+                    !['complete', 'partial'].includes(result.kind) ||
+                    !this.supplierRefreshOzonIds.length) return;
+
+                return this.openOzonPreparation(
+                    this.supplierRefreshOzonIds,
+                    event && event.currentTarget,
+                );
+            },
+            openOzonPreparation: function (productIds, returnFocus) {
+                if (!this.ozonEnabled || this.ozonPreparationDisabled) return false;
+                if (!Array.isArray(productIds) || !productIds.length ||
+                    productIds.length > MAX_BULK_SELECTION ||
+                    productIds.some(function (id) {
+                        return !Number.isSafeInteger(id) || id <= 0;
+                    }) || new Set(productIds).size !== productIds.length) {
+                    this.ozonError = 'Не удалось проверить список товаров. Обновите его и повторите действие.';
+                    this.$nextTick(function () {
+                        this.$refs.ozonError?.focus();
+                    });
+                    return false;
+                }
+                this.ozonIds = productIds.slice();
+                this.ozonAccountId = this.ozonAccounts.length === 1
+                    ? String(this.ozonAccounts[0].id) : '';
+                this.ozonConfirmed = false;
+                this.ozonError = '';
+                this.ozonReturnFocus = returnFocus || null;
+                this.$nextTick(function () {
+                    this.$refs.ozonDialog.showModal();
+                    this.$refs.ozonAccount.focus();
+                });
+                return true;
+            },
             closeOzonDialog: function () {
                 if (this.ozonBusy) return;
                 this.$refs.ozonDialog.close();
                 this.ozonConfirmed = false;
+                if (this.ozonReturnFocus && this.ozonReturnFocus.isConnected &&
+                    typeof this.ozonReturnFocus.focus === 'function') {
+                    this.ozonReturnFocus.focus();
+                }
+                this.ozonReturnFocus = null;
             },
             clearOzonStorageProblem: function () {
                 if (!this.ozonStorageProblem || this.ozonBusy) return;
