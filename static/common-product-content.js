@@ -5,6 +5,10 @@
     var WORKSPACE_RETURN_TTL_MS = 60 * 60 * 1000;
     var WORKSPACE_RETURN_MAX_BYTES = 16 * 1024;
     var WORKSPACE_RETURN_MAX_BATCH_BYTES = 8192;
+    var workspaceReturnEncoder = null;
+    var WORKSPACE_RETURN_CAPSULE_KEYS = [
+        'v', 'nonce', 'owner', 'expiresAt', 'editorIds', 'selectionIds', 'scope', 'batch',
+    ];
 
     function workspaceReturnNow(options) {
         if (options && typeof options.now === 'function') return options.now();
@@ -21,14 +25,8 @@
     }
 
     function workspaceReturnByteLength(value) {
-        try {
-            if (typeof TextEncoder === 'function') {
-                return new TextEncoder().encode(value).length;
-            }
-            return unescape(encodeURIComponent(value)).length;
-        } catch (_) {
-            return Infinity;
-        }
+        if (!workspaceReturnEncoder) workspaceReturnEncoder = new TextEncoder();
+        return workspaceReturnEncoder.encode(value).length;
     }
 
     function workspaceReturnIdList(value, maximum, allowEmpty) {
@@ -44,8 +42,12 @@
 
     function workspaceReturnPlainObject(value) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-        var prototype = Object.getPrototypeOf(value);
-        return prototype === Object.prototype || prototype === null;
+        try {
+            var prototype = Object.getPrototypeOf(value);
+            return prototype === Object.prototype || prototype === null;
+        } catch (_) {
+            return false;
+        }
     }
 
     function workspaceReturnNonce(options) {
@@ -55,43 +57,46 @@
         try {
             var bytes = new Uint8Array(16);
             cryptoSource.getRandomValues(bytes);
-            return Array.from(bytes, function (byte) {
-                return byte.toString(16).padStart(2, '0');
-            }).join('');
+            var hex = '0123456789abcdef';
+            var nonce = '';
+            for (var index = 0; index < bytes.length; index += 1) {
+                nonce += hex.charAt(bytes[index] >>> 4) + hex.charAt(bytes[index] & 15);
+            }
+            return nonce;
         } catch (_) {
             return null;
         }
     }
 
-    function workspaceReturnScope(value) {
-        if (!workspaceReturnPlainObject(value)) return null;
+    function workspaceReturnCapsuleValid(capsule) {
         try {
-            var encoded = JSON.stringify(value);
-            if (typeof encoded !== 'string' || workspaceReturnByteLength(encoded) > 8192) return null;
-            var decoded = JSON.parse(encoded);
-            return workspaceReturnPlainObject(decoded) ? decoded : null;
-        } catch (_) {
-            return null;
-        }
-    }
+            if (!workspaceReturnPlainObject(capsule) ||
+                Object.keys(capsule).length !== WORKSPACE_RETURN_CAPSULE_KEYS.length ||
+                !WORKSPACE_RETURN_CAPSULE_KEYS.every(function (key) {
+                    return Object.prototype.hasOwnProperty.call(capsule, key);
+                })) return false;
 
-    function workspaceReturnBatch(value) {
-        return value === null || (
-            typeof value === 'string' && value.length > 0 &&
-            workspaceReturnByteLength(value) <= WORKSPACE_RETURN_MAX_BATCH_BYTES
-        );
+            return capsule.v === 1 &&
+                typeof capsule.nonce === 'string' && /^[a-f0-9]{32}$/.test(capsule.nonce) &&
+                typeof capsule.owner === 'string' && capsule.owner.length <= 256 &&
+                /^[0-9]+:[0-9]+$/.test(capsule.owner) &&
+                Number.isSafeInteger(capsule.expiresAt) && capsule.expiresAt >= 0 &&
+                workspaceReturnIdList(capsule.editorIds, 50) &&
+                workspaceReturnIdList(capsule.selectionIds, 200, true) &&
+                workspaceReturnPlainObject(capsule.scope) &&
+                (capsule.batch === null || (
+                    typeof capsule.batch === 'string' &&
+                    capsule.batch.length > 0 &&
+                    capsule.batch.length <= WORKSPACE_RETURN_MAX_BATCH_BYTES &&
+                    /^[A-Za-z0-9_.-]+$/.test(capsule.batch)
+                ));
+        } catch (_) {
+            return false;
+        }
     }
 
     function storeWorkspaceReturn(payload, options) {
-        if (!workspaceReturnPlainObject(payload) ||
-            typeof payload.owner !== 'string' || !payload.owner || payload.owner.length > 256 ||
-            !workspaceReturnIdList(payload.editorIds, 50) ||
-            !workspaceReturnIdList(payload.selectionIds, 200, true)) return null;
-
-        var batch = payload.batch;
-        if (batch !== null && batch !== undefined && !workspaceReturnBatch(batch)) return null;
-        var scope = workspaceReturnScope(payload.scope);
-        if (!scope) return null;
+        if (!workspaceReturnPlainObject(payload)) return null;
 
         var now = workspaceReturnNow(options);
         if (!Number.isSafeInteger(now) || now < 0) return null;
@@ -104,11 +109,12 @@
             nonce: nonce,
             owner: payload.owner,
             expiresAt: expiresAt,
-            editorIds: payload.editorIds.slice(),
-            selectionIds: payload.selectionIds.slice(),
-            scope: scope,
-            batch: batch === undefined ? null : batch,
+            editorIds: payload.editorIds,
+            selectionIds: payload.selectionIds,
+            scope: payload.scope,
+            batch: payload.batch === undefined ? null : payload.batch,
         };
+        if (!workspaceReturnCapsuleValid(capsule)) return null;
         try {
             var encoded = JSON.stringify(capsule);
             if (workspaceReturnByteLength(encoded) > WORKSPACE_RETURN_MAX_BYTES) return null;
@@ -134,19 +140,7 @@
             if (typeof encoded !== 'string' ||
                 workspaceReturnByteLength(encoded) > WORKSPACE_RETURN_MAX_BYTES) return null;
             var capsule = JSON.parse(encoded);
-            var keys = ['v', 'nonce', 'owner', 'expiresAt', 'editorIds',
-                'selectionIds', 'scope', 'batch'];
-            if (!workspaceReturnPlainObject(capsule) ||
-                Object.keys(capsule).length !== keys.length ||
-                !keys.every(function (key) { return Object.prototype.hasOwnProperty.call(capsule, key); })) return null;
-            if (capsule.v !== 1 || !/^[a-f0-9]{32}$/.test(capsule.nonce) ||
-                typeof capsule.owner !== 'string' || !capsule.owner || capsule.owner.length > 256 ||
-                !Number.isSafeInteger(capsule.expiresAt) ||
-                !workspaceReturnIdList(capsule.editorIds, 50) ||
-                !workspaceReturnIdList(capsule.selectionIds, 200, true) ||
-                !workspaceReturnPlainObject(capsule.scope) ||
-                !workspaceReturnBatch(capsule.batch)) return null;
-            return capsule;
+            return workspaceReturnCapsuleValid(capsule) ? capsule : null;
         } catch (_) {
             return null;
         }
@@ -187,16 +181,7 @@
             consumeWorkspaceReturn(match[1], options);
             return null;
         }
-        return {
-            v: capsule.v,
-            nonce: capsule.nonce,
-            owner: capsule.owner,
-            expiresAt: capsule.expiresAt,
-            editorIds: capsule.editorIds.slice(),
-            selectionIds: capsule.selectionIds.slice(),
-            scope: capsule.scope,
-            batch: capsule.batch,
-        };
+        return capsule;
     }
 
     function selectionUrl(base, productIds) {

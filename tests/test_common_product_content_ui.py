@@ -207,6 +207,11 @@ assert.equal(workspaceReturnFromHash('#workspace-return=' + nonce, {
     ...options, owner, editorIds: [7, 14],
 }), null, 'editor ID order must match the server bootstrap exactly');
 assert.equal(saved.getItem(WORKSPACE_RETURN_SESSION_KEY), null, 'a mismatched editor handoff is discarded');
+const malformedStorage = storage();
+malformedStorage.setItem(WORKSPACE_RETURN_SESSION_KEY, JSON.stringify({ ...capsule, batch: 'unsafe/+' }));
+assert.equal(workspaceReturnFromHash('#workspace-return=' + nonce, {
+    ...options, storage: malformedStorage, owner, editorIds: [14, 7],
+}), null, 'the same capsule validator rejects invalid stored shapes');
 
 const ownerBound = storage();
 const ownerNonce = storeWorkspaceReturn(payload, { ...options, storage: ownerBound });
@@ -252,7 +257,9 @@ assert.deepEqual(workspaceReturnFromHash('#workspace-return=' + emptySelectionNo
 }).selectionIds, [], 'an empty workspace selection is a valid state');
 assert.equal(storeWorkspaceReturn({ ...payload, batch: 'x'.repeat(8193) }, options), null);
 assert.equal(storeWorkspaceReturn({ ...payload, batch: '' }, options), null);
-assert.equal(storeWorkspaceReturn({ ...payload, scope: { data: 'x'.repeat(8193) } }, options), null);
+assert.equal(storeWorkspaceReturn({ ...payload, batch: 'unsafe/+' }, options), null);
+assert.equal(storeWorkspaceReturn({ ...payload, owner: 'user:9' }, options), null);
+assert.equal(storeWorkspaceReturn({ ...payload, scope: { data: 'x'.repeat(16 * 1024) } }, options), null);
 assert.equal(workspaceReturnFromHash('#workspace-return=not-a-nonce', {
     ...options, owner, editorIds: [14, 7],
 }), null);
