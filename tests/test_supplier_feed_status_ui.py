@@ -23,6 +23,7 @@ def supplier(**overrides):
         "last_price_sync_at": datetime(2026, 9, 20, 8, 30),
         "last_price_sync_status": "success",
         "last_price_sync_attempt_at": datetime(2026, 9, 20, 8, 30),
+        "last_price_sync_conflict_count": None,
         "last_price_sync_error": "provider response must stay private",
     }
     values.update(overrides)
@@ -67,6 +68,7 @@ class SupplierFeedStatusRenderingTest(unittest.TestCase):
                 self.assertIn('datetime="2026-09-21T10:15:00Z"', html)
                 self.assertIn("21.09.2026 10:15 UTC", html)
                 self.assertIn('datetime="2026-09-20T08:30:00Z"', html)
+                self.assertIn("Последнее обновление", html)
                 self.assertIn('datetime="2026-09-22T11:45:00Z"', html)
                 self.assertEqual(html.count("Последняя попытка завершилась ошибкой"), 2)
                 self.assertNotIn("private.example", html)
@@ -95,6 +97,32 @@ class SupplierFeedStatusRenderingTest(unittest.TestCase):
         html = self.render_status(TEMPLATES[0], source)
         self.assertIn("Результат последней попытки не подтверждён", html)
         self.assertNotIn("Синхронизация выполняется", html)
+
+    def test_partial_price_update_reports_preserved_positions_and_exact_conflict_count(self):
+        source = supplier(
+            last_price_sync_at=datetime(2026, 9, 22, 11, 45),
+            last_price_sync_status="partial",
+            last_price_sync_conflict_count=2,
+            last_price_sync_error="RAW 409 conflicting duplicate record",
+        )
+        html = self.render_status(TEMPLATES[0], source)
+        self.assertIn("Последняя успешная загрузка", html)
+        self.assertIn("Последнее обновление", html)
+        self.assertIn('datetime="2026-09-22T11:45:00Z"', html)
+        self.assertIn(
+            "Обновление выполнено частично. Для неоднозначных позиций сохранены прежние данные.",
+            html,
+        )
+        self.assertIn("Найдено конфликтов — 2", html)
+        self.assertNotIn("provider response must stay private", html)
+        self.assertNotIn("RAW 409 conflicting duplicate record", html)
+
+    def test_legacy_partial_price_update_omits_unavailable_conflict_count(self):
+        source = supplier(last_price_sync_status="partial")
+        del source.last_price_sync_conflict_count
+        html = self.render_status(TEMPLATES[0], source)
+        self.assertIn("Для неоднозначных позиций сохранены прежние данные", html)
+        self.assertNotIn("Найдено конфликтов", html)
 
     def test_combined_feed_uses_catalog_time_and_unconfigured_price_feed_is_omitted(self):
         combined = supplier(

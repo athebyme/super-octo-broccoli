@@ -3,6 +3,7 @@
 {% set has_catalog_price = 'supplier_price' in mapping %}
 {% set has_catalog_stock = 'supplier_quantity' in mapping %}
 {% set attempt_at = supplier.last_price_sync_attempt_at if supplier.last_price_sync_attempt_at is defined else none %}
+{% set conflict_count = supplier.last_price_sync_conflict_count if supplier.last_price_sync_conflict_count is defined else none %}
 <section class="sc-feed-freshness sc-feed-freshness--{{ placement }}" aria-label="Свежесть данных поставщика">
     <div class="sc-feed-freshness-item">
         <strong class="sc-feed-freshness-label">Каталог</strong>
@@ -22,7 +23,7 @@
         <strong class="sc-feed-freshness-label">Цены и остатки · отдельный файл</strong>
         <span class="sc-feed-freshness-value">Автообновление {{ 'включено' if supplier.auto_sync_prices else 'выключено' }}</span>
         {% if supplier.last_price_sync_at %}
-        <span class="sc-feed-freshness-value">Последняя успешная загрузка
+        <span class="sc-feed-freshness-value">Последнее обновление
             <time datetime="{{ supplier.last_price_sync_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ supplier.last_price_sync_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
         </span>
         {% else %}
@@ -32,6 +33,11 @@
         <span class="sc-feed-freshness-warning">Последняя попытка завершилась ошибкой</span>
         {% if attempt_at %}
         <time class="sc-feed-freshness-value" datetime="{{ attempt_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ attempt_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
+        {% endif %}
+        {% elif supplier.last_price_sync_status == 'partial' %}
+        <span class="sc-feed-freshness-warning">Обновление выполнено частично. Для неоднозначных позиций сохранены прежние данные.</span>
+        {% if conflict_count is not none %}
+        <span class="sc-feed-freshness-value">Найдено конфликтов — {{ conflict_count }}</span>
         {% endif %}
         {% elif supplier.last_price_sync_status == 'running' and attempt_at %}
         <span class="sc-feed-freshness-warning">Результат последней попытки не подтверждён</span>
