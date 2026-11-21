@@ -62,12 +62,17 @@
             pending:validPending(storedPending) ? storedPending : null,
             storageProblem:hasStored(pendingKey) && !validPending(storedPending),
             csrf:initial.csrf_token, busy:'', error:'', status:'',
-            reviewed:null, confirmed:false, sessionEnded:false, retrySameKey:false,
+            reviewed:null, reviewedMode:'', reviewSummary:null, dialogStatus:'', confirmed:false, sessionEnded:false, retrySameKey:false,
             staleIds:[], alive:true}; },
         computed: {
             selectedIds() { return this.selected.map(row => row.id); },
+            reviewedToSend() {
+                const versions = new Map(this.selected.map(row => [row.id, row.version]));
+                return (this.reviewed || []).filter(row => versions.get(row.draft_id) === row.version);
+            },
             locked() { return !!this.busy || !!this.pending || this.storageProblem || this.sessionEnded; },
             canReview() { return this.selected.length > 0 && !this.locked; },
+            canReviewAll() { return this.review.draft_ids.length > 1 && !this.locked; },
         },
         methods: {
             pageUrl(page) { return config.urls.html + '?' + params(initial.draft_ids, page); },
@@ -98,12 +103,62 @@
                 return size + ' · ' + weight;
             },
             picked(row) { return this.selected.some(item => item.id === row.draft_id && item.version === row.version); },
+            saveSelection() { return store(selectionKey, this.selected); },
+            async readExactReview(ids) {
+                if (!Array.isArray(ids) || ids.length < 1 || ids.length > 200 ||
+                    ids.some(id => !positive(id)) || new Set(ids).size !== ids.length)
+                    throw Error('Состав карточек изменился. Начните просмотр заново.');
+                const pageCount = Math.ceil(ids.length / 20), rows = [];
+                let csrf = '', checkedAt = '';
+                for (let page=1; page<=pageCount; page++) {
+                    const data = await getJson(config.urls.api + '?' + params(ids, page));
+                    const doc = data.review, pagination = doc?.pagination;
+                    const expectedPageIds = ids.slice((page-1)*20, page*20);
+                    const shapeIsExact = doc && doc.account_id === initial.account_id &&
+                        doc.account_label === initial.account_label &&
+                        same(doc.draft_ids, ids) &&
+                        doc.parent_prepare_job_uid === initial.parent_prepare_job_uid &&
+                        typeof doc.checked_at === 'string' && doc.checked_at.length > 0 &&
+                        typeof doc.publication_enabled === 'boolean' &&
+                        pagination?.page === page && pagination?.pages === pageCount &&
+                        pagination?.total === ids.length && pagination?.per_page === 20 &&
+                        Array.isArray(doc.items) && doc.items.length === expectedPageIds.length &&
+                        same(doc.items.map(row => row && row.draft_id), expectedPageIds) &&
+                        doc.items.every(row => row && positive(row.version) &&
+                            typeof row.selectable === 'boolean' &&
+                            ['create', 'update'].includes(row.action) &&
+                            !(doc.publication_enabled === false && row.selectable === true));
+                    if (!shapeIsExact)
+                        throw Error('Магазин или состав карточек изменился. Начните просмотр заново.');
+                    if (typeof doc.csrf_token !== 'string' || !doc.csrf_token)
+                        throw Error('Защита формы не подтверждена. Обновите просмотр.');
+                    csrf = doc.csrf_token;
+                    checkedAt = doc.checked_at;
+                    rows.push(...doc.items);
+                }
+                if (rows.length !== ids.length || !same(rows.map(row => row.draft_id), ids))
+                    throw Error('Список карточек изменился. Начните просмотр заново.');
+                return {rows, csrf, checkedAt};
+            },
+            openReviewDialog(trigger, focusHeading=false) {
+                this._dialogTrigger = trigger || document.activeElement;
+                this.$nextTick(() => {
+                    this.$refs.dialog?.showModal();
+                    (focusHeading ? this.$refs.dialogTitle : this.$refs.confirm)?.focus();
+                });
+            },
+            focusReviewTrigger() {
+                const trigger = this._dialogTrigger;
+                this._dialogTrigger = null;
+                if (trigger?.isConnected && !trigger.disabled) trigger.focus();
+                else this.$refs.reviewButton?.focus();
+            },
             reconcilePage() {
                 const changed = [];
                 this.selected = this.selected.filter(item => {
                     const current = this.review.items.find(row => row.draft_id === item.id);
                     if (!current) return true;
-                    if (current.selectable && current.version === item.version) return true;
+                    if (current.selectable === true && current.version === item.version) return true;
                     changed.push(item.id); return false;
                 });
                 if (changed.length) {
@@ -114,16 +169,16 @@
             },
             toggle(row, checked) {
                 if (this.locked || !row.selectable) return;
-                this.reviewed = null; this.confirmed = false;
+                this.reviewed = null; this.reviewedMode = ''; this.reviewSummary = null; this.confirmed = false;
                 this.selected = this.selected.filter(item => item.id !== row.draft_id);
                 if (checked) this.selected.push({id:row.draft_id, version:row.version});
                 this.selected.sort((a,b) => initial.draft_ids.indexOf(a.id) - initial.draft_ids.indexOf(b.id));
-                this.error = store(selectionKey, this.selected) ? '' :
+                this.error = this.saveSelection() ? '' :
                     'Браузер не сохранил выбор между страницами. Проверьте настройки хранения данных сайта.';
             },
             clear() {
                 if (this.locked) return;
-                this.selected = []; this.reviewed = null; this.confirmed = false;
+                this.selected = []; this.reviewed = null; this.reviewedMode = ''; this.reviewSummary = null; this.confirmed = false;
                 forget(selectionKey); this.status = 'Выбор снят.';
             },
             clearStorageProblem() {
@@ -133,35 +188,28 @@
             },
             async reviewSelected() {
                 if (!this.canReview) return;
+                const trigger = this.$refs.reviewButton;
                 this.busy = 'read'; this.error = ''; this.status = ''; this.reviewed = null;
+                this.reviewedMode = ''; this.reviewSummary = null; this.dialogStatus = ''; this.confirmed = false;
                 const ids = [...this.selectedIds], rows = [];
                 try {
-                    for (let page=1, count=Math.ceil(ids.length/20); page<=count; page++) {
-                        const data = await getJson(config.urls.api + '?' + params(ids, page));
-                        const doc = data.review;
-                        if (!doc || doc.account_id !== initial.account_id || !same(doc.draft_ids, ids) ||
-                            doc.parent_prepare_job_uid !== initial.parent_prepare_job_uid ||
-                            doc.pagination?.page !== page || doc.pagination?.total !== ids.length ||
-                            doc.pagination?.per_page !== 20 || !Array.isArray(doc.items))
-                            throw Error('Магазин или состав карточек изменился. Начните просмотр заново.');
-                        if (typeof doc.csrf_token !== 'string' || !doc.csrf_token)
-                            throw Error('Защита формы не подтверждена. Обновите просмотр.');
-                        this.csrf = doc.csrf_token;
-                        rows.push(...doc.items);
-                    }
-                    if (rows.length !== ids.length || !same(rows.map(row => row.draft_id), ids))
-                        throw Error('Список карточек изменился. Начните просмотр заново.');
-                    const stale = rows.filter(row => !row.selectable ||
+                    const result = await this.readExactReview(ids);
+                    this.csrf = result.csrf;
+                    rows.push(...result.rows);
+                    const stale = rows.filter(row => row.selectable !== true ||
                         this.selected.find(item => item.id === row.draft_id)?.version !== row.version);
                     if (stale.length) {
                         const changed = new Set(stale.map(row => row.draft_id));
                         this.selected = this.selected.filter(item => !changed.has(item.id));
-                        store(selectionKey, this.selected); this.staleIds = [...changed];
+                        this.saveSelection(); this.staleIds = [...changed];
                         this.error = 'Часть карточек изменилась или теперь требует исправления. Их выбор снят; откройте эти карточки и проверьте снова.';
                         return;
                     }
-                    this.reviewed = rows; this.confirmed = false;
-                    this.$nextTick(() => { this.$refs.dialog?.showModal(); this.$refs.confirm?.focus(); });
+                    this.reviewed = rows; this.reviewedMode = 'manual'; this.reviewSummary = {
+                        checked: rows.length, ready: rows.length, needsWork: 0,
+                    };
+                    this.confirmed = false;
+                    this.openReviewDialog(trigger);
                 } catch (error) {
                     if (!this.alive) return;
                     if (typeof error.csrf_token === 'string' && error.csrf_token) this.csrf = error.csrf_token;
@@ -170,14 +218,78 @@
                         error instanceof TypeError ? 'Нет ответа сервера. Выбор сохранён; проверьте соединение.' : error.message;
                 } finally { if (this.alive) this.busy = ''; }
             },
+            async reviewAllReady() {
+                if (!this.canReviewAll) return;
+                const trigger = this.$refs.reviewAllButton;
+                const ids = [...initial.draft_ids];
+                const previousSelection = this.selected.map(row => ({id:row.id, version:row.version}));
+                this.busy = 'read_all'; this.error = ''; this.status = '';
+                this.reviewed = null; this.reviewedMode = ''; this.reviewSummary = null;
+                this.dialogStatus = ''; this.confirmed = false;
+                try {
+                    const result = await this.readExactReview(ids);
+                    if (!same(this.selected, previousSelection))
+                        throw Error('Выбор изменился во время проверки. Повторите её со свежим списком.');
+                    this.csrf = result.csrf;
+                    this.review.checked_at = result.checkedAt;
+                    const pageOffset = (this.review.pagination.page - 1) * 20;
+                    this.review.items = result.rows.slice(pageOffset, pageOffset + 20);
+                    const ready = result.rows.filter(row => row.selectable === true);
+                    const needsWork = result.rows.length - ready.length;
+                    this.reviewSummary = {
+                        checked: result.rows.length, ready: ready.length, needsWork,
+                    };
+                    if (!ready.length) {
+                        this.selected = previousSelection.filter(selection =>
+                            result.rows.some(row => row.draft_id === selection.id &&
+                                row.version === selection.version && row.selectable === true));
+                        const selectionSaved = this.saveSelection();
+                        this.reviewSummary = null;
+                        this.status = 'Проверены все ' + result.rows.length + ' карточек. Магазин: ' +
+                            (initial.account_label || ('№' + initial.account_id)) +
+                            '. Готовых нет. Требуют проверки или исправления: ' + needsWork +
+                            '. ' + (selectionSaved
+                                ? 'Выбор обновлён.'
+                                : 'Выбор действует до закрытия этой вкладки, но не сохранён для следующего открытия.');
+                        return;
+                    }
+                    this.reviewed = ready;
+                    this.reviewedMode = 'all_ready';
+                    this.selected = ready.map(row => ({id:row.draft_id, version:row.version}));
+                    this.dialogStatus = this.saveSelection() ? '' :
+                        'Выбор действует до закрытия этой вкладки, но браузер не смог сохранить его для следующего открытия.';
+                    this.confirmed = false;
+                    this.openReviewDialog(trigger, true);
+                } catch (error) {
+                    if (!this.alive) return;
+                    if (typeof error.csrf_token === 'string' && error.csrf_token) this.csrf = error.csrf_token;
+                    if (error.status === 401 || error.status === 403) this.sessionEnded = true;
+                    this.error = error.name === 'AbortError' ? 'Проверка заняла слишком много времени. Прежний выбор сохранён; повторите чтение.' :
+                        error instanceof TypeError ? 'Нет ответа сервера. Прежний выбор сохранён; проверьте соединение.' : error.message;
+                } finally { if (this.alive) this.busy = ''; }
+            },
+            reviewedPicked(row) {
+                return this.selected.some(item => item.id === row.draft_id && item.version === row.version);
+            },
+            toggleReviewed(row, checked) {
+                if (this.locked || !this.reviewed?.some(item => item.draft_id === row.draft_id && item.version === row.version)) return;
+                this.confirmed = false;
+                this.selected = this.selected.filter(item => item.id !== row.draft_id);
+                if (checked) this.selected.push({id:row.draft_id, version:row.version});
+                this.selected.sort((a,b) => initial.draft_ids.indexOf(a.id) - initial.draft_ids.indexOf(b.id));
+                if (!this.saveSelection())
+                    this.dialogStatus = 'Выбор действует до закрытия этой вкладки, но браузер не смог сохранить его для следующего открытия.';
+                else this.dialogStatus = '';
+            },
             closeDialog() {
                 if (this.busy === 'post') return;
-                this.$refs.dialog?.close(); this.confirmed = false; this.$refs.reviewButton?.focus();
+                this.$refs.dialog?.close(); this.confirmed = false; this.focusReviewTrigger();
             },
             async publish() {
-                if (!this.reviewed?.length || !this.confirmed || this.locked) return;
-                const ids = this.reviewed.map(row => row.draft_id);
-                const versions = Object.fromEntries(this.reviewed.map(row => [String(row.draft_id), row.version]));
+                const rows = this.reviewedToSend;
+                if (!rows.length || !this.confirmed || this.locked) return;
+                const ids = rows.map(row => row.draft_id);
+                const versions = Object.fromEntries(rows.map(row => [String(row.draft_id), row.version]));
                 const key = global.crypto?.randomUUID?.().replace(/-/g, '') ||
                     Array.from(global.crypto.getRandomValues(new Uint8Array(16)),
                         byte => byte.toString(16).padStart(2,'0')).join('');
@@ -229,7 +341,7 @@
                         error instanceof TypeError ? 'Связь прервалась. Повторная отправка заблокирована; проверьте результат.' : error.message;
                 } finally {
                     clearTimeout(timer);
-                    if (this.alive) { this.busy = ''; this.$refs.dialog?.close(); this.confirmed = false; }
+                    if (this.alive) { this.busy = ''; this.$refs.dialog?.close(); this.confirmed = false; this.focusReviewTrigger(); }
                 }
             },
             async readPending() {

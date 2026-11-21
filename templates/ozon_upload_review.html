@@ -3,7 +3,7 @@
 {% block title %}Проверка карточек Ozon — Seller Hub{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-editor.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='ozon-upload-review.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-upload-review.css', v='20261121-ready-review-1') }}">
 <script type="application/json" id="our-bootstrap">{{ {
     'review': review,
     'urls': {
@@ -38,7 +38,11 @@
     </div>
     <div class="our-toolbar">
         <div><strong>К отправке выбрано {{ selected.length }}</strong><span>Каждая карточка выбирается на странице после просмотра. Выбор между страницами сохраняется в этой вкладке.</span></div>
-        <div class="our-actions"><button type="button" class="our-text-button" :disabled="locked || !selected.length" @click="clear">Снять выбор</button><button ref="reviewButton" type="button" class="sh-btn sh-btn--primary" :disabled="!canReview" @click="reviewSelected">{{ busy === 'read' ? 'Проверяем…' : 'Проверить выбранные' }}</button></div>
+        <div class="our-actions">
+            <button type="button" class="our-text-button" :disabled="locked || !selected.length" @click="clear">Снять выбор</button>
+            <button v-if="review.draft_ids.length > 1" ref="reviewAllButton" type="button" class="sh-btn sh-btn--secondary" :disabled="!canReviewAll" @click="reviewAllReady">{{ busy === 'read_all' ? 'Проверяем весь список…' : 'Проверить все готовые' }}</button>
+            <button ref="reviewButton" type="button" class="sh-btn sh-btn--primary" :disabled="!canReview" @click="reviewSelected">{{ busy === 'read' ? 'Проверяем…' : 'Проверить выбранные' }}</button>
+        </div>
     </div>
     <div class="our-list">
         <article v-for="row in review.items" :key="row.draft_id" class="our-card" :class="{'our-card--blocked':!row.selectable}">
@@ -62,11 +66,21 @@
         <a v-if="review.pagination.page < review.pagination.pages" class="sh-btn sh-btn--secondary" :href="pageUrl(review.pagination.page+1)">Следующие 20 →</a>
     </nav>
     <dialog ref="dialog" class="our-dialog" aria-labelledby="our-dialog-title" @cancel.prevent="closeDialog">
-        <div class="our-dialog-head"><div><p class="our-eyebrow">{{ review.account_label }}</p><h2 id="our-dialog-title">Подтвердить отправку</h2></div><button type="button" class="our-close" aria-label="Закрыть подтверждение" :disabled="busy === 'post'" @click="closeDialog">×</button></div>
-        <p>Выбранные версии перечитаны. Ozon создаст новые карточки или полностью обновит существующие после отдельной проверки при запуске. Изменения после этого просмотра будут отклонены.</p>
-        <ul class="our-dialog-list"><li v-for="row in reviewed || []" :key="row.draft_id"><strong>{{ row.title }}</strong><span>{{ row.action === 'update' ? 'Обновление' : 'Создание' }} · версия {{ row.version }} · {{ row.offer_id }}<small>Цена продавца: {{ sellerPrice(row) }} · {{ packageLabel(row) }} · фото: {{ Number.isSafeInteger(row.photos_count) ? row.photos_count : 'неизвестно' }}</small></span></li></ul>
+        <div class="our-dialog-head"><div><p class="our-eyebrow">{{ review.account_label || ('Магазин №' + review.account_id) }}</p><h2 id="our-dialog-title" ref="dialogTitle" tabindex="-1">Подтвердить отправку</h2></div><button type="button" class="our-close" aria-label="Закрыть подтверждение" :disabled="busy === 'post'" @click="closeDialog">×</button></div>
+        <div v-if="reviewSummary" class="our-dialog-summary">
+            <span>Готовы к отправке: {{ reviewSummary.ready }} из {{ reviewSummary.checked }} проверенных.</span>
+            <span>Требуют проверки или исправления: {{ reviewSummary.needsWork }}.</span>
+            <span>Сейчас выбрано: {{ reviewedToSend.length }}.</span>
+        </div>
+        <p>Ozon создаст новые карточки или полностью обновит существующие после отдельной проверки при запуске. Изменения после этого просмотра будут отклонены.</p>
+        <ul class="our-dialog-list"><li v-for="row in reviewed || []" :key="row.draft_id">
+            <label v-if="reviewedMode === 'all_ready'" class="our-dialog-select"><input type="checkbox" :checked="reviewedPicked(row)" :disabled="locked" :aria-label="'Отправить ' + row.title" @change="toggleReviewed(row, $event.target.checked)"><span class="our-dialog-row-copy"><strong>{{ row.title }}</strong><span>{{ row.action === 'update' ? 'Обновление' : 'Создание' }} · версия {{ row.version }} · {{ row.offer_id }}<small>Цена продавца: {{ sellerPrice(row) }} · {{ packageLabel(row) }} · фото: {{ Number.isSafeInteger(row.photos_count) ? row.photos_count : 'неизвестно' }}</small></span></span></label>
+            <div v-else class="our-dialog-row-copy our-dialog-row-copy--manual"><strong>{{ row.title }}</strong><span>{{ row.action === 'update' ? 'Обновление' : 'Создание' }} · версия {{ row.version }} · {{ row.offer_id }}<small>Цена продавца: {{ sellerPrice(row) }} · {{ packageLabel(row) }} · фото: {{ Number.isSafeInteger(row.photos_count) ? row.photos_count : 'неизвестно' }}</small></span></div>
+        </li></ul>
+        <p v-if="dialogStatus" class="our-dialog-empty" role="status">{{ dialogStatus }}</p>
+        <p v-if="reviewed && !reviewedToSend.length" class="our-dialog-empty" role="status">Отметьте хотя бы одну готовую карточку или вернитесь к списку.</p>
         <label class="our-confirm"><input ref="confirm" type="checkbox" v-model="confirmed" :disabled="locked">Я проверил выбранные карточки и подтверждаю отправку в указанный магазин Ozon</label>
-        <div class="our-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="busy === 'post'" @click="closeDialog">Вернуться</button><button type="button" class="sh-btn sh-btn--primary" :disabled="!confirmed || !!busy || !!pending || sessionEnded" @click="publish">{{ busy === 'post' ? 'Принимаем…' : 'Отправить проверенные карточки' }}</button></div>
+        <div class="our-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="busy === 'post'" @click="closeDialog">Вернуться</button><button type="button" class="sh-btn sh-btn--primary" :disabled="!reviewedToSend.length || !confirmed || !!busy || !!pending || sessionEnded" @click="publish">{{ busy === 'post' ? 'Принимаем…' : 'Отправить проверенные карточки' }}</button></div>
     </dialog>
 {% endraw %}
 </section>
@@ -99,5 +113,5 @@
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
 <script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}" defer></script>
 <script src="{{ url_for('static', filename='ozon-draft-editor.js') }}" defer></script>
-<script src="{{ url_for('static', filename='ozon-upload-review.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-upload-review.js', v='20261121-ready-review-1') }}" defer></script>
 {% endblock %}

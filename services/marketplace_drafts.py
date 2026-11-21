@@ -8072,7 +8072,7 @@ class MarketplaceDraftService:
             if current_pack["fact_hash"] != draft.source_fact_hash:
                 errors.append(cls._validation_item(
                     "source_facts_stale", "source_facts",
-                    "Исходный товар изменился; обновите fact snapshot",
+                    "Исходный товар изменился. Откройте черновик и обновите данные товара.",
                 ))
         except MarketplaceFactPackError:
             errors.append(cls._validation_item(
