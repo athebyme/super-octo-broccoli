@@ -644,6 +644,18 @@ def _feed_query_without_batch(url: str) -> dict[str, list[str]]:
     return query
 
 
+def _common_editor_url_matches(url: str, expected_ids: list[int], *, with_return_nonce: bool) -> bool:
+    parsed = urlsplit(str(url))
+    return (
+        parsed.path == "/my-products/common-content"
+        and query_ids(str(url)) == expected_ids
+        and (
+            bool(re.fullmatch(r"workspace-return=[a-f0-9]{32}", parsed.fragment))
+            if with_return_nonce else not parsed.fragment
+        )
+    )
+
+
 def _id_set_fingerprint(values: list[int]) -> str:
     canonical = ",".join(str(value) for value in sorted(values))
     return hashlib.sha256(canonical.encode("ascii")).hexdigest()
@@ -1701,7 +1713,7 @@ def _run_bulk_50_case(page) -> None:
     # valid even after the common title overrides below.
     beta = page.goto(BASE + "/my-products/beta", wait_until="domcontentloaded")
     assert beta and beta.status == 200
-    page.locator("#my-products-app").wait_for()
+    page.locator("#my-products-app").wait_for(state="visible")
     page.wait_for_function("""() => {
         const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
         return proxy && !proxy.loading && proxy.itemsScope === proxy.feedScopeKey();
@@ -1739,6 +1751,9 @@ def _run_bulk_50_case(page) -> None:
         page.get_by_role("button", name="Что сделать").click()
         page.get_by_role("menuitem", name="Изменить общий контент").click()
     assert common_handoff.value.status == 200
+    page.wait_for_url(lambda value: _common_editor_url_matches(value, product_ids, with_return_nonce=True))
+    page.locator("#common-content-editor").wait_for(state="visible")
+    page.locator("[data-workspace-return-link]").first.wait_for(state="visible")
     assert query_ids(page.url) == product_ids
     handoff_hash = urlsplit(page.url).fragment
     assert re.fullmatch(r"workspace-return=[a-f0-9]{32}", handoff_hash)
@@ -1990,6 +2005,11 @@ def _run_bulk_50_case(page) -> None:
             and response.request.method == "GET"
         )) as restored_feed:
             return_link.click()
+            page.wait_for_url(lambda value: (
+                urlsplit(str(value)).path == "/my-products/beta"
+                and not urlsplit(str(value)).query
+            ))
+            page.locator("#my-products-app").wait_for(state="visible")
             assert gate["entered"].wait(timeout=5), "return feed did not enter the synthetic loading gate"
             page.wait_for_function("""() => {
                 const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
@@ -2024,7 +2044,7 @@ def _run_bulk_50_case(page) -> None:
             proxy.searchInput === expected.search && proxy.filters.supplier === expected.supplier &&
             proxy.filters.has_photos === expected.has_photos && proxy.filters.stock === expected.stock &&
             proxy.filters.sort === expected.sort && proxy.selected.join(',') === expected.ids.join(',');
-    }""", {
+    }""", arg={
         "activeTab": "validated", "search": "COMMON-CONTENT-BULK-", "supplier": "",
         "has_photos": "no", "stock": "out_of_stock", "sort": "title", "ids": product_ids,
     })
@@ -2042,6 +2062,11 @@ def _run_bulk_50_case(page) -> None:
     # selection; no partial selection should be restored.
     page.get_by_role("button", name="Что сделать").click()
     page.get_by_role("menuitem", name="Изменить общий контент").click()
+    page.wait_for_url(lambda value: _common_editor_url_matches(
+        value, product_ids, with_return_nonce=True,
+    ))
+    page.locator("#common-content-editor").wait_for(state="visible")
+    page.get_by_role("link", name="Вернуться к товарам", exact=True).wait_for(state="visible")
     assert query_ids(page.url) == product_ids
     with app.app_context():
         changed_scope_row = db.session.get(ImportedProduct, product_ids[0])
@@ -2054,6 +2079,11 @@ def _run_bulk_50_case(page) -> None:
         and response.request.method == "GET"
     )) as missing_feed:
         missing_return.click()
+        page.wait_for_url(lambda value: (
+            urlsplit(str(value)).path == "/my-products/beta"
+            and not urlsplit(str(value)).query
+        ))
+        page.locator("#my-products-app").wait_for(state="visible")
     assert missing_feed.value.status == 200
     page.wait_for_function("""() => {
         const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
@@ -2088,6 +2118,7 @@ def _run_bulk_50_case(page) -> None:
     foreign_page = page.goto(BASE + "/my-products/beta#workspace-return=" + foreign_nonce,
                              wait_until="domcontentloaded")
     assert foreign_page and foreign_page.status == 200
+    page.locator("#my-products-app").wait_for(state="visible")
     page.wait_for_function("""() => {
         const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
         return proxy && !proxy.loading && proxy.itemsScope === proxy.feedScopeKey();
@@ -2099,10 +2130,11 @@ def _run_bulk_50_case(page) -> None:
     REPORT["checks"].append("foreign_owner_workspace_capsule_does_not_restore_scope_or_selection")
 
     absent_nonce = "f" * 32
-    assert absent_nonce != foreign_nonce
+    assert absent_nonce != foreign_nonce, "unmatched nonce must differ from the foreign-owner capsule"
     unmatched_page = page.goto(BASE + "/my-products/beta#workspace-return=" + absent_nonce,
                                wait_until="domcontentloaded")
     assert unmatched_page and unmatched_page.status == 200
+    page.locator("#my-products-app").wait_for(state="visible")
     page.wait_for_function("""() => {
         const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
         return proxy && !proxy.loading && proxy.itemsScope === proxy.feedScopeKey();
@@ -2856,6 +2888,10 @@ def run():
         single_link = row.get_by_role("link", name="Общий контент")
         single_link.wait_for()
         single_link.click()
+        page.wait_for_url(lambda value: _common_editor_url_matches(
+            value, [product_ids[0]], with_return_nonce=False,
+        ))
+        page.locator("#common-content-editor").wait_for(state="visible")
         assert query_ids(page.url) == [product_ids[0]], page.url
         classic_return_links = page.locator("[data-workspace-return-link]").evaluate_all(
             "links => links.map(link => link.getAttribute('href'))"
@@ -2872,7 +2908,7 @@ def run():
 
         beta = page.goto(BASE + beta_path, wait_until="domcontentloaded")
         assert beta and beta.status == 200
-        page.locator("#my-products-app").wait_for()
+        page.locator("#my-products-app").wait_for(state="visible")
         boxes = page.locator(".mp-check input[type=checkbox]")
         boxes.first.wait_for()
         assert boxes.count() >= 2
@@ -2884,6 +2920,10 @@ def run():
         action = page.get_by_role("menuitem", name="Изменить общий контент")
         assert action.is_enabled()
         action.click()
+        page.wait_for_url(lambda value: _common_editor_url_matches(
+            value, ordinary_selection, with_return_nonce=True,
+        ))
+        page.locator("#common-content-editor").wait_for(state="visible")
         assert query_ids(page.url) == ordinary_selection
         ordinary_hash = urlsplit(page.url).fragment
         assert re.fullmatch(r"workspace-return=[a-f0-9]{32}", ordinary_hash)
@@ -2903,11 +2943,16 @@ def run():
         )) as ordinary_feed:
             ordinary_return.click()
         assert ordinary_feed.value.status == 200
+        page.wait_for_url(lambda value: (
+            urlsplit(str(value)).path == beta_path
+            and not urlsplit(str(value)).query
+        ))
+        page.locator("#my-products-app").wait_for(state="visible")
         page.wait_for_function("""expected => {
             const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
             return proxy && !proxy.loading && proxy.itemsScope === proxy.feedScopeKey() &&
                 proxy.selected.join(',') === expected.join(',');
-        }""", ordinary_selection)
+        }""", arg=ordinary_selection)
         assert beta_catalog_state(page)["selected"] == ordinary_selection
         REPORT["checks"].append("beta_explicit_common_content_return_restores_exact_ordered_selection")
         REPORT["checks"].append("beta_bulk_selection_preserves_exact_product_ids")

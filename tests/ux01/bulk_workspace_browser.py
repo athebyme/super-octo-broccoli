@@ -791,11 +791,23 @@ def run():
         with context.expect_page() as direct_editor_page:
             common_content_link.click(modifiers=["Control"])
         direct_editor = direct_editor_page.value
+        direct_editor.wait_for_url(lambda value: (
+            urlsplit(str(value)).path == "/my-products/common-content"
+            and parse_qs(urlsplit(str(value)).query) == {"product_id": [str(imported_local_id)]}
+            and not urlsplit(str(value)).fragment
+        ))
         direct_editor.wait_for_load_state("domcontentloaded")
-        assert urlsplit(direct_editor.url).path == "/my-products/common-content"
-        assert parse_qs(urlsplit(direct_editor.url).query) == {"product_id": [str(imported_local_id)]}
-        assert not urlsplit(direct_editor.url).fragment
+        direct_editor.locator("#common-content-editor").wait_for(state="visible")
+        direct_url = urlsplit(direct_editor.url)
+        assert direct_url.path == "/my-products/common-content", {
+            "path": direct_url.path,
+            "query_keys": sorted(parse_qs(direct_url.query)),
+            "has_fragment": bool(direct_url.fragment),
+        }
+        assert parse_qs(direct_url.query) == {"product_id": [str(imported_local_id)]}
+        assert not direct_url.fragment
         direct_return = direct_editor.get_by_role("link", name="Вернуться к товарам", exact=True)
+        direct_return.wait_for(state="visible")
         direct_return_parts = urlsplit(direct_return.get_attribute("href") or "")
         assert direct_return_parts.path == "/my-products" and not direct_return_parts.query
         assert not direct_return_parts.fragment
@@ -808,6 +820,13 @@ def run():
                                   and response.request.method == "GET") as batch_editor:
             common_content_link.click()
         assert batch_editor.value.status == 200
+        page.wait_for_url(lambda value: (
+            urlsplit(str(value)).path == "/my-products/common-content"
+            and parse_qs(urlsplit(str(value)).query) == {"product_id": [str(imported_local_id)]}
+            and re.fullmatch(r"workspace-return=[a-f0-9]{32}", urlsplit(str(value)).fragment)
+        ))
+        page.locator("#common-content-editor").wait_for(state="visible")
+        page.locator("[data-workspace-return-link]").first.wait_for(state="visible")
         assert query_ids(page.url) == [imported_local_id]
         batch_editor_hash = urlsplit(page.url).fragment
         assert re.fullmatch(r"workspace-return=[a-f0-9]{32}", batch_editor_hash)
@@ -835,6 +854,14 @@ def run():
                 "link => link.click()"
             )
         assert returned_batch_feed.value.status == 200
+        page.wait_for_url(lambda value: (
+            urlsplit(str(value)).path == "/my-products/beta"
+            and parse_qs(urlsplit(str(value)).query, keep_blank_values=True).get("import_batch", [])
+                == [batch_token]
+            and urlsplit(str(value)).fragment == batch_editor_hash
+        ))
+        page.locator("#my-products-app").wait_for(state="visible")
+        page.locator(".mp-list article.mp-row input[type=checkbox]").wait_for(state="attached")
         returned_batch_data = returned_batch_feed.value.json()
         assert returned_batch_data.get("import_batch_count") == 1
         assert [item.get("id") for item in returned_batch_data.get("items", [])] == [imported_local_id]
@@ -843,7 +870,7 @@ def run():
             return proxy && !proxy.loading && proxy.importBatchMode &&
                 proxy.items.map(item => item.id).join(',') === String(id) &&
                 proxy.selected.join(',') === String(id);
-        }""", imported_local_id)
+        }""", arg=imported_local_id)
         assert page.locator(".mp-list article.mp-row input[type=checkbox]:checked").evaluate_all(
             "boxes => boxes.map(box => Number(box.value))"
         ) == [imported_local_id]
