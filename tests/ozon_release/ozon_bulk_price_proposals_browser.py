@@ -1182,6 +1182,7 @@ try:
         # Follow the exact proposal-list link in this same tab. The browser
         # preserves the session capsule and its returned selection despite
         # the saved set containing only two of the original three listings.
+        page.set_viewport_size({"width": 320, "height": 640})
         exact_get_watch = begin_domain_write_watch()
         try:
             with page.expect_navigation(wait_until="domcontentloaded") as exact_navigation:
@@ -1225,7 +1226,74 @@ try:
                 JSON.stringify(capsule.priceTarget.ids) === JSON.stringify(listingIds) &&
                 capsule.selectionIds.length === 3;
         }""", [source_owner, account_id, multi_listing_ids, exact_proposal_ids])
+
+        mobile_nav = page.locator("details.pricing-workspace-mobile-nav")
+        assert mobile_nav.count() == 1
+        mobile_summary = mobile_nav.locator("summary")
+        mobile_links = mobile_nav.locator(".pricing-workspace-mobile-links a")
+        assert not mobile_nav.evaluate("element => element.open")
+        assert mobile_summary.is_visible()
+        initial_mobile_geometry = page.evaluate("""() => {
+            const rect = element => {
+                const box = element.getBoundingClientRect();
+                return {left:box.left, right:box.right, top:box.top, bottom:box.bottom,
+                        width:box.width, height:box.height};
+            };
+            const summary = document.querySelector('details.pricing-workspace-mobile-nav > summary');
+            const returnLink = document.querySelector('a[data-price-workspace-return]');
+            return {
+                viewportWidth:document.documentElement.clientWidth,
+                viewportHeight:window.innerHeight,
+                scrollWidth:document.documentElement.scrollWidth,
+                scrollX:window.scrollX,
+                scrollY:window.scrollY,
+                summary:summary ? rect(summary) : null,
+                returnLink:returnLink ? rect(returnLink) : null,
+            };
+        }""")
+        assert initial_mobile_geometry["viewportWidth"] == 320, initial_mobile_geometry
+        assert initial_mobile_geometry["viewportHeight"] == 640, initial_mobile_geometry
+        assert initial_mobile_geometry["scrollWidth"] <= initial_mobile_geometry["viewportWidth"] + 1, initial_mobile_geometry
+        assert initial_mobile_geometry["scrollX"] == initial_mobile_geometry["scrollY"] == 0, initial_mobile_geometry
+        for element_name in ("summary", "returnLink"):
+            bounds = initial_mobile_geometry[element_name]
+            assert bounds and bounds["width"] > 0 and bounds["height"] > 0, initial_mobile_geometry
+            assert bounds["left"] >= -1 and bounds["right"] <= 321, initial_mobile_geometry
+            assert bounds["top"] >= 0 and bounds["bottom"] <= 640, initial_mobile_geometry
+        assert initial_mobile_geometry["summary"]["height"] >= 44, initial_mobile_geometry
         page.screenshot(path=OUT / "ozon-price-result-return-exact-320.png", animations="disabled")
+
+        nav_posts_before = dict(report["postcounts"])
+        nav_price_reads_before = list(report["synthetic_price_reads"])
+        nav_provider_attempts_before = report["provider_attempts"]
+        nav_provider_writes_before = report["provider_write_callbacks"]
+        nav_external_before = list(report["external"])
+        nav_watch = begin_domain_write_watch()
+        try:
+            mobile_summary.focus()
+            mobile_summary.press("Enter")
+            assert mobile_nav.evaluate("element => element.open")
+            mobile_links.wait_for(state="visible")
+            link_accessibility = mobile_links.evaluate_all("""links => links.map(link => ({
+                label:link.innerText.trim(), href:link.getAttribute('href'),
+                current:link.getAttribute('aria-current'), visible:link.getClientRects().length > 0,
+            }))""")
+            assert link_accessibility and all(
+                item["label"] and item["href"] and item["visible"] for item in link_accessibility
+            ), link_accessibility
+            assert any(item["label"] == "Предложения Ozon" and item["current"] == "page"
+                       for item in link_accessibility), link_accessibility
+            mobile_summary.press("Enter")
+            assert not mobile_nav.evaluate("element => element.open")
+            assert mobile_nav.locator(".pricing-workspace-mobile-links a:visible").count() == 0
+        finally:
+            nav_writes = end_domain_write_watch(nav_watch)
+        assert nav_writes == [], nav_writes
+        assert report["postcounts"] == nav_posts_before
+        assert report["synthetic_price_reads"] == nav_price_reads_before
+        assert report["provider_attempts"] == nav_provider_attempts_before == 0
+        assert report["provider_write_callbacks"] == nav_provider_writes_before == 0
+        assert report["external"] == nav_external_before
 
         def open_result_probe(target_url, mutation=None, expected_status=200):
             probe = context.new_page()
