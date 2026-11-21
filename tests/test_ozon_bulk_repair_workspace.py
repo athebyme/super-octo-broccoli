@@ -1,12 +1,21 @@
 """Real repair routes and per-row receipts, with only synthetic source data."""
 import json
+from datetime import datetime, timedelta
 from unittest.mock import Mock
 import pytest
 from flask_login import LoginManager
 from werkzeug.datastructures import MultiDict
 
 from tests import test_marketplace_publications as fixtures
-from models import db, User, MarketplaceOperation, MarketplaceProductDraft
+from models import (
+    MarketplaceOperation,
+    MarketplaceProductDraft,
+    OzonBulkUploadItem,
+    OzonBulkUploadRun,
+    SellerMarketplaceAccount,
+    User,
+    db,
+)
 from services.ozon_api_client import OzonSellerAPIClient
 from services.ozon_bulk_repair import OzonBulkRepairService as Repair
 from services.ozon_bulk_upload import OzonBulkUploadService as Upload, OzonBulkUploadConflict
@@ -52,6 +61,70 @@ def form(row, *, action='ИСПРАВИТЬ', **updates):
 
 
 def url(case):return '/marketplaces/ozon/uploads/'+case.job.job_uid+'/repair'
+
+
+def source_prepare_case(case, *, active=False):
+    prepared = fixtures.BulkEnqueueTest._second_draft(
+        case, offer_id='source-prepare-prepared',
+    )
+    excluded = fixtures.BulkEnqueueTest._second_draft(
+        case, offer_id='source-prepare-excluded',
+    )
+    failed = fixtures.BulkEnqueueTest._second_draft(
+        case, offer_id='source-prepare-failed-local',
+    )
+    product_ids = [
+        case.source.id,
+        prepared.imported_product_id,
+        excluded.imported_product_id,
+        failed.imported_product_id,
+    ]
+    accepted = Upload.accept_source_prepare(
+        seller_id=case.seller.id,
+        account_id=case.account.id,
+        imported_product_ids=product_ids,
+        request_key='source-prepare-repair-fixture-0001',
+        created_by_user_id=case.user.id,
+    )
+    job = accepted.job
+    run = OzonBulkUploadRun.query.filter_by(job_id=job.id).one()
+    items = OzonBulkUploadItem.query.filter_by(run_id=run.id).order_by(
+        OzonBulkUploadItem.ordinal.asc(),
+    ).all()
+    assert len(items) == 4
+    if active:
+        run.state = 'active'
+        run.next_due_at = datetime.utcnow() + timedelta(hours=1)
+        job.status = 'running'
+    else:
+        run.state = 'completed'
+        run.next_due_at = None
+        assignments = [
+            ('needs_input', case.draft.id, None),
+            ('prepared', prepared.id, prepared.version),
+            ('excluded', excluded.id, None),
+            ('failed_local', None, None),
+        ]
+        for item, (phase, draft_id, prepared_version) in zip(items, assignments):
+            item.draft_id = draft_id
+            item.prepared_version = prepared_version
+            item.error_code = 'synthetic_local_issue' if phase in {
+                'needs_input', 'failed_local',
+            } else None
+            item.error_message = (
+                'Синтетический локальный блокер'
+                if phase in {'needs_input', 'failed_local'} else None
+            )
+            item.phase = phase
+        job.status = 'completed'
+    db.session.commit()
+    return {
+        'job': job,
+        'run': run,
+        'items': items,
+        'drafts': [case.draft, prepared, excluded, None],
+        'product_ids': product_ids,
+    }
 
 
 def test_json_get_is_private_and_photo_is_owned_cache_identity(case):
@@ -177,3 +250,178 @@ def test_read_renews_csrf_after_session_changes_and_old_token_cannot_write(case)
         response=case.client.post(url(case)+'/apply',data=data,headers={'Accept':'application/json'})
     assert response.status_code==200 and response.json['report']['excluded']==1
     assert MarketplaceOperation.query.count()==0
+
+
+def test_source_prepare_editor_uses_ordered_exact_editable_v3_scope(case):
+    v3 = source_prepare_case(case)
+    response = case.client.get(
+        '/marketplaces/ozon/uploads/'+v3['job'].job_uid+'/repair',
+        headers={'Accept':'application/json'},
+    )
+    assert response.status_code == 200
+    editor = response.json['editor']
+    expected_ids = [case.draft.id, v3['drafts'][1].id]
+    assert editor['mode'] == 'source_prepare'
+    assert editor['review_draft_ids'] == expected_ids
+    assert [
+        row['draft_id'] for group in editor['groups'] for row in group['rows']
+    ] == expected_ids
+    assert editor['blocked_review_items'] == []
+    assert MarketplaceOperation.query.count() == 0
+
+
+def test_source_prepare_rejects_exclusion_without_mutating_v3_item(case):
+    v3 = source_prepare_case(case)
+    path = '/marketplaces/ozon/uploads/'+v3['job'].job_uid+'/repair'
+    row = case.client.get(path, headers={'Accept':'application/json'}).json[
+        'editor'
+    ]['groups'][0]['rows'][0]
+    item = v3['items'][0]
+    before = (item.phase, item.prepared_version, case.draft.version)
+    response = case.client.post(
+        path+'/apply',
+        data=form(row, action='ИСКЛЮЧИТЬ'),
+        headers={'Accept':'application/json'},
+    )
+    assert response.status_code == 400
+    db.session.refresh(item)
+    db.session.refresh(case.draft)
+    assert (item.phase, item.prepared_version, case.draft.version) == before
+    assert MarketplaceOperation.query.count() == 0
+
+
+def test_source_prepare_local_edit_advances_only_exact_v3_prepared_version(case, monkeypatch):
+    v3 = source_prepare_case(case)
+    path = '/marketplaces/ozon/uploads/'+v3['job'].job_uid+'/repair'
+    editor = case.client.get(path, headers={'Accept':'application/json'}).json['editor']
+    rows = [row for group in editor['groups'] for row in group['rows']]
+    row = next(row for row in rows if row['draft_id'] == case.draft.id)
+    assert any(field['external_id'] == '22232' for field in row['attributes'])
+    item = v3['items'][0]
+    before_version = case.draft.version
+    monkeypatch.setattr(
+        MarketplaceDraftService, '_build_validation_result', case._ready_validation,
+    )
+    response = case.client.post(
+        path+'/apply',
+        data=form(
+            row,
+            description='Сохранено только в локальном черновике.',
+            attribute_22232='3304990000',
+            attribute_value_id_22232='1001',
+        ),
+        headers={'Accept':'application/json'},
+    )
+    assert response.status_code == 200
+    report = response.json['report']
+    assert report['total'] == report['ready_to_retry'] == report['updated'] == 1
+    draft = db.session.get(MarketplaceProductDraft, case.draft.id)
+    db.session.refresh(item)
+    assert draft.version > before_version
+    assert json.loads(draft.content_json)['description'] == (
+        'Сохранено только в локальном черновике.'
+    )
+    assert item.phase == 'prepared'
+    assert item.prepared_version == draft.version
+    assert MarketplaceOperation.query.count() == 0
+
+
+def test_source_prepare_stale_version_returns_failed_receipt_without_rebase(case, monkeypatch):
+    v3 = source_prepare_case(case)
+    path = '/marketplaces/ozon/uploads/'+v3['job'].job_uid+'/repair'
+    editor = case.client.get(path, headers={'Accept':'application/json'}).json['editor']
+    row = next(
+        row for group in editor['groups'] for row in group['rows']
+        if row['draft_id'] == case.draft.id
+    )
+    item = v3['items'][0]
+    original_prepared_version = item.prepared_version
+    original_content = case.draft.content_json
+    stale_form = form(
+        row,
+        description='Эта правка не должна пройти по старой версии.',
+        attribute_22232='3304990000',
+        attribute_value_id_22232='1001',
+    )
+    case.draft.version += 1
+    db.session.commit()
+    current_version = case.draft.version
+    monkeypatch.setattr(
+        MarketplaceDraftService, '_build_validation_result', case._ready_validation,
+    )
+    response = case.client.post(
+        path+'/apply', data=stale_form, headers={'Accept':'application/json'},
+    )
+    assert response.status_code == 200
+    outcome = response.json['report']['rows'][0]
+    assert outcome['draft_id'] == case.draft.id and outcome['status'] == 'failed'
+    db.session.refresh(item)
+    db.session.refresh(case.draft)
+    assert case.draft.version == current_version
+    assert case.draft.content_json == original_content
+    assert item.phase == 'needs_input'
+    assert item.prepared_version == original_prepared_version
+    assert MarketplaceOperation.query.count() == 0
+
+
+def test_source_prepare_draft_from_another_account_is_not_in_repair_scope(case):
+    v3 = source_prepare_case(case)
+    second_account = SellerMarketplaceAccount(
+        seller_id=case.seller.id,
+        marketplace_id=case.marketplace.id,
+        external_account_id='synthetic-second-ozon-account',
+        label='Second synthetic Ozon',
+        is_active=True,
+        connection_status='connected',
+        settings_json='{}',
+    )
+    db.session.add(second_account)
+    db.session.flush()
+    v3['drafts'][1].account_id = second_account.id
+    db.session.commit()
+    response = case.client.get(
+        '/marketplaces/ozon/uploads/'+v3['job'].job_uid+'/repair',
+        headers={'Accept':'application/json'},
+    )
+    assert response.status_code == 409
+    assert MarketplaceOperation.query.count() == 0
+
+
+def test_source_prepare_active_run_is_not_opened_for_repair(case):
+    v3 = source_prepare_case(case, active=True)
+    response = case.client.get(
+        '/marketplaces/ozon/uploads/'+v3['job'].job_uid+'/repair',
+        headers={'Accept':'application/json'},
+    )
+    assert response.status_code == 409
+    db.session.refresh(v3['run'])
+    db.session.refresh(v3['job'])
+    assert v3['run'].state == 'active'
+    assert v3['job'].status == 'running'
+    assert MarketplaceOperation.query.count() == 0
+
+
+def test_source_prepare_active_reviewed_child_blocks_exact_draft(case):
+    v3 = source_prepare_case(case)
+    prepared = v3['drafts'][1]
+    Upload.accept_reviewed_publish(
+        seller_id=case.seller.id,
+        account_id=case.account.id,
+        draft_ids=[prepared.id],
+        expected_versions={str(prepared.id): prepared.version},
+        request_key='reviewed-child-repair-fixture-0001',
+        parent_prepare_job_uid=v3['job'].job_uid,
+        created_by_user_id=case.user.id,
+    )
+    response = case.client.get(
+        '/marketplaces/ozon/uploads/'+v3['job'].job_uid+'/repair',
+        headers={'Accept':'application/json'},
+    )
+    assert response.status_code == 200
+    editor = response.json['editor']
+    assert editor['review_draft_ids'] == [case.draft.id]
+    assert len(editor['blocked_review_items']) == 1
+    assert editor['blocked_review_items'][0]['draft_id'] == prepared.id
+    assert editor['blocked_review_items'][0]['title']
+    assert editor['blocked_review_items'][0]['message']
+    assert MarketplaceOperation.query.count() == 0

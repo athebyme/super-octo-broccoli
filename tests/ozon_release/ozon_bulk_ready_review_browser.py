@@ -293,6 +293,7 @@ state = {
     "source_job_uid": None,
     "source_item_ids": [],
     "source_prepare_post": None,
+    "source_prepare_repair_post": None,
     "source_worker_stats": None,
     "source_run_document": None,
     "reviewed_post": None,
@@ -418,9 +419,10 @@ def bridge(route):
                 "/marketplaces/ozon/uploads/",
                 "/marketplaces/ozon/uploads/from-drafts",
             }:
-                report["unexpected_http"].append({"method": request.method, "path": path})
-                route.abort()
-                return
+                if not (request.method == "POST" and path.endswith("/repair/apply")):
+                    report["unexpected_http"].append({"method": request.method, "path": path})
+                    route.abort()
+                    return
             if path != "/login":
                 report["post_counts"][path] = report["post_counts"].get(path, 0) + 1
                 if not request.headers.get("x-csrftoken"):
@@ -450,6 +452,15 @@ def bridge(route):
                 "source_ids": body["imported_product_ids"],
                 "confirm_prepare": body["confirm_prepare"],
                 "csrf": True,
+            }
+
+        if request.method == "POST" and path.endswith("/repair/apply"):
+            form = parse_qs(request.post_data or "", keep_blank_values=True)
+            selected_ids = [int(value) for value in form.get("selected_draft_id", [])]
+            assert selected_ids == state["repair_row_ids"], selected_ids
+            state["source_prepare_repair_post"] = {
+                "draft_ids": selected_ids,
+                "csrf": bool(request.headers.get("x-csrftoken")),
             }
 
         if request.method == "POST" and path == "/marketplaces/ozon/uploads/from-drafts":
@@ -655,8 +666,136 @@ def run_browser_journey():
         })
         passed("ordinary_beta_prepare_persisted_four_drafts_and_exact_job_review_link")
 
+        repair_link = page.locator("a[data-source-prepare-repair]")
+        repair_link.wait_for()
+        repair_href = repair_link.get_attribute("href")
+        assert urlsplit(repair_href).path == (
+            f"/marketplaces/ozon/uploads/{state['source_job_uid']}/repair"
+        )
+        repair_link.click()
+        page.wait_for_url(
+            f"**/marketplaces/ozon/uploads/{state['source_job_uid']}/repair"
+        )
+        page.locator(
+            '#ozon-bulk-repair[data-editor-mode="source_prepare"]'
+        ).wait_for()
+        editor = page.evaluate(
+            "() => JSON.parse(document.querySelector('#orb-bootstrap').textContent).editor"
+        )
+        assert editor["mode"] == "source_prepare"
+        assert editor["review_draft_ids"] == state["draft_ids"]
+        assert editor["account_id"] == account_id
+
+        # Use the actual native bulk editor to fill one field on one new and
+        # one update draft. This remains a local edit to the prepared run.
+        draft_by_source = dict(zip(state["source_item_ids"], state["draft_ids"]))
+        repair_row_ids = [
+            draft_by_source[source_ids["create"]],
+            draft_by_source[source_ids["update"]],
+        ]
+        state["repair_row_ids"] = repair_row_ids
+        for draft_id in repair_row_ids:
+            page.locator(
+                f'.orb-row[data-draft="{draft_id}"] input[type="checkbox"]'
+            ).check()
+        page.get_by_role("button", name="Заполнить поле", exact=True).click()
+        bulk_dialog = page.get_by_role("dialog")
+        bulk_dialog.wait_for(state="visible")
+        bulk_dialog.locator("#orb-bulk-field").select_option("description")
+        bulk_dialog.get_by_label("Новое значение").fill(
+            "Локальная групповая правка перед повторной проверкой."
+        )
+        bulk_dialog.get_by_role("button", name="Посмотреть изменения", exact=True).click()
+        assert bulk_dialog.locator(".orb-review-list li").count() == 2
+        bulk_dialog.get_by_role("button", name="Заполнить в форме", exact=True).click()
+        for draft_id in repair_row_ids:
+            row = page.locator(f'.orb-row[data-draft="{draft_id}"]')
+            if not row.locator("textarea").count():
+                row.get_by_role("button", name="Изменить", exact=True).click()
+            assert row.locator(
+                f'textarea[name="description-{draft_id}"]'
+            ).input_value() == "Локальная групповая правка перед повторной проверкой."
+        page.locator(".orb-toolbar").get_by_role(
+            "button", name="Сохранить черновики", exact=True,
+        ).click()
+        save_dialog = page.get_by_role("dialog")
+        save_dialog.wait_for(state="visible")
+        assert save_dialog.locator(".orb-review-list li").count() == 2
+        repair_write_marker = len(business_write_events)
+        with page.expect_response(lambda response: (
+            response.request.method == "POST"
+            and urlsplit(response.url).path.endswith("/repair/apply")
+        )) as repair_response_info:
+            save_dialog.get_by_role(
+                "button", name="Сохранить черновики", exact=True,
+            ).click()
+        repair_response = repair_response_info.value
+        assert repair_response.status == 200
+        assert state["source_prepare_repair_post"] == {
+            "draft_ids": repair_row_ids,
+            "csrf": True,
+        }
+        page.locator(".orb-receipt strong").filter(
+            has_text="Проверено карточек: 2"
+        ).wait_for()
+        return_review_link = page.locator(
+            ".orb-receipt a[data-source-prepare-review]"
+        )
+        assert return_review_link.count() == 1
+        return_review_link.wait_for()
+        page.set_viewport_size({"width": 320, "height": 780})
+        assert page.evaluate(
+            "() => document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+        )
+        assert return_review_link.is_visible()
+        repair_mobile_screenshot = OUT / "ozon-bulk-source-prepare-repair-mobile.png"
+        page.screenshot(path=str(repair_mobile_screenshot), full_page=True)
+        with app.app_context():
+            run = OzonBulkUploadRun.query.filter_by(
+                seller_id=fixture["seller_id"], account_id=account_id,
+                mode="source_prepare",
+            ).one()
+            source_items = OzonBulkUploadItem.query.filter_by(
+                run_id=run.id,
+            ).order_by(OzonBulkUploadItem.ordinal.asc()).all()
+            assert [item.draft_id for item in source_items] == state["draft_ids"]
+            assert [item.phase for item in source_items] == ["prepared"] * 4
+            for item in source_items[:2]:
+                draft = db.session.get(MarketplaceProductDraft, item.draft_id)
+                assert item.prepared_version == draft.version
+                assert json.loads(draft.content_json)["description"] == (
+                    "Локальная групповая правка перед повторной проверкой."
+                )
+            assert MarketplaceOperation.query.filter_by(
+                seller_id=fixture["seller_id"], account_id=account_id,
+            ).count() == 0
+        assert len(business_write_events) > repair_write_marker
+        assert "marketplace_operations" not in business_write_events[repair_write_marker:]
+        report["source_prepare"].update({
+            "native_repair_mode": editor["mode"],
+            "native_repair_ordered_draft_ids": editor["review_draft_ids"],
+            "native_repair_saved_draft_ids": repair_row_ids,
+            "native_repair_prepared_versions_current": True,
+            "native_repair_operations_created": 0,
+            "native_repair_mobile_viewport": {
+                "width": 320,
+                "height": 780,
+                "return_action_visible": return_review_link.is_visible(),
+                "no_horizontal_overflow": True,
+                "screenshot": repair_mobile_screenshot.name,
+            },
+        })
+        passed("source_prepare_native_bulk_repair_saved_two_rows_locally_without_operation")
+
+        return_review_href = return_review_link.get_attribute("href")
+        return_parts = urlsplit(return_review_href)
+        return_query = parse_qs(return_parts.query)
+        assert return_parts.path == "/marketplaces/ozon/uploads/review"
+        assert return_query.get("account_id") == [str(account_id)]
+        assert return_query.get("parent_prepare_job_uid") == [state["source_job_uid"]]
+        assert [int(value) for value in return_query["draft_ids"][0].split(",")] == state["draft_ids"]
         review_write_marker = len(business_write_events)
-        detail_review_link.click()
+        return_review_link.click()
         page.wait_for_url("**/marketplaces/ozon/uploads/review?*")
         page.locator("#ozon-upload-review:not([v-cloak])").wait_for()
         bootstrap = page.evaluate(
@@ -665,6 +804,16 @@ def run_browser_journey():
         assert bootstrap["account_id"] == account_id
         assert bootstrap["parent_prepare_job_uid"] == state["source_job_uid"]
         assert bootstrap["draft_ids"] == state["draft_ids"]
+        assert [
+            int(value) for value in parse_qs(urlsplit(page.url).query)["draft_ids"][0].split(",")
+        ] == state["draft_ids"]
+        preparation_back = page.get_by_role(
+            "link", name="К результатам подготовки", exact=True,
+        )
+        preparation_back.wait_for()
+        assert urlsplit(preparation_back.get_attribute("href")).path == (
+            f"/marketplaces/ozon/uploads/{state['source_job_uid']}"
+        )
         assert len(bootstrap["items"]) == 4
         rows_by_source = {
             row["imported_product_id"]: row for row in bootstrap["items"]
