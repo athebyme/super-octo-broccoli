@@ -938,6 +938,7 @@ class SmartProductParser:
             'parse_result': parse_result.to_dict(),
             'import_result': {
                 'imported': import_result.imported,
+                'imported_product_ids': list(import_result.imported_product_ids),
                 'skipped': import_result.skipped,
                 'errors': import_result.errors,
                 'error_messages': import_result.error_messages[:10],

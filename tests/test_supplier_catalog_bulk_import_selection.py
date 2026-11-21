@@ -7,6 +7,7 @@ import json
 import os
 import re
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 import unittest
 from unittest.mock import patch
 
@@ -193,6 +194,7 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         return SimpleNamespace(
             success=True,
             imported=1,
+            imported_product_ids=[],
             skipped=0,
             errors=0,
             marketplace_drafts_created=0,
@@ -384,6 +386,214 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
 
         self.assertEqual(SupplierProduct.query.count(), 2)
 
+    def _imported_row(self, supplier_product, *, external_id):
+        from models import ImportedProduct
+
+        row = ImportedProduct(
+            seller_id=self.seller_id,
+            supplier_id=supplier_product.supplier_id,
+            supplier_product_id=supplier_product.id,
+            external_id=external_id,
+            source_type='synthetic',
+            title=supplier_product.title,
+            import_status='validated',
+        )
+        self.db.session.add(row)
+        self.db.session.flush()
+        return row
+
+    def test_modern_import_redirects_303_with_exact_committed_new_ids(self):
+        from itsdangerous import URLSafeTimedSerializer
+        from models import ImportedProduct
+        from routes.suppliers import SUPPLIER_IMPORT_BATCH_TOKEN_SALT
+
+        source_a = self._product(title='Batch source A', product_id=101)
+        source_b = self._product(title='Batch source B', product_id=102)
+        self.db.session.add(ImportedProduct(
+            seller_id=self.seller_id,
+            external_id='batch-id-padding',
+            source_type='synthetic',
+            title='Existing row to separate ID spaces',
+            import_status='validated',
+        ))
+        self.db.session.add_all([source_a, source_b])
+        self.db.session.commit()
+        expected_ids = []
+
+        def import_result(seller_id, supplier_product_ids, **kwargs):
+            # Commit exactly the rows represented in the returned import result.
+            rows_by_source = {
+                source_a.id: self._imported_row(
+                    source_a, external_id='new-import-a',
+                ),
+                source_b.id: self._imported_row(
+                    source_b, external_id='new-import-b',
+                ),
+            }
+            expected_ids.extend([
+                rows_by_source[source_b.id].id,
+                rows_by_source[source_a.id].id,
+            ])
+            self.db.session.commit()
+            return SimpleNamespace(
+                success=True,
+                imported=2,
+                skipped=0,
+                errors=0,
+                imported_product_ids=list(expected_ids),
+                marketplace_drafts_created=1,
+                marketplace_draft_errors=0,
+                error_messages=[],
+            )
+
+        with patch(
+            'routes.suppliers.SupplierService.import_to_seller',
+            side_effect=import_result,
+        ) as importer:
+            response = self.client.post('/supplier-catalog/import', data={
+                'supplier_id': str(self.supplier_id),
+                'product_ids': [str(source_a.id), str(source_b.id)],
+            })
+
+        self.assertEqual(response.status_code, 303)
+        self.assertTrue(response.location.startswith('/my-products/beta?import_batch='))
+        token = parse_qs(urlsplit(response.location).query)['import_batch'][0]
+        payload = URLSafeTimedSerializer(
+            self.app.secret_key,
+            salt=SUPPLIER_IMPORT_BATCH_TOKEN_SALT,
+        ).loads(token, max_age=3600)
+        self.assertEqual(set(payload), {'v', 'user_id', 'seller_id', 'ids'})
+        self.assertEqual(payload['v'], 1)
+        self.assertEqual(payload['user_id'], self.user.id)
+        self.assertEqual(payload['seller_id'], self.seller_id)
+        self.assertEqual(payload['ids'], expected_ids)
+        self.assertTrue(all(
+            imported_id not in {source_a.id, source_b.id}
+            for imported_id in payload['ids']
+        ))
+        importer.assert_called_once_with(
+            self.seller_id,
+            [source_a.id, source_b.id],
+            draft_account_ids=None,
+        )
+        with self.client.session_transaction() as session:
+            message = ' '.join(value for _, value in session.get('_flashes', []))
+        self.assertIn('Ozon-черновиков: 1', message)
+        self.assertNotIn('на WB', message)
+
+    def test_modern_zero_import_returns_to_selected_supplier_with_truthful_flash(self):
+        source = self._product(title='Duplicate source')
+        self.db.session.commit()
+        result = SimpleNamespace(
+            success=True,
+            imported=0,
+            skipped=1,
+            errors=0,
+            imported_product_ids=[],
+            marketplace_drafts_created=0,
+            marketplace_draft_errors=0,
+            error_messages=[],
+        )
+        with patch(
+            'routes.suppliers.SupplierService.import_to_seller',
+            return_value=result,
+        ):
+            response = self.client.post('/supplier-catalog/import', data={
+                'supplier_id': str(self.supplier_id),
+                'product_ids': [str(source.id)],
+            })
+        self.assertEqual(response.status_code, 302)
+        self.assertNotIn('/my-products', response.location)
+        self.assertIn(str(self.supplier_id), response.location)
+        with self.client.session_transaction() as session:
+            message = ' '.join(value for _, value in session.get('_flashes', []))
+        self.assertIn('Новые карточки не добавлены: импортировано 0', message)
+        self.assertIn('пропущено (дубли): 1', message)
+
+    def test_modern_smart_import_redirects_to_exact_new_batch(self):
+        from itsdangerous import URLSafeTimedSerializer
+        from models import ImportedProduct
+        from routes.suppliers import SUPPLIER_IMPORT_BATCH_TOKEN_SALT
+
+        source = self._product(title='Smart new source')
+        self.db.session.add(ImportedProduct(
+            seller_id=self.seller_id,
+            external_id='smart-id-padding',
+            source_type='synthetic',
+            title='Existing row to separate ID spaces',
+            import_status='validated',
+        ))
+        self.db.session.flush()
+        imported = self._imported_row(source, external_id='smart-new-import')
+        self.db.session.commit()
+        result = {
+            'success': True,
+            'parse_result': {
+                'brand_resolved_count': 1,
+                'category_mapped_count': 1,
+                'avg_readiness_score': 82.0,
+            },
+            'import_result': {
+                'imported': 1,
+                'imported_product_ids': [imported.id],
+                'skipped': 0,
+                'errors': 0,
+                'error_messages': [],
+                'marketplace_drafts_created': 0,
+                'marketplace_draft_errors': 0,
+            },
+        }
+        with patch('services.smart_product_parser.SmartProductParser') as parser_cls:
+            parser = parser_cls.return_value
+            parser.smart_import_to_seller.return_value = result
+            response = self.client.post('/supplier-catalog/smart-import', data={
+                'supplier_id': str(self.supplier_id),
+                'product_ids': [str(source.id)],
+            })
+        self.assertEqual(response.status_code, 303)
+        token = parse_qs(urlsplit(response.location).query)['import_batch'][0]
+        payload = URLSafeTimedSerializer(
+            self.app.secret_key,
+            salt=SUPPLIER_IMPORT_BATCH_TOKEN_SALT,
+        ).loads(token, max_age=3600)
+        self.assertEqual(payload['ids'], [imported.id])
+        self.assertNotIn('WB', response.get_data(as_text=True))
+
+    def test_smart_parser_result_carries_imported_product_ids(self):
+        from services.smart_product_parser import SmartProductParser
+
+        source = self._product(title='Parser result source')
+        self.db.session.commit()
+        imported = self._imported_row(source, external_id='parser-result-import')
+        self.db.session.commit()
+        import_result = SimpleNamespace(
+            success=True,
+            imported=1,
+            imported_product_ids=[imported.id],
+            skipped=0,
+            errors=0,
+            error_messages=[],
+            marketplace_drafts_created=0,
+            marketplace_drafts_existing=0,
+            marketplace_draft_errors=0,
+        )
+        parser = SmartProductParser(supplier_id=self.supplier_id)
+        parser.parse_and_apply_bulk = lambda product_ids: SimpleNamespace(
+            to_dict=lambda: {
+                'brand_resolved_count': 0,
+                'category_mapped_count': 0,
+                'avg_readiness_score': 0.0,
+            },
+        )
+        with patch(
+            'services.supplier_service.SupplierService.import_to_seller',
+            return_value=import_result,
+        ):
+            result = parser.smart_import_to_seller(self.seller_id, [source.id])
+        self.assertEqual(
+            result['import_result']['imported_product_ids'], [imported.id],
+        )
+
     def test_legacy_missing_supplier_and_smart_import_keep_their_boundaries(self):
         own = self._product(title='Legacy accepted source')
         foreign = self._product(
@@ -400,6 +610,7 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
                 'product_ids': [str(own.id), 'legacy-invalid-token'],
             })
         self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.location, '/my-products')
         importer.assert_called_once_with(
             self.seller_id, [own.id], draft_account_ids=None,
         )

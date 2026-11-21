@@ -11,9 +11,10 @@ from functools import wraps
 
 from flask import (
     Blueprint, render_template, redirect, url_for, flash,
-    request, abort, jsonify, current_app, session
+    request, abort, jsonify, current_app, session, make_response
 )
 from flask_login import login_required, current_user
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
@@ -26,6 +27,10 @@ from services.supplier_service import SupplierService
 logger = logging.getLogger(__name__)
 
 MAX_BULK_PRODUCTS = 200
+SUPPLIER_IMPORT_BATCH_TOKEN_SALT = 'supplier-import-workspace-v1'
+SUPPLIER_IMPORT_BATCH_MAX_AGE_SECONDS = 60 * 60
+SUPPLIER_IMPORT_BATCH_MAX_TOKEN_BYTES = 8 * 1024
+MAX_SIGNED_SQLITE_ID = (1 << 63) - 1
 
 
 def _bulk_product_ids(raw_ids, limit=MAX_BULK_PRODUCTS):
@@ -76,6 +81,204 @@ def _form_bulk_product_ids(raw_ids, limit=MAX_BULK_PRODUCTS):
         seen.add(product_id)
         normalized.append(product_id)
     return normalized
+
+
+class SupplierImportBatchTokenError(ValueError):
+    """A signed supplier-import workspace selection is invalid or unavailable."""
+
+    def __init__(self, message, *, status_code=400):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _supplier_import_batch_serializer():
+    return URLSafeTimedSerializer(
+        current_app.secret_key,
+        salt=SUPPLIER_IMPORT_BATCH_TOKEN_SALT,
+    )
+
+
+def _ordered_committed_import_ids(
+    seller_id,
+    supplier_product_ids,
+    imported_count,
+    imported_product_ids,
+):
+    """Verify the result IDs are new committed rows for this exact selection."""
+    if (
+        type(imported_count) is not int
+        or imported_count <= 0
+        or imported_count > MAX_BULK_PRODUCTS
+    ):
+        return []
+    try:
+        ids = _bulk_product_ids(imported_product_ids)
+    except ValueError:
+        return []
+    if len(ids) != imported_count or any(
+        value > MAX_SIGNED_SQLITE_ID for value in ids
+    ):
+        return []
+
+    rows = db.session.query(
+        ImportedProduct.id,
+        ImportedProduct.supplier_product_id,
+    ).filter(
+        ImportedProduct.seller_id == seller_id,
+        ImportedProduct.id.in_(ids),
+    ).all()
+    if len(rows) != len(ids):
+        return []
+    selected_sources = set(supplier_product_ids)
+    observed_sources = [row.supplier_product_id for row in rows]
+    if (
+        any(source_id not in selected_sources for source_id in observed_sources)
+        or len(set(observed_sources)) != len(ids)
+    ):
+        return []
+    # Preserve the import service's exact result order in the receipt.
+    return ids
+
+
+def _issue_supplier_import_batch_token(*, user_id, seller_id, imported_product_ids):
+    try:
+        ids = _bulk_product_ids(imported_product_ids)
+    except ValueError:
+        return None
+    if len(ids) > MAX_BULK_PRODUCTS or any(
+        value > MAX_SIGNED_SQLITE_ID for value in ids
+    ):
+        return None
+    payload = {
+        'v': 1,
+        'user_id': user_id,
+        'seller_id': seller_id,
+        'ids': ids,
+    }
+    token = _supplier_import_batch_serializer().dumps(payload)
+    if len(token.encode('utf-8')) > SUPPLIER_IMPORT_BATCH_MAX_TOKEN_BYTES:
+        return None
+    return token
+
+
+def _load_supplier_import_batch_ids(*, user_id, seller_id):
+    values = request.args.getlist('import_batch')
+    if len(values) != 1:
+        raise SupplierImportBatchTokenError('Набор импорта недействителен')
+    token = values[0]
+    if (
+        not token
+        or len(token.encode('utf-8')) > SUPPLIER_IMPORT_BATCH_MAX_TOKEN_BYTES
+    ):
+        raise SupplierImportBatchTokenError('Набор импорта недействителен')
+    try:
+        payload = _supplier_import_batch_serializer().loads(
+            token,
+            max_age=SUPPLIER_IMPORT_BATCH_MAX_AGE_SECONDS,
+        )
+    except SignatureExpired as exc:
+        raise SupplierImportBatchTokenError(
+            'Срок действия набора импорта истёк',
+            status_code=410,
+        ) from exc
+    except BadSignature as exc:
+        raise SupplierImportBatchTokenError(
+            'Набор импорта недействителен',
+        ) from exc
+
+    if not isinstance(payload, dict) or set(payload) != {
+        'v', 'user_id', 'seller_id', 'ids',
+    }:
+        raise SupplierImportBatchTokenError('Набор импорта недействителен')
+    if (
+        type(payload.get('v')) is not int
+        or payload['v'] != 1
+        or type(payload.get('user_id')) is not int
+        or type(payload.get('seller_id')) is not int
+    ):
+        raise SupplierImportBatchTokenError('Набор импорта недействителен')
+    if payload['user_id'] != user_id or payload['seller_id'] != seller_id:
+        raise SupplierImportBatchTokenError(
+            'Набор импорта недоступен',
+            status_code=404,
+        )
+    try:
+        ids = _bulk_product_ids(payload.get('ids'))
+    except ValueError as exc:
+        raise SupplierImportBatchTokenError(
+            'Набор импорта недействителен',
+        ) from exc
+    if any(value > MAX_SIGNED_SQLITE_ID for value in ids):
+        raise SupplierImportBatchTokenError('Набор импорта недействителен')
+    return ids
+
+
+def _bounded_import_batch_template_value():
+    values = request.args.getlist('import_batch')
+    if not values:
+        return None
+    if len(values) != 1:
+        return ''
+    token = values[0]
+    if len(token.encode('utf-8')) > SUPPLIER_IMPORT_BATCH_MAX_TOKEN_BYTES:
+        return ''
+    return token
+
+
+def _no_store_supplier_import_batch_response(response):
+    """Prevent batch selections and their row payloads from entering caches."""
+    response = make_response(response)
+    if 'import_batch' in request.args:
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
+
+
+def _redirect_after_supplier_import(
+    *,
+    seller_id,
+    user_id,
+    supplier_id,
+    supplier_product_ids,
+    imported_count,
+    imported_product_ids,
+    summary,
+    category,
+    zero_import_summary,
+    zero_import_category,
+):
+    """Open only the newly committed rows from a declared-supplier import."""
+    if type(imported_count) is int and imported_count > 0:
+        imported_ids = _ordered_committed_import_ids(
+            seller_id,
+            supplier_product_ids,
+            imported_count,
+            imported_product_ids,
+        )
+        token = _issue_supplier_import_batch_token(
+            user_id=user_id,
+            seller_id=seller_id,
+            imported_product_ids=imported_ids,
+        ) if imported_ids else None
+        if token:
+            flash(
+                f'{summary} Открыты добавленные карточки в рабочем пространстве.',
+                category,
+            )
+            return redirect(
+                url_for('seller_my_products_beta', import_batch=token),
+                code=303,
+            )
+        flash(
+            f'{summary} Не удалось проверить точный список новых карточек; '
+            'вернитесь в каталог поставщика.',
+            'warning',
+        )
+        return _redirect_seller_supplier_catalog(supplier_id)
+
+    flash(zero_import_summary, zero_import_category)
+    return _redirect_seller_supplier_catalog(supplier_id)
 
 
 def _supplier_import_form_selection(seller_id, form):
@@ -2042,16 +2245,46 @@ def register_supplier_routes(app):
                 marketplace_note += (
                     f', Ozon требуют внимания: {result.marketplace_draft_errors}'
                 )
-            flash(
+            summary = (
                 f'Импортировано: {result.imported}, '
                 f'пропущено (дубли): {result.skipped}, '
-                f'ошибок: {result.errors}{marketplace_note}. '
-                'Проверьте карточки и отправьте их на WB.',
+                f'ошибок: {result.errors}{marketplace_note}.'
+            )
+            category = (
                 'success'
                 if result.errors == 0 and result.marketplace_draft_errors == 0
                 else 'warning'
             )
-            # Следующий шаг живёт в «Моих товарах» — ведём продавца туда
+            if supplier_id is not None:
+                zero_import_summary = (
+                    f'Новые карточки не добавлены: импортировано 0, '
+                    f'пропущено (дубли): {result.skipped}, '
+                    f'ошибок: {result.errors}{marketplace_note}. '
+                    'Выберите карточки для повторного импорта.'
+                )
+                zero_import_category = (
+                    'warning'
+                    if result.errors or result.marketplace_draft_errors
+                    else 'info'
+                )
+                return _redirect_after_supplier_import(
+                    seller_id=seller.id,
+                    user_id=current_user.id,
+                    supplier_id=supplier_id,
+                    supplier_product_ids=product_ids,
+                    imported_count=result.imported,
+                    imported_product_ids=result.imported_product_ids,
+                    summary=summary,
+                    category=category,
+                    zero_import_summary=zero_import_summary,
+                    zero_import_category=zero_import_category,
+                )
+
+            flash(
+                f'{summary} Проверьте карточки и отправьте их на WB.',
+                category,
+            )
+            # Legacy forms without a declared supplier keep the classic destination.
             return redirect(url_for('seller_my_products'))
         flash(f'Ошибка импорта: {"; ".join(result.error_messages[:3])}', 'danger')
         return _redirect_seller_supplier_catalog(supplier_id)
@@ -2092,23 +2325,57 @@ def register_supplier_routes(app):
             ozon_uploads_url = url_for('ozon_bulk_uploads.index')
         except Exception:
             ozon_uploads_url = '/marketplaces/ozon/uploads/'
-        return render_template(
+        response = render_template(
             'my_products_beta.html',
             wb_connected=bool(seller.has_valid_api_key()),
             ozon_enabled=ozon_enabled,
             ozon_accounts=ozon_accounts,
             suppliers_payload=suppliers_payload,
             ozon_uploads_url=ozon_uploads_url,
+            import_batch=_bounded_import_batch_template_value(),
         )
+        return _no_store_supplier_import_batch_response(response)
 
     @app.route('/api/my-products')
     @login_required
     @seller_required
     def api_my_products_list():
         """Списочный read-model «Моих товаров» для интерфейса на Vue."""
-        from services.my_products_feed import MyProductsFeed, MyProductsFeedError
+        from services.my_products_feed import (
+            MyProductsFeed, MyProductsFeedError, MyProductsFeedNotFound,
+        )
 
         seller = current_user.seller
+        if 'import_batch' in request.args:
+            try:
+                imported_product_ids = _load_supplier_import_batch_ids(
+                    user_id=current_user.id,
+                    seller_id=seller.id,
+                )
+            except SupplierImportBatchTokenError as exc:
+                return _no_store_supplier_import_batch_response((jsonify({
+                    'success': False,
+                    'error': str(exc),
+                }), exc.status_code))
+            try:
+                payload = MyProductsFeed.list_products_by_ids(
+                    seller_id=seller.id,
+                    imported_product_ids=imported_product_ids,
+                )
+            except MyProductsFeedNotFound:
+                return _no_store_supplier_import_batch_response((jsonify({
+                    'success': False,
+                    'error': 'Набор импорта недоступен',
+                }), 404))
+            except MyProductsFeedError:
+                return _no_store_supplier_import_batch_response((jsonify({
+                    'success': False,
+                    'error': 'Набор импорта недействителен',
+                }), 400))
+            return _no_store_supplier_import_batch_response(
+                jsonify({'success': True, **payload})
+            )
+
         try:
             payload = MyProductsFeed.list_products(
                 seller_id=seller.id,
@@ -2126,7 +2393,9 @@ def register_supplier_routes(app):
             )
         except MyProductsFeedError as exc:
             return jsonify({'success': False, 'error': str(exc)}), 400
-        return jsonify({'success': True, **payload})
+        return _no_store_supplier_import_batch_response(
+            jsonify({'success': True, **payload})
+        )
 
     @app.route('/api/my-products/facets')
     @login_required
@@ -4777,16 +5046,53 @@ def register_supplier_routes(app):
                 marketplace_note += (
                     f', Ozon требуют внимания: {imp["marketplace_draft_errors"]}'
                 )
-            flash(
+            parse_note = (
+                f', бренды определены: {parse["brand_resolved_count"]}'
+                f', категории: {parse["category_mapped_count"]}'
+                f', готовность: {parse["avg_readiness_score"]:.0f}%'
+            )
+            summary = (
                 f'Импортировано: {imp["imported"]}, '
                 f'пропущено: {imp["skipped"]}, '
-                f'бренды определены: {parse["brand_resolved_count"]}, '
-                f'категории: {parse["category_mapped_count"]}, '
-                f'готовность: {parse["avg_readiness_score"]:.0f}%'
-                f'{marketplace_note}. Проверьте карточки и отправьте их на WB.',
-                'success' if not imp.get('marketplace_draft_errors') else 'warning'
+                f'ошибок: {imp["errors"]}{parse_note}{marketplace_note}.'
             )
-            # Следующий шаг живёт в «Моих товарах» — ведём продавца туда
+            category = (
+                'success'
+                if imp.get('errors', 0) == 0
+                and imp.get('marketplace_draft_errors', 0) == 0
+                else 'warning'
+            )
+            if supplier_id is not None:
+                zero_import_summary = (
+                    f'Новые карточки не добавлены: импортировано 0, '
+                    f'пропущено: {imp["skipped"]}, ошибок: {imp["errors"]}'
+                    f'{parse_note}{marketplace_note}. '
+                    'Выберите карточки для повторного импорта.'
+                )
+                zero_import_category = (
+                    'warning'
+                    if imp.get('errors', 0)
+                    or imp.get('marketplace_draft_errors', 0)
+                    else 'info'
+                )
+                return _redirect_after_supplier_import(
+                    seller_id=seller.id,
+                    user_id=current_user.id,
+                    supplier_id=supplier_id,
+                    supplier_product_ids=product_ids,
+                    imported_count=imp['imported'],
+                    imported_product_ids=imp.get('imported_product_ids'),
+                    summary=summary,
+                    category=category,
+                    zero_import_summary=zero_import_summary,
+                    zero_import_category=zero_import_category,
+                )
+
+            flash(
+                f'{summary} Проверьте карточки и отправьте их на WB.',
+                category,
+            )
+            # Legacy forms without a declared supplier keep the classic destination.
             return redirect(url_for('seller_my_products'))
         flash(
             f'Ошибка импорта: {"; ".join(result.get("import_result", {}).get("error_messages", [])[:3])}',

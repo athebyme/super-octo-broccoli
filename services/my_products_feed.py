@@ -44,6 +44,10 @@ class MyProductsFeedError(ValueError):
     """Некорректный запрос ленты."""
 
 
+class MyProductsFeedNotFound(MyProductsFeedError):
+    """One or more exact seller-owned rows are no longer available."""
+
+
 def _positive_int(value: Any, name: str, default: Optional[int] = None) -> int:
     if value in (None, ''):
         if default is None:
@@ -219,6 +223,53 @@ class MyProductsFeed:
                 'total': pagination.total,
                 'has_next': pagination.has_next,
             },
+        }
+
+    @classmethod
+    def list_products_by_ids(
+        cls,
+        *,
+        seller_id: int,
+        imported_product_ids: List[int],
+    ) -> Dict[str, Any]:
+        """Serialize one exact seller-owned batch in receipt order."""
+        seller_id = _positive_int(seller_id, 'seller_id')
+        if (
+            not isinstance(imported_product_ids, list)
+            or not 1 <= len(imported_product_ids) <= MAX_PAGE_SIZE
+        ):
+            raise MyProductsFeedError('Набор импорта недействителен')
+        seen = set()
+        for value in imported_product_ids:
+            if (
+                type(value) is not int
+                or value <= 0
+                or value > (1 << 63) - 1
+                or value in seen
+            ):
+                raise MyProductsFeedError('Набор импорта недействителен')
+            seen.add(value)
+
+        rows = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == seller_id,
+            ImportedProduct.id.in_(imported_product_ids),
+        ).all()
+        by_id = {row.id: row for row in rows}
+        if len(by_id) != len(imported_product_ids):
+            raise MyProductsFeedNotFound('Набор импорта недоступен')
+        ordered_rows = [by_id[product_id] for product_id in imported_product_ids]
+        context = cls._page_context(seller_id=seller_id, rows=ordered_rows)
+        count = len(ordered_rows)
+        return {
+            'items': [cls._serialize(row, context) for row in ordered_rows],
+            'pagination': {
+                'page': 1,
+                'per_page': MAX_PAGE_SIZE,
+                'pages': 1,
+                'total': count,
+                'has_next': False,
+            },
+            'import_batch_count': count,
         }
 
     @classmethod
