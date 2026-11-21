@@ -358,8 +358,10 @@
 .mp-refresh-result-item a { display:inline-flex; align-items:center; min-height:44px; margin:2px 0 -5px; color:var(--accent-text); font-size:12px; text-decoration:underline; text-underline-offset:2px; }
 .mp-refresh-result-item a:focus-visible { outline:2px solid var(--focus-outline); outline-offset:1px; border-radius:2px; }
 .mp-refresh-result-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:10px 0; min-width:0; }
-.mp-refresh-result-ozon { min-height:44px; max-width:100%; white-space:normal; }
-.mp-refresh-result-ozon:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
+.mp-refresh-result-ozon,
+.mp-refresh-result-wb { min-height:44px; max-width:100%; white-space:normal; }
+.mp-refresh-result-ozon:focus-visible,
+.mp-refresh-result-wb:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
 .mp-refresh-result-reload { margin-top:10px; color:var(--accent-text); }
 
 /* ---------- Мобильный ---------- */

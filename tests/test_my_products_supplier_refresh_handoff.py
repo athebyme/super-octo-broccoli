@@ -16,11 +16,13 @@ const vm = require('node:vm');
 let component;
 const account = {id: 55, label: 'Shop East'};
 const boot = {
+  wbConnected: true,
   ozonEnabled: true,
   ozonAccounts: [account],
   urls: {
     refreshFromSupplier: '/my-products/refresh-from-supplier',
     commonContent: '/my-products/common-content',
+    enrichBulk: '/products/enrich-bulk',
   },
 };
 const fakeWindow = {
@@ -31,7 +33,23 @@ const fakeWindow = {
   crypto: {randomUUID() { return 'a'.repeat(32); }},
 };
 const stored = new Map();
-const fakeDocument = {activeElement: null};
+const submittedForms = [];
+const fakeDocument = {
+  activeElement: null,
+  querySelector(selector) {
+    assert.equal(selector, 'meta[name="csrf-token"]');
+    return {content: 'csrf-test-token'};
+  },
+  createElement(tagName) {
+    return {
+      tagName,
+      children: [],
+      appendChild(child) { this.children.push(child); },
+      submit() { this.submitted = true; },
+    };
+  },
+  body: {appendChild(form) { submittedForms.push(form); }},
+};
 const context = {
   window: fakeWindow,
   document: fakeDocument,
@@ -106,6 +124,14 @@ function setSupplierOutcome(app, data, ids) {
   };
 }
 
+async function finishSupplierRefresh(data, ids) {
+  const {app, refs} = makeApp();
+  setSupplierOutcome(app, data, ids);
+  app.runAction();
+  await new Promise(resolve => setImmediate(resolve));
+  return {app, refs};
+}
+
 (async () => {
   const ids = [101, 202, 303];
   const {app, refs} = makeApp();
@@ -116,6 +142,8 @@ function setSupplierOutcome(app, data, ids) {
     updated: 1,
     skipped: 1,
     errors: 1,
+    wb_ready: 1,
+    wb_targets: [{imported_product_id: 101, product_id: 9001}],
     items: [
       {product_id: 303, status: 'error', reason: 'update_failed'},
       {product_id: 101, status: 'updated', reason: null},
@@ -127,15 +155,103 @@ function setSupplierOutcome(app, data, ids) {
 
   assert.equal(app.supplierRefreshResult.kind, 'partial');
   sameJson(app.supplierRefreshOzonIds, [101]);
+  sameJson(app.supplierRefreshWbProductIds, [9001]);
   sameJson(app.selected, []);
 
-  // The handoff uses the verified updated subset only and does not change the
-  // seller's general selection, issue a second POST, or skip confirmation.
+  // Both result actions use their exact verified subsets and leave the general
+  // selection unchanged. The WB handoff uses the existing CSRF form.
   app.selected = [999];
+  assert.equal(app.checkRefreshedWbCharacteristics(), true);
+  assert.equal(submittedForms.length, 1);
+  assert.equal(submittedForms[0].method, 'post');
+  assert.equal(submittedForms[0].action, '/products/enrich-bulk');
+  assert.equal(submittedForms[0].submitted, true);
+  sameJson(submittedForms[0].children.map(input => [input.name, input.value]), [
+    ['csrf_token', 'csrf-test-token'],
+    ['selected_ids', '9001'],
+    ['preset', 'characteristics'],
+  ]);
+  sameJson(app.selected, [999]);
+
+  // The ordinary enrichment action still omits the preset and retains its
+  // existing photos-first behavior.
+  assert.equal(app.postSelectionForm('/products/enrich-bulk', [7001]), true);
+  assert.equal(submittedForms.length, 2);
+  sameJson(submittedForms[1].children.map(input => [input.name, input.value]), [
+    ['csrf_token', 'csrf-test-token'],
+    ['selected_ids', '7001'],
+  ]);
+
   const trigger = {isConnected: true, focused: false, focus() { this.focused = true; }};
   assert.equal(app.prepareRefreshedForOzon({currentTarget: trigger}), true);
   sameJson(app.ozonIds, [101]);
   sameJson(app.selected, [999]);
+
+  const multiIds = [101, 202, 303, 404];
+  const multiBase = {
+    success: true,
+    status: 'completed_with_errors',
+    requested: 4,
+    updated: 2,
+    skipped: 1,
+    errors: 1,
+    items: [
+      {product_id: 404, status: 'error', reason: 'update_failed'},
+      {product_id: 303, status: 'updated', reason: null},
+      {product_id: 202, status: 'skipped', reason: 'no_supplier_link'},
+      {product_id: 101, status: 'updated', reason: null},
+    ],
+  };
+  const wbTarget = (imported, product) => ({imported_product_id: imported, product_id: product});
+  const exactSubset = await finishSupplierRefresh({
+    ...multiBase,
+    wb_ready: 2,
+    wb_targets: [wbTarget(101, 9101), wbTarget(303, 9303)],
+  }, multiIds);
+  assert.equal(exactSubset.app.supplierRefreshResult.kind, 'partial');
+  sameJson(exactSubset.app.supplierRefreshOzonIds, [101, 303]);
+  sameJson(exactSubset.app.supplierRefreshWbProductIds, [9101, 9303]);
+  assert.equal(exactSubset.app.checkRefreshedWbCharacteristics(), true);
+  const exactSubsetForm = submittedForms[submittedForms.length - 1];
+  sameJson(exactSubsetForm.children.map(input => [input.name, input.value]), [
+    ['csrf_token', 'csrf-test-token'],
+    ['selected_ids', '9101'],
+    ['selected_ids', '9303'],
+    ['preset', 'characteristics'],
+  ]);
+
+  const malformedExtensions = [
+    {wb_ready: 1, wb_targets: [wbTarget(101, 9101), wbTarget(303, 9303)]},
+    {wb_ready: 1, wb_targets: [wbTarget(202, 9202)]}, // skipped row
+    {wb_ready: 1, wb_targets: [wbTarget(404, 9404)]}, // error row
+    {wb_ready: 1, wb_targets: [wbTarget(999, 9900)]}, // foreign row
+    {wb_ready: 2, wb_targets: [wbTarget(303, 9303), wbTarget(101, 9101)]}, // wrong order
+    {wb_ready: 2, wb_targets: [wbTarget(101, 9101), wbTarget(303, 9101)]}, // duplicate WB ID
+    {wb_ready: 1, wb_targets: [wbTarget(101, 0)]},
+    {wb_ready: 1, wb_targets: [{...wbTarget(101, 9101), extra: true}]},
+    {}, // legacy response without the WB extension
+  ];
+  for (const extension of malformedExtensions) {
+    const {app: wbApp} = await finishSupplierRefresh(
+      Object.assign({}, multiBase, extension), multiIds,
+    );
+    assert.equal(wbApp.supplierRefreshResult.kind, 'partial');
+    sameJson(wbApp.supplierRefreshOzonIds, [101, 303]);
+    sameJson(wbApp.supplierRefreshWbProductIds, []);
+    const formCount = submittedForms.length;
+    assert.equal(wbApp.checkRefreshedWbCharacteristics(), false);
+    assert.equal(submittedForms.length, formCount);
+  }
+
+  const disconnected = await finishSupplierRefresh({
+    ...multiBase,
+    wb_ready: 1,
+    wb_targets: [{imported_product_id: 101, product_id: 9101}],
+  }, multiIds);
+  disconnected.app.wbConnected = false;
+  sameJson(disconnected.app.supplierRefreshWbProductIds, []);
+  assert.equal(disconnected.app.checkRefreshedWbCharacteristics(), false,
+    'WB handoff is unavailable without a connected cabinet');
   assert.equal(app.ozonAccountId, String(account.id));
   assert.equal(app.ozonConfirmed, false);
   assert.equal(refs.dialog.open, true);
@@ -187,6 +303,11 @@ function setSupplierOutcome(app, data, ids) {
 
   console.log(JSON.stringify({status: 'passed', checks: [
     'only_exactly_verified_updated_ids_are_handed_to_the_existing_ozon_dialog',
+    'wb_result_handoff_uses_exact_csrf_form_with_characteristics_preset',
+    'wb_targets_are_exact_count_ordered_subset_of_updated_rows',
+    'malformed_or_absent_wb_extension_preserves_local_and_ozon_result',
+    'wb_handoff_requires_a_connected_cabinet',
+    'ordinary_enrichment_form_keeps_photos_preset_default',
     'partial_success_keeps_skips_and_errors_out_of_handoff',
     'handoff_and_dismissal_leave_general_selection_unchanged_and_restore_focus',
     'unknown_rejected_zero_inconsistent_pending_and_disabled_states_do_not_open_the_dialog',

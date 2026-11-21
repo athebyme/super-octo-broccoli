@@ -4,7 +4,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261121-supplier-refresh-ozon-handoff-1') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261121-supplier-refresh-wb-handoff-1') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
     'wbConnected': wb_connected,
@@ -87,13 +87,20 @@
                 </ul>
             </div>
         </details>
-        <div v-if="ozonEnabled && ozonAccounts.length && supplierRefreshOzonIds.length"
+        <div v-if="(ozonEnabled && ozonAccounts.length && supplierRefreshOzonIds.length) ||
+                    supplierRefreshWbProductIds.length"
              class="mp-refresh-result-actions">
-            <button type="button" class="sh-btn sh-btn--secondary mp-refresh-result-ozon"
+            <button v-if="ozonEnabled && ozonAccounts.length && supplierRefreshOzonIds.length"
+                    type="button" class="sh-btn sh-btn--secondary mp-refresh-result-ozon"
                     :disabled="ozonPreparationDisabled"
                     aria-haspopup="dialog"
                     @click="prepareRefreshedForOzon($event)">
                 Подготовить для Ozon ({{ supplierRefreshOzonIds.length }})
+            </button>
+            <button v-if="supplierRefreshWbProductIds.length" type="button"
+                    class="sh-btn sh-btn--secondary mp-refresh-result-wb"
+                    @click="checkRefreshedWbCharacteristics()">
+                Проверить характеристики WB ({{ supplierRefreshWbProductIds.length }})
             </button>
         </div>
         <button v-if="supplierRefreshResult.kind === 'unknown' || supplierRefreshResult.kind === 'rejected'" type="button"
@@ -339,5 +346,5 @@
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261120-bulk-workspace') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261121-supplier-refresh-ozon-handoff-1') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261121-supplier-refresh-wb-handoff-1') }}"></script>
 {% endblock %}

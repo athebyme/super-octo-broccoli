@@ -186,6 +186,44 @@
         return Number.isSafeInteger(value) && value >= 0;
     }
 
+    function exactSupplierRefreshWbProductIds(data, updatedIds) {
+        if (!data || !nonnegativeCount(data.wb_ready) ||
+            data.wb_ready > MAX_BULK_SELECTION ||
+            !Array.isArray(data.wb_targets) ||
+            data.wb_targets.length !== data.wb_ready ||
+            data.wb_targets.length > updatedIds.length) return null;
+
+        var updatedIndexById = new Map(updatedIds.map(function (id, index) {
+            return [id, index];
+        }));
+        var seenWbProductIds = new Set();
+        var lastUpdatedIndex = -1;
+        var productIds = [];
+
+        for (var i = 0; i < data.wb_targets.length; i += 1) {
+            var target = data.wb_targets[i];
+            if (!target || typeof target !== 'object' || Array.isArray(target)) return null;
+            var keys = Object.keys(target).sort();
+            if (keys.length !== 2 || keys[0] !== 'imported_product_id' ||
+                keys[1] !== 'product_id') return null;
+
+            var importedProductId = target.imported_product_id;
+            var wbProductId = target.product_id;
+            var updatedIndex = updatedIndexById.get(importedProductId);
+            if (!Number.isSafeInteger(importedProductId) || importedProductId <= 0 ||
+                !Number.isSafeInteger(wbProductId) || wbProductId <= 0 ||
+                updatedIndex === undefined || updatedIndex <= lastUpdatedIndex ||
+                seenWbProductIds.has(wbProductId)) {
+                return null;
+            }
+
+            lastUpdatedIndex = updatedIndex;
+            seenWbProductIds.add(wbProductId);
+            productIds.push(wbProductId);
+        }
+        return productIds;
+    }
+
     function supplierRefreshOutcome(data, ids, labels, commonContentUrl) {
         if (!data || data.success !== true ||
             !['completed', 'completed_with_errors'].includes(data.status) ||
@@ -250,6 +288,9 @@
             : data.updated === 0 && data.skipped > 0
                 ? 'Нет карточек для обновления'
                 : 'Обновление из поставщика завершено';
+        var updatedIds = ids.filter(function (id) {
+            return rowsById.get(id).status === 'updated';
+        });
         return {
             kind: data.errors ? 'partial' : 'complete',
             title: title,
@@ -259,6 +300,7 @@
             skipped: data.skipped,
             errors: data.errors,
             entries: ids.map(function (id) { return rowsById.get(id); }),
+            wbProductIds: exactSupplierRefreshWbProductIds(data, updatedIds),
         };
     }
 
@@ -380,6 +422,14 @@
                     .filter(function (entry) { return entry && entry.status === 'updated'; })
                     .map(function (entry) { return entry.productId; });
                 return updatedIds.length === result.updated ? updatedIds : [];
+            },
+            supplierRefreshWbProductIds: function () {
+                var result = this.supplierRefreshResult;
+                var productIds = result && result.wbProductIds;
+                if (!this.wbConnected || !result ||
+                    !['complete', 'partial'].includes(result.kind) ||
+                    !Array.isArray(productIds) || !productIds.length) return [];
+                return productIds;
             },
             ozonPreparationDisabled: function () {
                 return !this.ozonAccounts.length || !!this.ozonPending ||
@@ -1043,7 +1093,8 @@
                 };
                 if (action.key === 'refresh_supplier') this.supplierRefreshResult = null;
             },
-            postSelectionForm: function (url, productIds) {
+            postSelectionForm: function (url, productIds, preset) {
+                if (preset !== undefined && preset !== 'characteristics') return false;
                 var csrf = document.querySelector('meta[name="csrf-token"]')?.content;
                 if (!csrf) {
                     this.error = 'Защита формы недоступна. Обновите страницу и повторите действие.';
@@ -1064,8 +1115,16 @@
                     input.value = String(id);
                     form.appendChild(input);
                 });
+                if (preset === 'characteristics') {
+                    var presetInput = document.createElement('input');
+                    presetInput.type = 'hidden';
+                    presetInput.name = 'preset';
+                    presetInput.value = 'characteristics';
+                    form.appendChild(presetInput);
+                }
                 document.body.appendChild(form);
                 form.submit();
+                return true;
             },
             cancelAction: function () {
                 if (this.confirm.busy) return;
@@ -1188,6 +1247,17 @@
                 return this.openOzonPreparation(
                     productIds,
                     event && event.currentTarget,
+                );
+            },
+            checkRefreshedWbCharacteristics: function () {
+                var productIds = this.supplierRefreshWbProductIds;
+                if (!productIds.length ||
+                    typeof this.urls.enrichBulk !== 'string' || !this.urls.enrichBulk) return false;
+
+                return this.postSelectionForm(
+                    this.urls.enrichBulk,
+                    productIds.slice(),
+                    'characteristics',
                 );
             },
             openOzonPreparation: function (productIds, returnFocus) {
