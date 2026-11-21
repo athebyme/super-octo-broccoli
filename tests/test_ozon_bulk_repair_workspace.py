@@ -1,10 +1,12 @@
 """Real repair routes and per-row receipts, with only synthetic source data."""
 import json
 from datetime import datetime, timedelta
+import re
 from unittest.mock import Mock
 import pytest
 from flask_login import LoginManager
 from werkzeug.datastructures import MultiDict
+from sqlalchemy import event
 
 from tests import test_marketplace_publications as fixtures
 from models import (
@@ -270,6 +272,63 @@ def test_source_prepare_editor_uses_ordered_exact_editable_v3_scope(case):
     assert MarketplaceOperation.query.count() == 0
 
 
+def test_source_prepare_editor_get_does_not_reconcile_stale_job_summary(case):
+    v3 = source_prepare_case(case)
+    v3['job'].set_result({
+        'version': 3,
+        'mode': 'source_prepare',
+        'total': 4,
+        'prepared': 0,
+        'outcome': 'stale_fixture_summary',
+    })
+    db.session.commit()
+    job_result_before = v3['job'].result_data
+    run_before = (v3['run'].state, v3['run'].next_due_at)
+    items_before = [
+        (item.phase, item.draft_id, item.prepared_version, item.error_code, item.error_message)
+        for item in v3['items']
+    ]
+    write_tables = []
+
+    def record_business_write(_conn, _cursor, statement, _parameters, _context, _executemany):
+        match = re.match(
+            r'\s*(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+["`]?([A-Za-z0-9_]+)',
+            statement,
+            re.IGNORECASE,
+        )
+        if match and match.group(1).lower() in {
+            'background_jobs',
+            'ozon_bulk_upload_runs',
+            'ozon_bulk_upload_items',
+            'marketplace_product_drafts',
+            'marketplace_operations',
+        }:
+            write_tables.append(match.group(1).lower())
+
+    event.listen(db.engine, 'before_cursor_execute', record_business_write)
+    try:
+        response = case.client.get(
+            '/marketplaces/ozon/uploads/'+v3['job'].job_uid+'/repair',
+            headers={'Accept':'application/json'},
+        )
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', record_business_write)
+
+    assert response.status_code == 200
+    assert response.json['editor']['mode'] == 'source_prepare'
+    assert write_tables == []
+    db.session.refresh(v3['job'])
+    db.session.refresh(v3['run'])
+    for item in v3['items']:
+        db.session.refresh(item)
+    assert v3['job'].result_data == job_result_before
+    assert (v3['run'].state, v3['run'].next_due_at) == run_before
+    assert [
+        (item.phase, item.draft_id, item.prepared_version, item.error_code, item.error_message)
+        for item in v3['items']
+    ] == items_before
+
+
 def test_source_prepare_rejects_exclusion_without_mutating_v3_item(case):
     v3 = source_prepare_case(case)
     path = '/marketplaces/ozon/uploads/'+v3['job'].job_uid+'/repair'
@@ -336,6 +395,8 @@ def test_source_prepare_stale_version_returns_failed_receipt_without_rebase(case
     )
     item = v3['items'][0]
     original_prepared_version = item.prepared_version
+    original_error_code = item.error_code
+    original_error_message = item.error_message
     original_content = case.draft.content_json
     stale_form = form(
         row,
@@ -361,6 +422,8 @@ def test_source_prepare_stale_version_returns_failed_receipt_without_rebase(case
     assert case.draft.content_json == original_content
     assert item.phase == 'needs_input'
     assert item.prepared_version == original_prepared_version
+    assert item.error_code == original_error_code
+    assert item.error_message == original_error_message
     assert MarketplaceOperation.query.count() == 0
 
 
