@@ -241,21 +241,13 @@
                     <hr class="my-4">
                     <h3 class="text-sm font-semibold text-gray-700">Файл цен и остатков</h3>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">URL файла цен/остатков</label>
-                        <input type="url" name="price_file_url"
+                        <label for="supplier-price-file" class="block text-sm font-medium text-gray-700 mb-1">HTTPS-адрес файла цен и остатков</label>
+                        <input type="url" name="price_file_url" id="supplier-price-file"
                             value="{{ supplier.price_file_url if supplier and supplier.price_file_url else '' }}"
-                            placeholder="http://sexoptovik.ru/files/all_prod_prices__.csv"
+                            placeholder="https://sexoptovik.ru/files/all_prod_prices__.csv"
                             class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
                         <p class="mt-1 text-xs text-gray-400">CSV:
                             id;артикул;цена;наличие;статус;доп.артикул;штрихкод;ррц</p>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">URL INF файла (определение
-                            обновлений)</label>
-                        <input type="url" name="price_file_inf_url"
-                            value="{{ supplier.price_file_inf_url if supplier and supplier.price_file_inf_url else '' }}"
-                            placeholder="http://sexoptovik.ru/files/all_prod_prices__.inf"
-                            class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
                     </div>
                     <div class="grid grid-cols-2 gap-4">
                         <div>
