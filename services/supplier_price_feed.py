@@ -339,10 +339,12 @@ def _fetch_over_pinned_https(
         transfer_encoding = headers.get("transfer-encoding")
         if content_length is not None and transfer_encoding is not None:
             _fail("headers_invalid")
+        expected_length = None
         if content_length is not None:
             if not _POSITIVE_INT_RE.fullmatch(content_length):
                 _fail("headers_invalid")
-            if int(content_length) > MAX_BODY_BYTES:
+            expected_length = int(content_length)
+            if expected_length > MAX_BODY_BYTES:
                 _fail("body_too_large")
         if transfer_encoding is not None and transfer_encoding.lower().strip() != "chunked":
             _fail("headers_invalid")
@@ -357,6 +359,8 @@ def _fetch_over_pinned_https(
             body.extend(chunk)
             if len(body) > MAX_BODY_BYTES:
                 _fail("body_too_large")
+        if expected_length is not None and len(body) != expected_length:
+            _fail("network_error")
         _remaining(deadline)
         return bytes(body)
     except SupplierPriceFeedError:

@@ -301,6 +301,22 @@ def test_http_error_is_not_retried(monkeypatch):
     assert len(tls) == 1
 
 
+def test_truncated_content_length_is_not_returned_as_a_valid_prefix(monkeypatch):
+    valid_prefix = b"7;A;3;1\n"
+    response = (
+        b"HTTP/1.1 200 OK\r\n"
+        b"Content-Type: text/csv\r\n"
+        b"Content-Length: 100\r\n\r\n"
+        + valid_prefix
+    )
+    _install_fake_transport(monkeypatch, response)
+    code, message = _error_code(lambda: feed.read_supplier_price_feed(
+        "https://feed.example/prices.csv", encoding="utf-8", delimiter=";",
+    ))
+    assert code == "network_error"
+    assert "7;A" not in message
+
+
 def test_uncertain_send_does_not_try_a_second_resolved_address(monkeypatch):
     dns_entries = [
         (socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC_IP, 443)),
