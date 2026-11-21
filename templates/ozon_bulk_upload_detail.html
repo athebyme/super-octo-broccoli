@@ -7,6 +7,7 @@
 {% set summary = run.summary %}
 {% if run.mode in ['source_prepare', 'reviewed_drafts'] %}
 {% set local_only = run.mode == 'source_prepare' %}
+{% set review_recovery_draft_ids = run.review_recovery_draft_ids|default([], true) %}
 {% set review_drafts = namespace(ids=[]) %}
 {% set repair_drafts = namespace(ids=[]) %}
 {% for item in run['items'] %}
@@ -47,6 +48,13 @@
             <a class="sh-btn sh-btn--white-outline sh-btn--md" data-source-prepare-review
                href="{{ url_for('ozon_bulk_uploads.review', account_id=run.account_id, draft_ids=review_drafts.ids|join(','), parent_prepare_job_uid=run.job_uid) }}">
                 Проверить перед отправкой
+            </a>
+            {% endif %}
+            {% if not local_only and run.status != 'running' and review_recovery_draft_ids %}
+            <a class="sh-btn sh-btn--primary sh-btn--md" data-reviewed-result-recovery
+               aria-label="Проверить оставшиеся карточки: {{ review_recovery_draft_ids|length }}"
+               href="{{ url_for('ozon_bulk_uploads.review', account_id=run.account_id, draft_ids=review_recovery_draft_ids|join(','), result_job_uid=run.job_uid) }}">
+                Проверить оставшиеся карточки
             </a>
             {% endif %}
             {% if local_only %}
@@ -97,6 +105,8 @@
             'needs_manual_reconciliation':'Нужна ручная сверка'
         } %}
         {% for item in run['items'] %}
+        {% set reviewed_draft_id = item.reviewed_draft_id|default(none) %}
+        {% set recovery_draft_id = item.draft_id if item.draft_id in review_recovery_draft_ids else (reviewed_draft_id if reviewed_draft_id in review_recovery_draft_ids else none) %}
         <article class="sh-card p-4">
             <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div class="min-w-0 flex-1">
@@ -109,8 +119,9 @@
                     {% if item.message %}<p class="mt-2 text-sm" style="color:var(--text-secondary)">{{ item.message }}</p>{% endif %}
                 </div>
                 <div class="flex shrink-0 flex-wrap gap-2">
-                    {% if item.draft_id %}<a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('marketplace_drafts.detail', draft_id=item.draft_id) }}">{{ 'Проверить черновик' if local_only else 'Черновик' }}</a>{% endif %}
-                    {% if item.operation_id %}<a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('marketplace_operations.detail', operation_id=item.operation_id) }}">Операция Ozon</a>{% endif %}
+                    {% if recovery_draft_id %}<a class="sh-btn sh-btn--primary sh-btn--sm" data-reviewed-result-draft="{{ recovery_draft_id }}" href="{{ url_for('marketplace_drafts.detail', draft_id=recovery_draft_id) }}">Проверить черновик</a>
+                    {% elif item.draft_id %}<a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('marketplace_drafts.detail', draft_id=item.draft_id) }}">{{ 'Проверить черновик' if local_only else 'Черновик' }}</a>{% endif %}
+                    {% if item.operation_id %}<a class="sh-btn sh-btn--secondary sh-btn--sm" {% if not local_only %}data-reviewed-result-operation="{{ item.operation_id }}"{% endif %} href="{{ url_for('marketplace_operations.detail', operation_id=item.operation_id) }}">Операция Ozon</a>{% endif %}
                 </div>
             </div>
         </article>

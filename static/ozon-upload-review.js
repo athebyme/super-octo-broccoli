@@ -4,8 +4,10 @@
     const boot = document.getElementById('our-bootstrap');
     if (!boot || !global.Vue) return;
     const config = JSON.parse(boot.textContent), initial = config.review;
+    const resultJobUid = initial.result_job_uid || '';
     const scope = 'ozon-upload-review-v1:' + initial.account_id + ':' +
-        initial.draft_ids.join(',') + ':' + (initial.parent_prepare_job_uid || '');
+        initial.draft_ids.join(',') + ':' + (initial.parent_prepare_job_uid || '') +
+        (resultJobUid ? ':result:' + resultJobUid : '');
     const selectionKey = scope + ':selection', pendingKey = scope + ':pending';
     const runPattern = /^ozon-upload-[0-9a-f]{32}$/;
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -21,9 +23,11 @@
             allowed.has(row.id) && !seen.has(row.id) && (seen.add(row.id), true));
     }
     function validPending(value) {
-        if (!value || value.account_id !== initial.account_id ||
+        if ((resultJobUid && !runPattern.test(resultJobUid)) ||
+            !value || value.account_id !== initial.account_id ||
             typeof value.request_key !== 'string' || !/^[A-Za-z0-9_-]{24,128}$/.test(value.request_key) ||
             value.parent_prepare_job_uid !== initial.parent_prepare_job_uid ||
+            (value.result_job_uid || '') !== resultJobUid ||
             !Array.isArray(value.draft_ids) || !value.draft_ids.length || value.draft_ids.length > 200 ||
             !value.draft_ids.every(id => positive(id) && initial.draft_ids.includes(id)) ||
             new Set(value.draft_ids).size !== value.draft_ids.length ||
@@ -37,6 +41,7 @@
         const query = new URLSearchParams({account_id:String(initial.account_id),
             draft_ids:ids.join(','), page:String(page)});
         if (initial.parent_prepare_job_uid) query.set('parent_prepare_job_uid', initial.parent_prepare_job_uid);
+        if (resultJobUid) query.set('result_job_uid', resultJobUid);
         return query;
     }
     async function getJson(url, headers={}) {
@@ -61,7 +66,10 @@
         data() { const storedPending = read(pendingKey); return {config, review:initial, selected:selectedRows(read(selectionKey)),
             pending:validPending(storedPending) ? storedPending : null,
             storageProblem:hasStored(pendingKey) && !validPending(storedPending),
-            csrf:initial.csrf_token, busy:'', error:'', status:'',
+            csrf:initial.csrf_token, busy:'',
+            error:resultJobUid && !/^ozon-upload-[0-9a-f]{32}$/.test(resultJobUid)
+                ? 'Результат отправки не распознан. Вернитесь к исходному запуску.' : '',
+            status:'',
             reviewed:null, reviewedMode:'', reviewSummary:null, dialogStatus:'', confirmed:false, sessionEnded:false, retrySameKey:false,
             staleIds:[], alive:true}; },
         computed: {
@@ -71,8 +79,8 @@
                 return (this.reviewed || []).filter(row => versions.get(row.draft_id) === row.version);
             },
             locked() { return !!this.busy || !!this.pending || this.storageProblem || this.sessionEnded; },
-            canReview() { return this.selected.length > 0 && !this.locked; },
-            canReviewAll() { return this.review.draft_ids.length > 1 && !this.locked; },
+            canReview() { return this.selected.length > 0 && !this.locked && (!resultJobUid || runPattern.test(resultJobUid)); },
+            canReviewAll() { return this.review.draft_ids.length > 1 && !this.locked && (!resultJobUid || runPattern.test(resultJobUid)); },
         },
         methods: {
             pageUrl(page) { return config.urls.html + '?' + params(initial.draft_ids, page); },
@@ -105,7 +113,8 @@
             picked(row) { return this.selected.some(item => item.id === row.draft_id && item.version === row.version); },
             saveSelection() { return store(selectionKey, this.selected); },
             async readExactReview(ids) {
-                if (!Array.isArray(ids) || ids.length < 1 || ids.length > 200 ||
+                if ((resultJobUid && !runPattern.test(resultJobUid)) ||
+                    !Array.isArray(ids) || ids.length < 1 || ids.length > 200 ||
                     ids.some(id => !positive(id)) || new Set(ids).size !== ids.length)
                     throw Error('Состав карточек изменился. Начните просмотр заново.');
                 const pageCount = Math.ceil(ids.length / 20), rows = [];
@@ -118,6 +127,7 @@
                         doc.account_label === initial.account_label &&
                         same(doc.draft_ids, ids) &&
                         doc.parent_prepare_job_uid === initial.parent_prepare_job_uid &&
+                        (doc.result_job_uid || '') === resultJobUid &&
                         typeof doc.checked_at === 'string' && doc.checked_at.length > 0 &&
                         typeof doc.publication_enabled === 'boolean' &&
                         pagination?.page === page && pagination?.pages === pageCount &&
@@ -295,6 +305,7 @@
                         byte => byte.toString(16).padStart(2,'0')).join('');
                 const pending = {request_key:key, account_id:initial.account_id, draft_ids:ids,
                     expected_versions:versions, parent_prepare_job_uid:initial.parent_prepare_job_uid};
+                if (resultJobUid) pending.result_job_uid = resultJobUid;
                 if (!store(pendingKey, pending)) {
                     this.error = 'Браузер не сохранил ключ действия. Отправка остановлена, чтобы не потерять её результат.';
                     this.closeDialog(); return;
@@ -317,7 +328,8 @@
                         headers:{Accept:'application/json','Content-Type':'application/json','X-CSRFToken':this.csrf},
                         body:JSON.stringify({account_id:pending.account_id,draft_ids:pending.draft_ids,
                             expected_versions:pending.expected_versions,confirm_write:true,request_key:pending.request_key,
-                            ...(pending.parent_prepare_job_uid ? {parent_prepare_job_uid:pending.parent_prepare_job_uid} : {})})});
+                            ...(pending.parent_prepare_job_uid ? {parent_prepare_job_uid:pending.parent_prepare_job_uid} : {}),
+                            ...(pending.result_job_uid ? {result_job_uid:pending.result_job_uid} : {})})});
                     if (response.status === 401 || response.type === 'opaqueredirect' || response.redirected)
                         throw Object.assign(Error('Сессия завершилась. Войдите снова и проверьте результат по сохранённому ключу.'), {status:401});
                     if (response.status === 403)
