@@ -482,6 +482,10 @@ def create_from_drafts():
             raise OzonBulkUploadValidationError(
                 "Укажите только один исходный запуск"
             )
+        recovery_scope = (
+            {"result_job_uid": result_uid}
+            if result_uid is not None else {}
+        )
         acceptance = OzonBulkUploadService.accept_reviewed_publish(
             seller_id=seller_id,
             account_id=_integer(data.get("account_id"), "account_id"),
@@ -489,8 +493,8 @@ def create_from_drafts():
             expected_versions=expected_versions,
             request_key=_request_key(data.get("request_key")),
             parent_prepare_job_uid=parent_uid,
-            result_job_uid=result_uid,
             created_by_user_id=getattr(current_user, "id", None),
+            **recovery_scope,
         )
     except OzonBulkUploadError as exc:
         return _error_response(exc)
@@ -936,13 +940,17 @@ def review():
             raise OzonBulkUploadValidationError(
                 "Укажите только один исходный запуск"
             )
+        recovery_scope = (
+            {"result_job_uid": result_uid}
+            if result_uid is not None else {}
+        )
         document = OzonUploadReviewService.document(
             seller_id=seller_id,
             account_id=_integer(request.args.get("account_id"), "account_id"),
             draft_ids=draft_ids,
             page=_integer(request.args.get("page", "1"), "page"),
             parent_prepare_job_uid=parent_uid,
-            result_job_uid=result_uid,
+            **recovery_scope,
         )
         document["csrf_token"] = generate_csrf()
         if as_json:
