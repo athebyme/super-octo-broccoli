@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-21T20:20:01.735786+00:00",
+  "generated_at": "2026-11-21T20:23:38.069923+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -417,7 +417,7 @@
     },
     {
       "path": "docs/design/ozon-durable-card-upload.md",
-      "sha256": "d0c68e62c935a923ae19f0bb54e120d14be98c0f3a5f6daa8b244071d0576f84"
+      "sha256": "2414c4cd2b1173a7711f3d8b2a5fbb8b810f501d158719bac9936e6cd5e10f93"
     },
     {
       "path": "docs/design/ozon-finance-comparison.md",
@@ -3257,7 +3257,7 @@
     },
     {
       "path": "templates/ozon_bulk_upload_detail.html",
-      "sha256": "e96b03e926c29965a63a9ca761d9bba9069be7eb8201e11c4e223c9ad5750c4f"
+      "sha256": "3d337d7ebc7644a9d48993bdf667900e60a48469071c7fca9e09c6a122f2c57a"
     },
     {
       "path": "templates/ozon_bulk_uploads.html",
@@ -3677,7 +3677,7 @@
     },
     {
       "path": "tests/ozon_release/ozon_bulk_ready_review_browser.py",
-      "sha256": "ec1d431437749a18f67ac2583560f469bac9017148346378ea0be81c0783f923"
+      "sha256": "05623d713d5ff912be6be610ab63c891d234259b999cec6a9d7e39f2b25238db"
     },
     {
       "path": "tests/ozon_release/ozon_complete_journey_browser.py",
@@ -5160,5 +5160,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "5f2f7275a7d0f12f18741b45be186b779bca0440f7a3250c15d54f55a205a205"
+  "aggregate_sha256": "f59e52f74372cc1d338183343f447f1cf9060f769921759dcbca0ff4c7611973"
 }
