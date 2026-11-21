@@ -109,6 +109,20 @@ function assertTerminalRefresh(calls) {
   assert.equal(calls.facets, 1, 'a terminal poll refreshes facets once');
 }
 
+const jobProgress = fakeWindow.shVue.components['sh-job-progress'];
+function jobPresentation(job) {
+  const vm = {job};
+  const computed = jobProgress.computed;
+  vm.reportedFailedCount = computed.reportedFailedCount.call(vm);
+  vm.failedCount = computed.failedCount.call(vm);
+  vm.partialCompletion = computed.partialCompletion.call(vm);
+  vm.finished = computed.finished.call(vm);
+  return {
+    title: computed.resultTitle.call(vm),
+    tone: computed.tone.call(vm),
+  };
+}
+
 (async () => {
   // Raw BackgroundJob DTOs use completed + failed_count. The UI adapts that
   // payload to its terminal progress contract and stops its interval.
@@ -130,6 +144,25 @@ function assertTerminalRefresh(calls) {
   assert.deepEqual(activeTimerIds(), []);
   assertTerminalRefresh(mixed.calls);
   assert.equal(mixed.calls.post, 0);
+
+  // The shared progress component calls out a proven partial completion only
+  // when the API supplied an explicit, valid zero failure count and safe
+  // integer counts show that fewer cards were processed than requested.
+  assert.deepEqual(jobPresentation({
+    status: 'done', processed: 1, total: 2, failed_count: 0,
+  }), {title: 'Обработана часть карточек', tone: 'warn'});
+  const unprovenPartialJobs = [
+    {status: 'done', processed: 1, total: 2},
+    {status: 'done', processed: 1, total: 2, failed_count: '0'},
+    {status: 'done', total: 2, failed_count: 0},
+    {status: 'done', processed: 1.5, total: 2, failed_count: 0},
+    {status: 'done', processed: 1, failed_count: 0},
+    {status: 'done', processed: 1, total: Number.MAX_SAFE_INTEGER + 1, failed_count: 0},
+  ];
+  for (const job of unprovenPartialJobs) {
+    assert.notEqual(jobPresentation(job).title, 'Обработана часть карточек',
+      'missing or invalid proof must not be labeled as partial completion');
+  }
 
   // A fully failed batch is still a completed run with item failures, not a
   // worker-level failed job.
