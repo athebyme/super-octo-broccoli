@@ -42,8 +42,8 @@
     },
 } | tojson }}</script>
 
-<div id="my-products-app" class="shk-page" v-cloak
-     :data-supplier-refresh-handoff="supplierRefreshBatchMode ? 'active' : null">
+<div id="my-products-app" class="shk-page" v-cloak{% if supplier_refresh_batch|default(none) %}
+     data-supplier-refresh-handoff="active"{% endif %}>
 {% raw %}
     <header class="shk-head">
         <div>
