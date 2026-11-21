@@ -1121,9 +1121,9 @@ try:
         dialog = page.get_by_role("dialog", name="Цены для нескольких товаров")
         assert dialog.get_by_text("Выбрано товаров: 3 из 100", exact=True).is_visible()
         assert dialog.locator(".oc-bulk-selected li").count() == 3
-        multi_capsule = page.evaluate("""([owner, accountId, listingIds, sourceIds]) => {
+        multi_capsule = page.evaluate("""([owner, accountId, listingIds, sourceIds, search, nonce]) => {
             const capsule = window.SellerHubCommonContent.workspaceReturnFromHash(
-                window.location.hash, {
+                '#'+nonce, {
                     owner,
                     priceTarget: {channel: 'ozon', accountId, ids: listingIds},
                 }
@@ -1132,8 +1132,9 @@ try:
                 capsule.priceTarget.accountId === accountId &&
                 JSON.stringify(capsule.priceTarget.ids) === JSON.stringify(listingIds) &&
                 JSON.stringify(capsule.selectionIds) === JSON.stringify(sourceIds) &&
-                capsule.scope.search === multiSourceTitle && capsule.scope.sort === 'title';
-        }""", [source_owner, account_id, multi_listing_ids, multi_source_ids])
+                capsule.scope.search === search && capsule.scope.sort === 'title';
+        }""", [source_owner, account_id, multi_listing_ids, multi_source_ids,
+              multi_source_title, multi_hash])
         assert multi_capsule
         dialog.locator(".oc-bulk-rule input[type=text]").fill("1200")
         dialog.get_by_role("button", name="Сравнить выбранные: 3", exact=True).click()
@@ -1201,6 +1202,11 @@ try:
             "rows => rows.map(row => Number(row.querySelector('.oc-row-status')?.getAttribute('href')?.split('/').pop()))"
         )
         assert sorted(exact_row_ids) == sorted(exact_proposal_ids)
+        # The bridge reads the real Flask JSON body from route.fetch before
+        # fulfilling it; do not consume the browser Response after navigation.
+        assert report["exact_review_get"]["exact_selection"] is True
+        assert sorted(report["exact_review_get"]["proposal_ids"]) == sorted(exact_proposal_ids)
+        assert report["exact_review_get"]["statuses"] == ["pending_review", "pending_review"]
         exact_return = page.locator("a[data-price-workspace-return]")
         exact_return.wait_for(state="visible")
         exact_return_href = urlsplit(exact_return.get_attribute("href") or "")

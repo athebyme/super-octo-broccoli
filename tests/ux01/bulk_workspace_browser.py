@@ -882,13 +882,17 @@ def run():
             nonce_hash = open_exact_wb_price_form()
             page.locator(f'input[type="radio"][value="{change_type}"]').check()
             page.locator("#change_value").fill(str(change_value))
+            posts_before = len(price_create_posts)
+            receipts_before = len(price_create_receipts)
             with page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_PRICE_CREATE
                                       and response.request.method == "POST") as create_response:
                 page.get_by_role("button", name="Создать изменение (1 товаров)").click()
             response = create_response.value
             assert response.status == 200
-            receipt = response.json()
-            assert receipt.get("success") is True
+            assert response.request.method == "POST"
+            assert urlsplit(response.url).path == LOCAL_PRICE_CREATE
+            assert len(price_create_posts) == posts_before + 1
+            assert len(price_create_receipts) == receipts_before + 1
             assert len(price_create_posts) == len(price_create_receipts)
             assert price_create_posts[-1] == {
                 "product_ids": [fixture_ids["wb_id"]],
@@ -896,6 +900,10 @@ def run():
                 "change_type": change_type,
                 "change_value": change_value,
             }, price_create_posts[-1]
+            # route.fetch already read and validated the real Flask JSON body;
+            # the browser response can be retired when the redirect navigates.
+            receipt = price_create_receipts[-1]
+            assert receipt.get("success") is True
             batch_id = receipt.get("batch_id")
             assert isinstance(batch_id, int) and batch_id > 0
             page.wait_for_url(lambda value: (
