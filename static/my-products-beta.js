@@ -522,6 +522,7 @@
     var workspaceReturnCapsule = null;
     var workspaceReturnScopeSeed = null;
     var workspaceReturnSetupNote = '';
+    var workspaceChangedNote = 'Список изменился. Проверьте его и отметьте товары заново.';
     var workspaceHelpers = window.SellerHubCommonContent || {};
     if (window.location && typeof window.location.hash === 'string' &&
         typeof workspaceHelpers.workspaceReturnFromHash === 'function') {
@@ -546,7 +547,7 @@
         if (batchMatches && scopeIsValid && batchScopeIsValid) {
             workspaceReturnScopeSeed = workspaceReturnCapsule.scope;
         } else {
-            workspaceReturnSetupNote = 'Условия списка изменились. Выбор не восстановлен; проверьте список и отметьте товары снова.';
+            workspaceReturnSetupNote = workspaceChangedNote;
         }
     }
 
@@ -856,12 +857,10 @@
             this._supplierRefreshReturnAnchor = !!(window.location &&
                 window.location.hash === '#supplier-refresh-result');
             if (!this.importBatchMode) this.restoreSupplierRefreshResult();
-            if (workspaceReturnCapsule && workspaceReturnScopeSeed) {
-                this.load();
-            } else {
-                if (workspaceReturnCapsule) this.consumeWorkspaceReturn(workspaceReturnCapsule.nonce);
-                this.load();
+            if (workspaceReturnCapsule && !workspaceReturnScopeSeed) {
+                this.consumeWorkspaceReturn(workspaceReturnCapsule.nonce);
             }
+            this.load();
             if (!this.importBatchMode) this.loadFacets();
         },
         beforeUnmount: function () {
@@ -898,7 +897,7 @@
             },
             workspaceReturnChanged: function () {
                 this.selected = [];
-                this.workspaceReturnNote = 'Условия списка изменились. Выбор не восстановлен; проверьте список и отметьте товары снова.';
+                this.workspaceReturnNote = workspaceChangedNote;
                 if (workspaceReturnCapsule) this.consumeWorkspaceReturn(workspaceReturnCapsule.nonce);
             },
             workspaceReturnScopeMatches: function (scope) {
