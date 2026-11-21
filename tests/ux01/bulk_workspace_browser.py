@@ -34,6 +34,7 @@ LOCAL_WB_ENRICH_REVIEW = "/products/enrich-bulk"
 LOCAL_WB_ENRICH_START = "/api/products/enrich-bulk/start"
 LOCAL_SUPPLIER_IMPORT = "/supplier-catalog/import"
 LOCAL_PRICE_CREATE = "/prices/create-batch"
+LOCAL_PRICE_PREVIEW = "/prices/api/preview"
 
 
 def seed_bulk_selection():
@@ -43,8 +44,41 @@ def seed_bulk_selection():
         seller.wb_api_key = "synthetic-wb-key-for-bulk-workspace-only"
         wb_product = Product(id=4419902, seller_id=seller_id, nm_id=4419901, vendor_code="BULK-WB-001",
                              title=MAIN_TITLE, is_active=True, price=1000, wb_price=600)
+        preview_specs = [
+            (4420001, 4420101, "Сравнение цен WB · база", "PREVIEW-BASE", 900, 600),
+            (4420002, 4420102, "Сравнение цен WB · ноль", "PREVIEW-ZERO", 900, 0),
+            (4420003, 4420103, "Сравнение цен WB · fallback", "PREVIEW-FALLBACK", 1200, None),
+        ]
+        preview_products = [Product(
+            id=product_id,
+            seller_id=seller_id,
+            nm_id=nm_id,
+            vendor_code=vendor_code,
+            title=title,
+            is_active=True,
+            price=local_price,
+            wb_price=wb_price,
+            wb_price_synced_at=(datetime.utcnow() if wb_price is not None else None),
+        ) for product_id, nm_id, title, vendor_code, local_price, wb_price in preview_specs]
+        preview_sources = [ImportedProduct(
+            seller_id=seller_id,
+            external_id=f"WB-PRICE-PREVIEW-{index}",
+            external_vendor_code=vendor_code,
+            source_type="manual",
+            title=title,
+            photo_urls="[]",
+            product_id=product_id,
+            wb_nm_id=nm_id,
+            import_status="imported",
+            supplier_quantity=3,
+            created_at=datetime(2020, 1, 1) + timedelta(days=3 - index),
+        ) for index, (product_id, nm_id, title, vendor_code, _local, _wb) in enumerate(
+            preview_specs, 1,
+        )]
         db.session.add(wb_product)
+        db.session.add_all(preview_products)
         db.session.flush()
+        db.session.add_all(preview_sources)
         unrelated_price_batch = PriceChangeBatch(
             seller_id=seller_id,
             name="Unrelated price batch for return binding",
@@ -131,7 +165,10 @@ def seed_bulk_selection():
                 "manual_id": manual.id, "import_id": new_source.id,
                 "refresh_source_id": supplier_item.id,
                 "unrelated_price_batch_id": unrelated_price_batch.id,
-                "bulk_ids": [row.id for row in bulk_rows]}
+                "bulk_ids": [row.id for row in bulk_rows],
+                "preview_wb_ids": [item[0] for item in preview_specs],
+                "preview_local_ids": [source.id for source in preview_sources],
+                "preview_titles": [item[2] for item in preview_specs]}
 
 
 def verify_bounds(page):
@@ -336,11 +373,16 @@ def run():
     wb_enrich_start_posts = []
     price_create_posts = []
     price_create_receipts = []
+    price_create_attempts = []
+    price_preview_posts = []
+    price_preview_responses = []
     price_decisions = []
     errors = []
     feed_gets = []
     feed_responses = []
     bulk_photo_ids = set(fixture_ids["bulk_ids"])
+    price_review_scope = {"product_ids": [fixture_ids["wb_id"]]}
+    latest_price_preview = {"body": None, "token": None, "response": None}
     delay_next_full_select = False
     server_delay_next_full_select = False
     override_over_limit_initial = False
@@ -437,29 +479,104 @@ def run():
                     route.fulfill(status=204, body=b"")
                     return
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "POST":
+            if parsed.path == LOCAL_PRICE_PREVIEW:
+                body = request.post_data_json
+                if not isinstance(body, dict) or set(body) != {
+                    "reviewed_write", "product_ids", "change_type", "change_value",
+                    "formula", "formula_variables", "price_source", "exact_selection",
+                }:
+                    raise AssertionError(("WB preview request shape changed", body))
+                if body["reviewed_write"] is not True or body["product_ids"] != price_review_scope["product_ids"]:
+                    raise AssertionError(("WB preview did not use the exact ordered selected IDs", body))
+                if not isinstance(body["formula_variables"], dict):
+                    raise AssertionError("WB review omitted formula variable object")
+                price_preview_posts.append({
+                    "reviewed_write": body["reviewed_write"],
+                    "product_ids": body["product_ids"],
+                    "change_type": body["change_type"],
+                    "change_value": body["change_value"],
+                    "price_source": body["price_source"],
+                    "exact_selection": body["exact_selection"],
+                })
+                response = route.fetch(max_redirects=0)
+                if response.status != 200:
+                    raise AssertionError(("Authoritative WB preview failed", response.status,
+                                          response.text()[:300]))
+                preview = response.json()
+                token = preview.get("review_token")
+                if (preview.get("success") is not True or preview.get("reviewed") is not True
+                        or not isinstance(token, str) or len(token) < 40 or "." not in token):
+                    raise AssertionError("WB preview returned no signed review receipt")
+                if [row.get("product_id") for row in preview.get("items", [])] != body["product_ids"]:
+                    raise AssertionError("WB preview row order differs from the reviewed selection")
+                if preview.get("stats", {}).get("selected_count") != len(body["product_ids"]):
+                    raise AssertionError("WB preview selected count differs from exact selection")
+                latest_price_preview.update({
+                    "body": body,
+                    "token": token,
+                    "response": preview,
+                })
+                price_preview_responses.append({
+                    "status": response.status,
+                    "selected_count": preview["stats"]["selected_count"],
+                    "changed_count": preview["stats"]["changed_count"],
+                    "no_op_count": preview["stats"]["no_op_count"],
+                    "review_token_length": len(token),
+                })
+                route.fulfill(response=response)
+                return
             if parsed.path == LOCAL_PRICE_CREATE:
                 body = request.post_data_json
-                if not isinstance(body, dict) or body.get("exact_selection") is not True or \
-                        body.get("product_ids") != [fixture_ids["wb_id"]]:
-                    raise AssertionError("WB price batch did not use the exact transferred Product ID set")
+                if not isinstance(body, dict) or body.get("reviewed_write") is not True:
+                    raise AssertionError("WB price batch omitted reviewed-write consent")
                 if set(body) != {
-                    "product_ids", "change_type", "change_value", "formula", "name",
+                    "reviewed_write", "review_token", "product_ids", "change_type",
+                    "change_value", "formula", "formula_variables", "name",
                     "description", "price_source", "exact_selection",
                 }:
                     raise AssertionError("WB price batch sent unexpected fields")
-                price_create_posts.append({
-                    "product_ids": body["product_ids"],
-                    "exact_selection": body["exact_selection"],
-                    "change_type": body["change_type"],
-                    "change_value": body["change_value"],
-                })
+                reviewed_input = latest_price_preview.get("body")
+                if (not reviewed_input or body.get("review_token") != latest_price_preview.get("token")
+                        or body.get("product_ids") != price_review_scope["product_ids"]
+                        or body.get("product_ids") != reviewed_input.get("product_ids")):
+                    raise AssertionError("WB save did not use the exact current signed preview")
+                for field in (
+                    "change_type", "change_value", "formula", "formula_variables",
+                    "price_source", "exact_selection",
+                ):
+                    if body.get(field) != reviewed_input.get(field):
+                        raise AssertionError(("WB save inputs differ from signed preview", field))
                 response = route.fetch(max_redirects=0)
+                attempt = {
+                    "product_ids": body["product_ids"],
+                    "reviewed_write": body["reviewed_write"],
+                    "token_matches_last_preview": body["review_token"] == latest_price_preview["token"],
+                    "status": response.status,
+                }
+                if response.status == 409:
+                    try:
+                        error = response.json()
+                    except Exception:
+                        error = {}
+                    attempt["code"] = error.get("code")
+                    price_create_attempts.append(attempt)
+                    route.fulfill(response=response)
+                    return
                 if response.status != 200:
                     raise AssertionError(("Actual WB price batch create failed", response.status,
                                           response.text()[:300]))
                 receipt = response.json()
                 if receipt.get("success") is not True or not isinstance(receipt.get("batch_id"), int):
                     raise AssertionError("WB price create returned no exact batch receipt")
+                attempt["status"] = response.status
+                price_create_attempts.append(attempt)
+                price_create_posts.append({
+                    "product_ids": body["product_ids"],
+                    "reviewed_write": body["reviewed_write"],
+                    "exact_selection": body["exact_selection"],
+                    "change_type": body["change_type"],
+                    "change_value": body["change_value"],
+                })
                 price_create_receipts.append(receipt)
                 route.fulfill(response=response)
                 return
@@ -878,15 +995,66 @@ def run():
             assert parse_qs(urlsplit(page.url).query).get("product_ids") == [str(fixture_ids["wb_id"])]
             return urlsplit(page.url).fragment
 
-        def create_exact_wb_batch(change_type, change_value):
-            nonce_hash = open_exact_wb_price_form()
+        def calculate_price_preview(change_type, change_value):
             page.locator(f'input[type="radio"][value="{change_type}"]').check()
             page.locator("#change_value").fill(str(change_value))
+            preview_posts_before = len(price_preview_posts)
+            successful_creates_before = len(price_create_posts)
+            create_attempts_before = len(price_create_attempts)
+            decisions_before = len(price_decisions)
+            provider_attempts_before = fixture.REPORT["provider_attempts"]
+            watch = begin_domain_write_watch()
+            domain_writes = None
+            try:
+                with page.expect_response(lambda response: (
+                    urlsplit(response.url).path == LOCAL_PRICE_PREVIEW
+                    and response.request.method == "POST"
+                )) as preview_response_info:
+                    page.locator("[data-price-review-run]").click()
+                domain_writes = end_domain_write_watch(watch)
+            finally:
+                if domain_writes is None:
+                    end_domain_write_watch(watch)
+            response = preview_response_info.value
+            assert response.status == 200
+            preview = response.json()
+            assert preview.get("success") is True and preview.get("reviewed") is True
+            assert isinstance(preview.get("review_token"), str) and len(preview["review_token"]) >= 40
+            assert price_preview_posts[-1]["product_ids"] == price_review_scope["product_ids"]
+            assert price_preview_posts[-1]["reviewed_write"] is True
+            assert len(price_preview_posts) == preview_posts_before + 1
+            assert len(price_create_posts) == successful_creates_before
+            assert len(price_create_attempts) == create_attempts_before
+            assert len(price_decisions) == decisions_before
+            assert domain_writes == [], domain_writes
+            assert fixture.REPORT["provider_attempts"] == provider_attempts_before == 0
+            assert page.locator("[data-price-review-table]").is_visible()
+            assert page.locator("[data-price-review-row]").count() == len(price_review_scope["product_ids"])
+            save_button = page.locator("[data-price-reviewed-save]")
+            assert save_button.is_enabled() is bool(preview.get("can_create"))
+            return preview, response
+
+        def create_exact_wb_batch(change_type, change_value):
+            nonce_hash = open_exact_wb_price_form()
+            preview, _preview_response = calculate_price_preview(change_type, change_value)
+            assert len(preview["items"]) == 1
+            reviewed_row = preview["items"][0]
+            assert reviewed_row["product_id"] == fixture_ids["wb_id"]
+            assert reviewed_row["status"] == "changed"
+            assert reviewed_row["safety_level"] == {
+                5: "safe", 15: "warning", 25: "dangerous",
+            }[change_value]
+            assert page.locator("[data-price-review-row]").get_attribute("data-product-id") == str(
+                fixture_ids["wb_id"]
+            )
+            assert page.locator("[data-price-review-status]").inner_text() == {
+                "safe": "Изменится", "warning": "Проверить", "dangerous": "Опасно",
+            }[reviewed_row["safety_level"]]
             posts_before = len(price_create_posts)
             receipts_before = len(price_create_receipts)
             with page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_PRICE_CREATE
                                       and response.request.method == "POST") as create_response:
-                page.get_by_role("button", name="Создать изменение (1 товаров)").click()
+                page.locator("[data-price-reviewed-save]").click()
             response = create_response.value
             assert response.status == 200
             assert response.request.method == "POST"
@@ -896,6 +1064,7 @@ def run():
             assert len(price_create_posts) == len(price_create_receipts)
             assert price_create_posts[-1] == {
                 "product_ids": [fixture_ids["wb_id"]],
+                "reviewed_write": True,
                 "exact_selection": True,
                 "change_type": change_type,
                 "change_value": change_value,
@@ -1046,6 +1215,180 @@ def run():
         assert [item["action"] for item in price_decisions] == ["reject", "confirm"]
         assert all(item["workspace_return"] for item in price_decisions)
         checks.append("wb_dangerous_price_confirmation_keeps_exact_return_context")
+
+        # Compare three authoritative source cases in one exact selection:
+        # a no-op WB price, a real numeric zero, and documented local fallback.
+        open_products(page)
+        with page.expect_response(lambda response: feed_matches(response, {
+                "search": "Сравнение цен WB",
+        })) as comparison_feed:
+            page.get_by_placeholder("Название, бренд или артикул").fill("Сравнение цен WB")
+        assert comparison_feed.value.status == 200
+        assert page.locator(".mp-list article.mp-row").count() == 3
+        for title in fixture_ids["preview_titles"]:
+            page.get_by_role("checkbox", name=f"Выбрать {title}", exact=True).check()
+        checked_local_ids = page.locator(".mp-list article.mp-row input[type=checkbox]:checked").evaluate_all(
+            "boxes => boxes.map(box => Number(box.value))"
+        )
+        assert set(checked_local_ids) == set(fixture_ids["preview_local_ids"])
+        assert selected_browser_state(page)["selected"] == fixture_ids["preview_local_ids"]
+        pick_action(page, "Изменить цены WB")
+        page.wait_for_url(lambda value: (
+            urlsplit(str(value)).path == "/prices/change"
+            and re.fullmatch(r"workspace-return=[a-f0-9]{32}", urlsplit(str(value)).fragment)
+        ))
+        comparison_hash = urlsplit(page.url).fragment
+        comparison_product_ids = fixture_ids["preview_wb_ids"]
+        assert parse_qs(urlsplit(page.url).query).get("product_ids") == [
+            ",".join(str(value) for value in comparison_product_ids)
+        ]
+        price_review_scope["product_ids"] = comparison_product_ids
+        page.wait_for_function("""ids => {
+            const element = document.querySelector('[x-data^="priceChangeApp("]');
+            return element && window.Alpine &&
+                Alpine.$data(element).selectedIds.join(',') === ids.join(',');
+        }""", arg=comparison_product_ids)
+        comparison_form = page.locator('[x-data^="priceChangeApp("]')
+        comparison_form.locator("label").filter(
+            has_text="Цены с маркетплейса",
+        ).locator("div.relative").click()
+        assert comparison_form.evaluate("element => Alpine.$data(element).useMarketplacePrices")
+        comparison_preview, _comparison_response = calculate_price_preview("set", 600)
+        comparison_rows = comparison_preview["items"]
+        assert [row["product_id"] for row in comparison_rows] == comparison_product_ids
+        comparison_by_id = {row["product_id"]: row for row in comparison_rows}
+        base_price_id, zero_price_id, fallback_price_id = comparison_product_ids
+        assert comparison_preview["stats"]["selected_count"] == 3
+        assert comparison_preview["stats"]["changed_count"] == 2
+        assert comparison_preview["stats"]["no_op_count"] == 1
+        assert comparison_preview["stats"]["skipped_count"] == 0
+        assert comparison_preview["stats"]["invalid_count"] == 0
+        assert comparison_preview["can_create"] is True
+        assert (comparison_by_id[base_price_id]["source_kind"],
+                comparison_by_id[base_price_id]["old_price"],
+                comparison_by_id[base_price_id]["new_price"],
+                comparison_by_id[base_price_id]["status"]) == (
+                    "wb_seller_price", 600.0, 600, "no_op",
+                )
+        assert (comparison_by_id[zero_price_id]["source_kind"],
+                comparison_by_id[zero_price_id]["old_price"],
+                comparison_by_id[zero_price_id]["new_price"],
+                comparison_by_id[zero_price_id]["status"]) == (
+                    "wb_seller_price", 0.0, 600, "changed",
+                )
+        assert (comparison_by_id[fallback_price_id]["source_kind"],
+                comparison_by_id[fallback_price_id]["old_price"],
+                comparison_by_id[fallback_price_id]["new_price"],
+                comparison_by_id[fallback_price_id]["status"]) == (
+                    "local_fallback", 1200.0, 600, "changed",
+                )
+        comparison_table_rows = {
+            int(row.get_attribute("data-product-id")): row
+            for row in page.locator("[data-price-review-row]").all()
+        }
+        assert set(comparison_table_rows) == set(comparison_product_ids)
+        base_cells = comparison_table_rows[base_price_id].locator("td").all_text_contents()
+        zero_cells = comparison_table_rows[zero_price_id].locator("td").all_text_contents()
+        fallback_cells = comparison_table_rows[fallback_price_id].locator("td").all_text_contents()
+        assert "Цена продавца из WB" in base_cells[1] and "WB:" in base_cells[1]
+        assert "Без изменения" in base_cells[4]
+        assert "0 ₽" in zero_cells[2] and "Цена продавца из WB" in zero_cells[1]
+        assert "Локальная цена каталога" in fallback_cells[1]
+        assert "Дата источника не записана" in fallback_cells[1]
+        assert "Без изменения" in comparison_table_rows[base_price_id].locator(
+            "[data-price-review-status]"
+        ).inner_text()
+        assert len(price_create_posts) == len(price_create_receipts) == 4
+        checks.append("wb_multirow_preview_compares_noop_zero_and_explicit_local_fallback")
+
+        # At narrow width the exact result remains reachable by keyboard and
+        # the explicit return stays readable inside the viewport.
+        page.set_viewport_size({"width": 320, "height": 900})
+        verify_bounds(page)
+        review_return = page.locator("a[data-price-workspace-return]:visible").first
+        assert review_return.inner_text().strip() == "Вернуться к товарам"
+        return_bounds = review_return.bounding_box()
+        assert return_bounds and return_bounds["height"] >= 44
+        assert return_bounds["x"] >= 0 and return_bounds["x"] + return_bounds["width"] <= 320
+        review_region = page.locator(
+            '[role="region"][aria-label="Проверенные цены всех выбранных товаров"]'
+        )
+        run_button = page.locator("[data-price-review-run]")
+        run_button.focus()
+        page.keyboard.press("Tab")
+        assert review_region.evaluate("element => element === document.activeElement")
+        page.set_viewport_size({"width": 1080, "height": 900})
+        checks.append("wb_review_and_return_remain_keyboard_accessible_at_320px")
+
+        # Any edit to the reviewed rule invalidates the signed preview in the
+        # browser before a save request can be sent.
+        attempts_before_parameter_edit = len(price_create_attempts)
+        page.locator("#change_value").fill("601")
+        assert page.locator("[data-price-reviewed-save]").is_disabled()
+        page.locator("[data-price-review-table]").wait_for(state="detached")
+        assert len(price_create_attempts) == attempts_before_parameter_edit
+        checks.append("wb_price_rule_edit_invalidates_preview_and_disables_save")
+
+        # A signed preview also becomes stale when its authoritative WB price
+        # changes in storage. The real Flask save route rejects it with 409 and
+        # creates no batch; preview requests themselves remain read-only.
+        refreshed_preview, _refreshed_response = calculate_price_preview("set", 600)
+        assert refreshed_preview["review_token"]
+        with fixture.app.app_context():
+            stale_source = db.session.get(Product, base_price_id)
+            original_wb_price = stale_source.wb_price
+            stale_source.wb_price = 599
+            db.session.commit()
+            batches_before_stale_save = PriceChangeBatch.query.filter_by(
+                seller_id=fixture.FIXTURE["seller_id"],
+            ).count()
+        stale_attempts_before = len(price_create_attempts)
+        stale_create_posts_before = len(price_create_posts)
+        stale_receipts_before = len(price_create_receipts)
+        stale_provider_attempts_before = fixture.REPORT["provider_attempts"]
+        stale_write_watch = begin_domain_write_watch()
+        try:
+            with page.expect_response(lambda response: (
+                urlsplit(response.url).path == LOCAL_PRICE_CREATE
+                and response.request.method == "POST"
+            )) as stale_save_response_info:
+                page.locator("[data-price-reviewed-save]").click()
+            stale_save_writes = end_domain_write_watch(stale_write_watch)
+        finally:
+            if "stale_save_writes" not in locals():
+                end_domain_write_watch(stale_write_watch)
+        stale_save_response = stale_save_response_info.value
+        assert stale_save_response.status == 409
+        assert stale_save_response.json().get("code") == "review_stale"
+        assert stale_save_writes == [], stale_save_writes
+        assert len(price_create_attempts) == stale_attempts_before + 1
+        assert price_create_attempts[-1]["code"] == "review_stale"
+        assert price_create_attempts[-1]["token_matches_last_preview"] is True
+        assert len(price_create_posts) == stale_create_posts_before
+        assert len(price_create_receipts) == stale_receipts_before
+        assert fixture.REPORT["provider_attempts"] == stale_provider_attempts_before == 0
+        assert page.locator("[data-price-review-error]").is_visible()
+        assert "Цена, источник или настройки изменились" in page.locator(
+            "[data-price-review-error]"
+        ).inner_text()
+        assert page.locator("[data-price-reviewed-save]").is_disabled()
+        assert page.locator("[data-price-review-table]").count() == 0
+        with fixture.app.app_context():
+            stale_source = db.session.get(Product, base_price_id)
+            stale_source.wb_price = original_wb_price
+            db.session.commit()
+            assert PriceChangeBatch.query.filter_by(
+                seller_id=fixture.FIXTURE["seller_id"],
+            ).count() == batches_before_stale_save
+        checks.append("wb_server_rejects_stale_review_token_without_batch_or_provider_write")
+
+        # Return to the catalogue with the failed preview still visibly
+        # recoverable through its exact original workspace hash.
+        stale_preview_return = page.locator("a[data-price-workspace-return]:visible").last
+        assert urlsplit(stale_preview_return.get_attribute("href") or "").fragment == comparison_hash
+        page.goto(fixture.BASE + "/my-products/beta")
+        page.locator("#my-products-app").wait_for(state="visible")
+        price_review_scope["product_ids"] = [fixture_ids["wb_id"]]
 
         open_products(page)
         page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
