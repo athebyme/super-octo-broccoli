@@ -334,7 +334,15 @@ try:
             page.get_by_role('menuitem',name='Подготовить для Ozon',exact=False).click()
             source_dialog = page.get_by_role('dialog')
             source_dialog.wait_for()
-            assert source_dialog.get_by_text('Ничего не отправится в Ozon.',exact=False).count() == 1
+            local_prep_copy = source_dialog.get_by_text(
+                'Подготовим локальные черновики для выбранного магазина Ozon. '
+                'Отправку подтвердите отдельно после проверки карточек.',
+                exact=True,
+            )
+            assert local_prep_copy.count() == 1 and local_prep_copy.is_visible()
+            assert source_dialog.get_by_text(
+                'Отправку подтвердите отдельно после проверки карточек.', exact=False,
+            ).count() == 1
             assert source_dialog.get_by_role('combobox',name='Магазин Ozon').input_value() == str(account_id)
             beta_layout(page,'prepare-confirmation')
             source_dialog.get_by_role('checkbox').check()
