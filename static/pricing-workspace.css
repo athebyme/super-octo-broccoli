@@ -373,7 +373,7 @@
         color: var(--text);
     }
 
-    .pricing-workspace-nav-summary {
+    .pricing-workspace-mobile-nav > .pricing-workspace-nav-summary {
         display: flex;
         align-items: center;
         gap: 10px;
@@ -385,6 +385,11 @@
         line-height: 1.35;
         cursor: pointer;
         list-style: none;
+    }
+
+    .pricing-workspace-mobile-nav > .pricing-workspace-nav-summary:focus-visible {
+        outline: 2px solid var(--accent-strong);
+        outline-offset: 2px;
     }
 
     .pricing-workspace-nav-summary::-webkit-details-marker {
