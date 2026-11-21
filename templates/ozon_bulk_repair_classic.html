@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Массовое исправление Ozon — Seller Hub{% endblock %}
+{% block title %}{{ 'Изменить подготовленные черновики' if editor.mode == 'source_prepare' else 'Массовое исправление Ozon' }} — Seller Hub{% endblock %}
 
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='ozon-bulk-repair.css') }}">
@@ -10,13 +10,19 @@
 <div class="sh-page-header">
     <div class="sh-page-header-content">
         <div>
-            <h1 class="sh-page-title">Массовое исправление карточек Ozon</h1>
+            <h1 class="sh-page-title">{{ 'Изменить подготовленные черновики' if editor.mode == 'source_prepare' else 'Массовое исправление карточек Ozon' }}</h1>
             <p class="sh-page-subtitle">
                 {{ editor.account_label or ('Кабинет #' ~ editor.account_id) }}
                 · {{ editor.total }} карточек · всё редактируется прямо в Seller Hub
             </p>
         </div>
         <div class="sh-page-actions">
+            {% if editor.mode == 'source_prepare' and editor.review_draft_ids %}
+            <a class="sh-btn sh-btn--primary sh-btn--md" data-source-prepare-review
+               href="{{ url_for('ozon_bulk_uploads.review', account_id=editor.account_id, draft_ids=editor.review_draft_ids|join(','), parent_prepare_job_uid=editor.job_uid) }}">
+                Проверить перед отправкой
+            </a>
+            {% endif %}
             <a class="sh-btn sh-btn--white-outline sh-btn--md"
                href="{{ url_for('ozon_bulk_uploads.detail', job_uid=editor.job_uid) }}">
                 Вернуться к итогу
@@ -27,16 +33,30 @@
 
 <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6"
      data-ozon-repair-root
+     data-editor-mode="{{ editor.mode or 'legacy' }}"
+     {% if editor.mode == 'source_prepare' %}data-source-prepare-editor{% endif %}
      data-type-search-url="{{ url_for('ozon_bulk_uploads.repair_type_search', job_uid=editor.job_uid) }}">
     <div class="sh-alert sh-alert--info mb-5" role="status">
         <div class="sh-alert-content">
+            {% if editor.mode == 'source_prepare' %}
+            <strong>Изменения сохраняются только в Seller Hub.</strong>
+            После сохранения проверьте актуальные версии отдельным шагом. Здесь ничего не отправляется в Ozon.
+            {% else %}
             <strong>Это локальный редактор.</strong>
             «Сохранить и проверить» обновляет только ваши черновики и сразу
             пересчитывает готовность каждой строки. В Ozon ничего не отправляется.
             Готовые карточки затем запускаются отдельной подтверждённой кнопкой
             на экране итога.
+            {% endif %}
         </div>
     </div>
+    {% if editor.mode == 'source_prepare' and editor.blocked_review_items %}
+    <div class="sh-alert sh-alert--warning mb-5" role="status" data-source-prepare-blocked-count>
+        <div class="sh-alert-content">
+            Для изменения временно недоступно: {{ editor.blocked_review_items|length }} черновиков уже находятся в проверенной отправке. Дождитесь результата операции Ozon.
+        </div>
+    </div>
+    {% endif %}
 
     <form method="post"
           action="{{ url_for('ozon_bulk_uploads.apply_repair_editor', job_uid=editor.job_uid, view='classic') }}"
@@ -168,6 +188,9 @@
                                name="row_{{ row.draft_id }}_save_mapping"
                                value="0"
                                data-save-mapping>
+                        {% if editor.mode == 'source_prepare' %}
+                        <input type="hidden" name="row_{{ row.draft_id }}_action" value="ИСПРАВИТЬ">
+                        {% endif %}
 
                         <div class="ozr-row-summary">
                             <label class="ozr-check ozr-row-select">
@@ -181,10 +204,11 @@
                             <div class="min-w-0 flex-1">
                                 <div class="flex flex-wrap items-center gap-2">
                                     <span class="sh-badge sh-badge--sm
-                                        {% if row.status == 'ready_to_retry' %}sh-badge--green
+                                        {% if row.status in ['ready_to_retry', 'prepared'] %}sh-badge--green
                                         {% elif row.status == 'excluded' %}sh-badge--gray
                                         {% else %}sh-badge--yellow{% endif %}">
-                                        {% if row.status == 'ready_to_retry' %}Готова к синхронизации
+                                        {% if editor.mode == 'source_prepare' and row.phase == 'prepared' %}Подготовлена локально
+                                        {% elif row.status == 'ready_to_retry' %}Готова к синхронизации
                                         {% elif row.status == 'excluded' %}Исключена
                                         {% else %}Нужно исправить{% endif %}
                                     </span>
@@ -204,6 +228,7 @@
                                 </p>
                                 {% endif %}
                             </div>
+                            {% if editor.mode != 'source_prepare' %}
                             <label class="w-full sm:w-44">
                                 <span class="ozr-label">Действие</span>
                                 <select class="ozr-input"
@@ -218,6 +243,7 @@
                                     </option>
                                 </select>
                             </label>
+                            {% endif %}
                         </div>
 
                         {% if row.repair_error %}
@@ -489,7 +515,11 @@
             <div>
                 <strong data-submit-selection style="color:var(--text)"></strong>
                 <div class="text-xs" style="color:var(--text-muted)">
+                    {% if editor.mode == 'source_prepare' %}
+                    Сохранение локальное. Перед отправкой проверьте актуальные версии.
+                    {% else %}
                     Сначала локальная проверка; отправка в Ozon здесь невозможна.
+                    {% endif %}
                 </div>
             </div>
             <div class="ozr-submit-actions">
@@ -499,13 +529,14 @@
                 </a>
                 <button class="sh-btn sh-btn--primary sh-btn--md"
                         type="submit"
-                        data-repair-submit>
-                    Сохранить и проверить
+                        data-repair-submit{% if editor.mode == 'source_prepare' %} data-source-prepare-save{% endif %}>
+                    {{ 'Сохранить черновики' if editor.mode == 'source_prepare' else 'Сохранить и проверить' }}
                 </button>
             </div>
         </div>
     </form>
 
+    {% if editor.mode != 'source_prepare' %}
     <details class="mt-5 text-sm">
         <summary class="cursor-pointer font-medium" style="color:var(--text-secondary)">
             Дополнительный экспорт в XLSX
@@ -519,6 +550,7 @@
             Скачать XLSX
         </a>
     </details>
+    {% endif %}
 </div>
 {% endblock %}
 

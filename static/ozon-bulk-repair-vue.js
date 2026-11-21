@@ -14,8 +14,9 @@
         return {...result,action:row.action,product_type_id:row.product_type_id,save_mapping:!!row.save_mapping,schema_cleanup:!!row.schema_cleanup};
     }
     function makeRows(editor) {
+        const sourcePrepare = editor.mode === 'source_prepare';
         return editor.groups.flatMap(group => group.rows.map(source => {
-            const row = {...clone(source),group_id:group.id,group_name:group.source_category,selected:false,
+            const row = {...clone(source),...(sourcePrepare ? {action:'ИСПРАВИТЬ'} : {}),group_id:group.id,group_name:group.source_category,selected:false,
                 expanded:false,save_mapping:false,error:'',server:null,dictionaryCopied:false,baseTypeName:source.product_type_name};
             row.attributes = row.attributes.map(field => ({...field,values:valuesOf(field)}));
             fixed.forEach(key => { row[key] = asText(row[key]); });
@@ -67,14 +68,14 @@
         const labels=items.map(item => asText(item?.value));
         return new Set(labels).size<labels.length;
     }
-    function serialize(rows, csrf) {
+    function serialize(rows, csrf, sourcePrepare=false) {
         const form = new URLSearchParams();
         form.append('csrf_token',csrf);
         for (const row of rows) {
             const prefix = 'row_'+row.draft_id+'_';
             form.append('selected_draft_id',String(row.draft_id));
             for (const [key,value] of Object.entries({draft_version:row.draft_version,imported_product_id:row.imported_product_id,
-                action:row.action,product_type_id:row.product_type_id || '',save_mapping:row.save_mapping ? '1':'0'})) form.append(prefix+key,asText(value));
+                action:sourcePrepare ? 'ИСПРАВИТЬ' : row.action,product_type_id:row.product_type_id || '',save_mapping:row.save_mapping ? '1':'0'})) form.append(prefix+key,asText(value));
             fixed.forEach(key => form.append(prefix+key,asText(row[key])));
             const typeChanged = row.product_type_id !== row.base.product_type_id;
             if (row.cleanup_candidates.length && row.schema_cleanup && !typeChanged) form.append(prefix+'schema_cleanup','1');
@@ -119,18 +120,31 @@
         return {key,items,skipped};
     }
     function validEditor(value, config) {
-        return value && value.account_id===config.editor.account_id && value.job_uid===config.editor.job_uid &&
-            Array.isArray(value.groups) && value.groups.every(g => Array.isArray(g.rows)) &&
-            value.groups.reduce((n,g) => n+g.rows.length,0)<=200 &&
-            value.groups.flatMap(g => g.rows).every(r => Number.isSafeInteger(r.draft_id) && r.draft_id>0 &&
-                Number.isSafeInteger(r.draft_version) && r.draft_version>0 && Array.isArray(r.attributes));
+        if (!value || value.account_id!==config.editor.account_id || value.job_uid!==config.editor.job_uid ||
+            !Array.isArray(value.groups) || !value.groups.every(g => Array.isArray(g.rows)) ||
+            value.groups.reduce((n,g) => n+g.rows.length,0)>200) return false;
+        const rows=value.groups.flatMap(g => g.rows);
+        if (!rows.every(r => Number.isSafeInteger(r.draft_id) && r.draft_id>0 &&
+            Number.isSafeInteger(r.draft_version) && r.draft_version>0 && Array.isArray(r.attributes))) return false;
+        if (config.editor.mode==='source_prepare') {
+            const expected=value.review_draft_ids,blocked=value.blocked_review_items,rowIds=rows.map(row=>row.draft_id);
+            if (value.mode!=='source_prepare' || !Array.isArray(expected) || !Array.isArray(blocked) ||
+                !expected.every(id=>Number.isSafeInteger(id) && id>0) ||
+                !blocked.every(item=>item && Number.isSafeInteger(item.draft_id) && item.draft_id>0 &&
+                    typeof item.title==='string' && typeof item.message==='string')) return false;
+            const expectedSet=new Set(expected);
+            if (expectedSet.size!==expected.length || rowIds.length!==expected.length ||
+                new Set(rowIds).size!==expectedSet.size || rowIds.some(id=>!expectedSet.has(id))) return false;
+        }
+        return true;
     }
     function createOptions(config) {
         let alive=true, controller=null, searchController=null, searchTimer=null, searchRevision=0, requestRevision=0, unload=null, pop=null, trigger=null;
-        const storageKey='ozon-repair:'+config.editor.account_id+':'+config.editor.job_uid;
+        const sourcePrepare=config.editor.mode==='source_prepare';
+        const storageKey='ozon-repair:'+config.editor.account_id+':'+config.editor.job_uid+(sourcePrepare?':source_prepare':'');
         return {
             components:{'ozon-field':global.ozonDraftEditor.fieldComponent,'ozon-photo':global.ozonDraftEditor.photoComponent},
-            data() { return {rows:makeRows(config.editor),enabled:config.enabled,urls:config.urls,busy:false,error:'',notice:'',
+            data() { return {rows:makeRows(config.editor),enabled:config.enabled,sourcePrepare,urls:config.urls,reviewable:!!config.editor.review_draft_ids?.length,blockedReviewCount:config.editor.blocked_review_items?.length || 0,busy:false,error:'',notice:'',
                 report:null,uncertain:false,sessionExpired:false,query:'',group:'',state:'',page:1,pageSize:15,dialog:'',
                 bulkKey:config.editor.bulk_fields[0]?.key || 'description',bulkValue:'',bulkValues:[],bulkMode:'value',bulkSource:null,bulkPlan:null,
                 fields:config.editor.bulk_fields,picker:{kind:'',rowId:null,fieldId:null,query:'',items:[],loading:false,error:'',more:false},
@@ -157,7 +171,7 @@
                 display,dictionaryIdentities,shouldShowDictionaryIdentities,shouldShowDictionaryId,definition,changes,
                 status(row) { return row.server ? 'Конфликт изменений' : row.error || row.repair_error ? 'Не сохранено' :
                     row.action==='ИСКЛЮЧИТЬ' ? 'Исключена из повтора' : changes(row).length ? 'Есть изменения' :
-                    row.status==='ready_to_retry' ? 'Проверена локально' : 'Нужно исправить'; },
+                    row.phase==='prepared' ? 'Подготовлена локально' : row.status==='ready_to_retry' ? 'Проверена локально' : 'Нужно исправить'; },
                 changedType(row) { return row.product_type_id!==row.base.product_type_id; },
                 changeField(row,field,values) { field.values=clone(values);row.error=''; },
                 noteChange(row) { row.error=''; },
@@ -170,7 +184,7 @@
                     global.history.replaceState(null,'',url.pathname+url.search);
                 },
                 fromURL() { const args=new URL(global.location.href).searchParams;this.query=(args.get('q') || '').slice(0,200);
-                    this.group=args.get('group') || '';this.state=args.get('state') || '';this.page=Math.max(1,Math.min(this.pages,Number(args.get('page')) || 1)); },
+                    this.group=args.get('group') || '';this.state=args.get('state') || '';if(this.sourcePrepare && this.state==='excluded')this.state='';this.page=Math.max(1,Math.min(this.pages,Number(args.get('page')) || 1)); },
                 goPage(page) { this.page=Math.max(1,Math.min(page,this.pages));this.syncURL(); },
                 persist() { try { global.sessionStorage.setItem(storageKey,JSON.stringify({selected:this.selected.map(r=>r.draft_id),uncertain:this.uncertain})); } catch (_) {} },
                 selectPage(event) { this.visible.forEach(r => {r.selected=event.target.checked;});this.persist(); },
@@ -222,7 +236,14 @@
                         for(const row of old.values())if(!fresh.some(r=>r.draft_id===row.draft_id) && changes(row).length) {
                             row.error='Карточка больше недоступна в этом запуске. Скопируйте ввод перед обновлением.';row.unavailable=true;this.rows.push(row);
                         }
-                        this.fields=data.editor.bulk_fields;this.page=Math.min(this.page,this.pages);
+                        this.fields=data.editor.bulk_fields;this.blockedReviewCount=data.editor.blocked_review_items?.length || 0;
+                        this.reviewable=!!data.editor.review_draft_ids?.length;
+                        if(this.reviewable && this.urls.review){const reviewUrl=new URL(this.urls.review,global.location.origin);
+                            reviewUrl.searchParams.set('account_id',String(data.editor.account_id));
+                            reviewUrl.searchParams.set('draft_ids',data.editor.review_draft_ids.join(','));
+                            reviewUrl.searchParams.set('parent_prepare_job_uid',data.editor.job_uid);
+                            this.urls.review=reviewUrl.pathname+reviewUrl.search;}
+                        this.page=Math.min(this.page,this.pages);
                         this.uncertain=false;this.persist();
                         if(manual)this.notice='Текущее состояние прочитано. Проверьте сохранённые значения и конфликты перед новым действием.';
                     }catch(error){if(alive && revision===requestRevision){this.error=error.name==='AbortError'?'Проверка состояния заняла слишком много времени. Повторите чтение.':error.message;}}
@@ -314,8 +335,8 @@
                 reviewSave() {
                     if(this.locked || !this.selected.length)return;
                     this.error=this.checkRows();if(this.error){this.$nextTick(()=>this.$refs.error?.focus());return;}
-                    if(new TextEncoder().encode(serialize(this.selected,config.csrf).toString()).length>2*1024*1024){this.error='Данные выбранных карточек больше 2 МБ. Сохраните меньшую группу.';return;}
-                    this.review=this.selected.map(r=>({id:r.draft_id,title:r.title,action:r.action,typeChanged:this.changedType(r),impact:r.type_change_impact,changes:changes(r)}));
+                    if(new TextEncoder().encode(serialize(this.selected,config.csrf,this.sourcePrepare).toString()).length>2*1024*1024){this.error='Данные выбранных карточек больше 2 МБ. Сохраните меньшую группу.';return;}
+                    this.review=this.selected.map(r=>({id:r.draft_id,title:r.title,action:this.sourcePrepare?'ИСПРАВИТЬ':r.action,typeChanged:this.changedType(r),impact:r.type_change_impact,changes:changes(r)}));
                     this.open('review');
                 },
                 async save() {
@@ -325,12 +346,15 @@
                     const control=new AbortController(),timeout=setTimeout(()=>control.abort(),45000);
                     let accepted=null;
                     try{
-                        const data=await this.request(config.urls.apply,{method:'POST',body:serialize(rows,config.csrf),signal:control.signal});
+                        const data=await this.request(config.urls.apply,{method:'POST',body:serialize(rows,config.csrf,this.sourcePrepare),signal:control.signal});
                         const report=data.report;
                         if(!report || report.total!==ids.length || !Array.isArray(report.rows) || report.rows.length!==ids.length ||
                             new Set(report.rows.map(r=>r.draft_id)).size!==ids.length || report.rows.some(r=>!ids.includes(r.draft_id) ||
-                            !['failed','excluded','needs_input','ready_to_retry'].includes(r.status)))throw new Error('Результат сохранения неполон. Нужна сверка состояния.');
-                        accepted=report;this.report=report;this.notice='Сохранение завершено. Готовность каждой карточки показана отдельно.';
+                            !(this.sourcePrepare ? ['failed','needs_input','ready_to_retry'] : ['failed','excluded','needs_input','ready_to_retry']).includes(r.status)) ||
+                            this.sourcePrepare && report.rows.some(r=>r.status==='excluded'))throw new Error('Результат сохранения неполон. Нужна сверка состояния.');
+                        accepted=report;this.report=report;this.notice=this.sourcePrepare
+                            ? 'Черновики сохранены локально. Перед отправкой проверьте актуальные версии.'
+                            : 'Сохранение завершено. Готовность каждой карточки показана отдельно.';
                     }catch(error){
                         if(alive){this.error=error.name==='AbortError'?'Ответ не получен вовремя. Сначала сверьте состояние.':error.message;
                             if([401,403].includes(error.status)){this.uncertain=false;this.persist();}}

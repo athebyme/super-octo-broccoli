@@ -23,9 +23,12 @@
                 node.textContent = `Выбрано ${selected} из ${total}`;
             });
             const submitLabel = root.querySelector('[data-submit-selection]');
+            const sourcePrepare = root.dataset.editorMode === 'source_prepare';
             if (submitLabel) {
                 submitLabel.textContent = selected
-                    ? `Будет проверено карточек: ${selected}`
+                    ? sourcePrepare
+                        ? `Будет сохранено черновиков: ${selected}`
+                        : `Будет проверено карточек: ${selected}`
                     : 'Карточки не выбраны';
             }
             const submit = root.querySelector('[data-repair-submit]');
@@ -390,7 +393,9 @@
             if (submit) {
                 submit.disabled = true;
                 submit.classList.add('is-loading');
-                submit.textContent = 'Сохраняем и проверяем';
+                submit.textContent = root.dataset.editorMode === 'source_prepare'
+                    ? 'Сохраняем черновики'
+                    : 'Сохраняем и проверяем';
             }
         });
 
