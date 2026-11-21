@@ -393,12 +393,22 @@ def register_photo_routes(app):
     @login_required
     def api_photos_download_all(supplier_id):
         """
-        Запускает массовое фоновое скачивание всех фото поставщика.
-        Фото, которые уже есть в кэше, пропускаются.
+        Явно запускает массовое фоновое скачивание фото одного поставщика.
+        Операция доступна только администратору; фото из кэша пропускаются.
         """
+        if not getattr(current_user, 'is_admin', False):
+            abort(403)
+
+        # Validate the exact supplier before handing its ID to the broad warm
+        # operation. Keep the existing response contract for valid suppliers.
+        from models import Supplier
+        supplier = Supplier.query.get(supplier_id)
+        if supplier is None:
+            return {'success': False, 'error': 'supplier_not_found'}, 404
+
         from services.photo_cache import bulk_download_supplier_photos
         try:
-            result = bulk_download_supplier_photos(supplier_id)
+            result = bulk_download_supplier_photos(supplier.id)
             return {
                 'success': True,
                 'total_photos': result['total_photos'],
