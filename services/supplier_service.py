@@ -320,6 +320,8 @@ class SupplierCSVParser:
                 numeric_id = int(external_id)
                 if numeric_id <= 0 or numeric_id > (1 << 63) - 1:
                     raise ValueError("Некорректный ID товара в каталоге sexoptovik")
+                if external_id != str(numeric_id):
+                    raise ValueError("Неканонический ID товара в каталоге sexoptovik")
                 if numeric_id in numeric_ids:
                     raise ValueError("В каталоге sexoptovik найдены повторяющиеся ID")
                 if not title:

@@ -192,6 +192,7 @@ class SupplierFeedContentRevisionTest(unittest.TestCase):
         parser = SupplierCSVParser(supplier)
         invalid_feeds = (
             self._legacy_row(external_id='not-numeric'),
+            self._legacy_row(external_id='000123'),
             self._legacy_row(title=''),
             self._legacy_row()[:-1],
             self._legacy_row(external_id='001') + '\n' + self._legacy_row(external_id='1'),
