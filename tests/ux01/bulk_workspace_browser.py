@@ -1365,10 +1365,26 @@ def run():
         preview_context.route("**/*", bridge)
         preview_page = preview_context.new_page()
         preview_page.on("pageerror", lambda error: errors.append(str(error)))
+        # The earlier real mixed apply has already advanced this fixture row.
+        # Temporarily restore its old baseline so this independent context can
+        # review the same title/quantity delta; restore the saved state below.
+        with fixture.app.app_context():
+            preview_target = db.session.get(ImportedProduct, fixture_ids["local_id"])
+            target_state_after_good_apply = (
+                preview_target.title,
+                preview_target.supplier_content_revision,
+                preview_target.supplier_quantity,
+                preview_target.supplier_price,
+            )
+            preview_target.title = MAIN_TITLE
+            preview_target.supplier_content_revision = 1
+            preview_target.supplier_quantity = 3
+            db.session.commit()
         open_products(preview_page)
         preview_page.get_by_role("checkbox", name=f"Выбрать {MAIN_TITLE}").check()
         preview_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
         preview_posts_before = len(refresh_preview_posts)
+        posts_before_cancel = len(posts)
         refresh_posts_before_cancel = sum(post["path"] == LOCAL_REFRESH for post in posts)
         dialog, mobile_preview = open_supplier_refresh_preview(
             preview_page, [fixture_ids["local_id"], fixture_ids["manual_id"]],
@@ -1430,7 +1446,7 @@ def run():
         dialog.get_by_role("button", name="Вернуться", exact=True).click()
         assert not dialog.is_visible()
         assert sum(post["path"] == LOCAL_REFRESH for post in posts) == refresh_posts_before_cancel
-        assert len(posts) == 3, posts
+        assert len(posts) == posts_before_cancel, posts
         assert selected_browser_state(preview_page)["selected"] == [
             fixture_ids["local_id"], fixture_ids["manual_id"],
         ]
@@ -1482,6 +1498,13 @@ def run():
             stale_source = db.session.get(SupplierProduct, fixture_ids["refresh_source_id"])
             stale_source.title = old_source_title
             stale_source.content_revision = old_source_revision
+            restored_target = db.session.get(ImportedProduct, fixture_ids["local_id"])
+            (
+                restored_target.title,
+                restored_target.supplier_content_revision,
+                restored_target.supplier_quantity,
+                restored_target.supplier_price,
+            ) = target_state_after_good_apply
             db.session.commit()
         stale_dialog.get_by_role("button", name="Вернуться", exact=True).click()
         assert not stale_dialog.is_visible()
