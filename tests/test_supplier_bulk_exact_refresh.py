@@ -672,7 +672,12 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
         )
         self.assertEqual(duplicate_headers.status_code, 400)
 
-        altered_token = token[:-1] + ('A' if token[-1] != 'A' else 'B')
+        payload_segment, signature_segment = token.rsplit('.', 1)
+        altered_signature = (
+            ('A' if signature_segment[0] != 'A' else 'B')
+            + signature_segment[1:]
+        )
+        altered_token = f'{payload_segment}.{altered_signature}'
         tampered = self._get(
             '/api/my-products/supplier-refresh-result',
             headers={'X-Supplier-Refresh-Receipt': altered_token},
