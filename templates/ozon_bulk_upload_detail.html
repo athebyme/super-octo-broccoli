@@ -50,6 +50,9 @@
             </a>
             {% endif %}
             {% if local_only %}
+            <a class="text-xs underline underline-offset-2" data-source-prepare-products
+               style="color:var(--text-secondary)"
+               href="{{ url_for('seller_my_products_beta') }}">Мои товары</a>
             <a class="text-xs underline underline-offset-2" data-source-prepare-history
                style="color:var(--text-secondary)"
                href="{{ url_for('ozon_bulk_uploads.index', account_id=run.account_id) }}">История запусков</a>
@@ -61,7 +64,7 @@
     </div>
 </div>
 <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-    {{ preparation_journey('result', run.account_label or ('Магазин #' ~ run.account_id), 'запуск ' ~ run.mode ~ ' · ' ~ run.job_uid, ('Локальная подготовка завершилась без отправки; исправьте нужные черновики, затем проверьте версии перед отправкой.' if local_only else 'Сверьте статус каждой строки и связанной операции; неопределённый итог сначала читают, не повторяют.'), internal_url=url_for('seller_my_products', account_id=run.account_id), draft_url=url_for('marketplace_drafts.index', account_id=run.account_id), review_url=url_for('ozon_bulk_uploads.review', account_id=run.account_id, draft_ids=review_drafts.ids|join(','), parent_prepare_job_uid=run.job_uid) if local_only and review_drafts.ids else false, result_url=url_for('ozon_bulk_uploads.index', account_id=run.account_id), listing_url=url_for('marketplace_listings.index', marketplace='ozon', account_id=run.account_id), channel='Ozon') }}
+    {{ preparation_journey('result', run.account_label or ('Магазин #' ~ run.account_id), 'запуск ' ~ run.mode ~ ' · ' ~ run.job_uid, ('Локальная подготовка завершилась без отправки; исправьте нужные черновики, затем проверьте версии перед отправкой.' if local_only else 'Сверьте статус каждой строки и связанной операции; неопределённый итог сначала читают, не повторяют.'), internal_url=(url_for('seller_my_products_beta') if local_only else url_for('seller_my_products', account_id=run.account_id)), draft_url=url_for('marketplace_drafts.index', account_id=run.account_id), review_url=url_for('ozon_bulk_uploads.review', account_id=run.account_id, draft_ids=review_drafts.ids|join(','), parent_prepare_job_uid=run.job_uid) if local_only and review_drafts.ids else false, result_url=url_for('ozon_bulk_uploads.index', account_id=run.account_id), listing_url=url_for('marketplace_listings.index', marketplace='ozon', account_id=run.account_id), channel='Ozon') }}
     {% set result_config = {'kind': 'run', 'initial': run, 'url': url_for('ozon_bulk_uploads.detail_api', job_uid=run.job_uid)} %}
     {% include 'partials/ozon_result_status.html' %}
     <div class="sh-card p-5">

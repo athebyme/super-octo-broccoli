@@ -26,6 +26,8 @@
 .orb-receipt > strong, .orb-receipt > p { flex-basis:100%; }
 .orb-receipt p { color:var(--text-secondary); }
 .orb-receipt a { text-decoration:underline; }
+.orb[data-editor-mode="source_prepare"] .orb-receipt[data-source-prepare-receipt] { scroll-margin-block-start:64px; }
+.orb[data-editor-mode="source_prepare"] .orb-receipt[data-source-prepare-receipt]:focus { outline:2px solid var(--accent); outline-offset:3px; }
 .orb-filters { display:grid; grid-template-columns:minmax(180px,1.5fr) minmax(160px,1fr) minmax(150px,1fr); gap:14px; padding:17px 0 23px; }
 .orb-filters label { min-width:0; }
 .orb-filters label > span, .orb-label { display:block; font-size:11px; font-weight:500; margin-bottom:6px; color:var(--text-secondary); }

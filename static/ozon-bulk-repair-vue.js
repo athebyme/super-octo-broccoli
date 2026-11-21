@@ -171,6 +171,7 @@
                 display,dictionaryIdentities,shouldShowDictionaryIdentities,shouldShowDictionaryId,definition,changes,
                 status(row) { return row.server ? 'Конфликт изменений' : row.error || row.repair_error ? 'Не сохранено' :
                     row.action==='ИСКЛЮЧИТЬ' ? 'Исключена из повтора' : changes(row).length ? 'Есть изменения' :
+                    row.status==='needs_input' && this.sourcePrepare ? 'Нужны данные' :
                     row.phase==='prepared' ? 'Подготовлена локально' : row.status==='ready_to_retry' ? 'Проверена локально' : 'Нужно исправить'; },
                 changedType(row) { return row.product_type_id!==row.base.product_type_id; },
                 changeField(row,field,values) { field.values=clone(values);row.error=''; },
@@ -192,7 +193,7 @@
                 clearSelection() { this.rows.forEach(r => {r.selected=false;});this.persist(); },
                 selectRow(row) { row.selected=!row.selected;this.persist(); },
                 open(name) { trigger=global.document.activeElement;this.dialog=name;this.$nextTick(()=>this.$refs.modal.showModal()); },
-                close() { if(this.busy)return;this.cancelSearch();this.dialog='';this.$refs.modal.close();trigger?.focus(); },
+                close({restoreFocus=true}={}) { if(this.busy)return;this.cancelSearch();this.dialog='';this.$refs.modal.close();if(restoreFocus)trigger?.focus(); },
                 cancelSearch() { clearTimeout(searchTimer);searchRevision++;searchController?.abort();this.picker.loading=false; },
                 async request(url, options={}) {
                     let response;
@@ -206,12 +207,13 @@
                     return data;
                 },
                 async reload({report=null,manual=false}={}) {
-                    if(this.busy && manual)return;
+                    if(this.busy && manual)return false;
+                    let confirmed=false;
                     this.busy=true;this.error='';const revision=++requestRevision;controller?.abort();controller=new AbortController();
                     const readControl=controller,timeout=setTimeout(()=>readControl.abort(),30000);
                     try {
                         const data=await this.request(config.urls.read,{signal:controller.signal});
-                        if(!alive || revision!==requestRevision)return;
+                        if(!alive || revision!==requestRevision)return false;
                         if(!validEditor(data.editor,config))throw new Error('Не удалось подтвердить магазин и состав загрузки.');
                         if(typeof data.csrf!=='string' || !data.csrf || data.csrf.length>512)throw new Error('Не удалось обновить защиту формы. Повторите чтение состояния.');
                         config.csrf=data.csrf;
@@ -244,10 +246,11 @@
                             reviewUrl.searchParams.set('parent_prepare_job_uid',data.editor.job_uid);
                             this.urls.review=reviewUrl.pathname+reviewUrl.search;}
                         this.page=Math.min(this.page,this.pages);
-                        this.uncertain=false;this.persist();
+                        this.uncertain=false;this.persist();confirmed=true;
                         if(manual)this.notice='Текущее состояние прочитано. Проверьте сохранённые значения и конфликты перед новым действием.';
                     }catch(error){if(alive && revision===requestRevision){this.error=error.name==='AbortError'?'Проверка состояния заняла слишком много времени. Повторите чтение.':error.message;}}
                     finally{clearTimeout(timeout);if(alive && revision===requestRevision)this.busy=false;}
+                    return confirmed;
                 },
                 openBulk() { if(this.locked || !this.selected.length)return;this.bulkPlan=null;this.bulkValue='';this.bulkValues=[];this.bulkMode='value';this.bulkSource=this.selected[0].draft_id;this.open('bulk'); },
                 resetBulk() {this.bulkPlan=null;this.bulkValue='';this.bulkValues=[];},
@@ -339,27 +342,47 @@
                     this.review=this.selected.map(r=>({id:r.draft_id,title:r.title,action:this.sourcePrepare?'ИСПРАВИТЬ':r.action,typeChanged:this.changedType(r),impact:r.type_change_impact,changes:changes(r)}));
                     this.open('review');
                 },
+                async focusReceipt(expectedFocus) {
+                    if(!alive || this.uncertain || !this.report)return false;
+                    await new Promise(resolve=>this.$nextTick(resolve));
+                    const receipt=this.$refs.receipt;
+                    if(!alive || this.uncertain || !receipt || receipt.isConnected===false ||
+                        global.document.activeElement!==expectedFocus)return false;
+                    receipt.focus({preventScroll:true});
+                    receipt.scrollIntoView({block:'start',behavior:'instant'});
+                    return true;
+                },
                 async save() {
                     if(this.locked || !this.review.length)return;
                     const ids=this.review.map(r=>r.id),rows=this.rows.filter(r=>ids.includes(r.draft_id));
+                    const sourcePrepare=this.sourcePrepare;
+                    let accepted=null,focusAfterClose=null;
                     this.busy=true;this.uncertain=true;this.persist();this.error='';this.report=null;
                     const control=new AbortController(),timeout=setTimeout(()=>control.abort(),45000);
-                    let accepted=null;
                     try{
-                        const data=await this.request(config.urls.apply,{method:'POST',body:serialize(rows,config.csrf,this.sourcePrepare),signal:control.signal});
+                        const data=await this.request(config.urls.apply,{method:'POST',body:serialize(rows,config.csrf,sourcePrepare),signal:control.signal});
                         const report=data.report;
                         if(!report || report.total!==ids.length || !Array.isArray(report.rows) || report.rows.length!==ids.length ||
                             new Set(report.rows.map(r=>r.draft_id)).size!==ids.length || report.rows.some(r=>!ids.includes(r.draft_id) ||
-                            !(this.sourcePrepare ? ['failed','needs_input','ready_to_retry'] : ['failed','excluded','needs_input','ready_to_retry']).includes(r.status)) ||
-                            this.sourcePrepare && report.rows.some(r=>r.status==='excluded'))throw new Error('Результат сохранения неполон. Нужна сверка состояния.');
-                        accepted=report;this.report=report;this.notice=this.sourcePrepare
-                            ? 'Черновики сохранены локально. Перед отправкой проверьте актуальные версии.'
-                            : 'Сохранение завершено. Готовность каждой карточки показана отдельно.';
+                            !(sourcePrepare ? ['failed','needs_input','ready_to_retry'] : ['failed','excluded','needs_input','ready_to_retry']).includes(r.status)) ||
+                            sourcePrepare && report.rows.some(r=>r.status==='excluded'))throw new Error('Результат сохранения неполон. Нужна сверка состояния.');
+                        accepted=report;this.report=report;this.notice=sourcePrepare?'':'Сохранение завершено. Готовность каждой карточки показана отдельно.';
                     }catch(error){
                         if(alive){this.error=error.name==='AbortError'?'Ответ не получен вовремя. Сначала сверьте состояние.':error.message;
                             if([401,403].includes(error.status)){this.uncertain=false;this.persist();}}
-                    }finally{clearTimeout(timeout);if(alive){this.busy=false;this.close();}}
-                    if(accepted && alive)await this.reload({report:accepted});
+                    }finally{
+                        clearTimeout(timeout);
+                        if(alive){
+                            this.busy=false;
+                            this.close({restoreFocus:!accepted || !sourcePrepare});
+                            if(accepted && sourcePrepare)focusAfterClose=global.document.activeElement;
+                        }
+                    }
+                    if(accepted && alive){
+                        const confirmed=await this.reload({report:accepted});
+                        if(sourcePrepare && confirmed && !this.uncertain && global.document.activeElement===focusAfterClose)
+                            await this.focusReceipt(focusAfterClose);
+                    }
                 },
                 openConflict(row) {this.conflictId=row.draft_id;this.open('conflict');},
                 canKeep(row) {return row.server && row.base.product_type_id===row.server.base.product_type_id &&

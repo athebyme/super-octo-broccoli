@@ -3,7 +3,7 @@
 {% block title %}Исправление карточек Ozon — Seller Hub{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-editor.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='ozon-bulk-repair-vue.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-bulk-repair-vue.css', v='20261121-source-prepare-r38') }}">
 {% endblock %}
 {% block content %}
 <script id="orb-bootstrap" type="application/json">{{ {
@@ -24,8 +24,8 @@
      {% if editor.mode == 'source_prepare' %}data-source-prepare-editor{% endif %}>
     <header class="orb-header">
         <a class="orb-back" href="{{ url_for('ozon_bulk_uploads.detail', job_uid=editor.job_uid) }}">{{ icon('arrow-left', size=16) }} {{ 'К результатам подготовки' if editor.mode == 'source_prepare' else 'К результатам загрузки' }}</a>
-        <h1>{{ 'Изменить подготовленные черновики' if editor.mode == 'source_prepare' else 'Исправление карточек' }}</h1>
-        <p>{{ editor.account_label or 'Магазин Ozon' }}. {% if editor.mode == 'source_prepare' %}Исправления сохраняются только в Seller Hub. Перед отправкой отдельно проверьте выбранные версии.{% else %}Подготовьте нужные значения и сохраните черновики.{% endif %}</p>
+        <h1>{{ 'Черновики партии' if editor.mode == 'source_prepare' else 'Исправление карточек' }}</h1>
+        <p>{{ editor.account_label or 'Магазин Ozon' }}. {% if editor.mode == 'source_prepare' %}Локальные изменения сохраняются в Seller Hub; перед отправкой проверьте актуальные версии.{% else %}Подготовьте нужные значения и сохраните черновики.{% endif %}</p>
         <button type="button" class="orb-link" :disabled="busy || sessionExpired" @click="reload({manual:true})">Прочитать текущее состояние</button>
     </header>
 {% raw %}
@@ -41,13 +41,15 @@
     <section v-if="sourcePrepare && blockedReviewCount" class="orb-banner orb-banner--warning" role="status" data-source-prepare-blocked-count>
         Для изменения временно недоступно: {{ blockedReviewCount }} черновиков уже находятся в проверенной отправке. Дождитесь результата операции Ozon.
     </section>
-    <section v-if="report" class="orb-receipt" aria-label="Результат сохранения">
-        <strong>Проверено карточек: {{ report.total }}</strong>
+    <section v-if="report" ref="receipt" class="orb-receipt" aria-label="Результат сохранения"
+             :tabindex="sourcePrepare ? -1 : null"
+             :data-source-prepare-receipt="sourcePrepare ? '' : null">
+        <strong>{{ sourcePrepare ? 'Обработано черновиков: ' : 'Проверено карточек: ' }}{{ report.total }}</strong>
         <span>Готовы к повторной проверке отправки: {{ report.ready_to_retry }}</span><span>Нужны данные: {{ report.needs_input }}</span>
         <span v-if="!sourcePrepare">Исключены из повтора: {{ report.excluded }}</span><span v-if="report.failed">Не удалось сохранить: {{ report.failed }}</span>
-        <p v-if="sourcePrepare">Изменения сохранены только в Seller Hub. Отправка в Ozon здесь не выполняется.</p>
+        <p v-if="sourcePrepare">Сохранено в Seller Hub. Перед отправкой проверьте актуальные версии.</p>
         <p v-else>Сохранение изменяет черновики. Отправка в Ozon подтверждается отдельно на странице результатов.</p>
-        <a v-if="sourcePrepare && reviewable && urls.review" data-source-prepare-review :href="urls.review">Проверить перед отправкой</a>
+        <a v-if="sourcePrepare && !uncertain && reviewable && urls.review" data-source-prepare-review :href="urls.review">Проверить перед отправкой</a>
         <a :href="urls.result">Открыть результаты загрузки</a>
     </section>
     <form class="orb-filters" @submit.prevent="setFilters" role="search" aria-label="Поиск карточек для исправления">
@@ -166,5 +168,5 @@
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
 <script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}" defer></script>
 <script src="{{ url_for('static', filename='ozon-draft-editor.js') }}" defer></script>
-<script src="{{ url_for('static', filename='ozon-bulk-repair-vue.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-bulk-repair-vue.js', v='20261121-source-prepare-r38') }}" defer></script>
 {% endblock %}
