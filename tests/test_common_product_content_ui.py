@@ -21,11 +21,14 @@ class BootstrapParser(HTMLParser):
         self.capture = False
         self.parts = []
         self.csrf_meta_token = None
+        self.workspace_links = []
 
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
         if tag == "meta" and values.get("name") == "csrf-token":
             self.csrf_meta_token = values.get("content")
+        if "data-workspace-return-link" in values:
+            self.workspace_links.append(values.get("href"))
         self.capture = tag == "script" and values.get("id") == "common-content-bootstrap"
 
     def handle_endtag(self, tag):
@@ -39,6 +42,7 @@ class BootstrapParser(HTMLParser):
 
 def _wire_page_template(app):
     app.add_url_rule("/my-products", endpoint="seller_my_products", view_func=lambda: "catalog")
+    app.add_url_rule("/my-products/beta", endpoint="seller_my_products_beta", view_func=lambda: "beta")
     # Load the real editor page template; keep the inherited base contract
     # that calls Flask-WTF's csrf_token() callable in the document metadata.
     app.jinja_loader = ChoiceLoader([
@@ -86,15 +90,21 @@ def test_page_renders_empty_and_selected_states_with_safe_bootstrap(api):
     empty_bootstrap = json.loads("".join(empty_parser.parts))
     assert empty_parser.csrf_meta_token
     assert empty_bootstrap["csrfToken"] == empty_parser.csrf_meta_token
+    assert empty_bootstrap["workspaceUrl"] == "/my-products/beta"
+    assert empty_bootstrap["workspaceOwner"] == f"{user_id}:{seller_id}"
+    assert empty_parser.workspace_links == ["/my-products", "/my-products", "/my-products"]
 
     parser = BootstrapParser()
     parser.feed(html)
     bootstrap = json.loads("".join(parser.parts))
     assert parser.csrf_meta_token
     assert bootstrap["csrfToken"] == parser.csrf_meta_token
+    assert bootstrap["workspaceUrl"] == "/my-products/beta"
+    assert bootstrap["workspaceOwner"] == f"{user_id}:{seller_id}"
     assert bootstrap["selectedProductIds"] == [own_id]
     assert len(bootstrap["products"]) == 1
     assert bootstrap["products"][0]["product_id"] == own_id
+    assert parser.workspace_links == ["/my-products", "/my-products"]
 
 
 def test_selection_url_helper_enforces_repeated_product_ids_and_fifty_item_cap():
@@ -129,6 +139,125 @@ assert.equal(photoPreviewFallbackLabel(true, false), 'Предпросмотр �
 assert.equal(photoPreviewFallbackLabel(true, true), 'Предпросмотр сохранённого фото недоступен');
 assert.equal(photoPreviewFallbackLabel(false, false), 'Нет предпросмотра');
 assert.equal(photoPreviewFallbackLabel(false, true), 'Предпросмотр недоступен');
+"""
+    result = subprocess.run(
+        [node, "-e", script],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_workspace_return_capsule_is_single_slot_bounded_and_identity_bound():
+    node = shutil.which("node")
+    assert node, "Node is required to verify the workspace handoff helper"
+    script = r"""
+const assert = require('node:assert/strict');
+const {
+    storeWorkspaceReturn, workspaceReturnFromHash, consumeWorkspaceReturn,
+    WORKSPACE_RETURN_SESSION_KEY,
+} = require('./static/common-product-content.js');
+
+function storage() {
+    const values = new Map();
+    return {
+        values,
+        getItem(key) { return values.has(key) ? values.get(key) : null; },
+        setItem(key, value) { values.set(key, String(value)); },
+        removeItem(key) { values.delete(key); },
+    };
+}
+let randomByte = 0;
+const crypto = { getRandomValues(bytes) {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = (randomByte + i) & 255;
+    randomByte += 16;
+    return bytes;
+} };
+const now = 1800000000000;
+const owner = '41:9';
+const payload = {
+    owner,
+    editorIds: [14, 7],
+    selectionIds: [7, 14, 22],
+    scope: { tab: 'all', search: 'склад', prefix: 'SKU', sort: 'title' },
+    batch: 'signed-import-batch-token',
+};
+const saved = storage();
+const options = { storage: saved, crypto, now };
+const nonce = storeWorkspaceReturn(payload, options);
+assert.match(nonce, /^[a-f0-9]{32}$/);
+assert.equal(saved.values.size, 1, 'the capsule uses one fixed storage slot');
+assert.ok(saved.getItem(WORKSPACE_RETURN_SESSION_KEY));
+const capsule = JSON.parse(saved.getItem(WORKSPACE_RETURN_SESSION_KEY));
+assert.equal(capsule.expiresAt, now + 60 * 60 * 1000);
+assert.deepEqual(capsule.editorIds, [14, 7]);
+assert.deepEqual(capsule.selectionIds, [7, 14, 22]);
+assert.equal(capsule.batch, payload.batch);
+const matched = workspaceReturnFromHash('#workspace-return=' + nonce, {
+    ...options, owner, editorIds: [14, 7],
+});
+assert.deepEqual(matched.editorIds, [14, 7]);
+assert.deepEqual(matched.selectionIds, [7, 14, 22]);
+assert.deepEqual(matched.scope, payload.scope);
+assert.equal(matched.batch, payload.batch);
+assert.equal(workspaceReturnFromHash('#workspace-return=' + nonce, {
+    ...options, owner, editorIds: [7, 14],
+}), null, 'editor ID order must match the server bootstrap exactly');
+assert.equal(saved.getItem(WORKSPACE_RETURN_SESSION_KEY), null, 'a mismatched editor handoff is discarded');
+
+const ownerBound = storage();
+const ownerNonce = storeWorkspaceReturn(payload, { ...options, storage: ownerBound });
+assert.equal(workspaceReturnFromHash('#workspace-return=' + ownerNonce, {
+    ...options, storage: ownerBound, owner: '41:10', editorIds: [14, 7],
+}), null, 'a different user or seller cannot use the capsule');
+assert.equal(ownerBound.getItem(WORKSPACE_RETURN_SESSION_KEY), null, 'a mismatched identity is discarded');
+
+const betaRead = storage();
+const betaNonce = storeWorkspaceReturn(payload, { ...options, storage: betaRead });
+const betaEnvelope = workspaceReturnFromHash('#workspace-return=' + betaNonce, {
+    storage: betaRead, now, owner,
+});
+assert.equal(betaEnvelope.nonce, betaNonce, 'the Beta landing can validate owner and nonce before consuming');
+assert.equal(consumeWorkspaceReturn(betaNonce, { storage: betaRead }), true);
+assert.equal(betaRead.getItem(WORKSPACE_RETURN_SESSION_KEY), null, 'the consumer removes the one-time capsule');
+assert.equal(consumeWorkspaceReturn(betaNonce, { storage: betaRead }), false);
+
+const expiring = storage();
+const expiringNonce = storeWorkspaceReturn(payload, { ...options, storage: expiring });
+assert.equal(workspaceReturnFromHash('#workspace-return=' + expiringNonce, {
+    storage: expiring, now: now + 60 * 60 * 1000, owner, editorIds: [14, 7],
+}), null, 'the capsule expires after one hour');
+assert.equal(expiring.getItem(WORKSPACE_RETURN_SESSION_KEY), null);
+
+const singleSlot = storage();
+const firstNonce = storeWorkspaceReturn(payload, { ...options, storage: singleSlot });
+const secondNonce = storeWorkspaceReturn(payload, { ...options, storage: singleSlot });
+assert.notEqual(firstNonce, secondNonce);
+assert.equal(singleSlot.values.size, 1);
+assert.equal(workspaceReturnFromHash('#workspace-return=' + firstNonce, {
+    ...options, storage: singleSlot, owner, editorIds: [14, 7],
+}), null, 'a newer handoff replaces the only stored capsule');
+assert.equal(consumeWorkspaceReturn(firstNonce, { storage: singleSlot }), false);
+assert.equal(consumeWorkspaceReturn(secondNonce, { storage: singleSlot }), true);
+
+assert.equal(storeWorkspaceReturn({ ...payload, editorIds: Array.from({length: 51}, (_, i) => i + 1) }, options), null);
+assert.equal(storeWorkspaceReturn({ ...payload, selectionIds: Array.from({length: 201}, (_, i) => i + 1) }, options), null);
+const emptySelection = storage();
+const emptySelectionNonce = storeWorkspaceReturn({ ...payload, selectionIds: [] }, { ...options, storage: emptySelection });
+assert.deepEqual(workspaceReturnFromHash('#workspace-return=' + emptySelectionNonce, {
+    ...options, storage: emptySelection, owner, editorIds: [14, 7],
+}).selectionIds, [], 'an empty workspace selection is a valid state');
+assert.equal(storeWorkspaceReturn({ ...payload, batch: 'x'.repeat(8193) }, options), null);
+assert.equal(storeWorkspaceReturn({ ...payload, batch: '' }, options), null);
+assert.equal(storeWorkspaceReturn({ ...payload, scope: { data: 'x'.repeat(8193) } }, options), null);
+assert.equal(workspaceReturnFromHash('#workspace-return=not-a-nonce', {
+    ...options, owner, editorIds: [14, 7],
+}), null);
+assert.equal(storeWorkspaceReturn(payload, { storage: storage(), crypto: {}, now }), null,
+    'nonce generation must use cryptographic randomness');
 """
     result = subprocess.run(
         [node, "-e", script],

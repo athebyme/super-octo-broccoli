@@ -12,17 +12,18 @@
     'previewUrl': url_for('common_product_content.preview_common_product_content'),
     'applyUrl': url_for('common_product_content.apply_common_product_content'),
     'readUrlBase': '/api/my-products/',
-    'catalogUrl': url_for('seller_my_products'),
+    'workspaceUrl': url_for('seller_my_products_beta'),
+    'workspaceOwner': (current_user.id|string) ~ ':' ~ (current_user.seller.id|string),
 } | tojson }}</script>
 
 <div id="common-content-editor" class="cpc-page">
     <header class="cpc-header">
         <div>
-            <p class="cpc-crumb"><a href="{{ url_for('seller_my_products') }}">Мои товары</a><span aria-hidden="true">/</span>Общий контент</p>
+            <p class="cpc-crumb"><a data-workspace-return-link href="{{ url_for('seller_my_products') }}">Мои товары</a><span aria-hidden="true">/</span>Общий контент</p>
             <h1>Общий контент товара</h1>
             <p class="cpc-intro">Исправляйте сведения в Seller Hub и сохраняйте источник каждого поля.</p>
         </div>
-        <a class="sh-btn sh-btn--secondary" href="{{ url_for('seller_my_products') }}">Вернуться к товарам</a>
+        <a data-workspace-return-link class="sh-btn sh-btn--secondary" href="{{ url_for('seller_my_products') }}">Вернуться к товарам</a>
     </header>
 
     <aside class="cpc-effect-note" role="note" aria-label="Что изменится при сохранении">
@@ -34,7 +35,7 @@
     <section class="cpc-empty" aria-labelledby="cpc-empty-title">
         <h2 id="cpc-empty-title">Сначала выберите товары</h2>
         <p>Откройте «Мои товары», отметьте до 50 карточек и выберите «Общий контент». Здесь ничего не загружается и не сохраняется автоматически.</p>
-        <a class="sh-btn sh-btn--primary" href="{{ url_for('seller_my_products') }}">Открыть мои товары</a>
+        <a data-workspace-return-link class="sh-btn sh-btn--primary" href="{{ url_for('seller_my_products') }}">Открыть мои товары</a>
     </section>
     {% else %}
     <div class="cpc-layout" data-product-count="{{ products|length }}">

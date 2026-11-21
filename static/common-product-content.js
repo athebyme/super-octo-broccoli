@@ -1,6 +1,204 @@
 (function (global) {
     'use strict';
 
+    var WORKSPACE_RETURN_SESSION_KEY = 'seller-hub-common-content-workspace-return-v1';
+    var WORKSPACE_RETURN_TTL_MS = 60 * 60 * 1000;
+    var WORKSPACE_RETURN_MAX_BYTES = 16 * 1024;
+    var WORKSPACE_RETURN_MAX_BATCH_BYTES = 8192;
+
+    function workspaceReturnNow(options) {
+        if (options && typeof options.now === 'function') return options.now();
+        if (options && Number.isSafeInteger(options.now)) return options.now;
+        return Date.now();
+    }
+
+    function workspaceReturnStorage(options) {
+        if (options && Object.prototype.hasOwnProperty.call(options, 'storage')) {
+            return options.storage;
+        }
+        try { return global && global.sessionStorage; }
+        catch (_) { return null; }
+    }
+
+    function workspaceReturnByteLength(value) {
+        try {
+            if (typeof TextEncoder === 'function') {
+                return new TextEncoder().encode(value).length;
+            }
+            return unescape(encodeURIComponent(value)).length;
+        } catch (_) {
+            return Infinity;
+        }
+    }
+
+    function workspaceReturnIdList(value, maximum, allowEmpty) {
+        if (!Array.isArray(value) || (!allowEmpty && value.length < 1) || value.length > maximum) return false;
+        var seen = new Set();
+        for (var index = 0; index < value.length; index += 1) {
+            var id = value[index];
+            if (!Number.isSafeInteger(id) || id <= 0 || seen.has(id)) return false;
+            seen.add(id);
+        }
+        return true;
+    }
+
+    function workspaceReturnPlainObject(value) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+        var prototype = Object.getPrototypeOf(value);
+        return prototype === Object.prototype || prototype === null;
+    }
+
+    function workspaceReturnNonce(options) {
+        var cryptoSource = options && options.crypto;
+        if (!cryptoSource) cryptoSource = global && global.crypto;
+        if (!cryptoSource || typeof cryptoSource.getRandomValues !== 'function') return null;
+        try {
+            var bytes = new Uint8Array(16);
+            cryptoSource.getRandomValues(bytes);
+            return Array.from(bytes, function (byte) {
+                return byte.toString(16).padStart(2, '0');
+            }).join('');
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function workspaceReturnScope(value) {
+        if (!workspaceReturnPlainObject(value)) return null;
+        try {
+            var encoded = JSON.stringify(value);
+            if (typeof encoded !== 'string' || workspaceReturnByteLength(encoded) > 8192) return null;
+            var decoded = JSON.parse(encoded);
+            return workspaceReturnPlainObject(decoded) ? decoded : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function workspaceReturnBatch(value) {
+        return value === null || (
+            typeof value === 'string' && value.length > 0 &&
+            workspaceReturnByteLength(value) <= WORKSPACE_RETURN_MAX_BATCH_BYTES
+        );
+    }
+
+    function storeWorkspaceReturn(payload, options) {
+        if (!workspaceReturnPlainObject(payload) ||
+            typeof payload.owner !== 'string' || !payload.owner || payload.owner.length > 256 ||
+            !workspaceReturnIdList(payload.editorIds, 50) ||
+            !workspaceReturnIdList(payload.selectionIds, 200, true)) return null;
+
+        var batch = payload.batch;
+        if (batch !== null && batch !== undefined && !workspaceReturnBatch(batch)) return null;
+        var scope = workspaceReturnScope(payload.scope);
+        if (!scope) return null;
+
+        var now = workspaceReturnNow(options);
+        if (!Number.isSafeInteger(now) || now < 0) return null;
+        var expiresAt = now + WORKSPACE_RETURN_TTL_MS;
+        if (!Number.isSafeInteger(expiresAt)) return null;
+        var nonce = workspaceReturnNonce(options);
+        if (!nonce || !/^[a-f0-9]{32}$/.test(nonce)) return null;
+        var capsule = {
+            v: 1,
+            nonce: nonce,
+            owner: payload.owner,
+            expiresAt: expiresAt,
+            editorIds: payload.editorIds.slice(),
+            selectionIds: payload.selectionIds.slice(),
+            scope: scope,
+            batch: batch === undefined ? null : batch,
+        };
+        try {
+            var encoded = JSON.stringify(capsule);
+            if (workspaceReturnByteLength(encoded) > WORKSPACE_RETURN_MAX_BYTES) return null;
+            var storage = workspaceReturnStorage(options);
+            if (!storage || typeof storage.setItem !== 'function') return null;
+            storage.setItem(WORKSPACE_RETURN_SESSION_KEY, encoded);
+            return nonce;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function workspaceReturnSameOrderedIds(left, right) {
+        return Array.isArray(left) && Array.isArray(right) &&
+            left.length === right.length &&
+            left.every(function (id, index) { return id === right[index]; });
+    }
+
+    function workspaceReturnReadStored(storage) {
+        if (!storage || typeof storage.getItem !== 'function') return null;
+        try {
+            var encoded = storage.getItem(WORKSPACE_RETURN_SESSION_KEY);
+            if (typeof encoded !== 'string' ||
+                workspaceReturnByteLength(encoded) > WORKSPACE_RETURN_MAX_BYTES) return null;
+            var capsule = JSON.parse(encoded);
+            var keys = ['v', 'nonce', 'owner', 'expiresAt', 'editorIds',
+                'selectionIds', 'scope', 'batch'];
+            if (!workspaceReturnPlainObject(capsule) ||
+                Object.keys(capsule).length !== keys.length ||
+                !keys.every(function (key) { return Object.prototype.hasOwnProperty.call(capsule, key); })) return null;
+            if (capsule.v !== 1 || !/^[a-f0-9]{32}$/.test(capsule.nonce) ||
+                typeof capsule.owner !== 'string' || !capsule.owner || capsule.owner.length > 256 ||
+                !Number.isSafeInteger(capsule.expiresAt) ||
+                !workspaceReturnIdList(capsule.editorIds, 50) ||
+                !workspaceReturnIdList(capsule.selectionIds, 200, true) ||
+                !workspaceReturnPlainObject(capsule.scope) ||
+                !workspaceReturnBatch(capsule.batch)) return null;
+            return capsule;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function consumeWorkspaceReturn(nonce, options) {
+        if (typeof nonce !== 'string' || !/^[a-f0-9]{32}$/.test(nonce)) return false;
+        var storage = workspaceReturnStorage(options);
+        var capsule = workspaceReturnReadStored(storage);
+        if (!capsule || capsule.nonce !== nonce || !storage ||
+            typeof storage.removeItem !== 'function') return false;
+        try {
+            storage.removeItem(WORKSPACE_RETURN_SESSION_KEY);
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function workspaceReturnFromHash(hash, options) {
+        if (typeof hash !== 'string' || hash.length > 64) return null;
+        var match = hash.match(/^#workspace-return=([a-f0-9]{32})$/);
+        if (!match || !options || typeof options.owner !== 'string' ||
+            !options.owner || options.owner.length > 256 ||
+            (options.editorIds !== undefined && !workspaceReturnIdList(options.editorIds, 50))) return null;
+
+        var storage = workspaceReturnStorage(options);
+        var capsule = workspaceReturnReadStored(storage);
+        if (!capsule || capsule.nonce !== match[1]) return null;
+        var now = workspaceReturnNow(options);
+        if (!Number.isSafeInteger(now) || now < 0 ||
+            !Number.isSafeInteger(now + WORKSPACE_RETURN_TTL_MS) ||
+            capsule.expiresAt <= now ||
+            capsule.expiresAt > now + WORKSPACE_RETURN_TTL_MS ||
+            capsule.owner !== options.owner ||
+            (options.editorIds !== undefined &&
+                !workspaceReturnSameOrderedIds(capsule.editorIds, options.editorIds))) {
+            consumeWorkspaceReturn(match[1], options);
+            return null;
+        }
+        return {
+            v: capsule.v,
+            nonce: capsule.nonce,
+            owner: capsule.owner,
+            expiresAt: capsule.expiresAt,
+            editorIds: capsule.editorIds.slice(),
+            selectionIds: capsule.selectionIds.slice(),
+            scope: capsule.scope,
+            batch: capsule.batch,
+        };
+    }
+
     function selectionUrl(base, productIds) {
         if (typeof base !== 'string' || base.charAt(0) !== '/' || base.indexOf('//') === 0) {
             throw new TypeError('A same-site common-content path is required.');
@@ -66,6 +264,10 @@
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {
+            storeWorkspaceReturn: storeWorkspaceReturn,
+            workspaceReturnFromHash: workspaceReturnFromHash,
+            consumeWorkspaceReturn: consumeWorkspaceReturn,
+            WORKSPACE_RETURN_SESSION_KEY: WORKSPACE_RETURN_SESSION_KEY,
             selectionUrl: selectionUrl,
             serializeFieldChange: serializeFieldChange,
             readablePhotoOrder: readablePhotoOrder,
@@ -75,6 +277,9 @@
     }
     if (global) {
         global.SellerHubCommonContent = global.SellerHubCommonContent || {};
+        global.SellerHubCommonContent.storeWorkspaceReturn = storeWorkspaceReturn;
+        global.SellerHubCommonContent.workspaceReturnFromHash = workspaceReturnFromHash;
+        global.SellerHubCommonContent.consumeWorkspaceReturn = consumeWorkspaceReturn;
         global.SellerHubCommonContent.selectionUrl = selectionUrl;
         global.SellerHubCommonContent.serializeFieldChange = serializeFieldChange;
         global.SellerHubCommonContent.readablePhotoOrder = readablePhotoOrder;
@@ -103,6 +308,35 @@
         characteristics: 'Характеристики',
     };
     var helpers = window.SellerHubCommonContent || {};
+
+    var workspaceHash = window.location && typeof window.location.hash === 'string'
+        ? window.location.hash
+        : '';
+    var workspaceReturn = typeof helpers.workspaceReturnFromHash === 'function'
+        ? helpers.workspaceReturnFromHash(workspaceHash, {
+            owner: bootstrap.workspaceOwner,
+            editorIds: bootstrap.selectedProductIds,
+        })
+        : null;
+    if (workspaceReturn && typeof bootstrap.workspaceUrl === 'string') {
+        try {
+            var workspaceTarget = new URL(bootstrap.workspaceUrl, window.location.origin);
+            if (bootstrap.workspaceUrl.charAt(0) === '/' &&
+                bootstrap.workspaceUrl.indexOf('//') !== 0 &&
+                workspaceTarget.origin === window.location.origin &&
+                workspaceTarget.pathname === '/my-products/beta' &&
+                !workspaceTarget.search && !workspaceTarget.hash) {
+                if (workspaceReturn.batch !== null) {
+                    workspaceTarget.searchParams.set('import_batch', workspaceReturn.batch);
+                }
+                workspaceTarget.hash = 'workspace-return=' + workspaceReturn.nonce;
+                document.querySelectorAll('[data-workspace-return-link]').forEach(function (link) {
+                    link.href = workspaceTarget.pathname + workspaceTarget.search + workspaceTarget.hash;
+                });
+            }
+        } catch (_) {}
+    }
+
     var originLabels = {
         source: 'из источника товара',
         supplier_enrichment: 'из дополнения поставщика',
