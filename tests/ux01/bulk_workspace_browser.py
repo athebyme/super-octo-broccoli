@@ -1625,6 +1625,7 @@ def run():
 
         # Unknown and rejected requests show the submitted count and refresh
         # action once, without duplicating a generic row for every selection.
+        mobile_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").uncheck()
         mobile_page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").check()
         refresh_response_override = {
             "success": True, "status": "completed", "requested": 1,
