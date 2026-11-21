@@ -4,7 +4,7 @@
 {% block title %}{{ product.title or 'Товар' }} — {{ supplier.name }} - Seller Hub{% endblock %}
 
 {% block content %}
-<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-24 sm:pb-8">
     <nav class="mb-4 text-sm text-gray-500">
         <a href="{{ url_for('supplier_catalog') }}" class="hover:text-gray-900">Каталог</a>
         <span class="mx-2">/</span>
@@ -282,30 +282,30 @@
     </div>
 
     <!-- Действия -->
-    <div class="mt-6 flex justify-between items-center">
+    <div class="mt-6 flex flex-col items-start gap-3 sm:flex-row sm:justify-between sm:items-center">
         <a href="{{ url_for('supplier_catalog_products', supplier_id=supplier.id) }}"
-            class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:border-gray-900">&larr;
+            class="inline-flex min-h-[44px] items-center px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:border-gray-900">&larr;
             Назад</a>
 
         {% if not existing_import %}
-        <form method="POST" action="{{ url_for('supplier_catalog_import') }}">
+        <form method="POST" action="{{ url_for('supplier_catalog_import') }}" class="w-full sm:w-auto">
             <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
             <input type="hidden" name="product_ids" value="{{ product.id }}">
             <button type="submit" onclick="return confirm('Импортировать этот товар?')"
-                class="px-6 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85">
+                class="inline-flex min-h-[44px] w-full items-center justify-center px-6 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85 sm:w-auto">
                 Импортировать к себе
             </button>
         </form>
         {% else %}
-        <div class="flex gap-2">
+        <div class="flex w-full flex-col items-start gap-2 sm:w-auto sm:flex-row sm:items-center">
             <span class="px-4 py-2 bg-gray-100 text-gray-700 rounded-md text-sm font-medium">Уже импортирован</span>
-            <form method="POST" action="{{ url_for('supplier_catalog_update_review') }}">
+            <form method="POST" action="{{ url_for('supplier_catalog_update_review') }}" class="w-full sm:w-auto">
                 <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
                 <input type="hidden" name="product_ids" value="{{ product.id }}">
                 <input type="hidden" name="return_to" value="{{ request.full_path }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit"
-                    class="px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:border-gray-900">
+                    class="inline-flex min-h-[44px] w-full items-center justify-center px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:border-gray-900 sm:w-auto">
                     Проверить обновление
                 </button>
             </form>
