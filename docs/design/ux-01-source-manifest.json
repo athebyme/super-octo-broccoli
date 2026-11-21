@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-21T08:20:32.204794+00:00",
+  "generated_at": "2026-11-21T09:26:24.046386+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "fd3ee8252e38d5869fca85a7247161408d3266ad9e42f12cf4d6de751da515eb"
+      "sha256": "1e08dc51fef757a68a3588d70a7061d2bf6c7b1b4de3ce164ce1d3d853f569c4"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -481,7 +481,7 @@
     },
     {
       "path": "docs/design/seller-bulk-workspace-2026-11-20.md",
-      "sha256": "fa673d57170c250ffb40e2db51562fc27e88377d8301f968868edff351f26d1f"
+      "sha256": "9b804d3e586ea6b5fe0a0968eecdd64f9c2ca6b10512eca2e4307a86d5ef1b85"
     },
     {
       "path": "docs/design/startup-migration-performance.md",
@@ -1437,7 +1437,7 @@
     },
     {
       "path": "routes/photos.py",
-      "sha256": "2d274309f46c76ab8f63bf1560dd69166ae0454b5b5fb1c58d081c821d485713"
+      "sha256": "99cafe59c45f35a068496f08057d482b3e29f0b88882a1571b45376feed69705"
     },
     {
       "path": "routes/pricing.py",
@@ -1485,7 +1485,7 @@
     },
     {
       "path": "routes/suppliers.py",
-      "sha256": "65aaad86f149f56644c33e7890a936bfdfb9acac939f384f7793addfa0175df9"
+      "sha256": "c87227d67974456b92dd7563124c70224040f62d1c819701238ca250a79b5877"
     },
     {
       "path": "routes/telegram_alerts.py",
@@ -2361,7 +2361,7 @@
     },
     {
       "path": "services/supplier_price_feed.py",
-      "sha256": "46cde351136d8bc47cdcaddbc95fcfd9507e10f0c53931fb5d9fa08a6de76496"
+      "sha256": "3ec8f0cb7518a1ea7b90a3558ffdddb4e810412d2b6cf442f965a653cbc35bf3"
     },
     {
       "path": "services/supplier_price_sync.py",
@@ -2369,7 +2369,7 @@
     },
     {
       "path": "services/supplier_service.py",
-      "sha256": "d6a13c8a29f4926bc05821970a5849cc797838eb47b922c61e0cedae75e2f179"
+      "sha256": "f172458bb731101dc4fe9c6c4be8097374268f942ff0136f5360fe30bc75783b"
     },
     {
       "path": "services/supplier_update_hub.py",
@@ -2909,7 +2909,7 @@
     },
     {
       "path": "templates/admin_supplier_products.html",
-      "sha256": "400e18f41d335e54a41953b9f617bf5f4026291509f19a9ca390c180466271fc"
+      "sha256": "8c745bc063174a13cb89eb8d45091d3d21705421908f055b3cbbd6597f24abf5"
     },
     {
       "path": "templates/admin_supplier_sellers.html",
@@ -4708,6 +4708,10 @@
       "sha256": "0a83ce1532c21b55214bc4b3048a528d83105034ad25889f4e8a91deb1718893"
     },
     {
+      "path": "tests/test_photo_bulk_warm_authorization.py",
+      "sha256": "5b7134fce8030d7957271af2841bfaac67165db24c926a30d89b697ff6406079"
+    },
+    {
       "path": "tests/test_photo_delivery_nonblocking.py",
       "sha256": "195ebfe868e494dff39016445ec0ad729bf503666fe199c6c8a10b72fb6b7f5d"
     },
@@ -4836,6 +4840,10 @@
       "sha256": "b37c4df17e74a0729ed79f611be50ac5589702c2cc1bfaa3024bd67aecd9826d"
     },
     {
+      "path": "tests/test_supplier_csv_refresh_routes.py",
+      "sha256": "a209e53a191236166298d97cc5f7fe08cca7bac3b2071a11578ea85c3a09a57c"
+    },
+    {
       "path": "tests/test_supplier_enrichment_bulk.py",
       "sha256": "82bd972c096c3ac44b7c523541ad45c1e684d5dc8381873d7643b1c81c7bae86"
     },
@@ -4849,7 +4857,7 @@
     },
     {
       "path": "tests/test_supplier_feed_content_revision.py",
-      "sha256": "b27de7348f85e2afe2dcba73cade5199d0f680ba0a398cdef84aaaf576f0dff5"
+      "sha256": "5a8162d74258e6e1739976a2695fe7375cccf6fd9dce1c4db9c2f7f94be9534a"
     },
     {
       "path": "tests/test_supplier_feed_status_ui.py",
@@ -4869,7 +4877,7 @@
     },
     {
       "path": "tests/test_supplier_price_feed.py",
-      "sha256": "9443a9c25210ecca3f437e4f30ea0112779faf5a312959d5e0f93ee1c95ee95c"
+      "sha256": "0a0948583b7679845e3f37aaec3e6904cdf70433b52611512918e3d63af1220d"
     },
     {
       "path": "tests/test_supplier_price_sync.py",
@@ -5124,5 +5132,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "9f4a1d3a088b6ca5e7e2548195742f75653200bf03f69f9a1efc83c8c5b971c9"
+  "aggregate_sha256": "8e8aac574e790abff4ac71f4e1bb6663a0fbaa9e88dcdfcd6af5b643e4267a54"
 }
