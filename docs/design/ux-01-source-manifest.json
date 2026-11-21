@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-21T21:15:03.187290+00:00",
+  "generated_at": "2026-11-21T21:21:50.974647+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -3393,7 +3393,7 @@
     },
     {
       "path": "templates/prices_change.html",
-      "sha256": "8be5e2f6686e669911ab342a2c743aae91cf6931ebcdee769fad99f81034f313"
+      "sha256": "1443259fc2a07548938891b04af540534ff0f21580672f82f1c0b738102af5d1"
     },
     {
       "path": "templates/prices_dashboard.html",
@@ -5093,7 +5093,7 @@
     },
     {
       "path": "tests/test_wb_price_selection_handoff.py",
-      "sha256": "f57f71ccd0b30162f671339fc8c2f983701690a0be3429f9b11daac79e8e14a9"
+      "sha256": "7a8bc7029ae4c1043268ab3897fe10304a09ae4cc37fa7d233867e72e409bd24"
     },
     {
       "path": "tests/test_wb_product_importer_strict_matching.py",
@@ -5164,5 +5164,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "97cdb97b51ec2b684ff7713cd44008b6b55c8fa1239f1b9aa4c129939ff25c95"
+  "aggregate_sha256": "71e5b8415c9f2e2dbbf983d1848522adc66c1b041005cbc4adaf058d4f806ab2"
 }
