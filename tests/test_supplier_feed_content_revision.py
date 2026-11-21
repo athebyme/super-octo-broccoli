@@ -450,6 +450,7 @@ class SupplierFeedContentRevisionTest(unittest.TestCase):
 
     def test_catalog_price_followup_uses_original_effective_config(self):
         supplier = db.session.get(Supplier, self.supplier_id)
+        supplier_created_at = supplier.created_at.isoformat()
         supplier.price_file_url = 'https://prices.invalid/original.csv'
         supplier.price_file_encoding = 'utf-8'
         supplier.price_file_delimiter = '|'
@@ -474,6 +475,7 @@ class SupplierFeedContentRevisionTest(unittest.TestCase):
         self.assertEqual(
             price_followup.call_args.kwargs['expected_config'],
             {
+                'supplier_created_at': supplier_created_at,
                 'price_file_url': 'https://prices.invalid/original.csv',
                 'encoding': 'utf-8',
                 'delimiter': '|',
@@ -487,6 +489,7 @@ class SupplierFeedContentRevisionTest(unittest.TestCase):
         supplier.price_file_delimiter = '|'
         db.session.commit()
         expected = {
+            'supplier_created_at': supplier.created_at.isoformat(),
             'price_file_url': 'https://prices.invalid/original.csv',
             'encoding': 'utf-8',
             'delimiter': '|',
@@ -499,9 +502,19 @@ class SupplierFeedContentRevisionTest(unittest.TestCase):
                 self.supplier_id,
                 expected_config=expected,
             )
+            reused_identity = sync_supplier_price_feed(
+                self.supplier_id,
+                expected_config={
+                    **expected,
+                    'supplier_created_at': '2000-01-01T00:00:00',
+                    'price_file_url': 'https://prices.invalid/current.csv',
+                },
+            )
 
         self.assertFalse(result.success)
         self.assertEqual(result.error_messages, ['source_changed'])
+        self.assertFalse(reused_identity.success)
+        self.assertEqual(reused_identity.error_messages, ['source_changed'])
         read_feed.assert_not_called()
 
     def test_config_digest_is_available_on_module_and_service(self):

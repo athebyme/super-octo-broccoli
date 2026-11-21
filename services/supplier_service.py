@@ -1606,6 +1606,7 @@ class SupplierService:
                     supplier_id,
                     force=True,
                     expected_config={
+                        'supplier_created_at': config['created_at'],
                         'price_file_url': price_url,
                         'encoding': config['price_file_encoding'],
                         'delimiter': config['price_file_delimiter'],

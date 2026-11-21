@@ -158,6 +158,7 @@ def _claim_supplier(
             return None, "supplier_not_found"
         if expected_config is not None:
             current_config = {
+                "supplier_created_at": supplier.created_at.isoformat(),
                 "price_file_url": supplier.price_file_url,
                 "encoding": supplier.price_file_encoding or "cp1251",
                 "delimiter": supplier.price_file_delimiter or ";",
