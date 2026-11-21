@@ -962,15 +962,14 @@ def register_supplier_routes(app):
         )
 
         if result.success:
-            msg = (f'Синхронизация цен: {result.updated} обновлено, '
-                   f'{result.errors} ошибок ({result.duration_seconds:.1f}с)')
+            msg = f'Файл цен и остатков проверен. Позиций обработано — {result.updated}.'
             if result.seller_rows_updated:
-                msg += f' | Обновлено у продавцов: {result.seller_rows_updated}'
+                msg += f' Записей у продавцов изменено — {result.seller_rows_updated}.'
             flash(msg, 'success')
         elif result.busy:
             flash('Проверка цен и остатков уже идёт.', 'warning')
         else:
-            flash(f'Ошибка синхронизации цен: {"; ".join(result.error_messages[:3])}', 'danger')
+            flash('Не удалось применить файл цен и остатков. Проверьте адрес источника и формат CSV.', 'danger')
 
         return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
 
