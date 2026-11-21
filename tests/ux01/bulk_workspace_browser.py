@@ -792,8 +792,19 @@ def run():
         assert refresh_posts_after_success == refresh_posts_before_success + 1
         mixed_result = page.locator(".mp-refresh-result")
         mixed_result.get_by_text("В запросе товаров: 2.", exact=False).wait_for()
+        mixed_result.get_by_role(
+            "heading", name="Обновление из поставщика завершено", exact=True,
+        ).wait_for()
+        assert page.evaluate(
+            "document.activeElement === document.querySelector('.mp-refresh-result')"
+        )
         mixed_result.get_by_text("Карточки и итог (2)").click()
-        mixed_result.get_by_text(MAIN_TITLE, exact=False).wait_for()
+        updated_title = mixed_result.locator(".mp-refresh-result-item.is-ok strong")
+        updated_title.wait_for()
+        assert MAIN_TITLE in updated_title.inner_text()
+        skipped_title = mixed_result.locator(".mp-refresh-result-item.is-muted strong")
+        skipped_title.wait_for()
+        assert MANUAL_TITLE in skipped_title.inner_text()
         mixed_result.get_by_text("Данные поставщика сохранены в Seller Hub.").wait_for()
         mixed_result.get_by_text("Нет связи с каталогом поставщика. Данные не менялись.").wait_for()
         with fixture.app.app_context():
@@ -802,24 +813,7 @@ def run():
             assert db.session.get(Product, fixture_ids["wb_id"]).title == MAIN_TITLE
         checks.append("supplier_refresh_mixed_local_update_and_skip_are_named")
 
-        wb_result = page.locator(".mp-refresh-result")
-        wb_result.get_by_role(
-            "heading", name="Обновление из поставщика завершено", exact=True,
-        ).wait_for()
-        assert page.evaluate(
-            "document.activeElement === document.querySelector('.mp-refresh-result')"
-        )
-        wb_result.get_by_text("Карточки и итог (2)", exact=True).click()
-        updated_title = wb_result.locator(".mp-refresh-result-item.is-ok strong")
-        updated_title.wait_for()
-        assert REFRESHED_TITLE in updated_title.inner_text()
-        skipped_title = wb_result.locator(".mp-refresh-result-item.is-muted strong")
-        skipped_title.wait_for()
-        assert MANUAL_TITLE in skipped_title.inner_text()
-        wb_result.get_by_text("Данные поставщика сохранены в Seller Hub.", exact=True).wait_for()
-        wb_result.get_by_text(
-            "Нет связи с каталогом поставщика. Данные не менялись.", exact=True,
-        ).wait_for()
+        wb_result = mixed_result
         wb_cta = refresh_wb_button(page)
         assert wb_cta.count() == 1
         assert refresh_ozon_button(page).count() == 1
