@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-21T03:13:10.799991+00:00",
+  "generated_at": "2026-11-21T03:31:47.612927+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "156c41d925320f8deacf3311f77f78d91a634ccabf706116651dd19d03c4c90d"
+      "sha256": "3c47734aa643ba4956db51e5a7d61dc1e7d45b858c89b288b91c82d370cd1f44"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -3453,7 +3453,7 @@
     },
     {
       "path": "templates/seller_my_products.html",
-      "sha256": "3ec84400c42674a7f5ca130ed81e4cc307c825c6fcb34cf2ad30aae3e7bc0f89"
+      "sha256": "a7be90eada563db1dcd54255baa5d0869f4c419f28518d38480f7a5b5b783a12"
     },
     {
       "path": "templates/seller_prohibited_words.html",
@@ -4689,7 +4689,7 @@
     },
     {
       "path": "tests/test_photo_delivery_nonblocking.py",
-      "sha256": "7692e09615b7c55def7db2fb8c7ffc28cce7863495c44ca81980ad0251cdaa06"
+      "sha256": "195ebfe868e494dff39016445ec0ad729bf503666fe199c6c8a10b72fb6b7f5d"
     },
     {
       "path": "tests/test_photo_proxy.py",
@@ -5092,5 +5092,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "f0c089ce518a85751ee86b6271f0e0801c2955c11465f189bd3ea084a30a5e52"
+  "aggregate_sha256": "79bde5c3db2c0c0e381a7bca1c91d0902d121585411bad5645dac33454f4098f"
 }
