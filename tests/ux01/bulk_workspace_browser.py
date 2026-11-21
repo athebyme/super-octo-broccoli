@@ -107,6 +107,37 @@ def verify_bounds(page):
     assert dimensions["scroll"] <= dimensions["viewport"] + 1, dimensions
 
 
+def verify_enrichment_review_bounds(page):
+    verify_bounds(page)
+    geometry = page.evaluate("""() => {
+        const rect = element => {
+            const box = element.getBoundingClientRect();
+            return {left: box.left, right: box.right, width: box.width, height: box.height};
+        };
+        const visibleRects = selector => Array.from(document.querySelectorAll(selector))
+            .filter(element => element.getClientRects().length > 0)
+            .map(rect);
+        return {
+            viewport: document.documentElement.clientWidth,
+            cards: visibleRects('.be-grid > .sh-card'),
+            labels: visibleRects('.be-grid label'),
+            controls: visibleRects('.be-grid input'),
+            confirm: (() => {
+                const button = document.querySelector('.be-grid .be-actions > button');
+                return button ? rect(button) : null;
+            })(),
+        };
+    }""")
+    assert geometry["viewport"] == 320, geometry
+    assert len(geometry["cards"]) == 2, geometry
+    assert geometry["labels"] and geometry["controls"] and geometry["confirm"], geometry
+    for group in (geometry["cards"], geometry["labels"], geometry["controls"],
+                  [geometry["confirm"]]):
+        for bounds in group:
+            assert bounds["width"] > 0 and bounds["height"] > 0, bounds
+            assert bounds["left"] >= -1 and bounds["right"] <= geometry["viewport"] + 1, bounds
+
+
 def open_products(page, title=MAIN_TITLE):
     fixture.wait_document(page, "bulk_workspace", "/my-products/beta")
     page.get_by_role("checkbox", name=f"Выбрать {title}").wait_for()
@@ -608,6 +639,13 @@ def run():
             "characteristics": False, "dimensions": False, "brand": False,
         }, default_review_fields
         page.get_by_role("button", name="Подтвердить обновление фото").wait_for()
+        default_review_viewport = page.evaluate("""() => ({
+            width: window.innerWidth, height: window.innerHeight,
+        })""")
+        page.set_viewport_size({"width": 320, "height": 900})
+        verify_enrichment_review_bounds(page)
+        page.set_viewport_size(default_review_viewport)
+        checks.append("ordinary_wb_photo_review_fits_320")
         with fixture.app.app_context():
             assert EnrichmentJob.query.filter_by(
                 seller_id=fixture.FIXTURE["seller_id"],
@@ -776,7 +814,8 @@ def run():
             "photos": False, "title": False, "description": False,
             "characteristics": True, "dimensions": True, "brand": False,
         }, reviewed_fields
-        wb_handoff_page.screenshot(
+        verify_enrichment_review_bounds(wb_handoff_page)
+        wb_handoff_page.locator(".be-shell").screenshot(
             path=OUTPUT / "supplier-refresh-wb-review-dark-320.png",
             animations="disabled",
         )
@@ -788,6 +827,7 @@ def run():
                 seller_id=fixture.FIXTURE["seller_id"],
             ).count() == jobs_before_wb_review
         checks.append("supplier_refresh_wb_handoff_posts_exact_owned_ids_to_characteristics_review_only")
+        checks.append("supplier_refresh_wb_characteristics_review_fits_320")
         wb_handoff_page.close()
 
         page.set_viewport_size({"width": 320, "height": 900})
