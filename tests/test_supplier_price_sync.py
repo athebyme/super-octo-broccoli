@@ -54,7 +54,7 @@ class SupplierPriceSyncTest(unittest.TestCase):
             "price_file_delimiter": ";",
             "is_active": True,
             "auto_sync_prices": False,
-            "auto_sync_interval_minutes": 50,
+            "auto_sync_interval_minutes": 60,
         }
         fields.update(values)
         supplier = Supplier(name="Price fixture", code=code, **fields)
@@ -266,6 +266,71 @@ class SupplierPriceSyncTest(unittest.TestCase):
         self.assertEqual(imported.calculated_price, 140.0)
         self.assertEqual(result.seller_rows_updated, 1)
         self.assertGreater(imported.updated_at, previous_imported_updated_at)
+
+    def test_target_cap_checks_next_chunk_and_fails_atomically(self):
+        supplier = self._supplier()
+        product = self._product(supplier, supplier_price=20.0, supplier_quantity=4)
+        seller = self._seller(supplier, active=True, username="target-cap")
+        imported = self._imported(seller, supplier, product, price=17.0, quantity=2)
+        db.session.commit()
+
+        with (
+            patch(
+                "services.supplier_price_sync.read_supplier_price_feed",
+                return_value={123: self._row(price=35.0, quantity=5)},
+            ),
+            patch("services.supplier_price_sync.MAX_IMPORTED_TARGETS", 0),
+        ):
+            result = sync_supplier_price_feed(supplier.id)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_messages, ["seller_targets_too_large"])
+        self.assertEqual(product.supplier_price, 20.0)
+        self.assertEqual(product.supplier_quantity, 4)
+        self.assertEqual(imported.supplier_price, 17.0)
+        self.assertEqual(imported.supplier_quantity, 2)
+        self.assertIsNone(supplier.last_price_sync_at)
+
+    def test_vendor_metadata_is_manual_only_but_rrp_is_allowed_automatically(self):
+        supplier = self._supplier(auto_sync_prices=True)
+        product = self._product(
+            supplier,
+            vendor_code="old-vendor",
+            additional_vendor_code="old-additional",
+            barcode="old-barcode",
+            recommended_retail_price=30.0,
+        )
+        db.session.commit()
+        row = self._row(
+            vendor_code="new-vendor",
+            additional_vendor_code="new-additional",
+            barcode="new-barcode",
+            rrp=42.0,
+        )
+
+        with patch(
+            "services.supplier_price_sync.read_supplier_price_feed",
+            return_value={123: row},
+        ):
+            automatic_result = sync_supplier_price_feed(supplier.id, automatic=True)
+
+        self.assertTrue(automatic_result.success)
+        self.assertEqual(product.vendor_code, "old-vendor")
+        self.assertEqual(product.additional_vendor_code, "old-additional")
+        self.assertEqual(product.barcode, "old-barcode")
+        self.assertEqual(product.recommended_retail_price, 42.0)
+
+        with patch(
+            "services.supplier_price_sync.read_supplier_price_feed",
+            return_value={123: row},
+        ):
+            manual_result = sync_supplier_price_feed(supplier.id)
+
+        self.assertTrue(manual_result.success)
+        self.assertEqual(product.vendor_code, "new-vendor")
+        self.assertEqual(product.additional_vendor_code, "new-additional")
+        self.assertEqual(product.barcode, "new-barcode")
+        self.assertEqual(product.recommended_retail_price, 42.0)
 
     def test_collision_fails_closed_and_identity_matching_is_anchored(self):
         supplier = self._supplier()

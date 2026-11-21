@@ -21,7 +21,7 @@ from services.supplier_price_feed import (
 logger = logging.getLogger(__name__)
 
 MIN_AUTO_INTERVAL_MINUTES = 5
-DEFAULT_AUTO_INTERVAL_MINUTES = 50
+DEFAULT_AUTO_INTERVAL_MINUTES = 60
 RUNNING_CLAIM_STALE_AFTER = timedelta(seconds=120)
 MAX_SOURCE_ROWS = 50_000
 MAX_SOURCE_PRODUCTS = 50_000
@@ -314,8 +314,6 @@ def _apply_feed(
                 chunk_start:chunk_start + IMPORTED_QUERY_CHUNK
             ]
             remaining_cap = MAX_IMPORTED_TARGETS - len(imported_targets)
-            if remaining_cap <= 0:
-                break
             chunk_targets = (
                 db.session.query(ImportedProduct, SupplierProduct)
                 .join(
@@ -338,7 +336,7 @@ def _apply_feed(
                     ImportedProduct.supplier_product_id.in_(chunk),
                 )
                 .populate_existing()
-                .limit(remaining_cap + 1)
+                .limit(max(1, remaining_cap + 1))
                 .all()
             )
             imported_targets.extend(chunk_targets)
@@ -376,12 +374,13 @@ def _apply_feed(
                 else:
                     product.supplier_status = "out_of_stock"
 
-            if record.vendor_code:
-                product.vendor_code = record.vendor_code
-            if record.additional_vendor_code:
-                product.additional_vendor_code = record.additional_vendor_code
-            if record.barcode:
-                product.barcode = record.barcode
+            if not automatic:
+                if record.vendor_code:
+                    product.vendor_code = record.vendor_code
+                if record.additional_vendor_code:
+                    product.additional_vendor_code = record.additional_vendor_code
+                if record.barcode:
+                    product.barcode = record.barcode
             if record.rrp is not None and record.rrp > 0:
                 product.recommended_retail_price = record.rrp
 
