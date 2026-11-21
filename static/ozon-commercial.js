@@ -4,23 +4,60 @@
   const boot = document.getElementById('oc-bootstrap');
   if (!host || !boot || !window.Vue || !window.mcatShared) return;
   const config = JSON.parse(boot.textContent);
-  const priceWorkspaceReturnHref = (() => {
+  const workspaceReturnHelper = window.SellerHubCommonContent;
+  const sourceWorkspaceReturnState = (() => {
     const selection = config.bulkSelection;
-    if (!selection) return '';
+    if (!selection) return {href:'', authorized:null};
+    const items = Array.isArray(selection?.items) ? selection.items : [];
+    const accountId = selection?.account_id;
+    const priceTarget = {channel:'ozon', ids:items.map(item => item?.id), accountId};
     const workspaceUrl = config.workspaceUrl || '/my-products/beta';
-    const items = Array.isArray(selection.items) ? selection.items : [];
-    const helper = window.SellerHubCommonContent?.priceWorkspaceReturnHref;
-    if (typeof helper !== 'function') return workspaceUrl;
-    const href = helper(window.location.hash, {
-      owner: config.workspaceOwner,
-      priceTarget: {
-        channel: 'ozon',
-        ids: items.map(item => item && item.id),
-        accountId: selection.account_id,
-      },
+    const hash = window.location.hash;
+    const helper = workspaceReturnHelper?.priceWorkspaceReturnHref;
+    const href = typeof helper === 'function' ? helper(hash, {
+      owner:config.workspaceOwner,
+      priceTarget,
       workspaceUrl,
-    });
-    return href || workspaceUrl;
+    }) : '';
+    const exactSource = Number.isSafeInteger(accountId) && accountId > 0 && items.length > 0 && items.length <= 100 &&
+      items.every(item => Number.isSafeInteger(item?.id) && item.id > 0 && item.account_id === accountId) &&
+      new Set(items.map(item => item.id)).size === items.length;
+    const authorized = exactSource && href && hash && href.endsWith(hash) ? {hash, priceTarget} : null;
+    return {href:href || workspaceUrl, authorized};
+  })();
+  const sourceWorkspaceReturn = sourceWorkspaceReturnState.authorized;
+  const priceWorkspaceReturnHref = sourceWorkspaceReturnState.href;
+  const initialPriceResult = (() => {
+    const filters = config.filters || {};
+    const accountId = filters.account_id;
+    const proposalIds = filters.proposal_ids;
+    if (config.mode !== 'list' || config.bulkSelection || filters.proposal_kind !== 'price' ||
+        filters.status !== 'pending_review' || !Number.isSafeInteger(accountId) || accountId <= 0 ||
+        !Array.isArray(proposalIds) || !proposalIds.length || proposalIds.length > 100 ||
+        proposalIds.some(id => !Number.isSafeInteger(id) || id <= 0) ||
+        new Set(proposalIds).size !== proposalIds.length) return null;
+    const params = new URLSearchParams(window.location.search);
+    const allowed = new Set(['account_id','proposal_kind','status','proposal_ids','page','per_page']);
+    if ([...params.keys()].some(key => !allowed.has(key)) ||
+        ['account_id','proposal_kind','status','proposal_ids'].some(key => params.getAll(key).length !== 1) ||
+        params.get('account_id') !== String(accountId) || params.get('proposal_kind') !== 'price' ||
+        params.get('status') !== 'pending_review' || params.get('proposal_ids') !== proposalIds.join(',') ||
+        (params.has('page') && params.get('page') !== '1') ||
+        (params.has('per_page') && !['50',String(proposalIds.length)].includes(params.get('per_page'))) ||
+        (params.has('page') && params.getAll('page').length !== 1) ||
+        (params.has('per_page') && params.getAll('per_page').length !== 1)) return null;
+    const hash = window.location.hash;
+    const href = typeof workspaceReturnHelper?.priceResultWorkspaceReturnHref === 'function'
+      ? workspaceReturnHelper.priceResultWorkspaceReturnHref(hash, {
+        owner:config.workspaceOwner,
+        priceResult:{channel:'ozon', accountId, proposalIds},
+        workspaceUrl:config.workspaceUrl || '/my-products/beta',
+      }) : '';
+    if (!href || !hash || !href.endsWith(hash)) return null;
+    return {
+      hash,
+      priceResult:{channel:'ozon', accountId, proposalIds:proposalIds.slice()},
+    };
   })();
   const initialListingId = new URLSearchParams(location.search).get('listing_id');
   const requests = new Set();
@@ -32,7 +69,7 @@
   const app = Vue.createApp({
     components: {'ozon-prices': window.mcatShared.ozonPrices},
     data: () => ({mode:config.mode, base:config.base, catalog:config.catalog, writeEnabled:config.writeEnabled,
-      priceWorkspaceReturnHref, workspaceUrl:config.workspaceUrl || '/my-products/beta',
+      priceWorkspaceReturnHref, resultReturnHref:'', workspaceUrl:config.workspaceUrl || '/my-products/beta',
       statuses, accounts:[], warehouses:[], items:[], proposal:null, loading:false, busy:false, error:'', notice:'',
       sessionEnded:false, stopped:false, actionBlocked:false, confirmed:false, rejectNote:'', errorQuarantine:null,
       filters:{account_id:String(initial.account_id || ''), proposal_kind:initial.proposal_kind || '', status:initial.status || ''},
@@ -55,6 +92,11 @@
     computed: {
       contextListing() { return this.context ? {price_summary:{values:this.context.price,currency:this.context.currency},prices_synced_at:this.context.prices_synced_at} : null; },
       catalogUrl() { return this.catalog + '?marketplace=ozon' + (this.observedFilters.account_id ? '&account_id=' + this.observedFilters.account_id : ''); },
+      headerPriceWorkspaceReturnHref() {
+        return this.resultReturnHref && this.filters.account_id === String(initialPriceResult?.priceResult.accountId || '') &&
+          this.filters.proposal_kind === 'price' && this.filters.status === 'pending_review'
+          ? this.resultReturnHref : this.priceWorkspaceReturnHref;
+      },
       hasFilters() { return Boolean(this.filters.proposal_kind || this.filters.status); },
       batchMode() { return this.writeEnabled && this.observedFilters.account_id && ['price','stock'].includes(this.observedFilters.proposal_kind) && this.observedFilters.status === 'pending_review' && !this.error; },
       stockObservation() { return this.context?.stocks.find(row => row.warehouse_id === Number(this.warehouseId)) || null; },
@@ -195,7 +237,7 @@
         const query = new URLSearchParams({page:String(target),per_page:exactProposalIds ? exactProposalPageSize : '50'});
         if (exactProposalIds) query.set('proposal_ids',exactProposalIds);
         Object.entries(filters).forEach(([key,val]) => { if (val) query.set(key,val); });
-        this.loading = true; this.error = ''; this.selected = [];
+        this.loading = true; this.error = ''; this.selected = []; this.resultReturnHref = '';
         try {
           const data = await this.request(this.base + '?' + query);
           if (revision !== this.listRevision || this.stopped) return;
@@ -204,17 +246,47 @@
           this.pagination = data.pagination; this.writeEnabled = data.write_enabled; this.observedFilters = filters;
           const listingLink = new URLSearchParams(location.search).get('listing_id');
           if (listingLink && /^[1-9]\d*$/.test(listingLink)) query.set('listing_id',listingLink);
-          history.replaceState({},'',this.base + '?' + query);
+          const exactResultLoaded = this.exactPriceResultLoaded(data, filters, exactProposalIds);
+          let resultReturnHref = '';
+          if (exactResultLoaded && initialPriceResult?.hash && location.hash === initialPriceResult.hash &&
+              typeof workspaceReturnHelper?.priceResultWorkspaceReturnHref === 'function') {
+            resultReturnHref = workspaceReturnHelper.priceResultWorkspaceReturnHref(initialPriceResult.hash, {
+              owner:config.workspaceOwner,
+              priceResult:initialPriceResult.priceResult,
+              workspaceUrl:this.workspaceUrl,
+            });
+          }
+          const resultHash = resultReturnHref ? initialPriceResult.hash : '';
+          history.replaceState({},'',this.base + '?' + query + resultHash);
+          this.resultReturnHref = resultReturnHref;
           if (filters.account_id) this.readRefresh('warehouses',Number(filters.account_id));
           else this.refreshError = '';
         } catch (error) { this.error = error.message; if (this.observedFilters.account_id !== undefined) this.filters = clone(this.observedFilters); }
         finally { this.loading = false; }
+      },
+      exactPriceResultLoaded(data, filters, exactProposalIds) {
+        const candidate = initialPriceResult?.priceResult;
+        if (!candidate || filters.account_id !== String(candidate.accountId) || filters.proposal_kind !== 'price' ||
+            filters.status !== 'pending_review' || typeof exactProposalIds !== 'string' ||
+            exactProposalIds !== candidate.proposalIds.join(',') || data.exact_selection !== true ||
+            !Array.isArray(data.items) || !data.pagination || data.items.length !== candidate.proposalIds.length ||
+            data.pagination.total !== candidate.proposalIds.length || data.pagination.page !== 1) return false;
+        const expected = new Set(candidate.proposalIds);
+        const seen = new Set();
+        for (const proposal of data.items) {
+          if (!Number.isSafeInteger(proposal?.id) || !expected.has(proposal.id) || seen.has(proposal.id) ||
+              proposal.account_id !== candidate.accountId || proposal.proposal_kind !== 'price' ||
+              proposal.status !== 'pending_review') return false;
+          seen.add(proposal.id);
+        }
+        return seen.size === expected.size;
       },
       clearExactProposalFilter() {
         const query = new URLSearchParams(location.search);
         if (!query.has('proposal_ids')) return;
         query.delete('proposal_ids'); query.delete('page'); query.delete('per_page');
         history.replaceState({},'',this.base + (query.size ? '?' + query : ''));
+        this.resultReturnHref = '';
       },
       applyFilters() { this.notice = ''; this.clearExactProposalFilter(); this.loadList(1); },
       resetFilters() { this.filters = {...this.filters,proposal_kind:'',status:''}; this.clearExactProposalFilter(); this.loadList(1); },
@@ -500,6 +572,29 @@
         safe.searchParams.set('proposal_ids',proposalIds.join(','));
         return safe.pathname + safe.search;
       },
+      bindBulkPriceResultReturn(saved) {
+        const source = sourceWorkspaceReturn;
+        const helper = workspaceReturnHelper?.bindPriceWorkspaceResult;
+        const accountId = Number(this.bulkAccount);
+        const preview = this.bulkPreviewBody;
+        if (!source || typeof helper !== 'function' || !saved?.url || !Array.isArray(saved.items) ||
+            !saved.items.length || accountId !== source.priceTarget.accountId ||
+            !preview || preview.account_id !== accountId || !Array.isArray(preview.listing_ids) ||
+            preview.listing_ids.length !== source.priceTarget.ids.length ||
+            preview.listing_ids.some((id, index) => id !== source.priceTarget.ids[index]) ||
+            saved.items.some(item => !source.priceTarget.ids.includes(item.listing_id))) return saved?.url || '';
+        const priceResult = {
+          channel:'ozon',
+          accountId,
+          proposalIds:saved.items.map(item => item.proposal.id),
+        };
+        const hash = helper(source.hash, {
+          owner:config.workspaceOwner,
+          priceTarget:source.priceTarget,
+          priceResult,
+        });
+        return hash === source.hash ? saved.url + hash : saved.url;
+      },
       bulkConfirmShape(data, preview) {
         if (!data || data.selected_count !== preview.selected_count || data.saved_count !== preview.eligible_count ||
             typeof data.replayed !== 'boolean' || data.created_count !== (data.replayed ? 0 : preview.eligible_count) ||
@@ -536,7 +631,7 @@
           if (revision !== this.bulkActionRevision || !this.bulkOpen) return;
           const saved = this.bulkConfirmShape(data,this.bulkPreview);
           if (!saved) throw new Error('Ответ о сохранении неполный. Проверьте итог тем же подтверждением; новая заявка не будет отправлена в Ozon автоматически.');
-          this.bulkSavedUrl = saved.url; this.bulkSavedItems = saved.items; this.bulkSavedCount = data.saved_count;
+          this.bulkSavedUrl = this.bindBulkPriceResultReturn(saved); this.bulkSavedItems = saved.items; this.bulkSavedCount = data.saved_count;
           this.bulkSavedReplay = data.replayed; this.bulkStage = 'saved';
           this.bulkConfirmUnknown = false; this.bulkBlocked = false; this.sessionEnded = false;
           this.$nextTick(()=>this.$refs.bulkSavedHeading?.focus());

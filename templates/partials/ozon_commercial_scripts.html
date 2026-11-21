@@ -1,4 +1,4 @@
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}"></script>
-{% if bulk_selection|default(none) %}<script src="{{ url_for('static', filename='common-product-content.js', v='20261121-price-workspace-return-r39') }}"></script>{% endif %}
-<script src="{{ url_for('static', filename='ozon-commercial.js', v='20261121-price-workspace-return-r39') }}"></script>
+{% if bulk_selection|default(none) or (filters is defined and filters.proposal_ids) %}<script src="{{ url_for('static', filename='common-product-content.js', v='20261121-price-result-return-r41') }}"></script>{% endif %}
+<script src="{{ url_for('static', filename='ozon-commercial.js', v='20261121-price-result-return-r41') }}"></script>
