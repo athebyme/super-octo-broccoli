@@ -773,8 +773,10 @@ def run():
         assert (unlinked_preview["eligible"], unlinked_preview["changed"],
                 unlinked_preview["skipped"]) == (0, 0, 1)
         assert unlinked_preview["items"][0]["state"] == "unlinked"
-        assert dialog.get_by_text(MANUAL_TITLE, exact=False).is_visible()
-        assert dialog.get_by_text("Нет связи с каталогом поставщика", exact=True).is_visible()
+        unlinked_row = dialog.locator(".mp-supplier-refresh-item.is-unlinked")
+        assert unlinked_row.count() == 1
+        assert unlinked_row.get_by_text(MANUAL_TITLE, exact=False).count() >= 1
+        assert unlinked_row.get_by_text("Нет связи с каталогом поставщика", exact=True).count() == 1
         assert dialog.get_by_role("button", name="Обновить", exact=True).count() == 0
         dialog.get_by_role("button", name="Вернуться", exact=True).click()
         assert not dialog.is_visible()
@@ -1412,22 +1414,24 @@ def run():
         quantity_change = changed_row.locator(".mp-supplier-refresh-changes > div").filter(
             has_text="Остаток у поставщика",
         )
+        unlinked_row = dialog.locator(".mp-supplier-refresh-item.is-unlinked").filter(
+            has_text=MANUAL_TITLE,
+        )
         assert title_change.locator("dd").inner_text().count("→") == 1
         assert MAIN_TITLE in title_change.locator("dd").inner_text()
         assert REFRESHED_TITLE in title_change.locator("dd").inner_text()
         quantity_text = quantity_change.locator("dd").inner_text()
         assert "3" in quantity_text and "0" in quantity_text and "→" in quantity_text
+        assert changed_row.count() == 1 and title_change.count() == 1 and quantity_change.count() == 1
+        assert unlinked_row.count() == 1
         assert dialog.get_by_text("Выбрано", exact=True).is_visible()
         assert dialog.get_by_text("Можно обновить", exact=True).is_visible()
         assert dialog.get_by_text("Изменятся", exact=True).is_visible()
         assert dialog.get_by_text("Без связи", exact=True).is_visible()
-        assert dialog.get_by_text(MAIN_TITLE, exact=True).is_visible()
-        assert dialog.get_by_text(REFRESHED_TITLE, exact=True).is_visible()
         assert dialog.get_by_text("Название", exact=True).is_visible()
         assert dialog.get_by_text("Остаток у поставщика", exact=True).is_visible()
-        assert dialog.get_by_text("0", exact=True).is_visible()
-        assert dialog.get_by_text(MANUAL_TITLE, exact=True).is_visible()
-        assert dialog.get_by_text("Нет связи с каталогом поставщика", exact=True).is_visible()
+        assert unlinked_row.get_by_text(MANUAL_TITLE, exact=False).count() >= 1
+        assert unlinked_row.get_by_text("Нет связи с каталогом поставщика", exact=True).count() == 1
         assert mobile_preview["review_token"] not in dialog.inner_text()
         verify_bounds(preview_page)
         preview_geometry = preview_page.evaluate("""() => {
