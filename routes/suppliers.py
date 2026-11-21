@@ -956,6 +956,7 @@ def register_supplier_routes(app):
                 'errors': result.errors,
                 'duration': round(result.duration_seconds, 1),
                 'cascade_updated': result.seller_rows_updated,
+                'conflicting_source_rows': result.conflicting_source_rows,
                 'already_running': result.busy,
             },
             request=request
@@ -965,7 +966,9 @@ def register_supplier_routes(app):
             msg = f'Файл цен и остатков проверен. Позиций обработано — {result.updated}.'
             if result.seller_rows_updated:
                 msg += f' Записей у продавцов изменено — {result.seller_rows_updated}.'
-            flash(msg, 'success')
+            if result.conflicting_source_rows:
+                msg += f' Позиции с противоречивыми строками пропущены. Всего — {result.conflicting_source_rows}.'
+            flash(msg, 'warning' if result.conflicting_source_rows else 'success')
         elif result.busy:
             flash('Проверка цен и остатков уже идёт.', 'warning')
         else:

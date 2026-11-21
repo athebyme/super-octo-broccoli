@@ -6896,6 +6896,7 @@ def _run_startup_migrations():
         ('imported_products', 'brand_status', 'VARCHAR(20)'),
         ('supplier_products', 'resolved_brand_id', 'INTEGER REFERENCES brands(id)'),
         ('suppliers', 'last_price_sync_attempt_at', 'DATETIME'),
+        ('suppliers', 'last_price_sync_conflict_count', 'INTEGER'),
         # Notification columns (may be missing if table was created before these were added)
         ('notifications', 'link', 'VARCHAR(500)'),
         ('notifications', 'metadata_json', "TEXT DEFAULT '{}'"),

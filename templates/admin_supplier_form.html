@@ -285,7 +285,7 @@
                     {% if mode == 'edit' and supplier.price_file_url %}
                     <dl class="bg-gray-50 rounded-lg p-3 text-sm space-y-1">
                         <div>
-                            <dt class="inline text-gray-500">Файл цен и остатков получен</dt>
+                            <dt class="inline text-gray-500">Последнее обновление цен и остатков</dt>
                             <dd class="inline font-medium">
                                 {% if supplier.last_price_sync_at %}
                                 <time datetime="{{ supplier.last_price_sync_at.isoformat() }}Z">{{ supplier.last_price_sync_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
@@ -302,6 +302,11 @@
                         {% endif %}
                         {% if supplier.last_price_sync_status == 'failed' %}
                         <div class="text-red-700">Последняя проверка завершилась ошибкой. Проверьте источник файла.</div>
+                        {% elif supplier.last_price_sync_status == 'partial' %}
+                        <div class="text-amber-700">
+                            Позиции с противоречивыми строками пропущены.
+                            {% if supplier.last_price_sync_conflict_count %}Всего — {{ supplier.last_price_sync_conflict_count }}.{% endif %}
+                        </div>
                         {% endif %}
                     </dl>
                     {% endif %}

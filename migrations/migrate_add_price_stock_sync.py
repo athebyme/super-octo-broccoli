@@ -4,7 +4,8 @@
 
 Supplier:
 - price_file_url, price_file_inf_url, price_file_delimiter, price_file_encoding
-- last_price_sync_at, last_price_sync_attempt_at, last_price_sync_status, last_price_sync_error, last_price_file_hash
+- last_price_sync_at, last_price_sync_attempt_at, last_price_sync_conflict_count
+- last_price_sync_status, last_price_sync_error, last_price_file_hash
 - auto_sync_prices, auto_sync_interval_minutes
 
 SupplierProduct:
@@ -80,6 +81,7 @@ def migrate(db_path: str = None):
             ("price_file_encoding", "VARCHAR(20) DEFAULT 'cp1251'"),
             ("last_price_sync_at", "DATETIME"),
             ("last_price_sync_attempt_at", "DATETIME"),
+            ("last_price_sync_conflict_count", "INTEGER"),
             ("last_price_sync_status", "VARCHAR(50)"),
             ("last_price_sync_error", "TEXT"),
             ("last_price_file_hash", "VARCHAR(64)"),

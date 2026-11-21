@@ -124,6 +124,7 @@ class SyncResult:
     duration_seconds: float = 0.0
     seller_rows_updated: int = 0
     busy: bool = False
+    conflicting_source_rows: int = 0
 
 
 @dataclass
