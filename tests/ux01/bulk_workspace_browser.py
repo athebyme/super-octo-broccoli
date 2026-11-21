@@ -251,7 +251,6 @@ def run():
     override_over_limit_initial = False
     over_limit_initial_total = 201
     mock_over_limit_full = False
-    expected_wb_handoff_error = False
 
     def remember_feed_response(query, status, body):
         pagination = body.get("pagination") if isinstance(body, dict) else None
@@ -272,19 +271,9 @@ def run():
         nonlocal refresh_response_override, refresh_response_status
         nonlocal delay_next_full_select, server_delay_next_full_select
         nonlocal override_over_limit_initial, over_limit_initial_total, mock_over_limit_full
-        nonlocal expected_wb_handoff_error
         request = route.request
         parsed = urlsplit(request.url)
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "GET":
-            if parsed.path == "/prices/api/products" and expected_wb_handoff_error:
-                query = parse_qs(parsed.query, keep_blank_values=True)
-                assert query.get("product_ids") == [str(fixture_ids["wb_id"])]
-                expected_wb_handoff_error = False
-                response = route.fetch(max_redirects=0)
-                assert response.status == 409
-                assert response.json().get("code") == "exact_selection_changed"
-                route.fulfill(response=response)
-                return
             if parsed.path == "/api/my-products":
                 query = parse_qs(parsed.query, keep_blank_values=True)
                 # The signed import-batch token is a short-lived capability.
@@ -666,26 +655,20 @@ def run():
         assert page.evaluate("localStorage.getItem('price_change_selected')") == '[999999]'
         checks.append("filtered_wb_price_return_restores_exact_owned_marks_and_scope")
 
-        # Re-run the same filtered action, then make that source stop matching
-        # the captured search and its WB product stop being active. This
-        # exercises the in-page error return, then rejects the stale mark.
-        with fixture.app.app_context():
-            stale_product = db.session.get(Product, fixture_ids["wb_id"])
-            stale_product.is_active = False
-            db.session.commit()
-        expected_wb_handoff_error = True
+        # Re-run the filtered action with an authorized WB product, then make
+        # its ImportedProduct stop matching the captured search before return.
+        # The fresh selector read must reject the stale mark as a whole.
         pick_action(page, "Изменить цены WB")
         page.wait_for_url(lambda value: (
             urlsplit(str(value)).path == "/prices/change"
             and re.fullmatch(r"workspace-return=[a-f0-9]{32}", urlsplit(str(value)).fragment)
         ))
-        page.get_by_role("alert").wait_for(state="visible")
-        stale_return = page.locator('[role="alert"] a[data-price-workspace-return]')
+        stale_return = page.get_by_role("link", name="Вернуться к товарам", exact=True)
         stale_return.wait_for(state="visible")
         stale_hash = urlsplit(page.url).fragment
-        error_href = urlsplit(stale_return.get_attribute("href") or "")
-        assert error_href.path == "/my-products/beta" and not error_href.query
-        assert error_href.fragment == stale_hash
+        stale_href = urlsplit(stale_return.get_attribute("href") or "")
+        assert stale_href.path == "/my-products/beta" and not stale_href.query
+        assert stale_href.fragment == stale_hash
         with fixture.app.app_context():
             changed_source = db.session.get(ImportedProduct, fixture_ids["local_id"])
             changed_source.title = "Изменённый товар вне исходного поиска"
@@ -708,8 +691,6 @@ def run():
         with fixture.app.app_context():
             changed_source = db.session.get(ImportedProduct, fixture_ids["local_id"])
             changed_source.title = MAIN_TITLE
-            stale_product = db.session.get(Product, fixture_ids["wb_id"])
-            stale_product.is_active = True
             db.session.commit()
         checks.append("stale_wb_price_return_drops_all_marks_after_feed_change")
         fixture.wait_document(page, "direct_wb_prices", "/prices/change")
