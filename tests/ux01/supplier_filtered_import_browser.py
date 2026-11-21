@@ -1,8 +1,10 @@
-"""Synthetic browser proof for bounded all-filtered supplier import selection.
+"""Synthetic browser proof for supplier import selection and WB create result.
 
 Uses the isolated app, SQLite fixture, network-denying browser bridge, and
-synthetic seller session from ``journey_browser``. The only browser POST is the
-normal local supplier import form; no supplier/provider endpoint is called.
+synthetic seller session from ``journey_browser``. Browser writes are limited
+to the normal local supplier import form and one exact WB bulk-create POST. A
+scoped fake importer supplies deterministic WB outcomes after the real route
+and BackgroundJob worker perform their normal seller scope/readiness checks.
 
 Run with the repository venv and Chromium installed. The summary is written to
 ``/artifacts/supplier-filtered-import.json`` by default.
@@ -14,7 +16,9 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import re
 import sys
+import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from playwright.sync_api import sync_playwright
@@ -22,7 +26,15 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.ux01 import journey_browser as fixture
-from models import ImportedProduct, SellerSupplier, Supplier, SupplierProduct, db
+from models import (
+    ImportedProduct,
+    PricingSettings,
+    Seller,
+    SellerSupplier,
+    Supplier,
+    SupplierProduct,
+    db,
+)
 
 
 REPORT_PATH = Path(os.environ.get(
@@ -30,6 +42,8 @@ REPORT_PATH = Path(os.environ.get(
     "/artifacts/supplier-filtered-import.json",
 ))
 IMPORT_PATH = "/supplier-catalog/import"
+WB_CREATE_PATH = "/my-products/push-to-wb-bulk"
+JOB_STATUS_PREFIX = "/api/jobs/"
 FILTERS = {
     "search": "R28 Mass batch",
     "stock_status": "in_stock",
@@ -40,10 +54,27 @@ FILTERS = {
 
 
 def seed_supplier_products():
-    """Create 53 current-supplier matches plus filter/supplier exclusions."""
+    """Create 53 eligible current-supplier matches plus exact exclusions.
+
+    The eligible source rows also carry enough observed facts to pass the real
+    WB upload-readiness validator after the normal supplier import. This keeps
+    the later mixed result focused on the importer outcome, not missing seed
+    data.
+    """
     with fixture.app.app_context():
         seller_id = fixture.FIXTURE["seller_id"]
         supplier_id = fixture.FIXTURE["supplier_id"]
+        seller = db.session.get(Seller, seller_id)
+        assert seller is not None
+        seller.wb_api_key = "synthetic-wb-key-never-sent"
+        pricing_settings = PricingSettings.query.filter_by(seller_id=seller_id).first()
+        if pricing_settings is None:
+            db.session.add(PricingSettings(
+                seller_id=seller_id,
+                is_enabled=True,
+            ))
+        else:
+            pricing_settings.is_enabled = True
         seller_supplier = SellerSupplier.query.filter_by(
             seller_id=seller_id,
             supplier_id=supplier_id,
@@ -58,14 +89,31 @@ def seed_supplier_products():
                 external_id=f"R28-MASS-{index:03d}",
                 vendor_code=f"R28-MASS-{index:03d}",
                 title=f"R28 Mass batch item {index:03d}",
+                description=(
+                    f"Synthetic supplier description for WB readiness item {index:03d}. "
+                    "This fixture text is local and is not sent to a provider."
+                ),
+                brand="R28 Synthetic Brand",
+                category="Synthetic supplier category",
+                wb_category_name="Synthetic WB category",
+                wb_subject_id=7000,
+                wb_subject_name="Synthetic WB subject",
                 supplier_price=100 + index,
                 currency="RUB",
                 supplier_quantity=4,
                 supplier_status="in_stock",
                 status="ready",
                 ai_parsed_at=datetime(2026, 11, 21),
-                photo_urls_json="[]",
-                characteristics_json="[]",
+                photo_urls_json=json.dumps([fixture.PHOTO]),
+                colors_json=json.dumps(["Blue"]),
+                materials_json=json.dumps(["Cotton"]),
+                gender="unisex",
+                country="Russia",
+                characteristics_json=json.dumps({
+                    "Synthetic material": "Cotton",
+                    "Synthetic color": "Blue",
+                    "Synthetic use": "Daily",
+                }),
             )
             db.session.add(product)
             eligible.append(product)
@@ -143,9 +191,17 @@ def run():
     fixture_ids = seed_supplier_products()
     checks = []
     posts = []
+    wb_create_posts = []
     product_feed_reads = []
     facet_reads = []
+    job_status_reads = []
     page_errors = []
+    event_number = [0]
+    wb_create_report = None
+
+    def next_event():
+        event_number[0] += 1
+        return event_number[0]
 
     def bridge(route):
         request = route.request
@@ -164,8 +220,35 @@ def run():
                     except Exception:
                         payload = None
                 product_feed_reads.append({
+                    "sequence": next_event(),
                     "query_keys": tuple(sorted(query)),
                     "batch_tokens": tuple(query.get("import_batch", [])),
+                    "status": response.status,
+                    "payload": payload,
+                })
+                if response.status >= 400:
+                    fixture.REPORT["unexpected_http"].append({
+                        "path": parsed.path, "status": response.status,
+                    })
+                route.fulfill(response=response)
+                return
+            if (
+                parsed.path.startswith(JOB_STATUS_PREFIX)
+                and parsed.path.removeprefix(JOB_STATUS_PREFIX)
+                not in {"active", "recent"}
+            ):
+                try:
+                    response = route.fetch(max_redirects=0)
+                except Exception:
+                    raise AssertionError("local WB job status request failed") from None
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = None
+                job_status_reads.append({
+                    "sequence": next_event(),
+                    "method": request.method,
+                    "path": parsed.path,
                     "status": response.status,
                     "payload": payload,
                 })
@@ -188,10 +271,25 @@ def run():
                 route.fulfill(response=response)
                 return
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "POST":
-            assert parsed.path == IMPORT_PATH, (request.method, parsed.path)
-            body = parse_qs(request.post_data or "", keep_blank_values=True)
-            assert body.get("csrf_token"), "normal supplier import form must carry CSRF"
-            posts.append({"path": parsed.path, "body": body})
+            assert parsed.path in {IMPORT_PATH, WB_CREATE_PATH}, (
+                request.method, parsed.path,
+            )
+            if parsed.path == IMPORT_PATH:
+                body = parse_qs(request.post_data or "", keep_blank_values=True)
+                assert body.get("csrf_token"), "normal supplier import form must carry CSRF"
+                posts.append({"path": parsed.path, "body": body})
+            else:
+                assert "application/json" in (request.headers.get("content-type") or "")
+                assert request.headers.get("x-csrftoken"), "WB create POST must carry CSRF"
+                try:
+                    body = request.post_data_json
+                except Exception:
+                    raise AssertionError("WB create POST must carry JSON") from None
+                wb_create_posts.append({
+                    "sequence": next_event(),
+                    "path": parsed.path,
+                    "body": body,
+                })
             fixture.REPORT["writes"].append({"method": "POST", "path": parsed.path})
             response = route.fetch(max_redirects=0)
             route.fulfill(response=response)
@@ -456,6 +554,285 @@ def run():
         checks.append("normal_post_persists_only_the_exact_selected_owned_supplier_rows")
         checks.append("import_batch_mobile_screenshot_saved")
 
+        # Reopen the signed receipt after the R31 53 → 50 → 49 Ozon review.
+        # This terminal WB create proof selects only two retained rows, so one
+        # actual partial result does not depend on the whole import batch.
+        batch_query = urlencode({"import_batch": batch_token})
+        batch_response = page.goto(
+            fixture.BASE + "/my-products/beta?" + batch_query,
+            wait_until="domcontentloaded",
+        )
+        assert batch_response and batch_response.status == 200
+        batch_state = assert_batch_page(persisted_product_ids)
+        assert batch_state["selected"] == []
+        assert product_feed_reads[-1]["query_keys"] == ("import_batch",)
+        assert product_feed_reads[-1]["batch_tokens"] == (batch_token,)
+        assert product_feed_reads[-1]["status"] == 200
+        assert product_feed_reads[-1]["payload"].get("import_batch_count") == 50
+        page.set_viewport_size({"width": 320, "height": 900})
+        batch_item_ids = page.evaluate("""() => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy ? proxy.items.map(item => item.id) : null;
+        }""")
+        assert isinstance(batch_item_ids, list) and len(batch_item_ids) == 50
+        wb_selected_ids = batch_item_ids[:2]
+        assert len(wb_selected_ids) == 2 and len(set(wb_selected_ids)) == 2
+        assert set(wb_selected_ids) <= persisted_product_ids
+        for product_id in wb_selected_ids:
+            page.locator(
+                f'.mp-row .mp-check input[type="checkbox"][value="{product_id}"]',
+            ).check()
+        selected_before_create = page.evaluate("""() => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy ? proxy.selected.slice() : null;
+        }""")
+        assert selected_before_create == wb_selected_ids
+        page.get_by_role("button", name="Что сделать").click()
+        page.get_by_role("menuitem", name="Создать карточки WB", exact=True).click()
+        confirmation = page.get_by_role("alertdialog")
+        confirmation.wait_for(state="visible")
+
+        from services.upload_readiness_validator import validate_product_upload_readiness
+        from services.wb_product_importer import WBProductImporter
+
+        fake_wb_calls = []
+        original_batch_import = WBProductImporter.batch_import_products_to_wb
+
+        def deterministic_wb_batch_import(self, imported_products, progress_callback=None):
+            product_ids = [product.id for product in imported_products]
+            assert product_ids == wb_selected_ids, (
+                "real BackgroundJob worker widened or reordered the selected product set",
+            )
+            checks_by_product = []
+            for product in imported_products:
+                readiness = validate_product_upload_readiness(
+                    product,
+                    seller=db.session.get(Seller, fixture.FIXTURE["seller_id"]),
+                )
+                checks_by_product.append({
+                    "id": product.id,
+                    "status": product.import_status,
+                    "is_ready": readiness["is_ready"],
+                    "can_push": readiness["can_push"],
+                })
+            assert all(
+                item["status"] == "validated" and item["is_ready"] and item["can_push"]
+                for item in checks_by_product
+            ), checks_by_product
+
+            outcomes = []
+            for index, product in enumerate(imported_products):
+                success = index == 0
+                outcomes.append({
+                    "product_id": product.id,
+                    "title": (product.title or "")[:50],
+                    "status": "success" if success else "failed",
+                    "error": None if success else "Synthetic WB rejected this fixture card",
+                    "nm_id": 700000 + index if success else None,
+                    "warnings": [],
+                })
+            fake_wb_calls.append({
+                "product_ids": product_ids,
+                "readiness": checks_by_product,
+                "outcomes": outcomes,
+            })
+            if progress_callback:
+                progress_callback("done", {"items": outcomes})
+            return outcomes
+
+        WBProductImporter.batch_import_products_to_wb = deterministic_wb_batch_import
+        try:
+            create_button = confirmation.get_by_role(
+                "button", name="Создать карточки", exact=True,
+            )
+            assert create_button.is_enabled()
+            status_reads_before_create = len(job_status_reads)
+            feed_reads_before_create = len(product_feed_reads)
+            facet_reads_before_create = len(facet_reads)
+            with page.expect_response(
+                lambda response: urlsplit(response.url).path == WB_CREATE_PATH
+                and response.request.method == "POST",
+            ) as created:
+                create_button.click()
+            create_response = created.value
+            assert create_response.status == 200, (
+                "normal WB create action must queue a BackgroundJob",
+                create_response.status,
+            )
+            confirmation.wait_for(state="hidden")
+            create_payload = create_response.json()
+            assert isinstance(create_payload, dict) and create_payload.get("success") is True
+            job_uid = create_payload.get("job_uid")
+            assert isinstance(job_uid, str) and re.fullmatch(
+                r"bulk_wb_[0-9a-f]{12}", job_uid,
+            ), "WB create response must identify the actual durable job"
+            assert page.get_by_role("alertdialog").count() == 0
+            assert len(wb_create_posts) == 1, wb_create_posts
+            create_post = wb_create_posts[0]
+            assert create_post["path"] == WB_CREATE_PATH
+            assert set(create_post["body"]) == {"product_ids"}
+            assert create_post["body"]["product_ids"] == wb_selected_ids
+            assert set(create_post["body"]["product_ids"]) <= persisted_product_ids
+            checks.append("signed_import_batch_posts_one_exact_two_product_wb_create_request")
+
+            expected_status_path = JOB_STATUS_PREFIX + job_uid
+            terminal_status_values = {"completed", "completed_with_errors", "failed", "cancelled"}
+            deadline = time.monotonic() + 15
+            terminal_status_read = None
+            while time.monotonic() < deadline:
+                matching_reads = [
+                    read for read in job_status_reads
+                    if read["path"] == expected_status_path and read["status"] == 200
+                    and isinstance(read["payload"], dict)
+                    and read["payload"].get("status") in terminal_status_values
+                ]
+                if matching_reads:
+                    terminal_status_read = matching_reads[-1]
+                    break
+                page.wait_for_timeout(50)
+            assert terminal_status_read is not None, (
+                "browser did not observe a terminal raw BackgroundJob status GET",
+                job_status_reads[status_reads_before_create:],
+            )
+            assert terminal_status_read["method"] == "GET"
+            assert terminal_status_read["sequence"] > create_post["sequence"]
+            assert terminal_status_read["payload"]["status"] == "completed"
+            page.evaluate("""() => new Promise(resolve =>
+                requestAnimationFrame(() => requestAnimationFrame(resolve)))""")
+            terminal_screenshot = "supplier-filtered-import-wb-create-terminal-dark-320.png"
+            page.locator(".shk-job").screenshot(
+                path=REPORT_PATH.parent / terminal_screenshot,
+                animations="disabled",
+            )
+
+            terminal_payload = terminal_status_read["payload"]
+            terminal_progress = terminal_payload.get("progress")
+            terminal_result = terminal_payload.get("result")
+            assert terminal_payload.get("job_type") == "bulk_wb_import"
+            assert terminal_payload.get("total") == 2
+            assert terminal_payload.get("processed") == 2
+            assert terminal_payload.get("succeeded") == 1
+            assert terminal_payload.get("failed_count") == 1
+            assert isinstance(terminal_progress, dict)
+            assert terminal_progress.get("product_ids") == wb_selected_ids
+            progress_items = terminal_progress.get("items")
+            assert isinstance(progress_items, list) and len(progress_items) == 2
+            assert [item.get("product_id") for item in progress_items] == wb_selected_ids
+            assert [item.get("status") for item in progress_items] == ["success", "failed"]
+            assert progress_items[1].get("error") == "Synthetic WB rejected this fixture card"
+            assert isinstance(terminal_result, dict)
+            assert terminal_result.get("total") == 2
+            assert terminal_result.get("imported") == 1
+            assert terminal_result.get("failed") == 1
+            assert terminal_result.get("errors") == [
+                "{}: Synthetic WB rejected this fixture card".format(
+                    progress_items[1].get("title", ""),
+                ),
+            ]
+            assert len(fake_wb_calls) == 1
+            assert fake_wb_calls[0]["product_ids"] == wb_selected_ids
+            assert all(item["is_ready"] and item["can_push"] for item in fake_wb_calls[0]["readiness"])
+            with fixture.app.app_context():
+                from models import BackgroundJob
+
+                job = BackgroundJob.query.filter_by(
+                    job_uid=job_uid,
+                    seller_id=fixture.FIXTURE["seller_id"],
+                ).one()
+                assert job.status == "completed"
+                assert job.total == 2 and job.processed == 2
+                assert job.succeeded == 1 and job.failed_count == 1
+                assert job.get_progress()["product_ids"] == wb_selected_ids
+                assert [row["product_id"] for row in job.get_progress()["items"]] == wb_selected_ids
+                assert job.get_result()["imported"] == 1 and job.get_result()["failed"] == 1
+
+            terminal_title = page.locator(".shk-job-title")
+            terminal_title.wait_for(state="visible")
+            assert terminal_title.inner_text() == "Завершено с ошибками"
+            job_panel = page.locator(".shk-job")
+            assert job_panel.get_by_text("2 из 2", exact=True).count() == 1
+            assert job_panel.locator(".shk-job-stat.is-ok").inner_text() == "Успешно: 1"
+            assert job_panel.locator(".shk-job-stat.is-danger").inner_text() == "С ошибкой: 1"
+            close_button = page.get_by_role("button", name="Скрыть итог задачи")
+            assert close_button.count() == 1 and close_button.is_visible()
+            close_geometry = close_button.evaluate("""element => {
+                const rect = element.getBoundingClientRect();
+                return {width: rect.width, height: rect.height};
+            }""")
+            assert close_geometry["width"] >= 44 and close_geometry["height"] >= 44, close_geometry
+            viewport_geometry = page.evaluate("""() => ({
+                width: document.documentElement.clientWidth,
+                scrollWidth: document.documentElement.scrollWidth,
+            })""")
+            assert viewport_geometry["width"] == 320
+            assert viewport_geometry["scrollWidth"] <= viewport_geometry["width"] + 1
+            page.keyboard.press("Tab")
+            close_button.focus()
+            close_focus = close_button.evaluate("""element => {
+                const style = getComputedStyle(element);
+                return {
+                    focused: document.activeElement === element,
+                    focusVisible: element.matches(':focus-visible'),
+                    outlineStyle: style.outlineStyle,
+                    outlineWidth: parseFloat(style.outlineWidth) || 0,
+                };
+            }""")
+            assert close_focus["focused"] and close_focus["focusVisible"], close_focus
+            assert close_focus["outlineStyle"] != "none" and close_focus["outlineWidth"] >= 2, close_focus
+            checks.append("raw_terminal_job_read_renders_one_success_and_one_distinct_failure")
+            checks.append("320px_terminal_close_target_is_44px_keyboard_visible_and_overflow_free")
+
+            refresh_deadline = time.monotonic() + 5
+            while time.monotonic() < refresh_deadline and not any(
+                read["sequence"] > terminal_status_read["sequence"]
+                and read["batch_tokens"] == (batch_token,)
+                for read in product_feed_reads
+            ):
+                page.wait_for_timeout(50)
+            refreshed_reads = [
+                read for read in product_feed_reads
+                if read["sequence"] > terminal_status_read["sequence"]
+                and read["batch_tokens"] == (batch_token,)
+            ]
+            assert refreshed_reads, "terminal result must refresh the signed import-batch product list"
+            assert refreshed_reads[-1]["status"] == 200
+            assert refreshed_reads[-1]["payload"].get("import_batch_count") == 50
+            assert {
+                item.get("id") for item in refreshed_reads[-1]["payload"].get("items", [])
+            } == persisted_product_ids
+            assert len(product_feed_reads) >= feed_reads_before_create + 1
+            assert len(facet_reads) == facet_reads_before_create, (
+                "terminal import-batch refresh must stay exact and avoid global facets",
+            )
+            assert page.locator(".mp-list > .mp-row").count() == 50
+            checks.append("terminal_job_refreshes_the_same_exact_signed_batch_product_list")
+
+            observed_status_get_count = sum(
+                1 for read in job_status_reads if read["path"] == expected_status_path
+            )
+            page.wait_for_timeout(2700)
+            assert sum(
+                1 for read in job_status_reads if read["path"] == expected_status_path
+            ) == observed_status_get_count, "terminal polling must stop after the raw completed status"
+            assert len(wb_create_posts) == 1, "terminal UI must not resubmit WB creation"
+            close_button.click()
+            job_panel.wait_for(state="hidden")
+            assert page.locator(".shk-job").count() == 0
+            assert len(wb_create_posts) == 1
+            checks.append("terminal_job_stops_polling_after_2_5s_and_closes_without_a_retry_or_resubmit")
+
+            wb_create_report = {
+                "selected_count": len(wb_selected_ids),
+                "terminal_raw_status": terminal_payload["status"],
+                "succeeded_count": terminal_payload["succeeded"],
+                "failed_count": terminal_payload["failed_count"],
+                "screenshot": terminal_screenshot,
+                "physical_post_count": len(wb_create_posts),
+                "status_get_count": observed_status_get_count,
+            }
+        finally:
+            WBProductImporter.batch_import_products_to_wb = original_batch_import
+
         oversized_path = "/supplier-catalog/{}/products?{}".format(
             fixture_ids["supplier_id"],
             urlencode({
@@ -492,19 +869,25 @@ def run():
         assert fixture.REPORT["unexpected_http"] == []
         assert fixture.REPORT["writes"] == [
             {"method": "POST", "path": IMPORT_PATH},
+            {"method": "POST", "path": WB_CREATE_PATH},
         ], fixture.REPORT["writes"]
-        checks.append("synthetic_import_has_zero_provider_attempts_external_requests_and_http_errors")
+        assert wb_create_report is not None
+        checks.append("synthetic_import_and_wb_create_have_zero_provider_attempts_external_requests_and_http_errors")
         context.close()
         browser.close()
 
     return {
         "status": "passed",
-        "scope": "synthetic_normal_supplier_filtered_bulk_import",
+        "scope": "synthetic_supplier_filtered_import_and_terminal_wb_bulk_create",
         "checks": checks,
         "provider_attempts": fixture.REPORT["provider_attempts"],
         "selected_count": len(selected_ids),
         "imported_count": imported_count,
-        "screenshots": ["supplier-filtered-import-batch-dark-320.png"],
+        "wb_create": wb_create_report,
+        "screenshots": [
+            "supplier-filtered-import-batch-dark-320.png",
+            wb_create_report["screenshot"] if wb_create_report else None,
+        ],
         "writes": fixture.REPORT["writes"],
         "external_requests": fixture.REPORT["unexpected_external_requests"],
         "unexpected_http": fixture.REPORT["unexpected_http"],
