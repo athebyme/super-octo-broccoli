@@ -315,6 +315,27 @@ def test_mocked_https_transport_pins_ip_uses_hostname_and_sends_no_credentials(m
     assert tls_sockets[0].closed
 
 
+def test_read_supplier_csv_bytes_returns_raw_headerless_18_column_body(monkeypatch):
+    body = b";".join(f"field-{index}".encode() for index in range(18)) + b"\n"
+    response = (
+        b"HTTP/1.1 200 OK\r\n"
+        b"Content-Type: text/csv; charset=utf-8\r\n"
+        + f"Content-Length: {len(body)}\r\n".encode()
+        + b"Connection: close\r\n\r\n"
+        + body
+    )
+    raw_sockets, tls_sockets, contexts = _install_fake_transport(monkeypatch, response)
+
+    result = feed.read_supplier_csv_bytes("https://feed.example/catalog.csv")
+
+    assert result == body
+    assert raw_sockets[0].connected_to == (PUBLIC_IP, 443)
+    assert contexts[0].server_hostname == "feed.example"
+    assert tls_sockets[0].request.startswith(b"GET /catalog.csv HTTP/1.1\r\n")
+    assert len(tls_sockets) == 1
+    assert tls_sockets[0].closed
+
+
 def test_redirect_is_rejected_and_never_followed(monkeypatch):
     response = (
         b"HTTP/1.1 302 Found\r\n"

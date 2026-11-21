@@ -396,6 +396,27 @@ def _fetch_over_pinned_https(
                 pass
 
 
+def _read_supplier_csv_bytes_until(url: str, deadline: float) -> bytes:
+    """Fetch one bounded public CSV body before the caller's deadline."""
+    host, path = _prepare_url(url)
+    addresses = _resolve_addresses(host, deadline)
+    return _fetch_over_pinned_https(host, path, addresses, deadline)
+
+
+def read_supplier_csv_bytes(url: str) -> bytes:
+    """Return one bounded supplier CSV response body without parsing it.
+
+    This uses the same public-origin validation and pinned HTTPS transport as
+    :func:`read_supplier_price_feed`: at most one credential-free GET, no
+    redirects, an 8 MiB body limit, and one wall-clock deadline for DNS,
+    connection, headers, and body reads. The documented exact legacy
+    ``http://sexoptovik.ru`` origin is upgraded to HTTPS without changing its
+    path.
+    """
+    deadline = time.monotonic() + TOTAL_DEADLINE_SECONDS
+    return _read_supplier_csv_bytes_until(url, deadline)
+
+
 def _text_value(value: str, maximum: int) -> Optional[str]:
     if len(value) > maximum:
         _fail("field_too_long")
@@ -554,9 +575,7 @@ def read_supplier_price_feed(
     from ``rows``.
     """
     deadline = time.monotonic() + TOTAL_DEADLINE_SECONDS
-    host, path = _prepare_url(url)
-    addresses = _resolve_addresses(host, deadline)
-    body = _fetch_over_pinned_https(host, path, addresses, deadline)
+    body = _read_supplier_csv_bytes_until(url, deadline)
     return _parse_csv(body, encoding=encoding, delimiter=delimiter, deadline=deadline)
 
 
@@ -564,5 +583,6 @@ __all__ = [
     "SupplierPriceFeedError",
     "SupplierPriceFeed",
     "SupplierPriceRow",
+    "read_supplier_csv_bytes",
     "read_supplier_price_feed",
 ]
