@@ -259,6 +259,17 @@ def seed_supplier_update_review_rows(fixture_ids, imported_source_ids):
         db.session.add_all(copies)
         db.session.flush()
 
+        # The service takes a fresh SQLite writer transaction and rolls back
+        # pending session state before BEGIN IMMEDIATE. Persist this browser
+        # fixture first so the legacy refresh sees the intended local copies.
+        db.session.commit()
+        persisted_current = ImportedProduct.query.filter_by(
+            seller_id=seller_id,
+            supplier_id=supplier_id,
+            supplier_product_id=current_source_id,
+        ).one()
+        assert persisted_current.id == copies[1].id
+
         from services.supplier_service import SupplierService
 
         seeded_current = SupplierService.update_supplier_products(
@@ -267,6 +278,20 @@ def seed_supplier_update_review_rows(fixture_ids, imported_source_ids):
             [current_source_id],
         )
         assert (seeded_current.total_requested, seeded_current.imported) == (1, 1)
+        current_copy = db.session.get(ImportedProduct, copies[1].id)
+        current_source = db.session.get(SupplierProduct, current_source_id)
+        assert current_copy.seller_id == seller_id
+        assert current_copy.supplier_id == supplier_id
+        assert current_copy.supplier_content_revision == current_source.content_revision
+        assert current_copy.title == current_source.title
+        seeded_review = SupplierService.preview_supplier_products(
+            seller_id, supplier_id, [current_source_id], details_limit=1,
+        )
+        assert (
+            seeded_review["requested"], seeded_review["eligible"],
+            seeded_review["changed"], seeded_review["already_current"],
+            seeded_review["unlinked"],
+        ) == (1, 1, 0, 1, 0)
 
         detail_source_id = int(fixture_ids["excluded_ids"][0])
         detail_copy = ImportedProduct.query.filter_by(
@@ -277,6 +302,9 @@ def seed_supplier_update_review_rows(fixture_ids, imported_source_ids):
             "detail_source_id": detail_source_id,
             "detail_copy_id": detail_copy.id,
             "selected_source_id": selected_source_id,
+            "selected_source_external_id": SupplierProduct.query.filter_by(
+                id=selected_source_id,
+            ).one().external_id,
             "selected_copy_id": copies[0].id,
             "current_source_id": current_source_id,
             "current_copy_id": copies[1].id,
@@ -480,7 +508,7 @@ def run():
                 fixture.REPORT["unexpected_http"].append({
                     "path": parsed.path, "status": response.status,
                 })
-            if parsed.path == SUPPLIER_CONFIRM_PATH and response.status not in (303, 409):
+            if parsed.path == SUPPLIER_CONFIRM_PATH and response.status not in (302, 409):
                 fixture.REPORT["unexpected_http"].append({
                     "path": parsed.path, "status": response.status,
                 })
@@ -1284,10 +1312,19 @@ def run():
         checks.append("supplier_source_drift_returns_409_without_local_write")
 
         # One checked source ID remains exact through review and explicit confirm.
-        response = page.goto(fixture.BASE + normal_path, wait_until="domcontentloaded")
+        selected_filters = dict(FILTERS)
+        selected_filters["search"] = review_fixture["selected_source_external_id"]
+        selected_source_path = "/supplier-catalog/{}/products?{}".format(
+            fixture_ids["supplier_id"], urlencode(selected_filters),
+        )
+        response = page.goto(fixture.BASE + selected_source_path, wait_until="domcontentloaded")
         assert response and response.status == 200
         page.wait_for_load_state("networkidle")
         selected_id = str(review_fixture["selected_source_id"])
+        visible_update_ids = page.locator(
+            'input[form="supplier-update-form"][name="update_product_ids"]',
+        ).evaluate_all("items => items.map(item => item.value)")
+        assert visible_update_ids == [selected_id]
         page.locator(
             f'input[form="supplier-update-form"][name="update_product_ids"][value="{selected_id}"]',
         ).check()
@@ -1323,7 +1360,12 @@ def run():
             lambda r: urlsplit(r.url).path == SUPPLIER_CONFIRM_PATH and r.request.method == "POST",
         ) as selected_confirm:
             page.locator("[data-supplier-review-confirm]").click()
-        assert selected_confirm.value.status == 303
+        assert selected_confirm.value.status == 302
+        selected_return = urlsplit(page.url)
+        assert selected_return.path == selected_source_path.split("?", 1)[0]
+        assert parse_qs(selected_return.query) == {
+            key: [value] for key, value in selected_filters.items()
+        }
         assert supplier_confirm_posts[-1]["body"].get("update_product_ids") == [selected_id]
         assert not supplier_confirm_posts[-1]["body"].get("product_ids")
         assert not supplier_confirm_posts[-1]["body"].get("update_all_for_supplier")
@@ -1396,7 +1438,8 @@ def run():
             lambda r: urlsplit(r.url).path == SUPPLIER_CONFIRM_PATH and r.request.method == "POST",
         ) as all_confirm:
             page.locator("[data-supplier-review-confirm]").click()
-        assert all_confirm.value.status == 303
+        assert all_confirm.value.status == 302
+        assert urlsplit(page.url).path == "/supplier-catalog"
         assert supplier_confirm_posts[-1]["body"].get("supplier_id") == [
             str(fixture_ids["supplier_id"]),
         ]
