@@ -31,6 +31,39 @@
   const priceLabels = readJson(priceLabelsElement);
   const errorCopy = readJson(errorCopyElement);
 
+  function correctStatusFragmentScroll() {
+    if (window.location.hash !== '#catalog-refresh-status') return;
+    const mobileHeader = document.querySelector('.mobile-header');
+    const statusHeadline = panel.querySelector('[data-testid="catalog-refresh-headline"]');
+    if (!mobileHeader || !statusHeadline) return;
+
+    window.requestAnimationFrame(() => {
+      if (window.location.hash !== '#catalog-refresh-status') return;
+      const headerStyle = window.getComputedStyle(mobileHeader);
+      const headerRect = mobileHeader.getBoundingClientRect();
+      const headlineRect = statusHeadline.getBoundingClientRect();
+      const headerVisible = headerStyle.display !== 'none'
+        && headerStyle.visibility !== 'hidden'
+        && Number(headerStyle.opacity) > 0
+        && headerRect.width > 0
+        && headerRect.height > 0
+        && headerRect.bottom > 0
+        && headerRect.top < window.innerHeight;
+      const overlapsHeadline = headlineRect.top < headerRect.bottom
+        && headlineRect.bottom > headerRect.top;
+
+      if (headerVisible && overlapsHeadline) {
+        panel.scrollIntoView({ block: 'start', behavior: 'instant' });
+      }
+    });
+  }
+
+  if (document.readyState === 'complete') {
+    correctStatusFragmentScroll();
+  } else {
+    window.addEventListener('load', correctStatusFragmentScroll, { once: true });
+  }
+
   function copyKey(status, rawCommitted) {
     if (status === 'running') return rawCommitted ? 'running_after' : 'running_before';
     if (status === 'interrupted') return rawCommitted ? 'interrupted_after' : 'interrupted_before';

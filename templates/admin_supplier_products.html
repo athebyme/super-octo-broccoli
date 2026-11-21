@@ -25,10 +25,12 @@
             <p class="text-xs text-gray-400 mt-2">
                 Каталог обновлён:
                 {% if supplier.last_sync_at %}<time datetime="{{ supplier.last_sync_at.isoformat() }}Z">{{ supplier.last_sync_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>{% else %}ещё не обновлялся{% endif %}
-                {% if supplier.last_sync_status == 'running' %}
-                <span class="text-amber-300">· Последнее состояние — обновление</span>
-                {% elif supplier.last_sync_status == 'failed' %}
-                <span class="text-red-300">· Последняя попытка завершилась ошибкой</span>
+                {% if catalog_refresh_latest is none %}
+                    {% if supplier.last_sync_status == 'running' %}
+                    <span class="text-amber-300">· Последнее состояние — обновление</span>
+                    {% elif supplier.last_sync_status == 'failed' %}
+                    <span class="text-red-300">· Последняя попытка завершилась ошибкой</span>
+                    {% endif %}
                 {% endif %}
             </p>
         </div>
