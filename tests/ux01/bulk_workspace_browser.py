@@ -769,6 +769,86 @@ def run():
             "boxes => boxes.map(box => Number(box.value))"
         ) == [imported_local_id]
         checks.append("ordinary_supplier_import_batch_displays_exact_single_new_product")
+
+        # Keep the opaque signed token local to this assertion flow. It is
+        # deliberately omitted from feed diagnostics, runner output and
+        # screenshots; the normal row action must carry the exact same token
+        # back through the existing server-validated import_batch path.
+        batch_tokens = parse_qs(urlsplit(page.url).query, keep_blank_values=True).get("import_batch", [])
+        assert len(batch_tokens) == 1 and batch_tokens[0]
+        batch_token = batch_tokens[0]
+        imported_row = page.locator(".mp-list article.mp-row")
+        common_content_link = imported_row.locator("[data-common-content-row-link]")
+        assert common_content_link.count() == 1
+        plain_href = common_content_link.get_attribute("href") or ""
+        plain_parts = urlsplit(plain_href)
+        assert plain_parts.path == "/my-products/common-content"
+        assert parse_qs(plain_parts.query) == {"product_id": [str(imported_local_id)]}
+        assert not plain_parts.fragment
+
+        # Ctrl-click stays a direct editor URL and does not mint a return
+        # capsule. This preserves the link's ordinary browser behavior.
+        with context.expect_page() as direct_editor_page:
+            common_content_link.click(modifiers=["Control"])
+        direct_editor = direct_editor_page.value
+        direct_editor.wait_for_load_state("domcontentloaded")
+        assert urlsplit(direct_editor.url).path == "/my-products/common-content"
+        assert parse_qs(urlsplit(direct_editor.url).query) == {"product_id": [str(imported_local_id)]}
+        assert not urlsplit(direct_editor.url).fragment
+        direct_return = direct_editor.get_by_role("link", name="Вернуться к товарам", exact=True)
+        direct_return_parts = urlsplit(direct_return.get_attribute("href") or "")
+        assert direct_return_parts.path == "/my-products" and not direct_return_parts.query
+        assert not direct_return_parts.fragment
+        direct_editor.close()
+        checks.append("signed_import_batch_modifier_click_keeps_classic_direct_editor_href")
+
+        page.get_by_role("checkbox", name="Выбрать Позиция для импорта").check()
+        assert selected_browser_state(page) == {"selected": [imported_local_id], "ozonIds": []}
+        with page.expect_response(lambda response: urlsplit(response.url).path == "/my-products/common-content"
+                                  and response.request.method == "GET") as batch_editor:
+            common_content_link.click()
+        assert batch_editor.value.status == 200
+        assert query_ids(page.url) == [imported_local_id]
+        batch_editor_hash = urlsplit(page.url).fragment
+        assert re.fullmatch(r"workspace-return=[a-f0-9]{32}", batch_editor_hash)
+        batch_return_links = page.locator("[data-workspace-return-link]").evaluate_all(
+            "links => links.map(link => link.getAttribute('href'))"
+        )
+        assert len(batch_return_links) == 2
+        for href in batch_return_links:
+            parts = urlsplit(href or "")
+            returned_tokens = parse_qs(parts.query, keep_blank_values=True).get("import_batch", [])
+            assert parts.path == "/my-products/beta" and parts.fragment == batch_editor_hash
+            assert set(parse_qs(parts.query, keep_blank_values=True)) == {"import_batch"}
+            token_matches = returned_tokens == [batch_token]
+            assert token_matches, {"returned_token_count": len(returned_tokens)}
+
+        def is_same_import_batch_feed(response):
+            parsed = urlsplit(response.url)
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            return (parsed.path == "/api/my-products"
+                    and response.request.method == "GET"
+                    and query.get("import_batch", []) == [batch_token])
+
+        with page.expect_response(is_same_import_batch_feed) as returned_batch_feed:
+            page.get_by_role("link", name="Вернуться к товарам", exact=True).evaluate(
+                "link => link.click()"
+            )
+        assert returned_batch_feed.value.status == 200
+        returned_batch_data = returned_batch_feed.value.json()
+        assert returned_batch_data.get("import_batch_count") == 1
+        assert [item.get("id") for item in returned_batch_data.get("items", [])] == [imported_local_id]
+        page.wait_for_function("""id => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy && !proxy.loading && proxy.importBatchMode &&
+                proxy.items.map(item => item.id).join(',') === String(id) &&
+                proxy.selected.join(',') === String(id);
+        }""", imported_local_id)
+        assert page.locator(".mp-list article.mp-row input[type=checkbox]:checked").evaluate_all(
+            "boxes => boxes.map(box => Number(box.value))"
+        ) == [imported_local_id]
+        assert len(posts) == 4, posts
+        checks.append("signed_import_batch_common_content_return_reuses_exact_server_token_and_selection")
         assert len(posts) == 4 and not errors, errors
 
         # The original early-photo check still covers the classic page after
