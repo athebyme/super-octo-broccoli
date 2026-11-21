@@ -588,7 +588,16 @@ def run():
         }""")
         assert selected_before_create == wb_selected_ids
         page.get_by_role("button", name="Что сделать").click()
-        page.get_by_role("menuitem", name="Создать карточки WB", exact=True).click()
+        wb_create_action = page.get_by_role(
+            "menuitem", name="Создать карточки WB",
+        )
+        wb_create_action.wait_for(state="visible")
+        assert wb_create_action.is_enabled(), "WB create must be enabled for the two retained rows"
+        assert wb_create_action.locator(".shk-actions-item-label").inner_text() == "Создать карточки WB"
+        assert wb_create_action.locator(".shk-actions-item-hint").inner_text() == (
+            "для 2 товаров, ещё не связанных с WB"
+        ), "action hint must name the exact two-row WB create scope"
+        wb_create_action.click()
         confirmation = page.get_by_role("alertdialog")
         confirmation.wait_for(state="visible")
 
