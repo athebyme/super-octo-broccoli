@@ -1,4 +1,4 @@
-Implementation in progress; not yet deployed.
+Implementation contract for the durable Ozon upload queue.
 
 # Ozon card upload v3 — frozen implementation contract (2026-09-27)
 
