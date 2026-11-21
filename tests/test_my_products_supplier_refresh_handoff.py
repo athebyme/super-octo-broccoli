@@ -414,7 +414,8 @@ async function finishSupplierRefresh(data, ids) {
   ), 'utf8');
   assert.match(templateText, /'supplierRefreshResult': url_for\('api_my_products_supplier_refresh_result'\)/);
   assert.match(templateText, /id="supplier-refresh-result"/);
-  assert.match(templateText, /20261121-supplier-refresh-resume-2/);
+  assert.match(templateText, /filename='my-products-beta\.css', v='20261121-wb-create-terminal-r33-css'/);
+  assert.match(templateText, /filename='my-products-beta\.js', v='20261121-wb-create-terminal-r33'/);
   assert.match(stylesheetText, /\.mp-refresh-result\s*\{[^}]*scroll-margin-top:\s*72px/s);
 
   const receiptKey = 'supplier-refresh-resume-v1';
