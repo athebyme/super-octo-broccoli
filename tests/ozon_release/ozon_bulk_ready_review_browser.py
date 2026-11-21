@@ -768,8 +768,8 @@ def run_browser_journey():
         ).wait_for()
         receipt = page.locator(".orb-receipt[data-source-prepare-receipt]")
         return_review_link = receipt.locator("a[data-source-prepare-review]")
-        assert return_review_link.count() == 1
         return_review_link.wait_for()
+        assert return_review_link.count() == 1
         page.wait_for_function(
             "() => document.activeElement === document.querySelector('[data-source-prepare-receipt]')"
         )
