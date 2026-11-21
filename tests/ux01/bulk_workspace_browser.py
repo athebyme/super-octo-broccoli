@@ -1402,12 +1402,13 @@ def run():
         assert len(price_create_posts) == stale_create_posts_before
         assert len(price_create_receipts) == stale_receipts_before
         assert fixture.REPORT["provider_attempts"] == stale_provider_attempts_before == 0
-        assert page.locator("[data-price-review-error]").is_visible()
-        assert "Цена, источник или настройки изменились" in page.locator(
-            "[data-price-review-error]"
-        ).inner_text()
-        assert page.locator("[data-price-reviewed-save]").is_disabled()
-        assert page.locator("[data-price-review-table]").count() == 0
+        stale_error = page.locator("[data-price-review-error]")
+        stale_error.wait_for(state="visible")
+        assert "Цена, источник или настройки изменились" in stale_error.inner_text()
+        page.wait_for_function("""() => {
+            const save = document.querySelector('[data-price-reviewed-save]');
+            return save && save.disabled && !document.querySelector('[data-price-review-table]');
+        }""")
         with fixture.app.app_context():
             stale_source = db.session.get(Product, base_price_id)
             stale_source.wb_price = original_wb_price
@@ -1440,6 +1441,11 @@ def run():
             and request.method == "POST"
         )):
             page.locator("[data-price-reviewed-save]").click()
+        page.locator("[data-price-review-error]").wait_for(state="visible")
+        page.locator("[data-price-reviewed-retry]").wait_for(state="visible")
+        assert "Повторите тот же запрос" in page.locator(
+            "[data-price-review-error]"
+        ).inner_text()
         assert lost_price_create_response["body"] is not None
         assert len(price_create_attempts) == replay_attempts_before + 1
         assert len(price_create_server_results) == replay_server_results_before + 1
@@ -1450,7 +1456,6 @@ def run():
         assert first_commit["batch_id"] == lost_receipt["batch_id"]
         assert len(price_create_posts) == replay_ui_posts_before
         assert len(price_create_receipts) == replay_ui_receipts_before
-        assert page.locator("[data-price-reviewed-retry]").is_visible()
         assert urlsplit(page.url).path == "/prices/change"
         with fixture.app.app_context():
             assert PriceChangeBatch.query.filter_by(
@@ -1483,7 +1488,14 @@ def run():
             page.locator("[data-price-reviewed-retry]").click()
         recovered_save_response = recovered_save_response_info.value
         assert recovered_save_response.status == 200
-        replayed_receipt = recovered_save_response.json()
+        # The browser navigates as soon as it consumes this response. Read the
+        # already-captured Flask route receipt instead of asking Playwright for
+        # response protocol data after that navigation.
+        assert len(price_create_receipts) == replay_ui_receipts_before + 1
+        replayed_receipt = price_create_receipts[-1]
+        expected_batch_path = f"/prices/batch/{first_commit['batch_id']}"
+        page.wait_for_url(lambda value: urlsplit(str(value)).path == expected_batch_path)
+        page.get_by_text("Готово к применению", exact=True).wait_for(state="visible")
         assert replayed_receipt.get("replayed") is True
         assert lost_price_create_response["retry_seen"] is True
         assert len(price_create_attempts) == replay_attempts_before + 2
@@ -1497,8 +1509,7 @@ def run():
             assert replayed_receipt[receipt_field] == lost_receipt[receipt_field], receipt_field
         assert replayed_receipt["selected_count"] == 3
         assert replayed_receipt["changed_count"] == 3
-        assert urlsplit(page.url).path == f"/prices/batch/{first_commit['batch_id']}"
-        assert page.get_by_text("Готово к применению", exact=True).is_visible()
+        assert urlsplit(page.url).path == expected_batch_path
         assert page.locator("tbody tr").count() == 3
         replay_return = page.locator("a[data-price-workspace-return]:visible").first
         assert replay_return.inner_text().strip() == "Вернуться к товарам"
