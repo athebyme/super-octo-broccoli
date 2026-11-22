@@ -833,6 +833,7 @@ def bridge(route):
             expected = state["selection_draft_ids"] if selection_mode else state["repair_row_ids"]
             if selection_mode:
                 assert sorted(selected_ids) == sorted(expected), selected_ids
+                assert form.get("confirm_local") == ["1"]
                 query = parse_qs(url.query)
                 assert query["account_id"] == [str(account_id)], query
                 assert query["draft_ids"] == [",".join(map(str, expected))], query
@@ -1365,7 +1366,12 @@ def run_selected_draft_journey(page):
         row = list_rows.first
         title = row.locator("h3").inner_text()
         if title in expected_titles:
-            row.locator("[data-draft-selection-check]").check()
+            pick = row.locator("[data-draft-selection-check]")
+            if not picked:
+                page.get_by_role("button", name="Выбрать страницу (1)", exact=True).click()
+                assert pick.is_checked()
+            else:
+                pick.check()
             picked.append(expected_titles[title])
         if len(picked) == 2:
             break
@@ -1381,9 +1387,26 @@ def run_selected_draft_journey(page):
     start = page.locator("[data-draft-selection-start]")
     assert "(2)" in start.inner_text()
     page.screenshot(path=str(OUT / "ozon-saved-draft-selection-list.png"), animations="disabled")
-    start.click()
+    page.set_viewport_size({"width": 320, "height": 860})
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+    start.scroll_into_view_if_needed()
+    button_bounds = start.bounding_box()
+    assert button_bounds and 0 <= button_bounds["x"] and button_bounds["x"] + button_bounds["width"] <= 321
+    assert button_bounds["height"] >= 44 and button_bounds["width"] >= 44
+    row_link_text_fits = list_rows.first.locator(".odl-row-action .ode-link").evaluate("""link => {
+        const limits = link.closest('.odl-row-action').getBoundingClientRect();
+        const text = document.createRange();
+        text.selectNodeContents(link);
+        const lines = [...text.getClientRects()];
+        return lines.length > 0 && lines.every(line =>
+            line.left >= limits.left - 1 && line.right <= limits.right + 1);
+    }""")
+    assert row_link_text_fits
+    page.screenshot(path=str(OUT / "ozon-saved-draft-selection-list-mobile.png"), animations="disabled")
+    start.press("Enter")
     editor = page.locator("[data-draft-selection-editor]:not([v-cloak])")
     editor.wait_for()
+    page.set_viewport_size({"width": 1440, "height": 980})
     editor_path = urlsplit(page.url)
     assert editor_path.path == "/marketplaces/ozon/uploads/selection/repair"
     query = parse_qs(editor_path.query)
@@ -1395,17 +1418,19 @@ def run_selected_draft_journey(page):
     assert {int(row.get_attribute("data-draft")) for row in editor.locator(".orb-row").all()} == set(picked)
 
     for draft_id in picked:
-        editor.locator(f'.orb-row[data-draft="{draft_id}"] input[type=checkbox]').first.check()
+        assert editor.locator(f'.orb-row[data-draft="{draft_id}"] input[type=checkbox]').first.is_checked()
     editor.get_by_role("button", name="Заполнить поле", exact=True).click()
     dialog = page.get_by_role("dialog")
     dialog.get_by_label("Поле", exact=True).select_option("description")
     dialog.get_by_label("Новое значение", exact=True).fill(description)
     dialog.get_by_role("button", name="Посмотреть изменения", exact=True).click()
-    assert dialog.get_by_text(description, exact=True).count() == 2
-    dialog.get_by_role("button", name="Заполнить в форме", exact=True).click()
+    fill_form = dialog.get_by_role("button", name="Заполнить в форме", exact=True)
+    fill_form.wait_for()
+    assert dialog.inner_text().count(description) == 2
+    fill_form.click()
 
     editor.locator("footer [data-draft-selection-save]").click()
-    assert dialog.get_by_text(description, exact=True).count() == 2
+    assert dialog.inner_text().count(description) == 2
     dialog.get_by_role("button", name="Вернуться к форме", exact=True).click()
     assert report["post_counts"] == posts_before
     assert len(business_write_events) == writes_before
@@ -1416,6 +1441,7 @@ def run_selected_draft_journey(page):
     dialog.locator("[data-draft-selection-save]").click()
     receipt = editor.get_by_role("region", name="Результат сохранения")
     receipt.wait_for()
+    page.wait_for_function("document.activeElement?.matches('[data-draft-selection-receipt]')")
     path = "/marketplaces/ozon/uploads/selection/repair/apply"
     assert report["post_counts"] == {**posts_before, path: 1}
     assert set(state["selection_repair_post"]["draft_ids"]) == set(picked)
@@ -1435,7 +1461,7 @@ def run_selected_draft_journey(page):
     assert not review_query.get("parent_prepare_job_uid")
     assert set(map(int, review_query["draft_ids"][0].split(","))) == set(picked)
     assert review_query["account_id"] == [str(account_id)]
-    list_return = editor.locator(f'a[href^="{page_path}?"]').first
+    list_return = editor.locator("header [data-draft-selection-return]")
     return_query = parse_qs(urlsplit(list_return.get_attribute("href")).query)
     assert return_query == origin_query
 
@@ -1451,8 +1477,13 @@ def run_selected_draft_journey(page):
             layouts.append({"width": width, "theme": theme})
         page.screenshot(path=str(OUT / f"ozon-saved-draft-edit-{theme}-mobile.png"), animations="disabled")
     page.set_viewport_size({"width": 1440, "height": 980})
-    with page.expect_response(lambda response: urlsplit(response.url).path == "/marketplaces/ozon/uploads/api/review") as pending_review:
-        review_link.click()
+    review_link.click()
+    review_page = page.locator("#ozon-upload-review:not([v-cloak])")
+    review_page.wait_for()
+    with page.expect_response(
+        lambda response: urlsplit(response.url).path == "/marketplaces/ozon/uploads/api/review"
+    ) as pending_review:
+        review_page.get_by_role("button", name="Проверить все готовые", exact=True).click()
     assert pending_review.value.status == 200
     reviewed = pending_review.value.json()["review"]
     assert {row["draft_id"]: row["version"] for row in reviewed["items"]} == {
@@ -1473,7 +1504,8 @@ def run_selected_draft_journey(page):
         "pages_kept": True, "selected_count": len(picked), "saved_count": len(picked),
         "origin_run_count": 1, "standalone_draft_count": 1, "confirm_posts": 1,
         "journal_unchanged": True, "exact_fresh_review_read": True, "published": 0,
-        "layouts": layouts,
+        "layouts": layouts, "focus_after_save": True, "mobile_list_cta_height": button_bounds["height"],
+        "mobile_list_action_text_fits": row_link_text_fits,
     }
     passed("saved_draft_selection_edits_exact_scope_and_reviews_current_versions_without_queueing")
 
