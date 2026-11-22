@@ -23,31 +23,44 @@ class _NavigationParser(HTMLParser):
         super().__init__()
         self.groups = []
         self.links = []
+        self.alternates = []
+        self.disclosures = []
         self._current_link = None
+        self._current_target = None
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
         classes = set((attributes.get("class") or "").split())
         if tag == "button" and "seller-workspace-group-toggle" in classes:
             self.groups.append(attributes)
+        if tag == "details" and "data-workspace-alt-nav" in attributes:
+            self.disclosures.append(attributes)
         if tag == "a" and (
-            "seller-workspace-sublink" in classes
+            "seller-workspace-root-link" in classes
+            or "seller-workspace-alt-link" in classes
             or "seller-workspace-primary-link" in classes
+            or "seller-workspace-sublink" in classes
         ):
-            self.links.append((attributes, ""))
-            self._current_link = len(self.links) - 1
+            target = "alternates" if "seller-workspace-alt-link" in classes else "links"
+            collection = self.alternates if target == "alternates" else self.links
+            collection.append((attributes, ""))
+            self._current_link = len(collection) - 1
+            self._current_target = target
 
     def handle_data(self, data):
         if self._current_link is not None:
-            attributes, text = self.links[self._current_link]
-            self.links[self._current_link] = (attributes, text + data)
+            collection = self.alternates if self._current_target == "alternates" else self.links
+            attributes, text = collection[self._current_link]
+            collection[self._current_link] = (attributes, text + data)
 
     def handle_endtag(self, tag):
         if tag == "a":
             if self._current_link is not None:
-                attributes, text = self.links[self._current_link]
-                self.links[self._current_link] = (attributes, text.strip())
+                collection = self.alternates if self._current_target == "alternates" else self.links
+                attributes, text = collection[self._current_link]
+                collection[self._current_link] = (attributes, text.strip())
             self._current_link = None
+            self._current_target = None
 
 
 class SellerWorkspaceNavigationTest(unittest.TestCase):
@@ -64,17 +77,22 @@ class SellerWorkspaceNavigationTest(unittest.TestCase):
         )
 
         cls.endpoint_cases = {
+            "dashboard": ("overview", "Главная"),
+            "dashboard_beta": ("overview", "Очередь внимания"),
             "seller_my_products": ("", "Мои товары"),
             "seller_my_products_beta": ("", "Мои товары"),
             "seller_product_wb_preview": ("", "Мои товары"),
-            "supplier_catalog_product_detail": ("products", "Каталог поставщиков"),
-            "supplier_catalog_export": ("products", "Каталог поставщиков"),
-            "marketplace_listings.detail": ("products", "Карточки кабинетов"),
+            "prices.prices_dashboard": ("prices", "Цены"),
+            "bulk_edit_history": ("operations", "Операции"),
+            "supplier_catalog_product_detail": ("products", "Каталоги поставщиков"),
+            "supplier_catalog_export": ("products", "Каталоги поставщиков"),
+            "marketplace_listings.detail": ("products", "Карточки Ozon"),
             "marketplace_drafts.detail": ("products", "Черновики Ozon"),
-            "marketplace_operations.detail": ("operations", "Операции Ozon"),
-            "marketplace_inbox.thread": ("communication", "Отзывы и вопросы Ozon"),
-            "marketplace_finance.detail": ("analytics", "Финансы"),
-            "marketplace_commercial.detail": ("prices", "Текущие цены и предложения"),
+            "marketplace_operations.detail": ("operations", "Операции"),
+            "marketplace_inbox.thread": ("communication", "Общение"),
+            "marketplace_analytics_page": ("analytics", "Аналитика"),
+            "marketplace_finance.detail": ("analytics", "Финансы Ozon"),
+            "marketplace_commercial.detail": ("prices", "Цены"),
         }
 
         for endpoint in cls.endpoint_cases:
@@ -119,36 +137,26 @@ class SellerWorkspaceNavigationTest(unittest.TestCase):
             with self.subTest(endpoint=endpoint):
                 body, parser = self._render(endpoint)
                 self.assertIn(f'data-active-group="{expected_group}"', body)
-                # x-cloak hides panels before Alpine can read persistent
-                # sidebar state. Runtime expanded/visibility is covered by
-                # the synthetic browser fixture.
-                self.assertEqual(
-                    sum(button.get("aria-expanded") == "true" for button in parser.groups),
-                    0,
-                )
-                active_links = [
-                    text.strip()
-                    for attributes, text in parser.links
-                    if "active" in (attributes.get("class") or "").split()
-                ]
+                all_links = parser.links + parser.alternates
+                active_links = [text.strip() for attributes, text in all_links
+                                if "active" in (attributes.get("class") or "").split()]
                 self.assertTrue(
                     any(expected_link in label for label in active_links),
                     active_links,
                 )
 
-    def test_primary_products_link_is_direct_and_advanced_tools_are_separate(self):
+    def test_six_high_frequency_roots_are_direct_and_other_routes_share_one_disclosure(self):
         body, parser = self._render("seller_my_products_beta")
+        roots = [(attributes, text) for attributes, text in parser.links]
         self.assertEqual(
-            [button["id"] for button in parser.groups],
+            [(attributes.get("data-workspace-root"), text) for attributes, text in roots],
             [
-                "seller-workspace-toggle-overview",
-                "seller-workspace-toggle-products",
-                "seller-workspace-toggle-prices",
-                "seller-workspace-toggle-operations",
-                "seller-workspace-toggle-communication",
-                "seller-workspace-toggle-analytics",
-                "seller-workspace-toggle-competitors",
-                "seller-workspace-toggle-promotion",
+                ("home", "Главная"),
+                ("products", "Мои товары"),
+                ("prices", "Цены"),
+                ("operations", "Операции"),
+                ("communication", "Общение"),
+                ("analytics", "Аналитика"),
             ],
         )
         self.assertIn('data-active-group=""', body)
@@ -161,29 +169,57 @@ class SellerWorkspaceNavigationTest(unittest.TestCase):
         self.assertEqual(primary_links[0][1], "Мои товары")
         self.assertEqual(primary_links[0][0].get("href"), "/synthetic/seller_my_products_beta")
         self.assertEqual(primary_links[0][0].get("aria-current"), "page")
-        self.assertIn('aria-label="Другие инструменты товаров"', body)
-        for label in (
-            "Обзор", "Товары", "Цены", "Операции", "Общение", "Аналитика",
-            "Конкуренты", "Продвижение",
-        ):
-            self.assertIn(label, body)
+        self.assertEqual(len(parser.disclosures), 1)
+        self.assertEqual(parser.groups, [])
+        self.assertNotIn("open", parser.disclosures[0])
+        self.assertIn('aria-label="Другие разделы и инструменты"', body)
+        self.assertIn("Мониторинг конкурентов", [text for _attrs, text in parser.alternates])
+        self.assertIn("Контент-фабрики", [text for _attrs, text in parser.alternates])
 
         tools_body, tools_nav = self._render("marketplace_drafts.detail")
         self.assertIn('data-active-group="products"', tools_body)
-        tool_toggles = [
-            attributes for attributes in tools_nav.groups
-            if attributes.get("id") == "seller-workspace-toggle-products"
-        ]
-        self.assertEqual(len(tool_toggles), 1)
-        self.assertIn("is-current", tool_toggles[0].get("class", "").split())
-        self.assertTrue(any(text == "Черновики Ozon" for _attrs, text in tools_nav.links))
-        self.assertFalse(any(text == "Автопубликация" for _attrs, text in tools_nav.links))
+        self.assertNotIn("open", tools_nav.disclosures[0])
+        self.assertIn("is-current", tools_body)
+        self.assertTrue(any(text == "Черновики Ozon" for _attrs, text in tools_nav.alternates))
+        self.assertFalse(any(text == "Автопубликация" for _attrs, text in tools_nav.alternates))
+
+    def test_contextual_sibling_routes_are_not_repeated_in_global_alternate_list(self):
+        body, _parser = self._render("prices.prices_dashboard")
+        for endpoint in (
+            "auto_import_pricing",
+            "price_monitor_settings",
+            "suspicious_price_changes",
+            "prices.prices_history",
+        ):
+            self.assertNotIn("/synthetic/" + endpoint, body)
+
+        operations_body, _parser = self._render("bulk_edit_history")
+        self.assertNotIn("/synthetic/ozon_bulk_uploads.index", operations_body)
+        self.assertNotIn("/synthetic/marketplace_operations.index", operations_body)
+
+        settings_body = self.app.test_client().get("/case/settings-health").get_data(as_text=True)
+        self.assertNotIn("Центр уведомлений", settings_body)
+        self.assertNotIn("/synthetic/notifications_page", settings_body)
+
+    def test_ozon_alternates_stay_behind_the_existing_feature_flag(self):
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = False
+        try:
+            body, _parser = self._render("seller_my_products_beta")
+            self.assertNotIn("Карточки Ozon", body)
+            self.assertNotIn("Черновики Ozon", body)
+            self.assertNotIn("Заказы и возвраты Ozon", body)
+            self.assertNotIn("marketplace_listings.index", body)
+            self.assertNotIn("marketplace_drafts.index", body)
+        finally:
+            self.app.config["MARKETPLACE_OZON_ENABLED"] = True
 
     def test_primary_products_link_distinguishes_current_page_from_related_location(self):
         for endpoint, expected_current in (
             ("seller_my_products_beta", "page"),
             ("seller_my_products", "location"),
             ("seller_product_wb_preview", "location"),
+            ("marketplace_drafts.detail", "location"),
+            ("supplier_catalog_product_detail", "location"),
         ):
             with self.subTest(endpoint=endpoint):
                 _body, parser = self._render(endpoint)
@@ -196,6 +232,7 @@ class SellerWorkspaceNavigationTest(unittest.TestCase):
                 self.assertEqual(
                     primary_links[0].get("aria-current"), expected_current,
                 )
+                self.assertIn("active", primary_links[0].get("class", "").split())
 
     def test_exact_account_health_link_requires_a_selected_account(self):
         path = "/case/settings-health"
@@ -223,6 +260,8 @@ class SellerWorkspaceNavigationTest(unittest.TestCase):
                 "templates/partials/seller_workspace_nav.html",
                 "templates/partials/seller_workspace_utility.html",
                 "templates/partials/seller_workspace_settings_nav.html",
+                "templates/partials/pricing_workspace_nav.html",
+                "templates/partials/operations_workspace_history_nav.html",
             )
         )
         endpoint = re.compile(r"url_for\(['\"]([^'\"]+)")

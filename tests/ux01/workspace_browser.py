@@ -74,6 +74,7 @@ REPORT = {
     "layouts": [],
     "pages": [],
     "interactions": [],
+    "seller_workspace_navigation": [],
     "primary_products_navigation": [],
     "browser_api_reads": [],
     "browser_mutations": [],
@@ -773,6 +774,14 @@ def main() -> None:
             with app.test_request_context():
                 from flask import url_for
                 dashboard_url = url_for("dashboard")
+                seller_root_urls = {
+                    "home": url_for("dashboard"),
+                    "products": url_for("seller_my_products_beta"),
+                    "prices": url_for("prices.prices_dashboard"),
+                    "operations": url_for("bulk_edit_history"),
+                    "communication": url_for("reviews_page"),
+                    "analytics": url_for("analytics_page"),
+                }
                 quality_url = url_for("card_quality_page")
                 beta_url = url_for("card_quality_beta_page")
                 api_settings_url = url_for("api_settings")
@@ -798,6 +807,32 @@ def main() -> None:
             dashboard_path = urlsplit(dashboard_url).path
             page.set_viewport_size({"width": 1280, "height": 1000})
             goto(page, dashboard_url)
+            root_links = page.locator("[data-workspace-root]")
+            assert root_links.count() == 6
+            root_receipt = []
+            for key, label in (
+                ("home", "Главная"),
+                ("products", "Мои товары"),
+                ("prices", "Цены"),
+                ("operations", "Операции"),
+                ("communication", "Общение"),
+                ("analytics", "Аналитика"),
+            ):
+                link = page.locator(f'[data-workspace-root="{key}"]')
+                assert link.count() == 1
+                assert link.get_attribute("aria-label") == label
+                href = link.get_attribute("href")
+                assert urlsplit(href).path == urlsplit(seller_root_urls[key]).path, (key, href)
+                root_receipt.append({"key": key, "label": label, "path": urlsplit(href).path})
+            assert page.locator("[data-workspace-alt-nav]").count() == 1
+            assert page.locator("[data-workspace-alt-nav]").evaluate("el => !el.open")
+            REPORT["seller_workspace_navigation"].append({
+                "check": "six_direct_workspace_roots_and_single_closed_alternate_disclosure",
+                "status": "passed",
+                "roots": root_receipt,
+                "alternate_disclosure_count": 1,
+                "alternate_disclosure_initially_closed": True,
+            })
             page.add_style_tag(content=".main-content { transition: none !important; }")
             for width in WIDTHS:
                 page.set_viewport_size({"width": width, "height": 1000})
@@ -824,7 +859,7 @@ def main() -> None:
                             theme: root.dataset.theme,
                             main: box(main), sidebar: box(sidebar),
                             activeGroup: document.querySelector('.seller-workspace-groups')?.dataset.activeGroup || null,
-                            focusColor: getComputedStyle(document.querySelector('.seller-workspace-group-toggle') || document.body).outlineColor};
+                            focusColor: getComputedStyle(document.querySelector('[data-workspace-alt-summary]') || document.body).outlineColor};
                     }""")
                     metrics["layout_settle"] = settled
                     REPORT["layouts"].append(metrics)
@@ -1137,7 +1172,7 @@ def main() -> None:
                     set_theme_and_wait(page, theme)
                     page.evaluate("""() => {
                         Alpine.$data(document.body).sidebarOpen = true;
-                        Alpine.$data(document.querySelector('.seller-workspace-groups')).activeGroup = 'overview';
+                        document.querySelector('[data-workspace-alt-nav]').open = true;
                     }""")
                     page.wait_for_function("""() => Array.from(document.querySelectorAll('.seller-workspace-sublink'))
                         .some(el => !el.classList.contains('active') && el.getBoundingClientRect().height > 0)""")
@@ -1154,9 +1189,10 @@ def main() -> None:
                         "contrast": round(normal_text["contrast"], 2),
                         "actual_theme": normal_text["actualTheme"],
                     })
-                    page.locator("#seller-workspace-toggle-products").focus()
+                    page.locator("[data-workspace-alt-summary]").evaluate("el => el.parentElement.open = false")
+                    page.locator("[data-workspace-alt-summary]").focus()
                     page.keyboard.press("Enter")
-                    page.wait_for_function("document.querySelector('#seller-workspace-toggle-products')?.getAttribute('aria-expanded') === 'true'")
+                    page.wait_for_function("document.querySelector('[data-workspace-alt-nav]')?.open === true")
                     assert_focus_ring(focus_metrics(".sidebar"), f"sidebar_focus_after_enter_{theme}", theme)
                     page.keyboard.press("Tab")
                     page.wait_for_function("document.activeElement?.matches('.seller-workspace-sublink:focus-visible')")
@@ -1184,32 +1220,22 @@ def main() -> None:
 
                 goto(page, dashboard_url)
                 page.wait_for_function("!!window.Alpine")
-                group_buttons = page.locator(".seller-workspace-group-toggle")
-                assert group_buttons.count() == 8
-                initial_open = page.locator(
-                    ".seller-workspace-group-toggle[aria-expanded='true']"
-                ).count()
-                assert initial_open == 1
-                page.locator("#seller-workspace-toggle-products").focus()
+                alternate_nav = page.locator("[data-workspace-alt-nav]")
+                assert alternate_nav.count() == 1
+                assert alternate_nav.evaluate("el => !el.open")
+                page.locator("[data-workspace-alt-summary]").focus()
                 page.keyboard.press("Enter")
-                page.wait_for_function("""() => {
-                    const products = document.querySelector('#seller-workspace-toggle-products');
-                    const overview = document.querySelector('#seller-workspace-toggle-overview');
-                    return products?.getAttribute('aria-expanded') === 'true'
-                        && overview?.getAttribute('aria-expanded') === 'false';
-                }""")
-                REPORT["interactions"].append({"check": "keyboard_group_toggle_single_open", "status": "passed"})
+                page.wait_for_function("document.querySelector('[data-workspace-alt-nav]')?.open === true")
+                assert alternate_nav.evaluate("el => el.open")
+                REPORT["interactions"].append({"check": "keyboard_alternate_route_disclosure_keyboard", "status": "passed", "open_alternate_sections": 1})
 
                 page.locator(".sidebar-toggle").click()
                 page.wait_for_function("Alpine.$data(document.body).sidebarOpen === false")
-                assert page.locator(
-                    "#seller-workspace-toggle-products"
-                ).get_attribute("aria-expanded") == "false"
-                page.locator("#seller-workspace-toggle-competitors").click()
+                page.locator("[data-workspace-alt-summary]").click()
                 page.wait_for_function("""() => Alpine.$data(document.body).sidebarOpen === true
-                    && Alpine.$data(document.querySelector('.seller-workspace-groups')).activeGroup === 'competitors'
-                    && document.querySelector('#seller-workspace-toggle-competitors')?.getAttribute('aria-expanded') === 'true'""")
-                REPORT["interactions"].append({"check": "collapsed_sidebar_group_click_opens_sidebar_and_panel", "status": "passed"})
+                    && document.querySelector('[data-workspace-alt-nav]')?.open === true""")
+                assert page.locator(".seller-workspace-alt-link").first.is_visible()
+                REPORT["interactions"].append({"check": "collapsed_sidebar_alternate_disclosure_opens", "status": "passed", "alternate_link_visible": True})
 
                 page.keyboard.press("Control+k")
                 palette = page.locator(".sh-cmdpal")
@@ -1349,8 +1375,8 @@ def main() -> None:
                     assert "active" in (primary_link.get_attribute("class") or "").split()
                     assert primary_link.get_attribute("aria-current") == "page"
                     assert extra_page.locator(
-                        "#seller-workspace-toggle-products",
-                    ).get_attribute("aria-expanded") == "false"
+                        "[data-workspace-alt-nav]",
+                    ).evaluate("el => !el.open")
                     REPORT["primary_products_navigation"].append({
                         "check": "primary_products_collapsed_enter_navigation",
                         "status": "passed",
@@ -1361,7 +1387,7 @@ def main() -> None:
 
                     extra_page.set_viewport_size({"width": 390, "height": 844})
                     extra_page.evaluate(
-                        "localStorage.setItem('sh-sidebar', 'open')",
+                        "localStorage.setItem('sh-sidebar', 'closed')",
                     )
                     goto_extra(extra_page, dashboard_path)
                     extra_page.wait_for_function("!!window.Alpine")
@@ -1371,6 +1397,9 @@ def main() -> None:
                     mobile_menu_button.click()
                     extra_page.wait_for_function(
                         "document.querySelector('.sidebar')?.classList.contains('mobile-open')",
+                    )
+                    extra_page.wait_for_function(
+                        "Alpine.$data(document.body).sidebarOpen === true",
                     )
                     mobile_primary_link = extra_page.locator(
                         ".seller-workspace-primary-link",
@@ -1406,12 +1435,10 @@ def main() -> None:
                     # Secondary product links stay under their own control and
                     # become active on the destination that they actually open.
                     extra_page.set_viewport_size({"width": 1440, "height": 1000})
-                    products_toggle = extra_page.locator(
-                        "#seller-workspace-toggle-products",
-                    )
+                    products_toggle = extra_page.locator("[data-workspace-alt-summary]")
                     products_toggle.click()
                     extra_page.wait_for_function(
-                        "document.querySelector('#seller-workspace-toggle-products')?.getAttribute('aria-expanded') === 'true'",
+                        "document.querySelector('[data-workspace-alt-nav]')?.open === true",
                     )
                     wb_cards_link = extra_page.locator(
                         '.seller-workspace-sublink[href="/products"]',
@@ -1448,11 +1475,11 @@ def main() -> None:
                 # order and Enter, rather than assigning its href directly.
                 merge_path = "/products/merge"
                 goto_extra(extra_page, dashboard_path)
-                toggle = extra_page.locator("#seller-workspace-toggle-products")
+                toggle = extra_page.locator("[data-workspace-alt-summary]")
                 toggle.focus()
                 extra_page.keyboard.press("Enter")
                 extra_page.wait_for_function(
-                    "document.querySelector('#seller-workspace-toggle-products')?.getAttribute('aria-expanded') === 'true'"
+                    "document.querySelector('[data-workspace-alt-nav]')?.open === true"
                 )
                 merge_link = extra_page.locator(
                     '.seller-workspace-sublink[href="/products/merge"]',
@@ -1576,9 +1603,16 @@ def main() -> None:
                 extra_page.wait_for_url(base + "/marketplaces/listings/")
                 assert extra_page.locator("#main-content h1").inner_text().strip() == "Каталог маркетплейсов"
                 assert "Ozon CI 0" in extra_page.locator("#main-content").inner_text()
+                extra_page.locator("[data-workspace-alt-summary]").click()
+                extra_page.wait_for_function(
+                    "document.querySelector('[data-workspace-alt-nav]')?.open === true",
+                )
                 downstream_href = extra_page.locator(
                     '.seller-workspace-sublink[href^="/marketplaces/drafts/"]',
                 ).get_attribute("href")
+                assert extra_page.locator(
+                    '.seller-workspace-sublink[href^="/marketplaces/drafts/"]',
+                ).is_visible()
                 downstream_query = dict(
                     __import__("urllib.parse", fromlist=["parse_qsl"]).parse_qsl(
                         urlsplit(downstream_href).query,
@@ -1586,6 +1620,14 @@ def main() -> None:
                 )
                 assert urlsplit(downstream_href).path == "/marketplaces/drafts/"
                 assert int(downstream_query.get("account_id", "0")) == int(fixture["account_id"])
+                REPORT["seller_workspace_navigation"].append({
+                    "check": "account_scoped_ozon_drafts_remain_in_alternate_tools",
+                    "status": "passed",
+                    "label": "Черновики Ozon",
+                    "path": urlsplit(downstream_href).path,
+                    "account_id": int(downstream_query["account_id"]),
+                    "opened_by": "native_other_sections_disclosure",
+                })
                 REPORT["legacy_action_checks"].append({
                     "name": "command_palette_account_link_preserves_selected_account",
                     "status": "passed",
@@ -1605,20 +1647,23 @@ def main() -> None:
                     "account_context_preserved": True,
                 })
 
-                # The WB tool group and account-scoped Ozon listing are
-                # separate destinations. Obtain the listing URL from the
-                # real seller journey so the exact account query is exercised.
+                # Product quality and channel destinations stay in one
+                # grouped disclosure and retain the seller's Ozon account.
                 goto_extra(extra_page, merge_path)
+                extra_page.locator("[data-workspace-alt-summary]").click()
+                extra_page.wait_for_function(
+                    "document.querySelector('[data-workspace-alt-nav]')?.open === true",
+                )
                 wb_heading = extra_page.locator(
-                    ".seller-workspace-link-group-title",
-                ).filter(has_text="Инструменты Wildberries").inner_text().strip()
+                    ".seller-workspace-alt-heading",
+                ).filter(has_text="Товары и поставщики").inner_text().strip()
                 wb_merge_href = extra_page.locator(
                     '.seller-workspace-sublink[href="/products/merge"]',
                 ).get_attribute("href")
                 ozon_listing_href = extra_page.locator(
                     '.seller-workspace-sublink[href="/marketplaces/listings/"]',
                 ).get_attribute("href")
-                assert wb_heading == "Инструменты Wildberries"
+                assert wb_heading == "Товары и поставщики"
                 assert urlsplit(wb_merge_href).path == "/products/merge"
                 assert urlsplit(ozon_listing_href).path == "/marketplaces/listings/"
                 goto_extra(extra_page, f"/my-products?account_id={fixture['account_id']}")

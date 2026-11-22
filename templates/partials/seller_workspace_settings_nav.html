@@ -51,7 +51,6 @@
     <details class="seller-workspace-settings-more"{% if settings_more_open %} open{% endif %}>
         <summary class="seller-workspace-settings-summary">Дополнительные настройки</summary>
         <div class="seller-workspace-settings-secondary">
-            <a href="{{ url_for('notifications_page') }}" class="seller-workspace-settings-link">Центр уведомлений</a>
             <a href="{{ url_for('product_defaults_page') }}" class="seller-workspace-settings-link{% if endpoint == 'product_defaults_page' %} is-active{% endif %}"{% if endpoint == 'product_defaults_page' %} aria-current="page"{% endif %}>Значения по умолчанию WB</a>
             <a href="{{ url_for('auto_publish_settings', marketplace=selected_marketplace, account_id=selected_account_id) }}" class="seller-workspace-settings-link{% if endpoint == 'auto_publish_settings' %} is-active{% endif %}"{% if endpoint == 'auto_publish_settings' %} aria-current="page"{% endif %}>Автопубликация</a>
             <a href="{{ url_for('prohibited_words.seller_index') }}" class="seller-workspace-settings-link{% if endpoint.startswith('prohibited_words.seller') %} is-active{% endif %}"{% if endpoint.startswith('prohibited_words.seller') %} aria-current="page"{% endif %}>Ограничения контента</a>
