@@ -31,7 +31,7 @@
         {% endif %}
         <h1 id="our-title">Проверка перед отправкой</h1>
         <p class="our-lead">Отправка в Ozon потребует отдельного подтверждения.</p>
-        <div class="our-context"><span><strong>Магазин:</strong> {{ review.account_label }}</span><span><strong>Набор:</strong> {{ review.pagination.total }} черновиков · страница {{ review.pagination.page }} из {{ review.pagination.pages }}</span><span><strong>Проверено:</strong> {{ review.checked_at }}</span></div>
+        <div class="our-context"><span><strong>Магазин:</strong> {{ review.account_label }}</span><span><strong>Карточек в наборе:</strong> {{ review.pagination.total }} · страница {{ review.pagination.page }} из {{ review.pagination.pages }}</span><span><strong>Проверено:</strong> {{ review.checked_at }}</span></div>
         {{ preparation_journey('review', review.account_label, 'набор из ' ~ review.pagination.total ~ ' черновиков · страница ' ~ review.pagination.page, 'Проверьте текущие версии и выберите карточки для отправки.', internal_url=url_for('seller_my_products', account_id=review.account_id), draft_url=url_for('marketplace_drafts.index', account_id=review.account_id), result_url=reviewed_result_url or preparation_result_url or url_for('ozon_bulk_uploads.index', account_id=review.account_id), listing_url=url_for('marketplace_listings.index', marketplace='ozon', account_id=review.account_id), channel='Ozon', compact=true) }}
     </header>
 {% raw %}
