@@ -1473,7 +1473,8 @@ def exercise_signed_import_review_return(page):
     )
     review_return_link = page.locator("a[data-review-workspace-return]")
     return_label = review_return_link.locator("[data-review-workspace-return-label]")
-    assert return_label.inner_text().strip() == "К выбранным товарам"
+    primary_return_label = return_label.inner_text().strip()
+    assert primary_return_label == "К выбранным товарам"
     previous_page = page.locator(".our-pagination a").filter(has_text="Предыдущие 20")
     previous_href = urlsplit(previous_page.get_attribute("href"))
     assert parse_qs(previous_href.query) == {
@@ -1581,7 +1582,7 @@ def exercise_signed_import_review_return(page):
             "signed_issue_return_page": return_payload["page"],
             "returned_review_page": returned_review["pagination"]["page"],
             "safe_fragment_survived_pagination_and_issue_return": True,
-            "primary_return_label": return_label.inner_text().strip(),
+            "primary_return_label": primary_return_label,
         },
         "workspace_return": {
             "same_tab": True,
