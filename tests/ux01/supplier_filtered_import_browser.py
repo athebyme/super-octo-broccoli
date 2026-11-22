@@ -13,6 +13,7 @@ Run with the repository venv and Chromium installed. The summary is written to
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime
 import json
 import os
@@ -317,10 +318,18 @@ def seed_supplier_update_review_rows(fixture_ids, imported_source_ids):
 def seed_filtered_supplier_update_rows(supplier_id):
     """Seed multi-page stale sources with exact seller-owned local copies.
 
-    One source has both a stale and already-current local copy, and one
-    matching source has no local copy for this seller.
+    One source has both a stale and already-current local copy, built from the
+    same transient supplier projection as preview, and one matching source
+    has no local copy for this seller.
     """
     with fixture.app.app_context():
+        from services.supplier_service import (
+            SUPPLIER_REFRESH_REVIEW_PRODUCT_FIELDS,
+            SupplierService,
+            _supplier_refresh_clone,
+            _update_imported_from_supplier,
+        )
+
         seller_id = fixture.FIXTURE["seller_id"]
         sources = []
         stale_copies = []
@@ -378,14 +387,25 @@ def seed_filtered_supplier_update_rows(supplier_id):
             db.session.add(stale_copy)
             stale_copies.append(stale_copy)
             if index == 0:
-                db.session.add(ImportedProduct(
+                current_duplicate = ImportedProduct(
                     seller_id=seller_id,
                     supplier_id=supplier_id,
                     supplier_product_id=source.id,
-                    supplier_content_revision=source.content_revision,
-                    title=source.title,
                     import_status="validated",
-                ))
+                )
+                # Build every reviewed field through the same nonpersisting
+                # projection updater used by supplier refresh preview. A
+                # matching title/revision alone is not a current row because
+                # supplier metadata and source snapshots also participate.
+                projected_current = _supplier_refresh_clone(current_duplicate)
+                _update_imported_from_supplier(projected_current, source)
+                for field in SUPPLIER_REFRESH_REVIEW_PRODUCT_FIELDS:
+                    setattr(
+                        current_duplicate,
+                        field,
+                        copy.deepcopy(getattr(projected_current, field)),
+                    )
+                db.session.add(current_duplicate)
         db.session.flush()
         current_duplicate = ImportedProduct.query.filter_by(
             seller_id=seller_id,
@@ -394,6 +414,23 @@ def seed_filtered_supplier_update_rows(supplier_id):
             supplier_content_revision=sources[0].content_revision,
         ).one()
         db.session.commit()
+        seeded_review = SupplierService.preview_supplier_products(
+            seller_id,
+            supplier_id,
+            [sources[0].id],
+            details_limit=2,
+        )
+        seeded_counts = {
+            key: seeded_review[key]
+            for key in ("requested", "eligible", "changed", "already_current", "unlinked")
+        }
+        assert seeded_counts == {
+            "requested": 2,
+            "eligible": 2,
+            "changed": 1,
+            "already_current": 1,
+            "unlinked": 0,
+        }, f"transient projection did not seed one current duplicate: {seeded_counts!r}"
         return {
             "source_ids": [source.id for source in sources],
             "stale_copy_ids": [copy.id for copy in stale_copies],
@@ -1784,12 +1821,70 @@ def run():
         ) == {
             key: [value] for key, value in filtered_update_filters.items()
         }
-        assert page.locator("[data-review-requested]").inner_text() == "55"
-        assert page.locator("[data-review-eligible]").inner_text() == "55"
-        assert page.locator("[data-review-changed]").inner_text() == "54"
-        assert page.locator("[data-review-already-current]").inner_text() == "1"
-        assert page.locator("[data-review-unlinked]").inner_text() == "0"
-        assert page.locator("[data-review-skipped]").inner_text() == "1"
+        filtered_review_counts = {
+            "requested": int(page.locator("[data-review-requested]").inner_text()),
+            "eligible": int(page.locator("[data-review-eligible]").inner_text()),
+            "changed": int(page.locator("[data-review-changed]").inner_text()),
+            "already_current": int(
+                page.locator("[data-review-already-current]").inner_text()
+            ),
+            "unlinked": int(page.locator("[data-review-unlinked]").inner_text()),
+            "skipped": int(page.locator("[data-review-skipped]").inner_text()),
+        }
+        expected_filtered_review_counts = {
+            "requested": 55,
+            "eligible": 55,
+            "changed": 54,
+            "already_current": 1,
+            "unlinked": 0,
+            "skipped": 1,
+        }
+        assert filtered_review_counts == expected_filtered_review_counts, (
+            "selected-only supplier preview counts differ: "
+            f"expected={expected_filtered_review_counts!r}, "
+            f"actual={filtered_review_counts!r}"
+        )
+        filtered_detail_rows = page.locator("[data-supplier-review-row]")
+        filtered_detail_ids = filtered_detail_rows.evaluate_all(
+            "items => items.map(item => item.dataset.localProductId)",
+        )
+        selected_local_copy_ids = [
+            copy_id
+            for source_id, copy_id in zip(
+                filtered_source_ids,
+                filtered_update_fixture["stale_copy_ids"],
+            )
+            if str(source_id) != excluded_source_id
+        ] + [current_duplicate_copy_id]
+        expected_filtered_detail_ids = [
+            str(copy_id) for copy_id in sorted(selected_local_copy_ids)[:50]
+        ]
+        assert len(selected_local_copy_ids) == 55, (
+            "selected supplier sources should scope 55 owned local copies: "
+            f"source_count={len(selected_after_exclusion)}, "
+            f"local_copy_ids={len(selected_local_copy_ids)}"
+        )
+        assert filtered_detail_rows.count() == 50, (
+            "supplier preview should render its first 50 local-copy details: "
+            f"rendered={filtered_detail_rows.count()}, "
+            f"requested={filtered_review_counts['requested']}"
+        )
+        assert filtered_detail_ids == expected_filtered_detail_ids, (
+            "supplier preview details must be the first 50 local rows in ID order: "
+            f"expected={expected_filtered_detail_ids!r}, actual={filtered_detail_ids!r}"
+        )
+        assert str(current_duplicate_copy_id) in filtered_detail_ids
+        assert not set(
+            map(str, filtered_update_fixture["stale_copy_ids"][50:]),
+        ).intersection(filtered_detail_ids), (
+            "tail local-copy details must be omitted after the first 50: "
+            f"tail={filtered_update_fixture['stale_copy_ids'][50:]!r}, "
+            f"rendered={filtered_detail_ids[-1]!r}"
+        )
+        assert page.get_by_text(
+            "Показаны первые 50 из 55 локальных карточек.",
+            exact=False,
+        ).count() == 1
         assert page.locator(
             f'[data-supplier-review-row][data-local-product-id="{current_duplicate_copy_id}"]'
             '[data-row-state="unchanged"]',
@@ -1856,6 +1951,10 @@ def run():
         assert not filtered_confirm_body.get("product_ids")
         assert not filtered_confirm_body.get("update_all_for_supplier")
         page.wait_for_url(lambda url: urlsplit(url).path == filtered_catalog_path)
+        page.get_by_text(
+            "Локально обновлено: 54, пропущено: 1, ошибок: 0.",
+            exact=False,
+        ).wait_for(state="visible")
         filtered_return_location = urlsplit(page.url)
         filtered_return_query = parse_qs(
             filtered_return_location.query,
@@ -1908,6 +2007,30 @@ def run():
                 else:
                     assert copy.title == source.title
                     assert copy.supplier_content_revision == source.content_revision
+            actual_changed_copy_ids = {
+                copy_id
+                for copy_id in filtered_update_fixture["stale_copy_ids"]
+                if (
+                    updated_copies[copy_id].title,
+                    updated_copies[copy_id].supplier_content_revision,
+                    updated_copies[copy_id].updated_at,
+                ) != filtered_before_preview[copy_id]
+            }
+            expected_changed_copy_ids = {
+                copy_id
+                for source_id, copy_id in zip(
+                    filtered_source_ids,
+                    filtered_update_fixture["stale_copy_ids"],
+                )
+                if str(source_id) != excluded_source_id
+            }
+            assert actual_changed_copy_ids == expected_changed_copy_ids, (
+                "apply should change exactly the selected stale copies: "
+                f"expected_count={len(expected_changed_copy_ids)}, "
+                f"actual_count={len(actual_changed_copy_ids)}, "
+                f"missing={sorted(expected_changed_copy_ids - actual_changed_copy_ids)!r}, "
+                f"unexpected={sorted(actual_changed_copy_ids - expected_changed_copy_ids)!r}"
+            )
             assert ImportedProduct.query.filter_by(
                 seller_id=fixture.FIXTURE["seller_id"],
                 supplier_id=fixture_ids["supplier_id"],
@@ -1922,9 +2045,11 @@ def run():
                 source_id in selected_after_exclusion
                 for source_id in expected_stale_source_ids[50:]
             ),
-            "reviewed_local_copies": 55,
-            "changed_local_copies": 54,
-            "already_current_local_copies": 1,
+            "reviewed_local_copies": filtered_review_counts["requested"],
+            "changed_local_copies": filtered_review_counts["changed"],
+            "already_current_local_copies": filtered_review_counts["already_current"],
+            "visible_detail_rows": len(filtered_detail_ids),
+            "first_50_detail_ids": filtered_detail_ids,
             "unimported_source_rows": 1,
             "returned_filters": filtered_return_query,
             "screenshot": update_selection_screenshot,
