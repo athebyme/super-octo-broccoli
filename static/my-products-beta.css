@@ -516,12 +516,39 @@
     outline-offset:2px;
 }
 
+.mp-wb-create-receipt {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    min-width:0;
+    margin:0 0 12px;
+    padding:11px 13px;
+    border:1px solid var(--warn-border);
+    border-radius:var(--r-md);
+    background:var(--warn-bg);
+    color:var(--text);
+}
+.mp-wb-create-receipt[data-wb-create-state="accepted"] {
+    border-color:var(--accent);
+    background:var(--accent-light);
+}
+.mp-wb-create-receipt-copy { display:grid; gap:3px; min-width:0; }
+.mp-wb-create-receipt-copy strong { font-size:13px; line-height:1.3; }
+.mp-wb-create-receipt-copy span { color:var(--text-secondary); font-size:12px; line-height:1.4; overflow-wrap:anywhere; }
+.mp-wb-create-receipt-actions { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:7px; flex:none; }
+.mp-wb-create-receipt-actions .sh-btn { min-height:44px; white-space:normal; }
+.mp-wb-create-receipt-actions .sh-btn:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
+
 /* ---------- Мобильный ---------- */
 @media (max-width: 1000px) {
     .mp-row { grid-template-columns: 24px 48px minmax(0, 1fr) auto 24px; }
     .mp-signal { display: none; }
 }
 @media (max-width: 700px) {
+    .mp-wb-create-receipt { align-items:stretch; flex-direction:column; }
+    .mp-wb-create-receipt-actions { justify-content:stretch; }
+    .mp-wb-create-receipt-actions .sh-btn { flex:1 1 140px; }
     #my-products-app .shk-job-close {
         display:inline-flex;
         align-items:center;

@@ -6,7 +6,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261122-unified-import-r60b') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261122-wb-create-continuity-r61') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261122-unified-import-r60c') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
@@ -28,6 +28,7 @@
         'facets': url_for('api_my_products_facets'),
         'jobStatus': '/api/jobs/',
         'pushToWb': url_for('seller_push_to_wb_bulk'),
+        'wbCreateResult': url_for('seller_push_to_wb_bulk_result'),
         'wbAudit': url_for('seller_wb_audit_start'),
         'refreshFromSupplier': url_for('my_products_refresh_from_supplier'),
         'supplierRefreshPreview': url_for('api_my_products_supplier_refresh_preview'),
@@ -235,6 +236,35 @@
         </div>
     </section>
 
+    <section v-if="wbCreateReceiptVisible" class="mp-wb-create-receipt"
+             data-wb-create-receipt role="status" aria-live="polite" aria-atomic="true"
+             :data-wb-create-state="wbCreateReceiptState">
+        <div class="mp-wb-create-receipt-copy">
+            <strong v-if="wbCreateStorageProblem">Сохранённый запуск WB нельзя прочитать</strong>
+            <strong v-else-if="wbCreateError && !wbCreatePending">Запуск WB не создан</strong>
+            <strong v-else-if="wbCreateBusy">Создаём карточки WB…</strong>
+            <strong v-else-if="wbCreatePending && wbCreatePending.state === 'posting'">Проверяем сохранённый запуск WB…</strong>
+            <strong v-else-if="wbCreatePending && wbCreatePending.state === 'terminal_refresh'">WB завершил запуск, проверяем список</strong>
+            <strong v-else-if="wbCreatePending && wbCreatePending.state === 'accepted'">Запуск WB принят</strong>
+            <strong v-else>Результат запуска WB пока неизвестен</strong>
+            <span v-if="wbCreatePending">В запросе WB: {{ wbCreatePending.product_ids.length }} {{ $fmt.plural(wbCreatePending.product_ids.length, 'карточка', 'карточки', 'карточек') }} · общий выбор сохранён; подготовка Ozon остаётся доступной.</span>
+            <span v-if="wbCreateError || wbCreateReadError">{{ wbCreateError || wbCreateReadError }}</span>
+        </div>
+        <div class="mp-wb-create-receipt-actions">
+            <a v-if="wbCreateOpenBatchAvailable" class="sh-btn sh-btn--secondary"
+               data-wb-create-open-batch :href="wbCreateBatchReturnUrl">Открыть точный список импорта</a>
+            <button v-if="wbCreatePending && !wbCreateBusy && !wbCreateStorageProblem" type="button"
+                    class="sh-btn sh-btn--secondary" data-wb-create-reconcile
+                    :disabled="wbCreateReading" @click="checkWbCreateResult(false)">
+                {{ wbCreateReading ? 'Проверяем…' : 'Проверить результат WB' }}
+            </button>
+            <button v-if="wbCreateRetryAvailable" type="button" class="sh-btn sh-btn--primary"
+                    data-wb-create-retry @click="retryWbCreateSameKey">Повторить тот же запуск</button>
+            <button v-if="wbCreateVerifyFeedAvailable" type="button" class="sh-btn sh-btn--secondary"
+                    data-wb-create-verify-feed @click="load">Проверить список</button>
+        </div>
+    </section>
+
     <sh-job-progress ref="jobProgress" :job="job" :title="jobTitle"
                      @check-status="recheckJob" @dismiss="dismissJob"></sh-job-progress>
 
@@ -334,6 +364,7 @@
                  :class="{'is-selected': selected.includes(item.id)}">
             <label class="mp-check">
                 <input type="checkbox" :value="item.id" v-model="selected"
+                       @change="markWbCreateSelectionIntent"
                        :aria-label="'Выбрать ' + (item.title || item.vendor_code)">
             </label>
 
@@ -426,7 +457,7 @@
     </div>
 
     <!-- Выбранный список сразу показывает четыре понятных намерения. -->
-    <sh-bulk-bar class="mp-bulkbar" :count="selected.length" @clear="selected = []">
+    <sh-bulk-bar class="mp-bulkbar" :count="selected.length" @clear="clearSelection">
         <div class="mp-bulk-topline">
             <details ref="moreActions" class="mp-more-actions" v-if="selected.length"
                      @toggle="onMoreActionsToggle">
@@ -444,7 +475,7 @@
                 </div>
             </details>
             <button type="button" class="mp-bulk-clear" aria-label="Снять выбор"
-                    @click="selected = []">Снять</button>
+                    @click="clearSelection">Снять</button>
         </div>
         <div class="mp-bulk-intents" role="group" aria-label="Основные действия">
             <section v-if="showSupplierImportNextSteps" class="mp-import-next-steps"
@@ -621,5 +652,5 @@
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261122-ozon-update-return-r56') }}"></script>
 <script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261122-unified-import-r60c') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-unified-import-r60b') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-wb-create-continuity-r61') }}"></script>
 {% endblock %}

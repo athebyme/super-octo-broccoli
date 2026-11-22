@@ -207,9 +207,126 @@
     var MAX_OZON_PRICE_HANDOFF = 100;
     var MAX_WORKSPACE_UPDATE_TOKEN_LENGTH = 32 * 1024;
     var SUPPLIER_REFRESH_PREVIEW_TIMEOUT_MS = 12000;
+    var WB_CREATE_PENDING_KEY = 'seller-hub-wb-create-pending-v1';
+    var WB_CREATE_PENDING_MAX_BYTES = 24 * 1024;
+    var WB_CREATE_STATUSES = ['pending', 'running', 'unknown', 'completed', 'failed', 'cancelled'];
+    var WB_CREATE_JOB_UID_RE = /^bulk_wb_[0-9a-f]{56}$/;
+    var WB_CREATE_NOT_ACCEPTED_CODES = [
+        'wb_create_invalid_request', 'wb_create_invalid_scope',
+        'wb_create_request_key_invalid', 'wb_create_owner_scope_changed',
+        'wb_create_wb_account_unavailable', 'wb_create_scope_mismatch',
+        'wb_create_overlap',
+    ];
+    function wbCreateStorageKey() {
+        return WB_CREATE_PENDING_KEY + ':' + encodeURIComponent(
+            typeof boot.workspaceOwner === 'string' ? boot.workspaceOwner : '',
+        );
+    }
     var WORKSPACE_RETURN_SCOPE_KEYS = [
         'activeTab', 'search', 'supplier', 'has_photos', 'stock', 'sort', 'visibleCount',
     ];
+    function validWbCreateIds(ids, allowEmpty) {
+        return Array.isArray(ids) && (allowEmpty || ids.length > 0) && ids.length <= MAX_BULK_SELECTION &&
+            ids.every(function (id) { return Number.isSafeInteger(id) && id > 0; }) &&
+            new Set(ids).size === ids.length;
+    }
+
+    function validWbCreatePending(value) {
+        if (!value || typeof value !== 'object' || Array.isArray(value) || value.version !== 1 ||
+            typeof boot.workspaceOwner !== 'string' || !boot.workspaceOwner ||
+            value.owner !== boot.workspaceOwner || typeof value.import_batch !== 'string' ||
+            !SIGNED_IMPORT_BATCH.test(value.import_batch) ||
+            typeof value.request_key !== 'string' || !/^[a-f0-9]{32}$/.test(value.request_key) ||
+            !validWbCreateIds(value.selection_ids, false) ||
+            !validWbCreateIds(value.product_ids, false) ||
+            value.product_ids.some(function (id) { return value.selection_ids.indexOf(id) === -1; }) ||
+            !['posting', 'unknown', 'accepted', 'terminal_refresh'].includes(value.state) ||
+            typeof value.selection_changed !== 'boolean' ||
+            !validWbCreateIds(value.current_selection_ids, true) ||
+            (value.job_uid !== null && (typeof value.job_uid !== 'string' ||
+                !WB_CREATE_JOB_UID_RE.test(value.job_uid))) ||
+            (value.receipt_status !== null && !WB_CREATE_STATUSES.includes(value.receipt_status)) ||
+            (value.worker_exited !== null && typeof value.worker_exited !== 'boolean') ||
+            !Number.isSafeInteger(value.created_at) || value.created_at <= 0) return false;
+        var terminal = ['completed', 'failed', 'cancelled'].includes(value.receipt_status);
+        if (value.state === 'posting') {
+            return value.job_uid === null && value.receipt_status === null && value.worker_exited === false;
+        }
+        if (value.state === 'accepted') {
+            return !!value.job_uid && ['pending', 'running'].includes(value.receipt_status) &&
+                value.worker_exited === false;
+        }
+        if (value.state === 'terminal_refresh') {
+            return !!value.job_uid && terminal && value.worker_exited === true;
+        }
+        return value.worker_exited === false &&
+            (value.receipt_status === null || value.receipt_status === 'unknown');
+    }
+
+    function readWbCreatePending() {
+        try {
+            var raw = sessionStorage.getItem(wbCreateStorageKey());
+            if (raw === null) return { pending: null, storageProblem: false };
+            if (raw.length > WB_CREATE_PENDING_MAX_BYTES) return { pending: null, storageProblem: true };
+            var value = JSON.parse(raw);
+            if (!validWbCreatePending(value)) return { pending: null, storageProblem: true };
+            return { pending: value, storageProblem: false };
+        } catch (_) {
+            return { pending: null, storageProblem: true };
+        }
+    }
+
+    function saveWbCreatePending(value) {
+        if (!validWbCreatePending(value)) return false;
+        try {
+            var encoded = JSON.stringify(value);
+            if (encoded.length > WB_CREATE_PENDING_MAX_BYTES) return false;
+            sessionStorage.setItem(wbCreateStorageKey(), encoded);
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function clearWbCreatePending(requestKey) {
+        try {
+            var raw = sessionStorage.getItem(wbCreateStorageKey());
+            var value = raw ? JSON.parse(raw) : null;
+            if (value && value.request_key === requestKey) sessionStorage.removeItem(wbCreateStorageKey());
+        } catch (_) {}
+    }
+
+    function wbCreateRequestKey() {
+        var cryptoApi = window.crypto;
+        if (!cryptoApi || typeof cryptoApi.getRandomValues !== 'function') return '';
+        try {
+            if (typeof cryptoApi.randomUUID === 'function') {
+                return cryptoApi.randomUUID().replace(/-/g, '').toLowerCase();
+            }
+            return Array.from(cryptoApi.getRandomValues(new Uint8Array(16)), function (byte) {
+                return byte.toString(16).padStart(2, '0');
+            }).join('');
+        } catch (_) { return ''; }
+    }
+
+    function validWbCreateReceipt(data, pending) {
+        if (!data || typeof data !== 'object' || Array.isArray(data) || data.success !== true ||
+            typeof data.job_uid !== 'string' || !WB_CREATE_JOB_UID_RE.test(data.job_uid) ||
+            (pending.job_uid && data.job_uid !== pending.job_uid) ||
+            !Number.isSafeInteger(data.total) || data.total !== pending.product_ids.length ||
+            !sameOrderedIds(data.product_ids, pending.product_ids) ||
+            !WB_CREATE_STATUSES.includes(data.status) || typeof data.replayed !== 'boolean' ||
+            typeof data.worker_exited !== 'boolean') return false;
+        var terminalStatus = ['completed', 'failed', 'cancelled'].includes(data.status);
+        return terminalStatus ? data.worker_exited === true : data.worker_exited === false;
+    }
+
+    function knownWbCreateNotAccepted(response, data) {
+        return !!response && response.status >= 400 && response.status < 500 &&
+            !!data && typeof data === 'object' && !Array.isArray(data) &&
+            data.success === false && data.accepted === false &&
+            typeof data.code === 'string' && WB_CREATE_NOT_ACCEPTED_CODES.includes(data.code);
+    }
     function exactWbProductIds(items) {
         if (!Array.isArray(items) || !items.length) return null;
         var ids = items.map(function (item) {
@@ -982,6 +1099,7 @@
         data: function () {
             var savedOzon = readOzonPending();
             var savedInlineOzon = readOzonInlineReceipt();
+            var savedWbCreate = readWbCreatePending();
             return {
                 wbConnected: !!boot.wbConnected,
                 wbAccountId: wbAccountIdFromBootstrap,
@@ -1057,6 +1175,22 @@
                 ozonInlineReceiptFocusPending: false,
                 ozonRetrySameKey: false,
                 ozonSessionEnded: false,
+                wbCreatePending: savedWbCreate.pending,
+                wbCreateStorageProblem: savedWbCreate.storageProblem,
+                wbCreateBusy: false,
+                wbCreateReading: false,
+                wbCreateRetrySameKey: false,
+                wbCreateError: '',
+                wbCreateReadError: '',
+                wbCreateTerminalReceiptVerified: false,
+                wbCreateSelectionIntentRevision: 0,
+                _wbCreateReadAfterPost: false,
+                _wbCreatePostAbort: null,
+                _wbCreatePostTimer: null,
+                _wbCreateReadAbort: null,
+                _wbCreateReadTimer: null,
+                _wbCreatePollTimer: null,
+                _mpUnmounted: false,
                 ozonPriceError: '',
                 ozonPriceAccountId: '',
                 ozonPriceHandoffReview: null,
@@ -1152,6 +1286,7 @@
                 var createRows = chosen.filter(function (item) {
                     return !item.wb && ['pending', 'failed', 'validated'].indexOf(item.import_status) !== -1;
                 });
+                var wbCreateLocked = this.wbCreateStorageProblem || !!this.wbCreatePending;
                 var wbIds = exactWbProductIds(chosen);
                 var withUpdates = chosen.filter(function (i) { return i.has_supplier_update; }).length;
                 var underLimit = chosen.length <= MAX_BULK_SELECTION;
@@ -1200,14 +1335,16 @@
                         {
                             key: 'push_wb',
                             label: 'Создать карточки WB',
-                            hint: !this.wbConnected
+                            hint: wbCreateLocked
+                                ? 'сначала проверьте сохранённый результат предыдущего запуска WB'
+                                : !this.wbConnected
                                 ? 'подключите кабинет Wildberries'
                                 : !underLimit
                                 ? 'за один запуск можно выбрать не больше 200 товаров'
                                 : createRows.length
                                     ? 'для ' + createRows.length + ' товаров, ещё не связанных с WB'
                                     : 'выберите товары, которые ещё не связаны с WB',
-                            disabled: !this.wbConnected || !underLimit || !createRows.length,
+                            disabled: wbCreateLocked || !this.wbConnected || !underLimit || !createRows.length,
                         },
                         this.ozonEnabled ? {
                             key: 'ozon',
@@ -1353,6 +1490,47 @@
                     !!this.inlineSupplierImportToken && this.inlineSupplierImportToken === this.importBatch &&
                     this.importBatchSelectionVerified && !this.loading && !this.loadingMore &&
                     this.itemsScope === this.feedScopeKey();
+            },
+            wbCreatePendingForCurrentOwner: function () {
+                return !!this.wbCreatePending && this.wbCreatePending.owner === this.workspaceOwner;
+            },
+            wbCreatePendingForCurrentBatch: function () {
+                return this.wbCreatePendingForCurrentOwner && this.importBatchMode &&
+                    this.importBatchKind === 'import' && this.importBatch === this.wbCreatePending.import_batch;
+            },
+            wbCreateReceiptVisible: function () {
+                return this.wbCreateStorageProblem || this.wbCreatePendingForCurrentOwner || !!this.wbCreateError;
+            },
+            wbCreateReceiptState: function () {
+                if (this.wbCreateStorageProblem) return 'blocked';
+                return this.wbCreatePending ? this.wbCreatePending.state : '';
+            },
+            wbCreateRetryAvailable: function () {
+                return !!(this.wbCreateRetrySameKey && !this.wbCreateStorageProblem &&
+                    !this.wbCreateBusy && !this.wbCreateReading &&
+                    this.wbCreatePendingForCurrentBatch && this.importBatchSelectionVerified &&
+                    !this.wbCreatePending.job_uid &&
+                    this.itemsScope === this.feedScopeKey() &&
+                    this.wbCreatePending.product_ids.every((id) => this.items.some((item) => item.id === id)));
+            },
+            wbCreateVerifyFeedAvailable: function () {
+                return !!(this.wbCreatePending && this.wbCreatePending.state === 'terminal_refresh' &&
+                    this.wbCreatePending.worker_exited === true && this.wbCreatePendingForCurrentBatch && !this.loading);
+            },
+            wbCreateBatchReturnUrl: function () {
+                if (!this.wbCreatePendingForCurrentOwner) return '';
+                if (typeof this.urls.workspace !== 'string' || !this.urls.workspace ||
+                    this.urls.workspace.length > 2000 || !window.location) return '';
+                try {
+                    var target = new URL(this.urls.workspace, window.location.origin);
+                    if (target.origin !== window.location.origin || target.username || target.password ||
+                        target.search || target.hash || target.pathname !== window.location.pathname) return '';
+                    return target.pathname + '?import_batch=' + encodeURIComponent(this.wbCreatePending.import_batch);
+                } catch (_) { return ''; }
+            },
+            wbCreateOpenBatchAvailable: function () {
+                return !!(this.wbCreateBatchReturnUrl &&
+                    (!this.wbCreatePendingForCurrentBatch || !this.importBatchSelectionVerified));
             },
             ozonInlineReceiptVisible: function () {
                 var receipt = this.ozonInlineReceipt;
@@ -1526,9 +1704,15 @@
             if (!this.importBatchMode && !this.supplierRefreshBatchMode) this.loadFacets();
         },
         beforeUnmount: function () {
+            this._mpUnmounted = true;
             this.invalidateWbEditHandoff();
             this.invalidateOzonWorkspaceUpdate();
             this.stopJobTracking();
+            this.stopWbCreateReceiptTracking();
+            if (this._wbCreatePostTimer) clearTimeout(this._wbCreatePostTimer);
+            this._wbCreatePostTimer = null;
+            if (this._wbCreatePostAbort) this._wbCreatePostAbort.abort();
+            this._wbCreatePostAbort = null;
             if (this._abort) this._abort.abort();
             if (this._loadMoreAbort) this._loadMoreAbort.abort();
             this.cancelSupplierRefreshRestore();
@@ -2259,6 +2443,9 @@
                                 self.selected = verifiedBatchIds.slice();
                             }
                             self.supplierRefreshSelectPending = false;
+                            if (self.importBatchKind === 'import' && !self.supplierRefreshResultBatchMode) {
+                                self.tryResumeWbCreateAfterFeed();
+                            }
                             return;
                         }
                         if (self.supplierRefreshBatchMode) {
@@ -2494,6 +2681,7 @@
                 this.selected = this.allSelected
                     ? []
                     : this.items.map(function (item) { return item.id; });
+                this.markWbCreateSelectionIntent();
             },
             resolveOzonPriceAccountChoices: function (items, selectionIds) {
                 return exactOzonPriceAccountChoices(items, selectionIds, this.ozonAccounts);
@@ -2846,6 +3034,13 @@
                     new Set(selectionIds).size !== selectionIds.length ||
                     chosen.some(function (item) { return selectionIds.indexOf(item.id) === -1; })) {
                     this.error = 'Выбор изменился. Обновите список и отметьте товары заново.';
+                    return;
+                }
+                if (action && action.key === 'push_wb' &&
+                    (this.wbCreateStorageProblem || this.wbCreatePending)) {
+                    this.error = this.wbCreateStorageProblem
+                        ? 'Сохранённый запуск WB нельзя прочитать. Новая отправка заблокирована.'
+                        : 'Сначала проверьте сохранённый результат предыдущего запуска WB.';
                     return;
                 }
                 var published = chosen.filter(function (i) { return i.wb; }).length;
@@ -3497,8 +3692,23 @@
                 }
                 this.confirm.busy = true;
 
+                if (key === 'push_wb' && this.importBatchMode && this.importBatchKind === 'import') {
+                    if (!this.inlineSupplierImportBatch || this.wbCreateStorageProblem || this.wbCreatePending) {
+                        this.confirm.open = false;
+                        this.error = 'Сначала подтвердите точный состав этого импорта и проверьте незавершённый запуск WB.';
+                        this.finishConfirmAction();
+                        return;
+                    }
+                    this.startInlineWbCreate(ids, selectionAtReview);
+                    return;
+                }
+
                 var request;
                 if (key === 'push_wb') {
+                    if (this.inlineSupplierImportBatch) {
+                        this.startInlineWbCreate(ids, selectionAtReview);
+                        return;
+                    }
                     this.jobTitle = 'Отправляем на Wildberries';
                     request = this.$api.post(this.urls.pushToWb, { product_ids: ids });
                 } else if (key === 'audit') {
@@ -3546,6 +3756,419 @@
                     self.confirm.selectionIds = [];
                     self.confirm.labels = [];
                 });
+            },
+            finishConfirmAction: function () {
+                this.confirm.busy = false;
+                this.confirm.productIds = [];
+                this.confirm.selectionIds = [];
+                this.confirm.labels = [];
+            },
+            markWbCreateSelectionIntent: function () {
+                if (!this.wbCreatePending) return;
+                var self = this;
+                var revision = this.wbCreateSelectionIntentRevision + 1;
+                this.wbCreateSelectionIntentRevision = revision;
+                var immediate = Object.assign({}, this.wbCreatePending, {
+                    selection_changed: true,
+                    current_selection_ids: this.selected.slice(),
+                });
+                this.wbCreatePending = immediate;
+                if (!saveWbCreatePending(immediate)) {
+                    this.wbCreateStorageProblem = true;
+                    this.wbCreateReadError = 'Не удалось сохранить новый выбор. Результат WB остаётся защищённым.';
+                }
+                this.$nextTick(function () {
+                    if (!self.wbCreatePending || self.wbCreateSelectionIntentRevision !== revision) return;
+                    var pending = Object.assign({}, self.wbCreatePending, {
+                        current_selection_ids: self.selected.slice(),
+                    });
+                    if (!saveWbCreatePending(pending)) {
+                        self.wbCreateStorageProblem = true;
+                        self.wbCreateReadError = 'Не удалось сохранить новый выбор. Результат WB остаётся защищённым.';
+                    }
+                    self.wbCreatePending = pending;
+                });
+            },
+            clearSelection: function () {
+                this.selected = [];
+                this.markWbCreateSelectionIntent();
+            },
+            wbCreateActionUrl: function (kind) {
+                var value = kind === 'result' ? this.urls.wbCreateResult : this.urls.pushToWb;
+                var suffix = kind === 'result'
+                    ? '/my-products/push-to-wb-bulk/result'
+                    : '/my-products/push-to-wb-bulk';
+                if (typeof value !== 'string' || !value || value.length > 2000) return '';
+                try {
+                    var target = new URL(value, window.location.origin);
+                    if (target.origin !== window.location.origin || target.username || target.password ||
+                        target.search || target.hash || !target.pathname.endsWith(suffix)) return '';
+                    return target.pathname;
+                } catch (_) { return ''; }
+            },
+            wbCreatePendingMatchesCurrentBatch: function (pending) {
+                return !!pending && pending.owner === this.workspaceOwner && this.importBatchMode &&
+                    this.importBatchKind === 'import' && this.importBatch === pending.import_batch &&
+                    !this.importBatchInvalid;
+            },
+            wbCreateFeedContains: function (ids) {
+                if (!validWbCreateIds(ids, true) || !this.inlineSupplierImportToken &&
+                    !this.wbCreatePendingMatchesCurrentBatch(this.wbCreatePending)) return false;
+                var feedIds = orderedProductIds(this.items);
+                return !!feedIds && ids.every(function (id) { return feedIds.indexOf(id) !== -1; });
+            },
+            saveCurrentWbCreatePending: function (pending) {
+                if (!pending || !validWbCreatePending(pending)) return false;
+                this.wbCreatePending = pending;
+                if (!saveWbCreatePending(pending)) {
+                    this.wbCreateStorageProblem = true;
+                    this.wbCreateReadError = 'Не удалось обновить сохранённую запись WB. Новая отправка заблокирована.';
+                    return false;
+                }
+                return true;
+            },
+            startInlineWbCreate: function (productIds, selectionIds) {
+                if (!this.inlineSupplierImportBatch || this.wbCreateStorageProblem || this.wbCreatePending ||
+                    !Array.isArray(productIds) || !validWbCreateIds(productIds, false) ||
+                    !validWbCreateIds(selectionIds, false) || !sameOrderedIds(this.selected, selectionIds) ||
+                    productIds.some((id) => selectionIds.indexOf(id) === -1) ||
+                    !this.wbCreateFeedContains(productIds) || !this.wbCreateFeedContains(selectionIds)) {
+                    this.confirm.open = false;
+                    this.error = 'WB-запуск остановлен: проверьте точный состав выбранного импорта и повторите действие.';
+                    this.finishConfirmAction();
+                    return false;
+                }
+                var requestKey = wbCreateRequestKey();
+                if (!requestKey || !this.wbCreateActionUrl('post') || !this.wbCreateActionUrl('result') ||
+                    !document.querySelector('meta[name="csrf-token"]')?.content) {
+                    this.confirm.open = false;
+                    this.error = 'Не удалось безопасно подготовить запрос WB. Ничего не отправлено.';
+                    this.finishConfirmAction();
+                    return false;
+                }
+                var pending = {
+                    version: 1,
+                    owner: this.workspaceOwner,
+                    import_batch: this.importBatch,
+                    request_key: requestKey,
+                    selection_ids: selectionIds.slice(),
+                    product_ids: productIds.slice(),
+                    current_selection_ids: selectionIds.slice(),
+                    selection_changed: false,
+                    state: 'posting',
+                    job_uid: null,
+                    receipt_status: null,
+                    worker_exited: false,
+                    created_at: Date.now(),
+                };
+                if (!saveWbCreatePending(pending)) {
+                    this.wbCreateStorageProblem = true;
+                    this.confirm.open = false;
+                    this.error = 'Не удалось сохранить ключ WB в этой вкладке. Запрос не отправлен.';
+                    this.finishConfirmAction();
+                    return false;
+                }
+                this.wbCreatePending = pending;
+                this.wbCreateStorageProblem = false;
+                this.wbCreateRetrySameKey = false;
+                this.wbCreateError = '';
+                this.wbCreateReadError = '';
+                this.jobTitle = 'Создаём карточки WB';
+                this.job = null;
+                this.confirm.open = false;
+                this.postInlineWbCreate(pending, false);
+                return true;
+            },
+            postInlineWbCreate: function (pending, explicitRetry) {
+                if (!pending || !validWbCreatePending(pending) || this.wbCreateBusy ||
+                    !this.wbCreatePending || this.wbCreatePending.request_key !== pending.request_key ||
+                    (explicitRetry && (!this.wbCreateRetrySameKey || !this.wbCreatePendingMatchesCurrentBatch(pending) ||
+                        !this.importBatchSelectionVerified || !this.wbCreateFeedContains(pending.product_ids)))) return false;
+                var url = this.wbCreateActionUrl('post');
+                var csrfMeta = document.querySelector('meta[name="csrf-token"]');
+                if (!url || !csrfMeta || !csrfMeta.content) {
+                    this.wbCreateReadError = 'Не удалось проверить защищённый адрес WB. Запрос не отправлен.';
+                    return false;
+                }
+                var self = this;
+                var controller = new AbortController();
+                var timer = setTimeout(function () { controller.abort(); }, 20000);
+                this._wbCreatePostAbort = controller;
+                this._wbCreatePostTimer = timer;
+                this.wbCreateBusy = true;
+                this.wbCreateRetrySameKey = false;
+                var posting = Object.assign({}, pending, {
+                    state: 'posting', job_uid: null, receipt_status: null, worker_exited: false,
+                });
+                if (!this.saveCurrentWbCreatePending(posting)) {
+                    this.wbCreateBusy = false;
+                    clearTimeout(timer);
+                    this._wbCreatePostTimer = null;
+                    this._wbCreatePostAbort = null;
+                    this.wbCreateReadError = 'Ключ не удалось сохранить перед отправкой. Запрос не отправлен.';
+                    this.finishConfirmAction();
+                    return false;
+                }
+                fetch(url, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    redirect: 'manual',
+                    signal: controller.signal,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Accept: 'application/json',
+                        'X-CSRFToken': csrfMeta.content,
+                    },
+                    body: JSON.stringify({
+                        product_ids: pending.product_ids,
+                        request_key: pending.request_key,
+                    }),
+                }).then(function (response) {
+                    return response.json().catch(function () { return null; }).then(function (data) {
+                        if (self._mpUnmounted) return;
+                        if (knownWbCreateNotAccepted(response, data)) {
+                            self.clearKnownNotAcceptedWbCreate(pending, data);
+                            return;
+                        }
+                        if (![200, 202].includes(response.status) ||
+                            !validWbCreateReceipt(data, pending)) {
+                            self.markWbCreateUnknown(pending, 'Ответ WB не подтвердил точный запуск. Проверьте результат по сохранённому ключу.');
+                            self._wbCreateReadAfterPost = true;
+                            return;
+                        }
+                        self.confirm.open = false;
+                        self.applyWbCreateReceipt(pending, data);
+                    });
+                }).catch(function () {
+                    if (self._mpUnmounted) return;
+                    self.markWbCreateUnknown(pending, 'Ответ на отправку WB не получен. Сначала проверьте результат по сохранённому ключу.');
+                    self._wbCreateReadAfterPost = true;
+                }).finally(function () {
+                    clearTimeout(timer);
+                    if (self._wbCreatePostTimer === timer) self._wbCreatePostTimer = null;
+                    if (self._wbCreatePostAbort === controller) self._wbCreatePostAbort = null;
+                    self.wbCreateBusy = false;
+                    self.finishConfirmAction();
+                    if (!self._mpUnmounted && self._wbCreateReadAfterPost) {
+                        self._wbCreateReadAfterPost = false;
+                        self.checkWbCreateResult(true);
+                    }
+                });
+                return true;
+            },
+            clearKnownNotAcceptedWbCreate: function (pending, data) {
+                clearWbCreatePending(pending.request_key);
+                this.wbCreatePending = null;
+                this.wbCreateRetrySameKey = false;
+                this.wbCreateStorageProblem = false;
+                this.wbCreateError = typeof data.error === 'string' ? data.error.slice(0, 300) :
+                    'Запуск WB не создан. Проверьте сообщение и при необходимости откройте новое подтверждение.';
+                this.wbCreateReadError = '';
+                this.job = null;
+                this.confirm.open = false;
+            },
+            markWbCreateUnknown: function (pending, message) {
+                if (!this.wbCreatePending || this.wbCreatePending.request_key !== pending.request_key) return;
+                var next = Object.assign({}, this.wbCreatePending, {
+                    state: 'unknown',
+                    receipt_status: 'unknown',
+                    worker_exited: false,
+                });
+                this.wbCreateTerminalReceiptVerified = false;
+                this.saveCurrentWbCreatePending(next);
+                this.wbCreateRetrySameKey = false;
+                this.wbCreateError = message;
+                this.job = null;
+                this.stopWbCreateReceiptTracking();
+            },
+            applyWbCreateReceipt: function (pending, data) {
+                if (!validWbCreateReceipt(data, pending) || !this.wbCreatePending ||
+                    this.wbCreatePending.request_key !== pending.request_key) {
+                    this.markWbCreateUnknown(pending, 'Получен ответ о другом составе. Запуск остаётся неизвестным; проверьте ключ.');
+                    return false;
+                }
+                var terminal = ['completed', 'failed', 'cancelled'].includes(data.status) && data.worker_exited === true;
+                this.wbCreateTerminalReceiptVerified = terminal;
+                var next = Object.assign({}, this.wbCreatePending, {
+                    state: terminal ? 'terminal_refresh' :
+                        data.status === 'unknown' || (['completed', 'failed', 'cancelled'].includes(data.status) && !data.worker_exited)
+                            ? 'unknown' : 'accepted',
+                    job_uid: data.job_uid,
+                    receipt_status: data.status,
+                    worker_exited: data.worker_exited,
+                });
+                this.saveCurrentWbCreatePending(next);
+                this.wbCreateRetrySameKey = false;
+                this.wbCreateError = terminal
+                    ? 'WB завершил запуск. Проверяем точный список импорта перед восстановлением выбора.'
+                    : data.status === 'unknown' || (['completed', 'failed', 'cancelled'].includes(data.status) && !data.worker_exited)
+                        ? 'Результат WB пока не подтверждён. Повторно проверьте его перед новым запуском.'
+                        : '';
+                this.wbCreateReadError = '';
+                this.jobTitle = 'Создание карточек WB';
+                if (data.status === 'completed' && terminal) {
+                    this.job = {
+                        job_uid: data.job_uid, status: 'done', total: data.total,
+                        processed: data.total, succeeded: data.total,
+                        message: 'WB подтвердил завершение фонового запуска.',
+                    };
+                } else if (['failed', 'cancelled'].includes(data.status) && terminal) {
+                    this.job = {
+                        job_uid: data.job_uid, status: data.status, total: data.total,
+                        processed: 0, message: data.status === 'failed'
+                            ? 'WB подтвердил завершение с ошибкой.' : 'WB подтвердил остановку запуска.',
+                    };
+                } else {
+                    this.job = null;
+                }
+                if (terminal) {
+                    this.stopWbCreateReceiptTracking();
+                    if (this.wbCreatePendingMatchesCurrentBatch(next) && !this.loading) this.load();
+                    this.focusJobProgress();
+                } else if (next.state === 'accepted') {
+                    this.scheduleWbCreateReceiptPoll();
+                } else {
+                    this.stopWbCreateReceiptTracking();
+                }
+                return true;
+            },
+            checkWbCreateResult: function (quiet) {
+                var pending = this.wbCreatePending;
+                if (!pending || !validWbCreatePending(pending) || this.wbCreateReading || this.wbCreateBusy) return false;
+                var url = this.wbCreateActionUrl('result');
+                if (!url) {
+                    this.wbCreateReadError = 'Не удалось проверить адрес результата WB.';
+                    return false;
+                }
+                var self = this;
+                var controller = new AbortController();
+                var timer = setTimeout(function () { controller.abort(); }, 10000);
+                this._wbCreateReadAbort = controller;
+                this._wbCreateReadTimer = timer;
+                this.wbCreateReading = true;
+                this.wbCreateRetrySameKey = false;
+                fetch(url, {
+                    method: 'GET',
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    redirect: 'manual',
+                    signal: controller.signal,
+                    headers: { Accept: 'application/json', 'X-WB-Create-Key': pending.request_key },
+                }).then(function (response) {
+                    return response.json().catch(function () { return null; }).then(function (data) {
+                        if (self._mpUnmounted) return;
+                        if (response.status === 404 && data && data.success === false &&
+                            data.code === 'wb_create_receipt_not_found') {
+                            if (pending.job_uid || (self.wbCreatePending && self.wbCreatePending.job_uid)) {
+                                self.markWbCreateUnknown(pending,
+                                    'Уже подтверждённый WB запуск больше не найден по ключу. Новый запуск заблокирован.');
+                                self.wbCreateReadError = self.wbCreateError;
+                                return;
+                            }
+                            var retryable = Object.assign({}, self.wbCreatePending, { state: 'unknown' });
+                            self.saveCurrentWbCreatePending(retryable);
+                            self.wbCreateRetrySameKey = true;
+                            self.wbCreateReadError = 'Сохранённый ключ пока не найден. Можно вручную повторить только тот же запрос и набор товаров.';
+                            if (!quiet) self.wbCreateError = '';
+                            return;
+                        }
+                        if (!response.ok || !validWbCreateReceipt(data, pending)) {
+                            self.markWbCreateUnknown(pending,
+                                response.status === 401 || response.status === 403
+                                    ? 'Проверьте вход и доступ. Сохранённый WB-запуск не повторяется автоматически.'
+                                    : 'Не удалось подтвердить точный результат WB. Повторите только чтение.');
+                            self.wbCreateReadError = self.wbCreateError;
+                            return;
+                        }
+                        self.applyWbCreateReceipt(pending, data);
+                    });
+                }).catch(function () {
+                    if (self._mpUnmounted) return;
+                    self.markWbCreateUnknown(pending,
+                        'Проверка WB не завершилась. Повторите чтение; новый запуск не отправлен.');
+                    self.wbCreateReadError = self.wbCreateError;
+                }).finally(function () {
+                    clearTimeout(timer);
+                    if (self._wbCreateReadTimer === timer) self._wbCreateReadTimer = null;
+                    if (self._wbCreateReadAbort === controller) self._wbCreateReadAbort = null;
+                    self.wbCreateReading = false;
+                });
+                return true;
+            },
+            retryWbCreateSameKey: function () {
+                if (!this.wbCreateRetryAvailable) return false;
+                var pending = this.wbCreatePending;
+                this.wbCreateReadError = '';
+                this.wbCreateError = 'Повторяем тот же запуск с прежним ключом и точным набором товаров.';
+                return this.postInlineWbCreate(pending, true);
+            },
+            scheduleWbCreateReceiptPoll: function () {
+                this.stopWbCreateReceiptTracking();
+                var self = this;
+                this._wbCreatePollTimer = setInterval(function () {
+                    if (document.hidden || !self.wbCreatePending || self.wbCreatePending.state !== 'accepted') return;
+                    self.checkWbCreateResult(true);
+                }, 2500);
+            },
+            stopWbCreateReceiptTracking: function () {
+                if (this._wbCreatePollTimer) clearInterval(this._wbCreatePollTimer);
+                this._wbCreatePollTimer = null;
+                if (this._wbCreateReadTimer) clearTimeout(this._wbCreateReadTimer);
+                this._wbCreateReadTimer = null;
+                if (this._wbCreateReadAbort) this._wbCreateReadAbort.abort();
+                this._wbCreateReadAbort = null;
+            },
+            tryResumeWbCreateAfterFeed: function () {
+                var pending = this.wbCreatePending;
+                if (!pending || !this.wbCreatePendingMatchesCurrentBatch(pending) ||
+                    !this.importBatchSelectionVerified || this.itemsScope !== this.feedScopeKey()) return false;
+                if (!this.wbCreateFeedContains(pending.product_ids)) {
+                    this.wbCreateReadError = 'Запрошенные товары не совпали с проверенным импортом. Защита WB сохранена.';
+                    return false;
+                }
+                var desired = pending.selection_changed
+                    ? pending.current_selection_ids.slice() : pending.selection_ids.slice();
+                if (!this.wbCreateFeedContains(desired)) {
+                    this.wbCreateReadError = 'Выбор не восстановлен: часть товаров больше не входит в эту подборку.';
+                } else {
+                    this.selected = desired;
+                }
+                if (pending.state === 'terminal_refresh' && pending.worker_exited === true &&
+                    this.wbCreateTerminalReceiptVerified) {
+                    this.finishWbCreateAfterVerifiedFeed(pending);
+                } else if (pending.state === 'accepted' || pending.state === 'unknown' ||
+                    pending.state === 'posting' || pending.state === 'terminal_refresh') {
+                    this.checkWbCreateResult(true);
+                }
+                return true;
+            },
+            finishWbCreateAfterVerifiedFeed: function (pending) {
+                if (!pending || !this.wbCreatePendingMatchesCurrentBatch(pending) ||
+                    pending.state !== 'terminal_refresh' || pending.worker_exited !== true ||
+                    !this.wbCreateTerminalReceiptVerified ||
+                    !this.importBatchSelectionVerified || this.itemsScope !== this.feedScopeKey() ||
+                    !this.wbCreateFeedContains(pending.product_ids)) {
+                    this.wbCreateReadError = 'Не удалось подтвердить точный состав после завершения WB. Защита запуска остаётся активной.';
+                    return false;
+                }
+                var desired = pending.selection_changed
+                    ? pending.current_selection_ids.slice() : pending.selection_ids.slice();
+                if (this.wbCreateFeedContains(desired)) {
+                    this.selected = desired;
+                } else {
+                    this.selected = [];
+                    this.wbCreateReadError = 'Запуск завершён, но прежний выбор изменился. Отметьте товары из проверенного списка заново.';
+                }
+                clearWbCreatePending(pending.request_key);
+                this.wbCreatePending = null;
+                this.wbCreateRetrySameKey = false;
+                this.wbCreateStorageProblem = false;
+                this.wbCreateTerminalReceiptVerified = false;
+                this.wbCreateError = '';
+                this.stopWbCreateReceiptTracking();
+                this.focusJobProgress();
+                return true;
             },
             refreshListAfterSupplierResult: function () {
                 this.load();
@@ -3909,6 +4532,11 @@
             },
             recheckJob: function () {
                 var current = this.job;
+                if (current && this.wbCreatePending &&
+                    current.job_uid === this.wbCreatePending.job_uid) {
+                    this.checkWbCreateResult(false);
+                    return;
+                }
                 if (!current || current.status !== 'unknown' || current.checking || !current.job_uid) return;
                 var self = this;
                 var jobUid = current.job_uid;
