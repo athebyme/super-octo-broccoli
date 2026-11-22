@@ -24,7 +24,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import requests
 from jinja2 import ChoiceLoader, DictLoader
