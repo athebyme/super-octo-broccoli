@@ -481,6 +481,7 @@ def run():
     facet_reads = []
     job_status_reads = []
     page_errors = []
+    classic_fallback_documents = []
     event_number = [0]
     wb_create_report = None
 
@@ -492,6 +493,11 @@ def run():
         request = route.request
         parsed = urlsplit(request.url)
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "GET":
+            if parsed.path == "/static/supplier-catalog-update-review.js":
+                # Exercise the server forms if just the inline enhancer is unavailable.
+                classic_fallback_documents.append(parsed.path)
+                route.fulfill(status=200, content_type="application/javascript", body="")
+                return
             if parsed.path == "/api/my-products":
                 query = parse_qs(parsed.query, keep_blank_values=True)
                 try:
@@ -2514,6 +2520,7 @@ def run():
         assert fixture.REPORT["provider_attempts"] == 0
         assert fixture.REPORT["unexpected_external_requests"] == []
         assert fixture.REPORT["unexpected_http"] == []
+        assert classic_fallback_documents, "Classic form fallback needs a missing inline enhancer"
         assert fixture.REPORT["writes"] == [
             {"method": "POST", "path": IMPORT_PATH},
             {"method": "POST", "path": WB_CREATE_PATH},
@@ -2537,6 +2544,7 @@ def run():
         "provider_attempts": fixture.REPORT["provider_attempts"],
         "selected_count": len(selected_ids),
         "imported_count": imported_count,
+        "classic_update_form_fallback": True,
         "supplier_catalog_review": supplier_review_report,
         "filtered_update_selection": filtered_update_report,
         "supplier_refresh_handoff": supplier_refresh_handoff_report,
