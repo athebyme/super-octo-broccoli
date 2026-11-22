@@ -3,6 +3,7 @@
     'use strict';
     const clone = value => JSON.parse(JSON.stringify(value));
     const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const BULK_ATTRIBUTE_WINDOW = 40;
     const fixed = ['price_rub','package_width_mm','package_height_mm','package_depth_mm','package_weight_g','description'];
     const labels = {price_rub:'Цена продавца, ₽',package_width_mm:'Ширина упаковки, мм',package_height_mm:'Высота упаковки, мм',package_depth_mm:'Длина упаковки, мм',package_weight_g:'Вес с упаковкой, г',description:'Описание',action:'Действие',product_type_id:'Тип товара',save_mapping:'Запомнить категорию',schema_cleanup:'Очистка несовместимых характеристик'};
     const asText = value => value == null ? '' : String(value);
@@ -94,7 +95,9 @@
     function planBulk(rows, key, value, sourceField, sourceTypeId=null) {
         const items = [], skipped = [];
         for (const row of rows) {
-            let reason = row.action === 'ИСКЛЮЧИТЬ' ? 'Карточка исключается из повтора' : row.server ? 'Сначала разрешите конфликт' : '';
+            let reason = row.unavailable ? 'Карточка больше недоступна в этом запуске' :
+                row.action === 'ИСКЛЮЧИТЬ' ? 'Карточка исключается из повтора' :
+                row.server ? 'Сначала разрешите конфликт' : '';
             const field = row.attributes.find(f => 'attribute:'+f.external_id===key);
             if (!reason && key.startsWith('attribute:')) {
                 if (row.product_type_id !== row.base.product_type_id) reason='Сначала сохраните новый тип';
@@ -189,7 +192,8 @@
                 reviewable:!!config.editor.review_draft_ids?.length,blockedReviewItems:config.editor.blocked_review_items || [],
                 blockedReviewCount:config.editor.blocked_review_items?.length || 0,busy:false,error:'',notice:'',
                 report:null,uncertain:false,sessionExpired:false,query:'',group:'',state:'',page:1,pageSize:15,dialog:'',
-                bulkKey:config.editor.bulk_fields[0]?.key || 'description',bulkValue:'',bulkValues:[],bulkMode:'value',bulkSource:null,bulkPlan:null,
+                bulkKey:config.editor.bulk_fields.find(field=>!field.key.startsWith('attribute:'))?.key || 'description',
+                bulkFieldQuery:'',bulkValue:'',bulkValues:[],bulkMode:'value',bulkSource:null,bulkPlan:null,
                 fields:config.editor.bulk_fields,picker:{kind:'',rowId:null,fieldId:null,query:'',items:[],loading:false,error:'',more:false},
                 typeChoice:null,typeIds:[],rememberType:false,review:[],conflictId:null}; },
             computed:{
@@ -203,10 +207,47 @@
                 },
                 pages() { return Math.max(1,Math.ceil(this.filtered.length/this.pageSize)); },
                 visible() { return this.filtered.slice((this.page-1)*this.pageSize,this.page*this.pageSize); },
-                pageSelected() { return this.visible.length>0 && this.visible.every(r => r.selected); },
+                selectableVisible() { return this.visible.filter(r=>!r.unavailable); },
+                pageSelected() { return this.selectableVisible.length>0 && this.selectableVisible.every(r=>r.selected); },
                 dirty() { return this.rows.some(r => changes(r).length); },
                 locked() { return this.busy || this.uncertain || this.sessionExpired || !this.enabled; },
-                bulkField() { return this.selected.flatMap(r => r.attributes).find(f => 'attribute:'+f.external_id===this.bulkKey && f.editable) || null; },
+                bulkFixedFields() { return this.fields.filter(field=>!field.key.startsWith('attribute:')); },
+                bulkAttributeChoices() {
+                    const choices=new Map();
+                    for(const row of this.selected) {
+                        if(!this.bulkRowUsable(row) || this.changedType(row))continue;
+                        const seen=new Set();
+                        for(const field of row.attributes) {
+                            if(!field.editable || field.dictionary && !field.dictionary_fresh)continue;
+                            const key='attribute:'+field.external_id;
+                            if(seen.has(key))continue;
+                            seen.add(key);
+                            const option=choices.get(key) || {key,label:field.name || 'Характеристика',field,sourceRow:row,count:0};
+                            option.count++;
+                            choices.set(key,option);
+                        }
+                    }
+                    return [...choices.values()].sort((a,b)=>a.label.localeCompare(b.label,'ru-RU',{sensitivity:'base'}) ||
+                        a.key.localeCompare(b.key,'ru-RU'));
+                },
+                bulkAttributeWindow() {
+                    const term=this.bulkFieldQuery.trim().normalize('NFKC').toLocaleLowerCase('ru-RU');
+                    const matching=this.bulkAttributeChoices.filter(option=>!term ||
+                        option.label.normalize('NFKC').toLocaleLowerCase('ru-RU').includes(term));
+                    const visible=matching.slice(0,BULK_ATTRIBUTE_WINDOW);
+                    const selected=this.bulkAttributeChoices.find(option=>option.key===this.bulkKey) || null;
+                    const pinned=selected && !visible.some(option=>option.key===selected.key) ? selected : null;
+                    return {matchingCount:matching.length,total:this.bulkAttributeChoices.length,visible,pinned};
+                },
+                bulkSources() {
+                    return this.selected.filter(row=>this.bulkRowUsable(row) &&
+                        (!this.bulkKey.startsWith('attribute:') || row.attributes.some(field=>
+                            'attribute:'+field.external_id===this.bulkKey && field.editable &&
+                            (!field.dictionary || field.dictionary_fresh))));
+                },
+                bulkFieldOption() { return this.bulkAttributeChoices.find(option=>option.key===this.bulkKey) || null; },
+                bulkField() { return this.bulkFieldOption?.field || null; },
+                bulkFieldSourceRow() { return this.bulkFieldOption?.sourceRow || null; },
                 conflictRow() { return this.rows.find(r => r.draft_id===this.conflictId); },
                 loginUrl() { return '/login?next='+encodeURIComponent(global.location.pathname+global.location.search); },
             },
@@ -220,6 +261,20 @@
                 changeField(row,field,values) { field.values=clone(values);row.error=''; },
                 noteChange(row) { row.error=''; },
                 setFilters() { this.page=1;this.syncURL(); },
+                bulkRowUsable(row) { return !row.unavailable && !row.server && row.action!=='ИСКЛЮЧИТЬ'; },
+                syncBulkField() {
+                    const fixed=this.bulkFixedFields.find(field=>field.key===this.bulkKey);
+                    const attribute=this.bulkAttributeChoices.find(field=>field.key===this.bulkKey);
+                    if(fixed || attribute)return true;
+                    this.bulkKey=this.bulkFixedFields[0]?.key || 'description';
+                    this.resetBulk();
+                    return false;
+                },
+                selectionChanged() {
+                    if(this.dialog!=='bulk')return;
+                    this.syncBulkField();
+                    this.resetBulk();
+                },
                 syncURL() {
                     const url=new URL(global.location.href);
                     for (const [key,value] of Object.entries({q:this.query,group:this.group,state:this.state,page:this.page>1 ? this.page : ''})) {
@@ -231,10 +286,16 @@
                     this.group=args.get('group') || '';this.state=args.get('state') || '';if(this.sourcePrepare && this.state==='excluded')this.state='';this.page=Math.max(1,Math.min(this.pages,Number(args.get('page')) || 1)); },
                 goPage(page) { this.page=Math.max(1,Math.min(page,this.pages));this.syncURL(); },
                 persist() { try { global.sessionStorage.setItem(storageKey,JSON.stringify({selected:this.selected.map(r=>r.draft_id),uncertain:this.uncertain})); } catch (_) {} },
-                selectPage(event) { this.visible.forEach(r => {r.selected=event.target.checked;});this.persist(); },
-                selectFiltered() { this.filtered.filter(r=>!r.unavailable).forEach(r=>{r.selected=true;});this.persist(); },
-                clearSelection() { this.rows.forEach(r => {r.selected=false;});this.persist(); },
-                selectRow(row) { row.selected=!row.selected;this.persist(); },
+                selectPage(event) {
+                    const checked=!!event.target.checked;
+                    for(const row of this.visible) {
+                        if(!checked || !row.unavailable)row.selected=checked;
+                    }
+                    this.persist();this.selectionChanged();
+                },
+                selectFiltered() { this.filtered.filter(r=>!r.unavailable).forEach(r=>{r.selected=true;});this.persist();this.selectionChanged(); },
+                clearSelection() { this.rows.forEach(r => {r.selected=false;});this.persist();this.selectionChanged(); },
+                selectRow(row) { if(row.unavailable)return;row.selected=!row.selected;this.persist();this.selectionChanged(); },
                 open(name) { trigger=global.document.activeElement;this.dialog=name;this.$nextTick(()=>this.$refs.modal.showModal()); },
                 close({restoreFocus=true}={}) { if(this.busy)return;this.cancelSearch();this.dialog='';this.$refs.modal.close();if(restoreFocus)trigger?.focus(); },
                 cancelSearch() { clearTimeout(searchTimer);searchRevision++;searchController?.abort();this.picker.loading=false; },
@@ -279,9 +340,10 @@
                         });
                         // Missing rows remain visible for explicit conflict resolution; never silently discard input.
                         for(const row of old.values())if(!fresh.some(r=>r.draft_id===row.draft_id) && changes(row).length) {
-                            row.error='Карточка больше недоступна в этом запуске. Скопируйте ввод перед обновлением.';row.unavailable=true;this.rows.push(row);
+                            row.error='Карточка больше недоступна в этом запуске. Ввод сохранён для копирования.';
+                            row.unavailable=true;row.selected=false;this.rows.push(row);
                         }
-                        this.fields=data.editor.bulk_fields;this.blockedReviewItems=data.editor.blocked_review_items || [];
+                        this.fields=data.editor.bulk_fields;this.syncBulkField();this.resetBulk();this.blockedReviewItems=data.editor.blocked_review_items || [];
                         this.blockedReviewCount=this.blockedReviewItems.length;
                         this.reviewable=!!data.editor.review_draft_ids?.length;
                         if(this.reviewable && this.urls.review && this.sourcePrepare){const reviewUrl=new URL(this.urls.review,global.location.origin);
@@ -301,14 +363,34 @@
                     finally{clearTimeout(timeout);if(alive && revision===requestRevision)this.busy=false;}
                     return confirmed;
                 },
-                openBulk() { if(this.locked || !this.selected.length)return;this.bulkPlan=null;this.bulkValue='';this.bulkValues=[];this.bulkMode='value';this.bulkSource=this.selected[0].draft_id;this.open('bulk'); },
-                resetBulk() {this.bulkPlan=null;this.bulkValue='';this.bulkValues=[];},
+                openBulk() {
+                    if(this.locked || !this.selected.length)return;
+                    if(this.picker.kind==='bulkDictionary') {
+                        this.cancelSearch();this.picker={kind:'',rowId:null,fieldId:null,query:'',items:[],loading:false,error:'',more:false};
+                    }
+                    this.bulkFieldQuery='';this.bulkPlan=null;this.bulkValue='';this.bulkValues=[];this.bulkMode='value';
+                    this.syncBulkField();this.bulkSource=this.bulkSources[0]?.draft_id || null;this.error='';this.open('bulk');
+                },
+                resetBulk() {
+                    if(this.picker.kind==='bulkDictionary') {
+                        this.cancelSearch();this.picker={kind:'',rowId:null,fieldId:null,query:'',items:[],loading:false,error:'',more:false};
+                    }
+                    this.bulkPlan=null;this.bulkValue='';this.bulkValues=[];this.error='';
+                    if(!this.bulkSources.some(row=>row.draft_id===Number(this.bulkSource)))
+                        this.bulkSource=this.bulkSources[0]?.draft_id || null;
+                },
                 previewBulk() {
+                    this.bulkPlan=null;
+                    if(!this.bulkFixedFields.some(field=>field.key===this.bulkKey) &&
+                        !this.bulkAttributeChoices.some(option=>option.key===this.bulkKey)) {
+                        this.syncBulkField();this.error='Это поле больше не доступно в выбранных карточках. Выберите его заново.';return;
+                    }
                     let value=this.bulkKey.startsWith('attribute:') ? this.bulkValues : this.bulkKey==='schema_cleanup' ? this.bulkValue==='true' : this.bulkValue;
                     let sourceField=this.bulkField;
-                    let sourceRow=this.selected.find(r=>sourceField && r.attributes.includes(sourceField));
+                    let sourceRow=this.bulkFieldSourceRow;
                     if(this.bulkMode==='copy') {
-                        sourceRow=this.selected.find(r=>r.draft_id===Number(this.bulkSource));
+                        sourceRow=this.bulkSources.find(r=>r.draft_id===Number(this.bulkSource));
+                        if(!sourceRow){this.error='Выберите карточку, в которой это поле доступно.';return;}
                         sourceField=sourceRow?.attributes.find(f=>'attribute:'+f.external_id===this.bulkKey);
                         value=sourceField ? sourceField.values : sourceRow?.[this.bulkKey];
                     }
@@ -334,13 +416,14 @@
                     if(!bulk)this.open('picker');this.search();
                 },
                 openBulkDictionary() {
-                    const row=this.selected.find(r=>r.attributes.some(f=>'attribute:'+f.external_id===this.bulkKey && f.editable));
+                    const row=this.bulkFieldSourceRow;
                     if(row && this.bulkField)this.openDictionary(row,this.bulkField,true);
                 },
                 openType(rows) {
                     if(this.locked)return;this.typeIds=rows.filter(r=>!r.server && !r.unavailable).map(r=>r.draft_id);
                     this.typeChoice=null;this.rememberType=false;
-                    this.picker={kind:'type',rowId:null,fieldId:null,query:'',items:[],loading:false,error:'',more:false};this.open('picker');
+                    this.picker={kind:'type',rowId:null,fieldId:null,query:'',items:[],loading:false,error:'',more:false};
+                    this.open('picker');
                 },
                 search() {
                     clearTimeout(searchTimer);searchController?.abort();const revision=++searchRevision;this.picker.items=[];this.picker.error='';this.picker.loading=true;

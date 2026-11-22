@@ -73,7 +73,7 @@
         <label><span>Исходная категория</span><select class="sh-input" name="group" v-model="group" @change="setFilters"><option value="">Все категории</option><option v-for="item in groups" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
         <label><span>Состояние</span><select class="sh-input" name="state" v-model="state" @change="setFilters"><option value="">Все карточки</option><option value="needs_input">Нужны данные</option><option value="ready_to_retry">Проверены локально</option><option v-if="!sourcePrepare && !draftSelection" value="excluded">Исключены</option><option value="changed">Есть мои изменения</option><option value="error">Ошибки и конфликты</option></select></label>
     </form>
-    <div class="orb-list-heading"><label><input type="checkbox" :checked="pageSelected" :disabled="busy || !visible.length" @change="selectPage"> Выбрать страницу</label><button type="button" class="orb-link" :disabled="busy || !filtered.length" @click="selectFiltered">Выбрать все по фильтру ({{ filtered.length }})</button></div>
+    <div class="orb-list-heading"><label><input type="checkbox" :checked="pageSelected" :disabled="busy || !selectableVisible.length" @change="selectPage"> Выбрать страницу</label><button type="button" class="orb-link" :disabled="busy || !filtered.length" @click="selectFiltered">Выбрать все по фильтру ({{ filtered.length }})</button></div>
     <section class="orb-list" aria-label="Карточки для исправления" :aria-busy="busy">
         <article v-for="row in visible" :key="row.draft_id" class="orb-row" :class="{'is-selected':row.selected}" :data-draft="row.draft_id">
             <div class="orb-row-head">
@@ -131,11 +131,22 @@
         <p v-if="error" class="orb-inline-warning" role="alert">{{ error }}</p>
         <template v-if="dialog==='bulk'">
             <template v-if="!bulkPlan">
-                <label for="orb-bulk-field" class="orb-label">Поле</label><select id="orb-bulk-field" class="sh-input" v-model="bulkKey" @change="resetBulk"><option v-for="field in fields" :key="field.key" :value="field.key">{{ field.label }}</option></select>
+                <label v-if="bulkAttributeChoices.length > 40" for="orb-bulk-field-query"><span class="orb-label">Найти характеристику</span><input id="orb-bulk-field-query" class="sh-input" type="search" maxlength="200" autocomplete="off" v-model="bulkFieldQuery" placeholder="Часть названия характеристики…"></label>
+                <label for="orb-bulk-field" class="orb-label">Поле</label><select id="orb-bulk-field" data-bulk-field-choice class="sh-input" v-model="bulkKey" @change="resetBulk">
+                    <optgroup v-if="bulkFixedFields.length" label="Основные поля"><option v-for="field in bulkFixedFields" :key="field.key" :value="field.key">{{ field.label }}</option></optgroup>
+                    <optgroup label="Характеристики среди выбранных карточек">
+                        <option v-if="bulkAttributeWindow.pinned" :value="bulkAttributeWindow.pinned.key">Выбрано вне списка: {{ bulkAttributeWindow.pinned.label }} ({{ bulkAttributeWindow.pinned.count }})</option>
+                        <option v-for="field in bulkAttributeWindow.visible" :key="field.key" :value="field.key">{{ field.label }} ({{ field.count }})</option>
+                        <option v-if="!bulkAttributeChoices.length" disabled value="">Нет редактируемых характеристик среди выбранных карточек</option>
+                    </optgroup>
+                </select>
+                <p v-if="bulkAttributeChoices.length > 40" class="orb-help" data-bulk-field-window :data-total="bulkAttributeWindow.total" :data-shown="bulkAttributeWindow.visible.length"><template v-if="bulkAttributeWindow.matchingCount">Показано {{ bulkAttributeWindow.visible.length }} из {{ bulkAttributeWindow.matchingCount }}. Уточните название.</template><template v-else>Совпадений нет. Измените название.</template></p>
+                <p v-else-if="!bulkAttributeChoices.length" class="orb-help" data-bulk-field-window :data-total="0" :data-shown="0">Нет редактируемых характеристик среди выбранных карточек.</p>
                 <div class="orb-modes"><label><input type="radio" name="bulk-mode" value="value" v-model="bulkMode">Задать значение</label><label><input type="radio" name="bulk-mode" value="copy" v-model="bulkMode">Взять из карточки</label></div>
-                <div v-if="bulkMode==='copy'"><label for="orb-bulk-source" class="orb-label">Карточка с нужным значением</label><select id="orb-bulk-source" class="sh-input" v-model="bulkSource"><option v-for="row in selected" :key="row.draft_id" :value="row.draft_id">{{ row.title }} — {{ row.offer_id }}</option></select></div>
+                <div v-if="bulkMode==='copy'"><label for="orb-bulk-source" class="orb-label">Карточка с нужным значением</label><select id="orb-bulk-source" class="sh-input" v-model="bulkSource"><option v-for="row in bulkSources" :key="row.draft_id" :value="row.draft_id">{{ row.title }} — {{ row.offer_id }}<template v-if="bulkKey.startsWith('attribute:')"> · {{ changedType(row) ? 'Старая схема: ' + (row.baseTypeName || 'тип не выбран') : row.product_type_name || 'тип не выбран' }}</template></option></select><p v-if="!bulkSources.length" class="orb-help">В текущем наборе нет доступной строки с этим полем.</p></div>
                 <template v-else-if="bulkField">
                     <ozon-field :definition="definition(bulkField)" :values="bulkValues" :locked="false" @change="bulkValues=$event" @remove="bulkValues=[]" @dictionary="openBulkDictionary"></ozon-field>
+                    <p v-if="bulkField.dictionary" class="orb-help">Список значений открыт для типа «{{ bulkFieldSourceRow?.product_type_name || 'без названия' }}». Идентификатор справочника сохраняется только для этого типа; для других типов поле будет отдельно проверено при сохранении.</p>
                     <section v-if="picker.kind==='bulkDictionary'" class="orb-inline-picker"><label><span class="orb-label">Поиск значения</span><input class="sh-input" type="search" maxlength="200" v-model="picker.query" @input="search" placeholder="Название значения…"></label><p v-if="picker.loading" role="status">Ищем…</p><p v-if="picker.error" role="alert">{{ picker.error }}</p><div class="orb-picker-results"><button v-for="item in picker.items" :key="item.id" type="button" @click="choose(item)"><strong>{{ item.value }}</strong><small v-if="shouldShowDictionaryId(bulkKey.startsWith('attribute:') ? bulkKey.slice(10) : '',picker.items)">ID {{ item.id }} в справочнике Ozon</small></button></div></section>
                 </template>
                 <label v-else-if="bulkKey==='schema_cleanup'"><span class="orb-label">Подтверждённая очистка</span><select class="sh-input" v-model="bulkValue"><option value="">Выберите действие</option><option value="true">Подготовить удаление несовместимых характеристик</option><option value="false">Отменить подготовленную очистку</option></select></label>
@@ -144,9 +155,9 @@
                 <button type="button" class="sh-btn sh-btn--primary" @click="previewBulk">Посмотреть изменения</button>
             </template>
             <template v-else>
-                <p><strong>Будет заполнено: {{ bulkPlan.items.length }}</strong> из {{ selected.length }} выбранных карточек.</p>
+                <p data-bulk-preview-summary><strong>Будет заполнено: {{ bulkPlan.items.length }}. Пропущено: {{ bulkPlan.skipped.length }}</strong> из {{ selected.length }} выбранных карточек.</p>
                 <ul class="orb-review-list"><li v-for="item in bulkPlan.items" :key="item.id"><strong>{{ item.title }}</strong><div class="orb-diff"><span><small>Сейчас в форме</small>{{ display(item.before) }}<template v-if="shouldShowDictionaryIdentities(bulkPlan.key,item.before,item.after)"><small v-for="identity in dictionaryIdentities(item.before)" :key="identity">{{ identity }}</small></template></span><span><small>После заполнения</small>{{ display(item.after) }}<template v-if="shouldShowDictionaryIdentities(bulkPlan.key,item.before,item.after)"><small v-for="identity in dictionaryIdentities(item.after)" :key="identity">{{ identity }}</small></template></span></div></li></ul>
-                <details v-if="bulkPlan.skipped.length"><summary>Без изменений: {{ bulkPlan.skipped.length }}</summary><ul class="orb-skipped"><li v-for="item in bulkPlan.skipped" :key="item.id"><strong>{{ item.title }}</strong> — {{ item.reason }}</li></ul></details>
+                <details v-if="bulkPlan.skipped.length"><summary>Пропущено: {{ bulkPlan.skipped.length }}</summary><ul class="orb-skipped"><li v-for="item in bulkPlan.skipped" :key="item.id"><strong>{{ item.title }}</strong> — {{ item.reason }}</li></ul></details>
                 <div class="orb-dialog-actions"><button type="button" class="sh-btn sh-btn--secondary" @click="bulkPlan=null">Изменить значение</button><button type="button" class="sh-btn sh-btn--primary" :disabled="!bulkPlan.items.length || locked" @click="applyBulk">Заполнить в форме</button></div>
             </template>
         </template>

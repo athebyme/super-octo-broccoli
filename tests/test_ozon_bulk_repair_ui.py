@@ -184,3 +184,89 @@ const response=data=>({status:200,ok:true,redirected:false,json:async()=>({...da
     assert "'Обработано черновиков: '" in template
     assert 'Изменено: {{ report.updated }}' in template
     assert template.count('v-if="!draftSelection" class="orb-check"') == 2
+
+
+def test_mixed_bulk_field_picker_filters_selected_schema_and_unavailable_rows():
+    source=Path(__file__).parents[1]/'static/ozon-bulk-repair-vue.js'
+    script=r"""
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const saved=new Map(),active={focus(){}};
+const window={ozonDraftEditor:{fieldComponent:{},photoComponent:{}},document:{activeElement:active,getElementById(){return null}},
+ location:{href:'https://app.test/repair',origin:'https://app.test',pathname:'/repair',search:''},history:{replaceState(){}},
+ addEventListener(){},removeEventListener(){},sessionStorage:{setItem(k,v){saved.set(k,v)},getItem(k){return saved.get(k)}}};
+let transport=async()=>{throw Error('Unexpected fetch')};
+vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),{window,URL,URLSearchParams,TextEncoder,AbortController,
+ setTimeout,clearTimeout,fetch:async(url,options)=>transport(url,options)});
+const core=window.ozonBulkRepair;
+const field=(id,name,editable=true)=>({external_id:String(id),name,value:'',dictionary_value_id:'',editable,dictionary:false,
+ dictionary_fresh:true,data_type:'String',is_collection:false,max_values:1,values:[]});
+const row=(id,attributes)=>({draft_id:id,draft_version:1,imported_product_id:id,offer_id:'offer-'+id,title:'Товар '+id,
+ action:'ИСПРАВИТЬ',product_type_id:1,product_type_name:'Тип 1',price_rub:'100',description:'',package_width_mm:'',
+ package_height_mm:'',package_depth_mm:'',package_weight_g:'',attributes,cleanup_candidates:[],schema_cleanup:false,
+ status:'needs_input',validation_errors:[],type_change_impact:{attributes:0,complex_groups:0,removals:0}});
+const fields=Array.from({length:105},(_,i)=>field(5000+i,'Свойство '+String(i).padStart(3,'0')));
+const first=row(1,fields),second=row(2,[...fields.slice(0,50),field(9000,'Отдельное поле')]),third=row(3,[field(9001,'Поле вне выбора')]);
+const editor={job_uid:'synthetic-run',account_id:1,groups:[{id:'g',source_category:'Категория',rows:[first,second,third]}],
+ bulk_fields:[{key:'price_rub',label:'Цена продавца, ₽'},{key:'description',label:'Описание'}]};
+const config={editor,enabled:true,csrf:'csrf',urls:{read:'/read',apply:'/apply',types:'/types',dictionaries:'/dict/'}};
+const options=core.createOptions(config),state=options.data();
+for(const [key,fn] of Object.entries(options.methods))state[key]=fn.bind(state);
+for(const [key,fn] of Object.entries(options.computed))Object.defineProperty(state,key,{get:()=>fn.call(state)});
+state.$nextTick=fn=>fn();state.$refs={modal:{showModal(){},close(){}},error:{focus(){}}};
+const response=data=>({status:200,ok:true,redirected:false,json:async()=>({...data,csrf:'fresh-csrf'})});
+(async()=>{
+ state.rows[0].selected=true;state.rows[1].selected=true;
+ assert.equal(state.bulkAttributeChoices.length,106,'picker includes the union of selected editable fields');
+ assert(!state.bulkAttributeChoices.some(option=>option.key==='attribute:9001'),'unselected rows do not add field choices');
+ assert.equal(state.bulkAttributeChoices.find(option=>option.key==='attribute:5000').count,2);
+ assert.equal(state.bulkAttributeWindow.visible.length,40,'the first menu window stays bounded');
+ state.bulkKey='attribute:5100';state.bulkFieldQuery='Свойство 000';
+ assert.equal(state.bulkAttributeWindow.visible.length,1,'plain name filtering reaches values beyond the first window');
+ assert.equal(state.bulkAttributeWindow.visible[0].key,'attribute:5000');
+ assert.equal(state.bulkAttributeWindow.pinned.key,'attribute:5100','the current choice stays available outside the search');
+ assert.deepEqual(state.selected.map(item=>item.draft_id),[1,2],'field search does not change row selection');
+ state.bulkFieldQuery='no match';
+ assert.equal(state.bulkAttributeWindow.visible.length,0);assert.equal(state.bulkAttributeWindow.pinned.key,'attribute:5100');
+ state.bulkKey='attribute:9001';state.bulkValue='unexpected';state.previewBulk();
+ assert.equal(state.bulkPlan,null,'direct preview cannot route to a field outside the selected schema');
+ assert.equal(state.bulkKey,'price_rub','stale field selection returns to a current fixed control');
+ assert(state.error.includes('больше не доступно'));
+
+ // Page selection is exact and does not change later pages.
+ state.bulkFieldQuery='';state.pageSize=2;state.page=1;
+ state.rows[0].selected=false;state.rows[1].selected=false;state.rows[2].selected=false;
+ state.selectPage({target:{checked:true}});
+ assert.equal(state.rows[0].selected,true);assert.equal(state.rows[1].selected,true);assert.equal(state.rows[2].selected,false);
+ state.page=2;state.selectPage({target:{checked:true}});assert.equal(state.rows[2].selected,true);
+ state.page=1;state.selectPage({target:{checked:false}});
+ assert.equal(state.rows[0].selected,false);assert.equal(state.rows[1].selected,false);
+ assert.equal(state.rows[2].selected,true,'revisiting one page does not remove another page selection');
+
+ // A scoped read that omits a dirty row keeps its input visible but drops it from selection.
+ state.rows[1].description='dirty input to copy';state.rows[1].selected=true;
+ const fresh={...editor,groups:[{...editor.groups[0],rows:[first,third]}]};
+ transport=async()=>response({success:true,editor:fresh});
+ assert.equal(await state.reload({manual:true}),true);
+ const unavailable=state.rows.find(item=>item.draft_id===2);
+ assert.equal(unavailable.unavailable,true);assert.equal(unavailable.selected,false);
+ assert.equal(unavailable.description,'dirty input to copy');
+ state.pageSize=1;state.page=state.rows.findIndex(item=>item.draft_id===2)+1;
+ assert.equal(state.selectableVisible.length,0);assert.equal(state.pageSelected,false);
+ unavailable.selected=true;state.selectPage({target:{checked:false}});
+ assert.equal(unavailable.selected,false,'page removal can clear a stale selection');
+ state.selectPage({target:{checked:true}});
+ assert.equal(unavailable.selected,false,'page selection cannot reselect unavailable rows');
+ assert.equal(unavailable.description,'dirty input to copy','page selection never discards stale input');
+ state.selectFiltered();
+ assert.equal(unavailable.selected,false,'select all by filter continues to skip unavailable rows');
+ assert.equal(unavailable.description,'dirty input to copy');
+ console.log('mixed bulk field window, filtering, exact selection and stale row retention: passed');
+})().catch(error=>{console.error(error);process.exitCode=1});
+"""
+    result=subprocess.run(['node','-e',script,str(source)],capture_output=True,text=True,timeout=15)
+    assert result.returncode==0,result.stdout+result.stderr
+    template=(Path(__file__).parents[1]/'templates/ozon_bulk_repair.html').read_text()
+    assert 'id="orb-bulk-field-query"' in template
+    assert 'data-bulk-field-window' in template
+    assert 'data-bulk-preview-summary' in template
+    assert 'Будет заполнено: {{ bulkPlan.items.length }}' in template
