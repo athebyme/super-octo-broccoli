@@ -1542,6 +1542,15 @@ def review():
         if as_json:
             response = jsonify({"success": True, "review": document})
         else:
+            from services.ozon_review_navigation import OzonReviewNavigation
+
+            review_return_token = OzonReviewNavigation.issue_token(
+                document,
+                user_id=getattr(current_user, "id", None),
+                seller_id=seller_id,
+            )
+            if review_return_token is not None:
+                document["review_return_token"] = review_return_token
             document["request_key"] = secrets.token_urlsafe(24)
             document["expected_versions"] = {
                 str(item["draft_id"]): item["version"] for item in document["items"]

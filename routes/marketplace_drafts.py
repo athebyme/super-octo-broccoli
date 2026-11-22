@@ -10,6 +10,7 @@ from flask import (
     current_app,
     flash,
     jsonify,
+    make_response,
     redirect,
     render_template,
     request,
@@ -116,7 +117,45 @@ def _feature_enabled() -> bool:
 def _draft_detail_url(draft_id: int) -> str:
     endpoint = ('marketplace_drafts.classic_detail' if request.args.get('view') == 'classic'
                 else 'marketplace_drafts.detail')
+    if endpoint == 'marketplace_drafts.classic_detail':
+        tokens = request.args.getlist('review_return')
+        if len(tokens) == 1:
+            from services.ozon_review_navigation import OzonReviewNavigation
+
+            if OzonReviewNavigation.has_bounded_token_syntax(tokens[0]):
+                return url_for(
+                    endpoint,
+                    draft_id=draft_id,
+                    review_return=tokens[0],
+                )
     return url_for(endpoint, draft_id=draft_id)
+
+
+def _review_return_context(draft, seller_id: int) -> tuple[Optional[dict], Optional[str]]:
+    """Resolve a signed review return without accepting caller-provided URLs."""
+    if _wants_json():
+        return None, None
+    tokens = request.args.getlist("review_return")
+    if len(tokens) != 1:
+        return None, None
+    from services.ozon_review_navigation import OzonReviewNavigation
+
+    focus_codes = request.args.getlist("focus_code")
+    focus_fields = request.args.getlist("focus_field")
+    focus_code = focus_codes[0] if len(focus_codes) == 1 else None
+    focus_field = focus_fields[0] if len(focus_fields) == 1 else None
+    navigation = OzonReviewNavigation.resolve_navigation(
+        tokens[0],
+        user_id=getattr(current_user, "id", None),
+        seller_id=seller_id,
+        draft_id=draft.id,
+        draft_account_id=draft.account_id,
+        focus_code=focus_code,
+        focus_field=focus_field,
+    )
+    if navigation is None:
+        return None, None
+    return navigation, tokens[0]
 
 
 def _publication_enabled() -> bool:
@@ -564,12 +603,20 @@ def detail(draft_id: int):
             seller_id=seller_id,
             draft_id=draft_id,
         )
+        review_navigation, review_return_token = _review_return_context(
+            draft, seller_id,
+        )
         if not _wants_json() and request.endpoint != 'marketplace_drafts.classic_detail':
-            return render_template(
+            response = make_response(render_template(
                 'marketplace_draft_detail.html', draft=draft,
                 ozon_enabled=_feature_enabled(), publication_enabled=_publication_enabled(),
                 publication_idempotency_key=secrets.token_urlsafe(24),
-            )
+                review_navigation=review_navigation,
+                review_return_token=review_return_token,
+            ))
+            if review_navigation is not None:
+                response.headers["Cache-Control"] = "private, no-store"
+            return response
         type_query = request.args.get("type_query", "")
         type_options = (
             MarketplaceDraftService.search_product_types(
@@ -632,7 +679,7 @@ def detail(draft_id: int):
                 == draft.product_type_id,
             ).all()
         }
-    return render_template(
+    response = make_response(render_template(
         "marketplace_draft_detail_classic.html",
         draft=draft,
         draft_data=draft.to_public_dict(detail=True),
@@ -647,7 +694,12 @@ def detail(draft_id: int):
         active_operation=active_operation,
         mapping_readiness=mapping_readiness,
         write_quarantine=hold_document(draft_hold(draft)),
-    )
+        review_navigation=review_navigation,
+        review_return_token=review_return_token,
+    ))
+    if review_navigation is not None:
+        response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @marketplace_drafts_bp.route('/<int:draft_id>/editor', methods=['GET'])
