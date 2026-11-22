@@ -79,7 +79,7 @@ def bridge(route):
                 attempted['receipt'] = {
                     key: payload.get(key) for key in (
                         'success', 'job_uid', 'total', 'product_ids', 'status',
-                        'replayed', 'worker_exited', 'accepted',
+                        'replayed', 'worker_exited', 'accepted', 'result_counts',
                     ) if key in payload
                 }
             route.fulfill(response=response)
@@ -99,6 +99,7 @@ def bridge(route):
                     field: payload.get(field) for field in (
                         'success', 'code', 'job_uid', 'total', 'product_ids',
                         'status', 'replayed', 'worker_exited', 'cancel_requested',
+                        'result_counts',
                     ) if isinstance(payload, dict) and field in payload
                 },
             })
@@ -387,11 +388,11 @@ def check_wb_create_selection_continuity(
             outcomes = [{
                 'product_id': product.id,
                 'title': (product.title or '')[:50],
-                'status': 'success',
-                'error': None,
-                'nm_id': 760001 + index,
+                'status': 'failed',
+                'error': 'Synthetic WB rejected this fixture card',
+                'nm_id': None,
                 'warnings': [],
-            } for index, product in enumerate(imported_products)]
+            } for product in imported_products]
             if progress_callback:
                 progress_callback('done', {'items': outcomes})
             return outcomes
@@ -401,6 +402,7 @@ def check_wb_create_selection_continuity(
     WBProductImporter.batch_import_products_to_wb = deterministic_blocked_wb_import
     feed_reads_before = len(state['wb_feed_reads'])
     try:
+        assert len(selected) == 1
         assert page.evaluate("document.querySelector('#my-products-app')._vnode.component.proxy.selected") == selected
         assert page.evaluate("window.supplierProofDocument === 'first'") and not navigations
 
@@ -442,11 +444,12 @@ def check_wb_create_selection_continuity(
         accepted = retry_response.json()
         assert set(accepted) == {
             'success', 'job_uid', 'total', 'product_ids', 'status', 'replayed',
-            'worker_exited', 'cancel_requested',
+            'worker_exited', 'cancel_requested', 'result_counts',
         }
         assert accepted['success'] is True and accepted['replayed'] is False
         assert accepted['product_ids'] == selected and accepted['total'] == len(selected)
         assert accepted['status'] in {'pending', 'running'} and accepted['worker_exited'] is False
+        assert accepted['result_counts'] is None
         assert re.fullmatch(r'bulk_wb_[0-9a-f]{56}', accepted['job_uid'])
         assert state['wb_posts'][1]['key'] == state['wb_posts'][0]['key']
         assert state['wb_posts'][1]['ids'] == state['wb_posts'][0]['ids'] == selected
@@ -467,6 +470,7 @@ def check_wb_create_selection_continuity(
         assert active_payload['product_ids'] == selected and active_payload['total'] == len(selected)
         assert active_payload['status'] == 'running' and active_payload['worker_exited'] is False
         assert active_payload['cancel_requested'] is False
+        assert active_payload['result_counts'] is None
         assert not urlsplit(active.url).query
         assert state['wb_reads'][-1]['key'] == state['wb_posts'][0]['key']
 
@@ -577,7 +581,14 @@ def check_wb_create_selection_continuity(
         assert terminal['product_ids'] == selected and terminal['total'] == len(selected)
         assert terminal['status'] == 'completed' and terminal['worker_exited'] is True
         assert terminal['replayed'] is True and terminal['cancel_requested'] is False
+        assert terminal['result_counts'] == {'processed': 1, 'succeeded': 0, 'failed': 1}
         assert terminal_payload['job_uid'] == terminal['job_uid']
+        terminal_job = page.locator('.shk-job[role="status"]')
+        expect(terminal_job).to_be_visible()
+        expect(terminal_job.locator('.shk-job-title')).to_have_text('Завершено с ошибками')
+        expect(terminal_job.locator('.shk-job-stat.is-danger')).to_have_text('С ошибкой: 1')
+        assert terminal_job.locator('.shk-job-stat.is-ok').count() == 0
+        assert 'Готово' not in terminal_job.inner_text()
         assert state['wb_worker_errors'] == []
         assert state['wb_worker_product_ids'] == [selected]
         assert state['wb_posts'][-1]['status'] == 409 and len(state['wb_posts']) == 3
@@ -614,6 +625,8 @@ def check_wb_create_selection_continuity(
             'wb_keyed_post_count_including_overlap': len(state['wb_posts']),
             'wb_worker_invocation_count': len(state['wb_worker_product_ids']),
             'wb_terminal_status': terminal['status'],
+            'wb_result_counts': terminal['result_counts'],
+            'wb_terminal_view_reports_no_success': True,
         }
     finally:
         release.set()
