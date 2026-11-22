@@ -1359,12 +1359,9 @@ class OzonBulkRepairService:
                 "key": f"attribute:{external_id}",
                 "label": label,
             })
-        if len(bulk_fields) > cls.MAX_COLUMNS:
-            raise cls._conflict(
-                "ozon_repair_editor_too_many_columns",
-                "Для выбранных типов слишком много разных обязательных "
-                "полей; разделите карточки на более однородные партии",
-            )
+        # Native form values are scoped to each exact row. Their cross-row
+        # union is bounded above by MAX_EDITOR_ATTRIBUTE_CELLS; MAX_COLUMNS
+        # remains the XLSX column cap and the native apply per-row values cap.
         result = {
             "account_id": document["account_id"],
             "account_label": document.get("account_label") or "",

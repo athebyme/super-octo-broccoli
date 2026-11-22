@@ -360,14 +360,20 @@ def _parse_editor_rows(editor: dict, *, mode: str = "job") -> list[dict]:
             if not attribute["editable"]:
                 continue
             external_id = attribute["external_id"]
-            values[f"attribute:{external_id}"] = _single_form_value(
+            raw_value = _single_form_value(
                 prefix + f"attribute_{external_id}"
             )
-            values[f"attribute_value_id:{external_id}"] = (
-                _single_form_value(
-                    prefix + f"attribute_value_id_{external_id}"
-                )
+            raw_value_id = _single_form_value(
+                prefix + f"attribute_value_id_{external_id}"
             )
+            # Blank native controls are already no-ops in _row_patch. Do not
+            # synthesize two empty values per attribute into its bounded
+            # per-row values DTO; still read both fields above so duplicate
+            # form keys are rejected exactly as before.
+            if raw_value not in (None, ""):
+                values[f"attribute:{external_id}"] = raw_value
+                if raw_value_id not in (None, ""):
+                    values[f"attribute_value_id:{external_id}"] = raw_value_id
         result.append({
             "draft_id": draft_id,
             "expected_version": expected_version,

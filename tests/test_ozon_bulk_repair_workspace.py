@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timedelta
 import re
 from unittest.mock import Mock
+from urllib.parse import urlencode
 import pytest
 from flask_login import LoginManager
 from werkzeug.datastructures import MultiDict
@@ -14,7 +15,9 @@ from models import (
     ImportedProduct,
     Marketplace,
     MarketplaceOperation,
+    MarketplaceAttributeDefinition,
     MarketplaceProductDraft,
+    MarketplaceProductType,
     OzonBulkUploadItem,
     OzonBulkUploadRun,
     SellerMarketplaceAccount,
@@ -30,6 +33,7 @@ from services.ozon_bulk_upload import (
     OzonBulkUploadValidationError,
 )
 from services.marketplace_drafts import MarketplaceDraftService
+from routes.marketplace_drafts import register_marketplace_draft_routes
 from routes.ozon_bulk_uploads import register_ozon_bulk_upload_routes
 
 
@@ -101,6 +105,91 @@ def selection_row(row, **updates):
         'schema_cleanup':row['schema_cleanup'],
         'values':values,
     }
+
+
+def mixed_attribute_selection(case):
+    """Build three exact types with small, disjoint required schemas."""
+    now = datetime.utcnow()
+    product_types = [case.product_type]
+    for index in range(2):
+        product_type = MarketplaceProductType(
+            marketplace_id=case.marketplace.id,
+            category_id=case.product_type.category_id,
+            external_type_id=str(778 + index),
+            name=f"Тип mixed {index + 2}",
+            is_available=True,
+            is_enabled=True,
+            is_seller_selectable=True,
+            attributes_synced_at=now,
+            attributes_sync_status="success",
+            attributes_schema_hash=(str(index + 2) * 64),
+            attributes_version=1,
+            attributes_count=33,
+            required_attributes_count=32,
+        )
+        db.session.add(product_type)
+        db.session.flush()
+        product_types.append(product_type)
+
+    required_ids = [
+        ["22232", *(str(value) for value in range(50000, 50031))],
+        [str(value) for value in range(50100, 50132)],
+        [str(value) for value in range(50200, 50232)],
+    ]
+    case.product_type.attributes_count = 33
+    case.product_type.required_attributes_count = 32
+    for row_index, (product_type, attribute_ids) in enumerate(
+        zip(product_types, required_ids),
+    ):
+        for attribute_id in attribute_ids:
+            if row_index == 0 and attribute_id == "22232":
+                continue
+            db.session.add(MarketplaceAttributeDefinition(
+                marketplace_id=case.marketplace.id,
+                product_type_id=product_type.id,
+                external_attribute_id=attribute_id,
+                name=f"Обязательное поле {attribute_id}",
+                data_type="String",
+                is_required=True,
+                max_value_count=1,
+                is_collection=False,
+                is_available=True,
+                is_enabled=True,
+                last_seen_at=now,
+            ))
+        if row_index > 0:
+            db.session.add(MarketplaceAttributeDefinition(
+                marketplace_id=case.marketplace.id,
+                product_type_id=product_type.id,
+                external_attribute_id="4191",
+                name="Аннотация",
+                data_type="String",
+                is_required=False,
+                max_value_count=1,
+                is_collection=False,
+                is_available=True,
+                is_enabled=True,
+                last_seen_at=now,
+            ))
+
+    other_drafts = [
+        fixtures.BulkEnqueueTest._second_draft(
+            case,
+            offer_id="mixed-type-second",
+        ),
+        fixtures.BulkEnqueueTest._second_draft(
+            case,
+            offer_id="mixed-type-third",
+        ),
+    ]
+    for draft, product_type in zip(other_drafts, product_types[1:]):
+        draft.product_type_id = product_type.id
+        draft.external_type_id = product_type.external_type_id
+        draft.schema_version = product_type.attributes_version
+        draft.schema_hash = product_type.attributes_schema_hash
+        draft.attributes_json = "[]"
+    db.session.commit()
+    return [case.draft, *other_drafts], required_ids
 
 
 def source_prepare_case(case, *, active=False):
@@ -575,6 +664,200 @@ def test_draft_selection_editor_is_exact_ordered_local_scope(case):
         )
     with pytest.raises(OzonBulkUploadValidationError):
         Repair.editor_document(seller_id=case.seller.id)
+
+
+def test_native_mixed_type_editor_allows_cross_row_fields_over_xlsx_limit(
+    case,
+    monkeypatch,
+):
+    drafts, required_ids = mixed_attribute_selection(case)
+    register_marketplace_draft_routes(case.app)
+    query = urlencode({
+        "account_id": case.account.id,
+        "draft_ids": ",".join(str(draft.id) for draft in drafts),
+    })
+    path = "/marketplaces/ozon/uploads/selection/repair?" + query
+    response = case.client.get(path, headers={"Accept": "application/json"})
+
+    assert response.status_code == 200
+    editor = response.json["editor"]
+    rows = [row for group in editor["groups"] for row in group["rows"]]
+    assert [row["draft_id"] for row in rows] == [draft.id for draft in drafts]
+    assert [len(row["attributes"]) for row in rows] == [32, 32, 32]
+    assert sum(len(row["attributes"]) for row in rows) == 96
+    assert len(editor["bulk_fields"]) == 102
+    assert Repair.MAX_COLUMNS == 100
+    assert Repair.MAX_EDITOR_ATTRIBUTE_CELLS == 5_000
+    assert len(editor["bulk_fields"]) > Repair.MAX_COLUMNS
+    assert MarketplaceOperation.query.count() == 0
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(Repair, "MAX_EDITOR_ATTRIBUTE_CELLS", 95)
+        limited = case.client.get(
+            path,
+            headers={"Accept": "application/json"},
+        )
+    assert limited.status_code == 409
+    assert limited.json["code"] == "ozon_repair_editor_too_many_fields"
+
+    target = rows[0]
+    target_attribute = required_ids[0][1]
+    assert any(
+        field["external_id"] == target_attribute and field["editable"]
+        for field in target["attributes"]
+    )
+    before = {
+        draft.id: (
+            draft.version,
+            draft.attributes_json,
+            draft.content_json,
+            draft.commercial_json,
+        )
+        for draft in drafts
+    }
+    oversized_row = selection_row(target)
+    while len(oversized_row["values"]) <= Repair.MAX_COLUMNS:
+        oversized_row["values"][
+            f"overflow_{len(oversized_row['values'])}"
+        ] = ""
+    with pytest.raises(
+        OzonBulkUploadValidationError,
+        match="слишком много полей",
+    ):
+        Repair.apply_editor_rows(
+            seller_id=case.seller.id,
+            selection=selection(case, [draft.id for draft in drafts]),
+            rows=[oversized_row],
+        )
+    assert MarketplaceOperation.query.count() == 0
+
+    data = MultiDict(form(target))
+    data.add("confirm_local", "1")
+    data[
+        f"row_{target['draft_id']}_attribute_{target_attribute}"
+    ] = "saved on exact selected row"
+    saved = case.client.post(
+        path.replace("/repair?", "/repair/apply?"),
+        data=data,
+        headers={"Accept": "application/json"},
+    )
+
+    assert saved.status_code == 200, saved.json
+    report = saved.json["report"]
+    assert report["total"] == report["updated"] == 1
+    assert report["failed"] == 0
+    changed = db.session.get(MarketplaceProductDraft, target["draft_id"])
+    db.session.refresh(changed)
+    changed_attributes = json.loads(changed.attributes_json)
+    assert any(
+        item.get("attribute_id") == target_attribute
+        and item.get("values") == [{"value": "saved on exact selected row"}]
+        for item in changed_attributes
+        if isinstance(item, dict)
+    )
+    for draft in drafts[1:]:
+        db.session.refresh(draft)
+        assert (
+            draft.version,
+            draft.attributes_json,
+            draft.content_json,
+            draft.commercial_json,
+        ) == before[draft.id]
+    assert MarketplaceOperation.query.count() == 0
+
+
+def test_native_single_row_with_48_fields_saves_edit_and_keeps_actual_value_cap(case):
+    now = datetime.utcnow()
+    required_ids = ["22232", *(str(value) for value in range(51000, 51047))]
+    case.product_type.attributes_count = 49
+    case.product_type.required_attributes_count = 48
+    for attribute_id in required_ids[1:]:
+        db.session.add(MarketplaceAttributeDefinition(
+            marketplace_id=case.marketplace.id,
+            product_type_id=case.product_type.id,
+            external_attribute_id=attribute_id,
+            name=f"Обязательное поле {attribute_id}",
+            data_type="String",
+            is_required=True,
+            max_value_count=1,
+            is_collection=False,
+            is_available=True,
+            is_enabled=True,
+            last_seen_at=now,
+        ))
+    db.session.commit()
+    register_marketplace_draft_routes(case.app)
+    query = urlencode({
+        "account_id": case.account.id,
+        "draft_ids": str(case.draft.id),
+    })
+    path = "/marketplaces/ozon/uploads/selection/repair?" + query
+    response = case.client.get(path, headers={"Accept": "application/json"})
+
+    assert response.status_code == 200
+    row = response.json["editor"]["groups"][0]["rows"][0]
+    assert len(row["attributes"]) == 48
+    assert len(response.json["editor"]["bulk_fields"]) == 54
+    before = (
+        case.draft.version,
+        case.draft.attributes_json,
+        case.draft.content_json,
+        case.draft.commercial_json,
+    )
+    too_many_values = selection_row(row)
+    for field in row["attributes"]:
+        external_id = field["external_id"]
+        too_many_values["values"][f"attribute:{external_id}"] = (
+            f"nonempty value {external_id}"
+        )
+        too_many_values["values"][f"attribute_value_id:{external_id}"] = (
+            f"nonempty dictionary ID {external_id}"
+        )
+    assert len(too_many_values["values"]) > Repair.MAX_COLUMNS
+    assert all(
+        value not in (None, "")
+        for key, value in too_many_values["values"].items()
+        if key.startswith(("attribute:", "attribute_value_id:"))
+    )
+    with pytest.raises(
+        OzonBulkUploadValidationError,
+        match="слишком много полей",
+    ):
+        Repair.apply_editor_rows(
+            seller_id=case.seller.id,
+            selection=selection(case, [case.draft.id]),
+            rows=[too_many_values],
+        )
+    assert MarketplaceOperation.query.count() == 0
+
+    target_attribute = required_ids[1]
+    data = MultiDict(form(row))
+    data.add("confirm_local", "1")
+    data[f"row_{case.draft.id}_attribute_{target_attribute}"] = (
+        "saved on a 48-field exact row"
+    )
+    saved = case.client.post(
+        path.replace("/repair?", "/repair/apply?"),
+        data=data,
+        headers={"Accept": "application/json"},
+    )
+
+    assert saved.status_code == 200, saved.json
+    report = saved.json["report"]
+    assert report["total"] == report["updated"] == 1
+    assert report["failed"] == 0
+    db.session.refresh(case.draft)
+    assert case.draft.version > before[0]
+    assert case.draft.content_json == before[2]
+    assert case.draft.commercial_json == before[3]
+    saved_attributes = json.loads(case.draft.attributes_json)
+    assert any(
+        item.get("attribute_id") == target_attribute
+        and item.get("values") == [{"value": "saved on a 48-field exact row"}]
+        for item in saved_attributes
+        if isinstance(item, dict)
+    )
+    assert MarketplaceOperation.query.count() == 0
 
 
 def test_unvalidated_draft_without_stored_errors_is_not_reported_ready(case, monkeypatch):
