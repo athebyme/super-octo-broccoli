@@ -1239,7 +1239,12 @@ class OzonBulkRepairService:
                 ):
                     row_status = "needs_input"
             elif draft_selection:
-                row_status = "needs_input" if errors else "ready_to_retry"
+                stored_errors = cls._validation_errors(draft)
+                row_status = (
+                    "ready_to_retry"
+                    if draft.status == "ready" and not errors and not stored_errors
+                    else "needs_input"
+                )
             editor_row = {
                 "draft_id": draft.id,
                 "draft_version": draft.version,

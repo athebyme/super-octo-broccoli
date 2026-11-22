@@ -577,6 +577,39 @@ def test_draft_selection_editor_is_exact_ordered_local_scope(case):
         Repair.editor_document(seller_id=case.seller.id)
 
 
+def test_unvalidated_draft_without_stored_errors_is_not_reported_ready(case, monkeypatch):
+    monkeypatch.setattr(
+        MarketplaceDraftService,
+        '_build_validation_result',
+        Mock(return_value={
+            'publishable': True, 'errors': [], 'warnings': [],
+        }),
+    )
+    case.draft.status = 'needs_category'
+    case.draft.product_type_id = None
+    case.draft.external_category_id = None
+    case.draft.external_type_id = None
+    case.draft.validation_status = 'never_validated'
+    case.draft.validation_result_json = json.dumps({'errors': []})
+    case.draft.validated_at = None
+    db.session.commit()
+    editor = Repair.editor_document(
+        seller_id=case.seller.id,
+        selection=selection(case, [case.draft.id]),
+    )
+    row = next(
+        row
+        for group in editor['groups']
+        for row in group['rows']
+        if row['draft_id'] == case.draft.id
+    )
+
+    assert case.draft.status == 'needs_category'
+    assert case.draft.validation_status == 'never_validated'
+    assert json.loads(case.draft.validation_result_json)['errors'] == []
+    assert row['status'] == 'needs_input'
+
+
 def test_draft_selection_rejects_foreign_mixed_archived_and_oversized_scope(case):
     foreign_account = SellerMarketplaceAccount(
         seller_id=case.foreign_seller.id,
