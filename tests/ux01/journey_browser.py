@@ -449,19 +449,28 @@ def supplier_catalog_assertions(page, name: str):
         update_switch = page.locator("nav.sc-intent-switch[aria-label='Действие с товарами поставщика']")
         assert update_switch.get_by_role("link", name="Обновления", exact=True).get_attribute("aria-current") == "page"
         updates_panel = page.locator("section.sc-action-panel--updates")
-        assert updates_panel.count() == 1 and updates_panel.is_visible()
-        assert page.locator("section.sc-action-panel").count() == 1
+        # This synthetic supplier has no linked imported product, so updates
+        # correctly resolves to the empty filtered list before an action panel
+        # can be rendered. Keep that route explicit and ensure it never falls
+        # back to the Import action.
+        assert updates_panel.count() == 0
+        assert page.locator("section.sc-action-panel").count() == 0
         assert page.locator("section.sc-action-panel--import").count() == 0
-        update_copy = updates_panel.inner_text()
-        assert "Перед сохранением покажем отличия." in update_copy, update_copy
-        assert "Данные в WB и Ozon не меняются." in update_copy, update_copy
+        empty_state = page.locator(".sc-product-list").get_by_text("Товары не найдены", exact=True)
+        assert empty_state.count() == 1 and empty_state.is_visible()
+        assert page.locator("button[form='supplier-import-form']").count() == 0
+        import_form_in_updates = page.locator("form#supplier-import-form")
+        assert import_form_in_updates.count() == 1 and not import_form_in_updates.is_visible()
         update_form = page.locator("form#supplier-update-form")
         assert update_form.count() == 1
         assert update_form.get_attribute("method").upper() == "POST"
         assert urlsplit(update_form.get_attribute("action")).path == "/supplier-catalog/update/review"
         assert update_form.locator('input[name="csrf_token"]').count() == 1
+        assert update_form.locator('input[name="supplier_id"]').get_attribute("value") == str(FIXTURE["supplier_id"])
+        update_return_to = update_form.locator('input[name="return_to"]').get_attribute("value")
+        assert urlsplit(update_return_to).path == product_path
+        assert parse_qs(urlsplit(update_return_to).query) == update_query
         assert page.locator('input[data-selection-kind="update"]').count() == 0
-        assert updates_panel.locator(".sc-action-empty").count() == 1
 
         update_switch.get_by_role("link", name="Импорт", exact=True).click()
         page.wait_for_url(lambda value: parse_qs(urlsplit(value).query).get("intent") == ["import"])
