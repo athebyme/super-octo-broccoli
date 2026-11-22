@@ -50,6 +50,7 @@ REPORT = {
     "status": "running",
     "scope": "synthetic_flask_jinja_vue_preparation_journey",
     "pages": [],
+    "review_no_javascript": None,
     "layouts": [],
     "geometry": [],
     "classic_draft_content_layouts": [],
@@ -497,11 +498,15 @@ def no_javascript_review_assertions(browser):
         assert classic_link.is_visible()
         assert classic_link.get_attribute("href") == expected_classic_href
         assert page.locator(".our-noscript form").is_visible()
-        REPORT["pages"].append({
-            "name": "review_no_javascript",
+        REPORT["review_no_javascript"] = {
+            "status": "passed",
             "path": urlsplit(PAGE_PATHS["review"]).path,
-            "status": response.status,
-        })
+            "http_status": response.status,
+            "classic_href": classic_link.get_attribute("href"),
+            "guide_label": guide_summary.text_content().strip(),
+            "guide_opened_and_closed_with_keyboard": True,
+            "boot_fallback_hidden": True,
+        }
         REPORT["checks"].append(
             "review_no_javascript_keeps_one_guide_disclosure_and_exact_classic_return"
         )
