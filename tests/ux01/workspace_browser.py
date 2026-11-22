@@ -1323,8 +1323,8 @@ def main() -> None:
                     assert urlsplit(primary_href).path == "/my-products/beta"
                     assert primary_link.get_attribute("aria-label") == "Мои товары"
 
-                    # The primary action remains a named, working one-click
-                    # destination when the sidebar shows icons only.
+                    # The primary action stays keyboard-operable when the
+                    # sidebar shows icons only.
                     extra_page.evaluate(
                         "Alpine.$data(document.body).sidebarOpen = false",
                     )
@@ -1338,7 +1338,8 @@ def main() -> None:
                     with extra_page.expect_navigation(
                         wait_until="domcontentloaded",
                     ) as primary_navigation:
-                        primary_link.click()
+                        primary_link.focus()
+                        extra_page.keyboard.press("Enter")
                     primary_response = primary_navigation.value
                     assert primary_response and primary_response.status == 200
                     assert primary_response.request.method == "GET"
@@ -1349,9 +1350,61 @@ def main() -> None:
                     assert extra_page.locator(
                         "#seller-workspace-toggle-products",
                     ).get_attribute("aria-expanded") == "false"
+                    REPORT["interactions"].append({
+                        "check": "primary_products_collapsed_enter_navigation",
+                        "status": "passed",
+                        "width": 1440,
+                        "path": "/my-products/beta",
+                        "accessible_name": "Мои товары",
+                    })
+
+                    extra_page.set_viewport_size({"width": 390, "height": 844})
+                    extra_page.evaluate(
+                        "localStorage.setItem('sh-sidebar', 'open')",
+                    )
+                    goto_extra(extra_page, dashboard_path)
+                    extra_page.wait_for_function("!!window.Alpine")
+                    mobile_menu_button = extra_page.get_by_role(
+                        "button", name="Открыть меню", exact=True,
+                    )
+                    mobile_menu_button.click()
+                    extra_page.wait_for_function(
+                        "document.querySelector('.sidebar')?.classList.contains('mobile-open')",
+                    )
+                    mobile_primary_link = extra_page.locator(
+                        ".seller-workspace-primary-link",
+                    )
+                    mobile_primary_link.wait_for(state="visible")
+                    assert mobile_primary_link.get_attribute("aria-label") == "Мои товары"
+                    assert extra_page.get_by_role(
+                        "link", name="Мои товары", exact=True,
+                    ).count() == 1
+                    with extra_page.expect_navigation(
+                        wait_until="domcontentloaded",
+                    ) as mobile_primary_navigation:
+                        mobile_primary_link.click()
+                    mobile_primary_response = mobile_primary_navigation.value
+                    assert mobile_primary_response and mobile_primary_response.status == 200
+                    assert mobile_primary_response.request.method == "GET"
+                    extra_page.wait_for_url(base + "/my-products/beta")
+                    assert "active" in (extra_page.locator(
+                        ".seller-workspace-primary-link",
+                    ).get_attribute("class") or "").split()
+                    assert extra_page.locator(
+                        ".seller-workspace-primary-link",
+                    ).get_attribute("aria-current") == "page"
+                    REPORT["interactions"].append({
+                        "check": "primary_products_mobile_menu_navigation",
+                        "status": "passed",
+                        "width": 390,
+                        "path": "/my-products/beta",
+                        "accessible_name": "Мои товары",
+                        "menu_opened": True,
+                    })
 
                     # Secondary product links stay under their own control and
                     # become active on the destination that they actually open.
+                    extra_page.set_viewport_size({"width": 1440, "height": 1000})
                     products_toggle = extra_page.locator(
                         "#seller-workspace-toggle-products",
                     )

@@ -64,7 +64,9 @@ class SellerWorkspaceNavigationTest(unittest.TestCase):
         )
 
         cls.endpoint_cases = {
+            "seller_my_products": ("", "Мои товары"),
             "seller_my_products_beta": ("", "Мои товары"),
+            "seller_product_wb_preview": ("", "Мои товары"),
             "supplier_catalog_product_detail": ("products", "Каталог поставщиков"),
             "supplier_catalog_export": ("products", "Каталог поставщиков"),
             "marketplace_listings.detail": ("products", "Карточки кабинетов"),
@@ -176,6 +178,24 @@ class SellerWorkspaceNavigationTest(unittest.TestCase):
         self.assertIn("is-current", tool_toggles[0].get("class", "").split())
         self.assertTrue(any(text == "Черновики Ozon" for _attrs, text in tools_nav.links))
         self.assertFalse(any(text == "Автопубликация" for _attrs, text in tools_nav.links))
+
+    def test_primary_products_link_distinguishes_current_page_from_related_location(self):
+        for endpoint, expected_current in (
+            ("seller_my_products_beta", "page"),
+            ("seller_my_products", "location"),
+            ("seller_product_wb_preview", "location"),
+        ):
+            with self.subTest(endpoint=endpoint):
+                _body, parser = self._render(endpoint)
+                primary_links = [
+                    attributes for attributes, _text in parser.links
+                    if "seller-workspace-primary-link"
+                    in attributes.get("class", "").split()
+                ]
+                self.assertEqual(len(primary_links), 1)
+                self.assertEqual(
+                    primary_links[0].get("aria-current"), expected_current,
+                )
 
     def test_exact_account_health_link_requires_a_selected_account(self):
         path = "/case/settings-health"

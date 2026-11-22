@@ -4,6 +4,7 @@
 
 {% set overview_active = endpoint in ['dashboard', 'dashboard_beta'] %}
 {% set products_primary_active = endpoint in ['seller_my_products', 'seller_my_products_beta', 'seller_product_wb_preview'] %}
+{% set products_primary_page_current = endpoint == 'seller_my_products_beta' %}
 {% set products_active = endpoint in [
     'products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit',
     'products_merge', 'products_merge_history_list', 'products_merge_history',
@@ -52,7 +53,7 @@
 
     <section class="sidebar-section seller-workspace-group seller-workspace-products" data-workspace-group="products">
     <p x-show="sidebarOpen" x-cloak class="seller-workspace-products-heading">Товары</p>
-    <a href="{{ url_for('seller_my_products_beta') }}" class="sidebar-link seller-workspace-primary-link{% if products_primary_active %} active{% endif %}" aria-label="Мои товары" title="Товары — Мои товары"{% if products_primary_active %} aria-current="page"{% endif %}>
+    <a href="{{ url_for('seller_my_products_beta') }}" class="sidebar-link seller-workspace-primary-link{% if products_primary_active %} active{% endif %}" aria-label="Мои товары" title="Товары — Мои товары"{% if products_primary_page_current %} aria-current="page"{% elif products_primary_active %} aria-current="location"{% endif %}>
         {{ icon('package', size=18, stroke=1.7) }}
         <span x-show="sidebarOpen" x-cloak>Мои товары</span>
     </a>
