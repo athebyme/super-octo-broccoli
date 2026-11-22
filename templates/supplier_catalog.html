@@ -1,177 +1,21 @@
 {% extends "base.html" %}
-{% from "partials/preparation_workspace_journey.html" import journey as preparation_journey %}
-{% from "macros/components.html" import page_header, stat_card, stat_grid, badge, card, empty_state, section_title, btn %}
+{% from "macros/components.html" import empty_state, section_title %}
 {% from "partials/supplier_feed_freshness.html" import supplier_feed_freshness %}
 
 {% block title %}Каталог поставщиков - Seller Hub{% endblock %}
 
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='supplier-feed-freshness.css', v='20261121-r34') }}">
-<style>
-    .sc-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 20px;
-    }
-    @media (max-width: 1023px) {
-        .sc-grid { grid-template-columns: repeat(2, 1fr); }
-    }
-    @media (max-width: 639px) {
-        .sc-grid { grid-template-columns: 1fr; }
-    }
-
-    .sc-card {
-        background: var(--bg-card);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        display: flex;
-        flex-direction: column;
-        transition: border-color 0.15s, box-shadow 0.15s;
-    }
-    .sc-card:hover {
-        border-color: var(--text-muted);
-        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-    }
-
-    .sc-card-body {
-        padding: 24px;
-        flex: 1;
-    }
-
-    .sc-supplier-row {
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        margin-bottom: 16px;
-    }
-
-    .sc-avatar {
-        width: 44px;
-        height: 44px;
-        border-radius: 50%;
-        background: var(--bg);
-        border: 1px solid var(--border);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-        font-family: var(--font-display);
-        font-size: 20px;
-        font-weight: 400;
-        font-style: italic;
-        color: var(--accent-text);
-    }
-
-    .sc-supplier-name {
-        font-family: var(--font-display);
-        font-weight: 400;
-        font-size: 18px;
-        color: var(--text);
-        line-height: 1.2;
-        margin: 0;
-    }
-
-    .sc-supplier-url {
-        font-size: 12px;
-        color: var(--text-muted);
-        margin-top: 2px;
-    }
-
-    .sc-description {
-        font-size: 13px;
-        color: var(--text-secondary);
-        line-height: 1.5;
-        margin-bottom: 16px;
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        -webkit-box-orient: vertical;
-        overflow: hidden;
-    }
-
-    .sc-stats-row {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 1px;
-        background: var(--border-light);
-        border: 1px solid var(--border-light);
-        border-radius: 6px;
-        overflow: hidden;
-    }
-
-    .sc-stat {
-        background: var(--bg);
-        padding: 12px 8px;
-        text-align: center;
-    }
-
-    .sc-stat-value {
-        font-size: 20px;
-        font-weight: 600;
-        color: var(--text);
-        font-variant-numeric: tabular-nums;
-        line-height: 1.2;
-    }
-    .sc-stat-value--green { color: #16a34a; }
-    .sc-stat-value--accent { color: var(--accent-text); }
-
-    .sc-stat-label {
-        font-size: 11px;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        color: var(--text-muted);
-        margin-top: 2px;
-    }
-
-    .sc-card-footer {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 8px 16px;
-        padding: 14px 24px;
-        border-top: 1px solid var(--border-light);
-    }
-
-    .sc-link {
-        font-size: 13px;
-        font-weight: 500;
-        color: var(--text-secondary);
-        text-decoration: none;
-        transition: color 0.15s;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-    }
-    .sc-link:hover { color: var(--text); }
-    .sc-link svg {
-        width: 14px;
-        height: 14px;
-        transition: transform 0.15s;
-    }
-    .sc-link:hover svg { transform: translateX(2px); }
-
-    .sc-update-btn {
-        font-size: 13px;
-        font-weight: 500;
-        color: #16a34a;
-        background: none;
-        border: none;
-        cursor: pointer;
-        min-height: 44px;
-        padding: 6px 0;
-        transition: color 0.15s;
-    }
-    .sc-update-btn:hover { color: #15803d; }
-
-</style>
+<link rel="stylesheet" href="{{ url_for('static', filename='supplier-catalog-workspace.css', v='20261122-r58') }}">
 {% endblock %}
 
 {% block content %}
 <div class="sh-page">
 
-    {{ page_header("Каталог поставщиков", "Просматривайте товары подключённых поставщиков и импортируйте к себе") }}
-
-    {{ preparation_journey('source', none, 'каталог поставщиков', 'Импортируйте выбранный источник в отдельный внутренний товар продавца; это не создаёт карточку Ozon.', channel='Ozon') }}
+    <header class="sc-index-heading">
+        <h1>Каталог поставщиков</h1>
+        <p>Выберите товары, чтобы добавить их в «Мои товары», или проверьте изменения у поставщика.</p>
+    </header>
 
     {% if suppliers_data %}
 
@@ -209,7 +53,7 @@
                     </div>
                     <div class="sc-stat">
                         <div class="sc-stat-value sc-stat-value--accent">{{ item.imported_count }}</div>
-                        <div class="sc-stat-label">Импорт.</div>
+                        <div class="sc-stat-label">Импортировано</div>
                     </div>
                 </div>
 
@@ -217,12 +61,7 @@
             </div>
 
             <div class="sc-card-footer">
-                <a href="{{ url_for('supplier_catalog_products', supplier_id=s.id) }}" class="sc-link">
-                    Открыть каталог
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
-                    </svg>
-                </a>
+                <a href="{{ url_for('supplier_catalog_products', supplier_id=s.id) }}" class="sc-card-primary">Открыть товары</a>
                 {% if item.imported_count > 0 %}
                 <form method="POST" action="{{ url_for('supplier_catalog_update_review') }}">
                     <input type="hidden" name="supplier_id" value="{{ s.id }}">
@@ -230,8 +69,8 @@
                     <input type="hidden" name="return_to" value="{{ url_for('supplier_catalog') }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit"
-                            class="sc-update-btn"
-                            title="Сначала проверить локальные изменения для всех карточек этого поставщика.">Проверить обновления ({{ item.imported_count }})</button>
+                            class="sc-card-secondary"
+                            title="Сначала сравнить сохранённые данные с локальными карточками.">Проверить локальные изменения</button>
                 </form>
                 {% endif %}
             </div>

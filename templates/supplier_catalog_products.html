@@ -1,100 +1,95 @@
 {% extends "base.html" %}
-{% from "partials/preparation_workspace_journey.html" import journey as preparation_journey %}
 {% from "partials/supplier_feed_freshness.html" import supplier_feed_freshness %}
 
 {% block title %}Каталог — {{ supplier.name }} - Seller Hub{% endblock %}
 
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='supplier-feed-freshness.css', v='20261121-r34') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='supplier-catalog-workspace.css', v='20261122-r58') }}">
 {% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <nav class="mb-4 text-sm text-gray-500">
-        <a href="{{ url_for('supplier_catalog') }}" class="hover:text-gray-900">Каталог поставщиков</a>
-        <span class="mx-2">/</span>
-        <span class="text-gray-900">{{ supplier.name }}</span>
+{% set action_mode = selection_mode if selection_mode else ('updates' if request.args.get('intent') == 'updates' or updates_only else 'import') %}
+{% set import_intent_url = url_for('supplier_catalog_products', supplier_id=supplier.id, intent='import', page=1, search=search or none, show_imported='1' if show_imported else none, stock_status=stock_status, wb_filter=wb_filter or none, ai_filter=ai_filter or none) %}
+{% set update_intent_url = url_for('supplier_catalog_products', supplier_id=supplier.id, intent='updates', page=1, search=search or none, show_imported='1', updates_only='1', stock_status=stock_status if request.args.get('stock_status') is not none else 'all', wb_filter=wb_filter or none, ai_filter=ai_filter or none) %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sc-products-page">
+    <nav class="sc-breadcrumb" aria-label="Навигация">
+        <a href="{{ url_for('supplier_catalog') }}">Поставщики</a>
+        <span aria-hidden="true">/</span>
+        <span aria-current="page">{{ supplier.name }}</span>
     </nav>
 
-    <header class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div class="min-w-0">
-            <p class="text-xs" style="color:var(--text-muted)">Каталог поставщика</p>
-            <h1 class="mt-1 text-2xl font-semibold" style="color:var(--text)">{{ supplier.name }}</h1>
-            <p class="mt-1 text-sm" style="color:var(--text-secondary)">
-                {{ stats.total }} товаров
-                {% if price_stock_stats and price_stock_stats.in_stock is not none %}
-                <span class="mx-1" aria-hidden="true">·</span>{{ price_stock_stats.in_stock }} в наличии
-                {% endif %}
-            </p>
+    <header class="sc-products-heading">
+        <div>
+            <h1>{{ supplier.name }}</h1>
+            <p>{{ pagination.total }} товаров{% if price_stock_stats and price_stock_stats.in_stock is not none %} · {{ price_stock_stats.in_stock }} в наличии{% endif %}</p>
         </div>
+        <details class="sc-feed-disclosure">
+            <summary>
+                <span>Данные каталога</span>
+                {% if supplier.last_sync_at %}
+                <time class="sc-feed-summary-time" datetime="{{ supplier.last_sync_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ supplier.last_sync_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
+                {% else %}
+                <span class="sc-feed-summary-time">Загрузка не подтверждена</span>
+                {% endif %}
+                {% if supplier.last_sync_status == 'failed' %}<strong class="sc-feed-summary-warning">Последняя попытка с ошибкой</strong>{% endif %}
+            </summary>
+            {{ supplier_feed_freshness(supplier, 'page') }}
+        </details>
     </header>
 
-    {{ supplier_feed_freshness(supplier, 'page') }}
-
-    {{ preparation_journey('source', none, 'товар из каталога поставщика', 'Выберите позиции для импорта. Публикация на площадке здесь не выполняется.', channel='Ozon') }}
-
-    {% if supplier_update_count %}
-    <div class="sh-alert sh-alert--warning" role="status">
-        <div class="sh-alert-content flex flex-wrap items-center justify-between gap-3">
-            <div>
-                <strong>Обновления в общем каталоге: {{ supplier_update_count }}</strong>
-                <span class="block text-sm">Изменятся ваши локальные карточки. Карточки WB останутся без изменений.</span>
-            </div>
-            <a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('supplier_catalog_products', supplier_id=supplier.id, updates_only=1, show_imported=1, stock_status='all') }}">Показать обновления</a>
-        </div>
-    </div>
-    {% endif %}
-
+    {% if not selection_review %}
     <!-- Поиск и фильтры -->
-    <form method="GET" id="search-form" class="bg-white rounded-lg border border-gray-200 p-4 mb-6 flex flex-wrap gap-3 items-end">
-        <div class="flex-1 min-w-[250px] relative">
-            <div class="relative">
-                <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                <input type="text" name="search" id="search-input" value="{{ search }}"
-                       placeholder="Название, бренд, артикул, штрихкод, категория..."
-                       class="w-full rounded-md border-gray-300 text-sm border pl-9 pr-8 py-2"
-                       autocomplete="off">
-                {% if search %}
-                <button type="button" onclick="document.getElementById('search-input').value='';document.getElementById('search-form').submit()"
-                        class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                </button>
+    <form method="GET" id="search-form" class="sc-search-form">
+        <input type="hidden" name="intent" value="{{ action_mode }}">
+        <label class="sc-search-label" for="search-input">Найти товар</label>
+        <div class="sc-search-row">
+            <input type="search" name="search" id="search-input" value="{{ search }}"
+                   placeholder="Название, бренд или артикул" autocomplete="off">
+            {% if search %}<button type="button" class="sc-clear-search" aria-label="Очистить поиск"
+                onclick="document.getElementById('search-input').value='';document.getElementById('search-form').submit()">Очистить</button>{% endif %}
+            <button type="submit" class="sc-search-submit">Найти</button>
+        </div>
+        <details class="sc-filter-disclosure" {% if wb_filter or ai_filter or stock_status != 'in_stock' or (action_mode == 'import' and (show_imported or updates_only)) %}open{% endif %}>
+            <summary>Фильтры и статус товаров</summary>
+            <div class="sc-filter-grid">
+                <label><span>Наличие</span>
+                    <select name="stock_status" onchange="this.form.submit()">
+                        <option value="in_stock" {{ 'selected' if stock_status == 'in_stock' }}>В наличии</option>
+                        <option value="all" {{ 'selected' if stock_status == 'all' }}>Все товары</option>
+                        <option value="out_of_stock" {{ 'selected' if stock_status == 'out_of_stock' }}>Нет в наличии</option>
+                    </select>
+                </label>
+                <label><span>Wildberries</span>
+                    <select name="wb_filter" onchange="this.form.submit()">
+                        <option value="" {{ 'selected' if not wb_filter }}>Все</option>
+                        <option value="not_on_wb" {{ 'selected' if wb_filter == 'not_on_wb' }}>Нет на WB</option>
+                        <option value="on_wb" {{ 'selected' if wb_filter == 'on_wb' }}>Уже на WB</option>
+                    </select>
+                </label>
+                <label><span>Обработка</span>
+                    <select name="ai_filter" onchange="this.form.submit()">
+                        <option value="" {{ 'selected' if not ai_filter }}>Все товары</option>
+                        <option value="ai_parsed" {{ 'selected' if ai_filter == 'ai_parsed' }}>Обработаны AI</option>
+                        <option value="not_parsed" {{ 'selected' if ai_filter == 'not_parsed' }}>Без AI</option>
+                    </select>
+                </label>
+                {% if action_mode == 'updates' %}
+                <input type="hidden" name="show_imported" value="1">
+                <input type="hidden" name="updates_only" value="1">
+                <p class="sc-filter-locked">Здесь показаны только позиции с изменениями.</p>
+                {% else %}
+                <label class="sc-filter-check">
+                    <input type="checkbox" name="show_imported" value="1" {{ 'checked' if show_imported }} onchange="this.form.submit()">
+                    <span>Показать импортированные</span>
+                </label>
+                <label class="sc-filter-check">
+                    <input type="checkbox" name="updates_only" value="1" {{ 'checked' if updates_only }} onchange="this.form.submit()">
+                    <span>Только с обновлениями</span>
+                </label>
                 {% endif %}
             </div>
-            <div class="mt-1 text-[11px] text-gray-400">ID, артикул, штрихкод, бренд, категория WB</div>
-        </div>
-        <div>
-            <select name="stock_status" class="rounded-md border-gray-300 text-sm border px-3 py-2" onchange="this.form.submit()">
-                <option value="in_stock" {{ 'selected' if stock_status == 'in_stock' }}>В наличии</option>
-                <option value="all" {{ 'selected' if stock_status == 'all' }}>Все товары</option>
-                <option value="out_of_stock" {{ 'selected' if stock_status == 'out_of_stock' }}>Нет в наличии</option>
-            </select>
-        </div>
-        <div>
-            <select name="wb_filter" class="rounded-md border-gray-300 text-sm border px-3 py-2" onchange="this.form.submit()">
-                <option value="" {{ 'selected' if not wb_filter }}>Все</option>
-                <option value="not_on_wb" {{ 'selected' if wb_filter == 'not_on_wb' }}>Нет на WB</option>
-                <option value="on_wb" {{ 'selected' if wb_filter == 'on_wb' }}>Уже на WB</option>
-            </select>
-        </div>
-        <div>
-            <select name="ai_filter" class="rounded-md border-gray-300 text-sm border px-3 py-2" onchange="this.form.submit()">
-                <option value="" {{ 'selected' if not ai_filter }}>AI: все</option>
-                <option value="ai_parsed" {{ 'selected' if ai_filter == 'ai_parsed' }}>AI-спарсенные</option>
-                <option value="not_parsed" {{ 'selected' if ai_filter == 'not_parsed' }}>Без AI</option>
-            </select>
-        </div>
-        <label class="flex items-center gap-2">
-            <input type="checkbox" name="show_imported" value="1" {{ 'checked' if show_imported }}
-                   class="rounded border-gray-300 text-gray-900" onchange="this.form.submit()">
-            <span class="text-sm text-gray-600">Показать импортированные</span>
-        </label>
-        <label class="flex items-center gap-2">
-            <input type="checkbox" name="updates_only" value="1" {{ 'checked' if updates_only }}
-                   class="rounded" style="accent-color:var(--warn)" onchange="this.form.submit()">
-            <span class="text-sm" style="color:var(--warn)">Только с обновлениями</span>
-        </label>
-        <button type="submit" class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85">Найти</button>
+        </details>
     </form>
     <script>
     (function(){
@@ -107,12 +102,11 @@
         });
     })();
     </script>
+    {% endif %}
 
     {% if search %}
-    <div class="mb-3 px-1 flex items-center gap-2 text-sm text-gray-600">
-        <span>Результаты по запросу «<strong class="text-gray-900">{{ search }}</strong>»:</span>
-        <span class="font-medium">{{ pagination.total }}</span>
-        <span>{{ 'товар' if pagination.total % 10 == 1 and pagination.total % 100 != 11 else ('товара' if pagination.total % 10 in [2,3,4] and pagination.total % 100 not in [12,13,14] else 'товаров') }}</span>
+    <div class="sc-search-results">
+        <span>{{ pagination.total }} {{ 'товар' if pagination.total % 10 == 1 and pagination.total % 100 != 11 else ('товара' if pagination.total % 10 in [2,3,4] and pagination.total % 100 not in [12,13,14] else 'товаров') }} по запросу «<strong>{{ search }}</strong>»</span>
     </div>
     {% endif %}
 
@@ -186,180 +180,187 @@
         </form>
         <form method="POST" action="{{ url_for('supplier_catalog_update_review') }}" id="supplier-update-form" class="hidden">
             <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
-            <input type="hidden" name="return_to" value="{{ cancel_select_all_url if selection_mode == 'updates' else request.full_path }}">
+            <input type="hidden" name="return_to" value="{{ update_intent_url if selection_mode == 'updates' else request.full_path }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         </form>
 
         {% if selection_review and selection_mode == 'updates' %}
-        <div class="mb-4 rounded-lg border p-3 text-sm" role="status" aria-live="polite"
-             style="border-color:var(--border);background:var(--bg-card);color:var(--text-secondary)">
-            <strong style="color:var(--text)"
-                    x-text="'Выбрано ' + updateSelected.length + ' из ' + {{ action_counts.updatable }} + ' позиций с обновлениями по текущему фильтру.'">Выбрано {{ selected_update_ids|length }} из {{ action_counts.updatable }} позиций с обновлениями по текущему фильтру.</strong>
-            Проверка охватит ваши локальные карточки, связанные с отмеченными позициями.
-            Снимите отметки, чтобы исключить позиции.
-            <a class="ml-2 underline underline-offset-2" style="color:var(--accent-strong)"
-               href="{{ cancel_select_all_url }}">Отменить массовый выбор</a>
+        <div class="sc-selection-note sc-selection-note--updates" role="status" aria-live="polite">
+            <strong x-text="'Выбрано ' + updateSelected.length + ' из ' + {{ action_counts.updatable }}">Выбрано {{ selected_update_ids|length }} из {{ action_counts.updatable }}</strong>
+            <span>Обновятся связанные локальные карточки.</span>
+            <a href="{{ update_intent_url }}">Снять выбор</a>
         </div>
         {% elif selection_review and selection_mode == 'import' %}
-        <div class="mb-4 rounded-lg border p-3 text-sm" role="status" aria-live="polite"
-             style="border-color:var(--border);background:var(--bg-card);color:var(--text-secondary)">
-            <strong style="color:var(--text)"
-                    x-text="'Выбрано ' + importSelected.length + ' из ' + {{ pagination.total }} + ' по текущему фильтру.'">Выбрано {{ selected_import_ids|length }} из {{ pagination.total }} по текущему фильтру.</strong>
+        <div class="sc-selection-note" role="status" aria-live="polite">
+            <strong x-text="'Выбрано ' + importSelected.length + ' из ' + {{ pagination.total }}">Выбрано {{ selected_import_ids|length }} из {{ pagination.total }}</strong>
             {% if pagination.total > selected_import_ids|length %}
-            Остальные позиции видны ниже, но не выбраны для импорта; их статус указан в карточках.
+            <span>Отметьте ниже товары, которые нужно добавить.</span>
             {% endif %}
-            Снимите отметки у товаров, которые нужно исключить.
-            <a class="ml-2 underline underline-offset-2" style="color:var(--accent-strong)"
-               href="{{ cancel_select_all_url }}">Отменить массовый выбор</a>
+            <a href="{{ cancel_select_all_url }}">Снять выбор</a>
+        </div>
+        {% endif %}
+
+        {% if not selection_review %}
+        <nav class="sc-intent-switch" aria-label="Действие с товарами поставщика">
+            <a href="{{ import_intent_url }}" {% if action_mode == 'import' %}aria-current="page"{% endif %}>
+                Импорт
+            </a>
+            <a href="{{ update_intent_url }}" {% if action_mode == 'updates' %}aria-current="page"{% endif %}>
+                Обновления
+            </a>
+        </nav>
+        {% else %}
+        <div class="sc-intent-locked" aria-label="Выбранное действие">
+            {{ 'Массовый импорт' if action_mode == 'import' else 'Локальные обновления' }} по текущему фильтру
         </div>
         {% endif %}
 
         {% if pagination.items %}
-        <section class="mb-4 rounded-lg border p-3 sm:p-4" style="border-color:var(--border);background:var(--bg-card)" aria-label="Массовые действия с товарами">
-            <div class="flex flex-col gap-3 md:flex-row md:items-start">
-                <div class="min-w-0 flex-1" role="group" aria-labelledby="supplier-import-heading">
-                    <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                        <div>
-                            <h2 id="supplier-import-heading" class="text-sm font-semibold" style="color:var(--text)">Импортировать товары</h2>
-                            <p class="text-xs" style="color:var(--text-secondary)">Создать локальные карточки без отправки на площадку.</p>
-                        </div>
-                        {% if action_counts.importable %}
-                        <label class="flex min-h-11 items-center gap-2 text-xs" style="color:var(--text-secondary)">
-                            <input id="select-all-import" type="checkbox" :checked="allImport"
-                                   @change="selectPage('import', $event.target.checked)"
-                                   class="rounded border-gray-300">
-                            <span>Выбрать все {{ action_counts.importable }} {{ 'в текущем фильтре' if selection_review else 'на странице' }}</span>
-                        </label>
-                        {% else %}
-                        <span class="text-xs" style="color:var(--text-muted)">Нет новых позиций на странице</span>
-                        {% endif %}
-                    </div>
-                    {% if not selection_review and pagination.total > 50 and pagination.total <= 200 %}
-                    <a class="mt-2 inline-flex min-h-11 items-center text-xs underline underline-offset-2"
-                       style="color:var(--accent-strong)" href="{{ select_all_url }}">
-                        Проверить все товары текущего фильтра ({{ pagination.total }})
-                    </a>
+        {% if action_mode == 'import' %}
+        <section class="sc-action-panel sc-action-panel--import" aria-labelledby="supplier-import-heading">
+            <div class="sc-action-copy">
+                <h2 id="supplier-import-heading">Добавить товары</h2>
+                <p>После импорта откроются «Мои товары». Отправки на площадки здесь нет.</p>
+                {% if ozon_auto_account_ids %}
+                <p class="sc-auto-draft-note">Для аккаунтов Ozon подготовятся локальные черновики:
+                    {% for account in ozon_import_accounts if account.id in ozon_auto_account_ids %}
+                    <span>{{ account.label }}</span>{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                </p>
+                {% endif %}
+            </div>
+            <div class="sc-action-controls">
+                {% if action_counts.importable %}
+                <label class="sc-select-all" for="select-all-import">
+                    <input id="select-all-import" type="checkbox" :checked="allImport"
+                           @change="selectPage('import', $event.target.checked)">
+                    {% if selection_review %}
+                    <span x-text="allImport ? 'Снять выбор по фильтру' : 'Выбрать все {{ action_counts.importable }} по фильтру'">Снять выбор по фильтру</span>
+                    {% else %}
+                    <span x-text="allImport ? 'Снять выбор' : 'Выбрать все {{ action_counts.importable }} на странице'">Выбрать все {{ action_counts.importable }} на странице</span>
                     {% endif %}
-                    <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-                        <button type="submit" form="supplier-import-form" disabled
-                                class="sh-btn sh-btn--primary sh-btn--sm"
-                                :disabled="importSelected.length === 0"
-                                aria-describedby="import-selection-count">
-                            Импортировать товары <span x-text="'(' + importSelected.length + ')'">({{ selected_import_ids|length }})</span>
+                </label>
+                {% else %}
+                <span class="sc-action-empty">На странице нет новых товаров для импорта.</span>
+                {% endif %}
+                {% if not selection_review and pagination.total > 50 and pagination.total <= 200 %}
+                <a class="sc-action-scope" href="{{ select_all_url }}">Выбрать все {{ pagination.total }} по фильтру</a>
+                {% endif %}
+                <button type="submit" form="supplier-import-form" disabled
+                        class="sh-btn sh-btn--primary sc-action-submit"
+                        :disabled="importSelected.length === 0"
+                        aria-describedby="import-selection-count">
+                    Импортировать товары <span x-text="'(' + importSelected.length + ')'">({{ selected_import_ids|length }})</span>
+                </button>
+                <p id="import-selection-count" class="sc-action-count" aria-live="polite">
+                    <span x-text="importSelected.length + ' выбрано'">{{ selected_import_ids|length }} выбрано</span>
+                    из {{ action_counts.importable }} доступных
+                </p>
+            </div>
+            {% if ozon_auto_account_ids or draft_options.count %}
+            <details class="sc-action-more">
+                <summary>Дополнительные настройки</summary>
+                <div class="sc-action-more-body">
+                    <div>
+                        <p>Улучшить данные перед импортом</p>
+                        <button type="submit" form="supplier-import-form" formaction="{{ url_for('supplier_catalog_smart_import') }}"
+                                disabled onclick="return confirm('Улучшить данные выбранных товаров и импортировать их?')"
+                                class="sh-btn sh-btn--secondary sc-secondary-submit"
+                                :disabled="importSelected.length === 0">
+                            Улучшить и импортировать <span x-text="'(' + importSelected.length + ')'">(0)</span>
                         </button>
-                        <p id="import-selection-count" class="text-xs" style="color:var(--text-muted)" aria-live="polite">
-                            Доступно: {{ action_counts.importable }}. <span x-text="importSelected.length + ' выбрано'">{{ selected_import_ids|length }} выбрано</span>
-                        </p>
-                        <a class="text-xs underline underline-offset-2" style="color:var(--accent-strong)" href="{{ url_for('seller_my_products_beta') }}">Дальше: «Мои товары»</a>
                     </div>
-                    {% if ozon_auto_account_ids %}
-                    <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs" style="color:var(--text-secondary)">
-                        <span>Ozon-черновики автоматически:</span>
-                        {% for account in ozon_import_accounts if account.id in ozon_auto_account_ids %}
-                        <span class="inline-flex items-center gap-1.5"><span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>{{ account.label }}</span>
+                    {% if draft_options.count %}
+                    <fieldset class="sc-draft-options">
+                        <legend>Подготовить черновик Ozon</legend>
+                        {% for account in ozon_import_accounts %}
+                        {% if account.id not in ozon_auto_account_ids %}
+                        <label>
+                            <input type="checkbox" form="supplier-import-form" name="draft_account_ids" value="{{ account.id }}">
+                            <span>{{ account.label }}</span>
+                        </label>
+                        {% endif %}
                         {% endfor %}
-                    </div>
+                        <p>Черновик сохранится в Seller Hub. Отправка на Ozon выполняется отдельно.</p>
+                    </fieldset>
                     {% endif %}
-                    <details class="mt-1">
-                        <summary class="flex min-h-11 cursor-pointer items-center text-xs underline underline-offset-2" style="color:var(--text-secondary)">Другие настройки импорта</summary>
-                        <div class="mt-2 flex max-w-full flex-col gap-3 border-l pl-3" style="border-color:var(--border)">
-                            <div>
-                                <p class="text-xs" style="color:var(--text-secondary)">Сначала определить бренд, категорию и характеристики.</p>
-                                <button type="submit" form="supplier-import-form" formaction="{{ url_for('supplier_catalog_smart_import') }}"
-                                        disabled onclick="return confirm('Обогатить выбранные товары (бренд, категория, характеристики) и импортировать их?')"
-                                        class="sh-btn sh-btn--secondary sh-btn--sm mt-2"
-                                        :disabled="importSelected.length === 0">
-                                    Обогатить и импортировать <span x-text="'(' + importSelected.length + ')'">(0)</span>
-                                </button>
-                            </div>
-                            {% if draft_options.count %}
-                            <fieldset class="flex flex-wrap gap-x-4 gap-y-1">
-                                <legend class="mb-1 text-xs" style="color:var(--text-secondary)">Также подготовить черновик Ozon</legend>
-                                {% for account in ozon_import_accounts %}
-                                {% if account.id not in ozon_auto_account_ids %}
-                                <label class="flex min-h-11 items-center gap-2 text-xs" style="color:var(--text-secondary)">
-                                    <input type="checkbox" form="supplier-import-form" name="draft_account_ids" value="{{ account.id }}" class="rounded border-gray-300">
-                                    <span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>{{ account.label }}
-                                </label>
-                                {% endif %}
-                                {% endfor %}
-                                <p class="w-full text-xs" style="color:var(--text-muted)">Создаётся локально, без отправки в Ozon.</p>
-                            </fieldset>
-                            {% endif %}
-                        </div>
-                    </details>
                 </div>
-
-                <div class="border-t md:self-stretch md:border-l md:border-t-0" style="border-color:var(--border)" aria-hidden="true"></div>
-
-                <div class="min-w-0 flex-1" role="group" aria-labelledby="supplier-update-heading">
-                    <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                        <div>
-                            <h2 id="supplier-update-heading" class="text-sm font-semibold" style="color:var(--warn)">Применить сохранённые данные</h2>
-                            <p class="text-xs" style="color:var(--text-secondary)">Скопировать изменения из сохранённого каталога в локальные карточки. Новая загрузка у поставщика не выполняется; WB и Ozon не меняются.</p>
-                        </div>
-                        {% if action_counts.updatable %}
-                        <label class="flex min-h-11 items-center gap-2 text-xs" style="color:var(--text-secondary)">
-                            <input id="select-all-updates" type="checkbox" :checked="allUpdate"
-                                   @change="selectPage('update', $event.target.checked)"
-                                   class="rounded border-gray-300">
-                            <span>Выбрать все {{ action_counts.updatable }} {{ 'в текущем фильтре' if selection_review and selection_mode == 'updates' else 'на странице' }}</span>
-                        </label>
-                        {% else %}
-                        <span class="text-xs" style="color:var(--text-muted)">{{ 'В фильтре нет подтверждённых обновлений' if selection_review and selection_mode == 'updates' else 'Нет изменений на странице' }}</span>
-                        {% endif %}
-                    </div>
-                    {% if not selection_review and not selection_block_reason and pagination.total > 50 and supplier_update_filtered_count > 0 and pagination.total <= 200 %}
-                    <a data-supplier-filter-update-select
-                       class="mt-2 inline-flex min-h-11 items-center text-xs underline underline-offset-2"
-                       style="color:var(--accent-strong)" href="{{ select_all_updates_url }}">
-                        Выбрать обновления по фильтру ({{ supplier_update_filtered_count }})
-                    </a>
+            </details>
+            {% endif %}
+        </section>
+        {% else %}
+        <section class="sc-action-panel sc-action-panel--updates" aria-labelledby="supplier-update-heading">
+            <div class="sc-action-copy">
+                <h2 id="supplier-update-heading">Обновить локальные карточки</h2>
+                <p>Перед сохранением покажем отличия. Данные в WB и Ozon не меняются.</p>
+            </div>
+            <div class="sc-action-controls">
+                {% if action_counts.updatable %}
+                <label class="sc-select-all" for="select-all-updates">
+                    <input id="select-all-updates" type="checkbox" :checked="allUpdate"
+                           @change="selectPage('update', $event.target.checked)">
+                    {% if selection_review %}
+                    <span x-text="allUpdate ? 'Снять выбор по фильтру' : 'Выбрать все {{ action_counts.updatable }} по фильтру'">Снять выбор по фильтру</span>
+                    {% else %}
+                    <span x-text="allUpdate ? 'Снять выбор' : 'Выбрать все {{ action_counts.updatable }} на странице'">Выбрать все {{ action_counts.updatable }} на странице</span>
                     {% endif %}
-                    <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-                        <button type="submit" form="supplier-update-form" disabled
-                                class="sh-btn sh-btn--secondary sh-btn--sm"
-                                style="border-color:var(--warn-border);color:var(--warn)"
-                                :disabled="updateSelected.length === 0"
-                                aria-describedby="update-selection-count">
-                            Проверить выбранное <span x-text="'(' + updateSelected.length + ')'">(0)</span>
-                        </button>
-                        <p id="update-selection-count" class="text-xs" style="color:var(--text-muted)" aria-live="polite">
-                            С новыми данными: {{ action_counts.updatable }}. <span x-text="updateSelected.length + ' выбрано'">0 выбрано</span>
-                        </p>
-                    </div>
-                </div>
+                </label>
+                {% else %}
+                <span class="sc-action-empty">Для этих фильтров нет связанных карточек с изменениями.</span>
+                {% endif %}
+                {% if not selection_review and not selection_block_reason and pagination.total > 50 and supplier_update_filtered_count > 0 and pagination.total <= 200 %}
+                <a data-supplier-filter-update-select class="sc-action-scope" href="{{ select_all_updates_url }}">
+                    Выбрать {{ supplier_update_filtered_count }} обновлений по фильтру
+                </a>
+                {% endif %}
+                <button type="submit" form="supplier-update-form" disabled
+                        class="sh-btn sh-btn--secondary sc-action-submit"
+                        :disabled="updateSelected.length === 0"
+                        aria-describedby="update-selection-count">
+                    Проверить выбранное <span x-text="'(' + updateSelected.length + ')'">(0)</span>
+                </button>
+                <p id="update-selection-count" class="sc-action-count" aria-live="polite">
+                    <span x-text="updateSelected.length + ' выбрано'">{{ selected_update_ids|length }} выбрано</span>
+                    из {{ action_counts.updatable }} с обновлениями
+                </p>
             </div>
         </section>
         {% endif %}
+        {% endif %}
 
-        <div class="bg-white border border-gray-200 rounded-b-lg overflow-hidden">
+        <div class="sc-product-list">
             {% if pagination.items %}
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-px bg-gray-100">
+            <div class="sc-product-grid">
                 {% for product in pagination.items %}
                 {% set is_imported = product.id in imported_sp_ids %}
                 {% set is_on_wb = product.id in wb_existing_sp_ids %}
-                <div class="p-4 {{ 'bg-purple-50' if is_on_wb else ('bg-gray-50' if is_imported else 'bg-white') }} hover:bg-gray-50 transition-colors flex flex-col">
+                <div class="p-4 sc-product-tile {{ 'bg-purple-50' if is_on_wb else ('bg-gray-50' if is_imported else 'bg-white') }} hover:bg-gray-50 transition-colors flex flex-col">
                     <div class="flex items-start gap-3 flex-1">
-                        {% if product.id in supplier_update_sp_ids %}
+                        {% if product.id in supplier_update_sp_ids and action_mode == 'updates' %}
+                        <label class="sc-product-select-wrap">
                         <input type="checkbox" form="supplier-update-form" name="update_product_ids" value="{{ product.id }}"
                                data-selection-kind="update"
                                :checked="updateSelected.includes('{{ product.id }}')"
                                @change="updateSelected = $event.target.checked ? [...updateSelected, '{{ product.id }}'] : updateSelected.filter(id => id !== '{{ product.id }}'); allUpdate = updateSelected.length === {{ action_counts.updatable }}"
-                               class="mt-1 rounded flex-shrink-0" style="accent-color:var(--warn)"
+                               class="sc-product-select" style="accent-color:var(--warn)"
                                aria-label="Выбрать {{ product.title or 'товар без названия' }} для обновления из каталога">
+                        </label>
                         {% elif is_on_wb %}
-                        <span class="mt-1 text-purple-500 text-sm flex-shrink-0" title="Уже на Wildberries">&#10003;</span>
-                        {% elif not is_imported %}
+                        <span class="sc-product-mark" title="Уже на Wildberries">&#10003;</span>
+                        {% elif not is_imported and action_mode == 'import' %}
+                        <label class="sc-product-select-wrap">
                         <input type="checkbox" form="supplier-import-form" name="product_ids" value="{{ product.id }}"
                                data-selection-kind="import"
                                {% if product.id in selected_import_ids %}checked{% endif %}
                                :checked="importSelected.includes('{{ product.id }}')"
                                @change="importSelected = $event.target.checked ? [...importSelected, '{{ product.id }}'] : importSelected.filter(id => id !== '{{ product.id }}'); allImport = importSelected.length === {{ action_counts.importable }}"
-                               class="mt-1 rounded border-gray-300 text-gray-900 flex-shrink-0"
+                               class="sc-product-select"
                                aria-label="Выбрать {{ product.title or 'товар без названия' }} для импорта">
+                        </label>
+                        {% elif is_imported %}
+                        <span class="sc-product-mark" title="Уже добавлен в Мои товары">&#10003;</span>
                         {% else %}
-                        <span class="mt-1 text-gray-400 text-sm flex-shrink-0" title="Уже импортирован">&#10003;</span>
+                        <span class="sc-product-mark" title="Нет локальной карточки для обновления">—</span>
                         {% endif %}
                         <div class="flex-1 min-w-0">
                             <!-- Фото -->
@@ -375,25 +376,37 @@
                             </div>
                             {% endif %}
 
+                            {% if selection_review %}
+                            <span class="sc-product-title text-sm font-medium text-gray-900 line-clamp-2">{{ product.title or 'Без названия' }}</span>
+                            {% else %}
                             <a href="{{ url_for('supplier_catalog_product_detail', supplier_id=supplier.id, product_id=product.id) }}"
-                               class="text-sm font-medium text-gray-900 hover:text-gray-600 line-clamp-2">
+                               class="sc-product-title text-sm font-medium text-gray-900 hover:text-gray-600 line-clamp-2">
                                 {{ product.title or 'Без названия' }}
                             </a>
+                            {% endif %}
 
-                            <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-gray-500">
+                            <div class="sc-product-meta mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-gray-500">
                                 {% if product.brand %}<span class="font-medium text-gray-700">{{ product.brand }}</span>{% endif %}
                                 {% if product.category %}<span class="text-gray-300">|</span><span>{{ product.category[:25] }}</span>{% endif %}
                                 <span class="text-gray-300">|</span>
                                 {% if product.wb_category_name %}
-                                <span class="text-indigo-600 cursor-pointer hover:underline"
+                                {% if selection_review %}
+                                <span class="sc-category-text">Категория WB: {{ product.wb_category_name[:30] }}</span>
+                                {% else %}
+                                <button type="button" class="sc-category-edit sc-category-edit--set"
                                       title="Категория WB: {{ product.wb_category_name }} (ID: {{ product.wb_subject_id }}). Нажмите чтобы изменить"
                                       id="cat-label-{{ product.id }}"
-                                      onclick="openCategoryModal({{ product.id }}, {{ supplier.id }}, '{{ product.wb_category_name|e }}', {{ product.wb_subject_id or 0 }})">{{ product.wb_category_name[:30] }}</span>
+                                      onclick="openCategoryModal({{ product.id }}, {{ supplier.id }}, '{{ product.wb_category_name|e }}', {{ product.wb_subject_id or 0 }})">{{ product.wb_category_name[:30] }}</button>
+                                {% endif %}
                                 {% else %}
-                                <span class="text-gray-400 cursor-pointer hover:underline hover:text-indigo-500 italic"
+                                {% if selection_review %}
+                                <span class="sc-category-text">Категория WB не задана</span>
+                                {% else %}
+                                <button type="button" class="sc-category-edit"
                                       id="cat-label-{{ product.id }}"
                                       onclick="openCategoryModal({{ product.id }}, {{ supplier.id }}, '', 0)"
-                                      title="Нажмите чтобы задать категорию WB">категория?</span>
+                                      title="Нажмите чтобы задать категорию WB">Задать категорию WB</button>
+                                {% endif %}
                                 {% endif %}
                                 {% if product.vendor_code %}<span class="text-gray-300">|</span><span title="Артикул">{{ product.vendor_code }}</span>{% endif %}
                                 {% if product.barcode %}<span class="text-gray-300">|</span><span title="Штрихкод" class="font-mono text-[10px]">{{ product.barcode }}</span>{% endif %}
@@ -412,16 +425,16 @@
                                 {% endif %}
                             </div>
 
-                            <div class="mt-2 flex items-center justify-between">
+                            <div class="sc-product-price-row mt-2 flex items-center justify-between">
                                 <div class="flex items-center gap-2">
                                     {% if product.supplier_price %}
-                                    <span class="text-sm font-bold text-gray-900">{{ '%.0f'|format(product.supplier_price) }} &#8381;</span>
+                                    <span class="sc-product-price text-sm font-bold text-gray-900">{{ '%.0f'|format(product.supplier_price) }} &#8381;</span>
                                     {% else %}
-                                    <span class="text-xs text-gray-400">Цена не указана</span>
+                                    <span class="sc-product-muted text-xs text-gray-400">Цена не указана</span>
                                     {% endif %}
                                 </div>
 
-                                <div class="flex items-center gap-2">
+                                <div class="sc-product-status flex items-center gap-2">
                                     {% if product.supplier_quantity is not none and product.supplier_quantity > 0 %}
                                     <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-gray-200 text-xs font-medium text-gray-600">{{ product.supplier_quantity }} шт</span>
                                     {% elif product.supplier_quantity is not none and product.supplier_quantity == 0 %}
@@ -431,10 +444,10 @@
                                     {% if product.id in wb_existing_sp_ids %}
                                     <span class="text-xs text-purple-600 font-medium">На WB</span>
                                     {% elif is_imported %}
-                                    <span class="text-xs text-gray-500 font-medium">Импортирован</span>
+                                    <span class="text-xs text-gray-500 font-medium">В «Моих товарах»</span>
                                     {% endif %}
                                     {% if product.id in supplier_update_sp_ids %}
-                                    <span class="sh-badge sh-badge--yellow sh-badge--sm" title="В общем каталоге появились новые данные. Выберите товар для обновления локальной карточки.">Есть обновление</span>
+                                    <span class="sh-badge sh-badge--yellow sh-badge--sm" title="В каталоге поставщика появились новые данные.">Есть изменения</span>
                                     {% endif %}
                                     {% if ozon_draft_sp_ids and product.id in ozon_draft_sp_ids %}
                                     <span class="inline-flex items-center gap-1 text-xs font-medium" style="color:var(--text-secondary)" title="Есть Ozon-черновик">
@@ -585,7 +598,7 @@
                 var label = document.getElementById('cat-label-' + activeProductId);
                 if (label) {
                     label.textContent = data.wb_category_name.substring(0, 30);
-                    label.className = 'text-indigo-600 cursor-pointer hover:underline';
+                    label.className = 'sc-category-edit sc-category-edit--set';
                     label.title = 'Категория WB: ' + data.wb_category_name + ' (ID: ' + data.wb_subject_id + '). Нажмите чтобы изменить';
                     label.setAttribute('onclick',
                         "openCategoryModal(" + activeProductId + "," + activeSupplierId + ",'" + escAttr(data.wb_category_name) + "'," + data.wb_subject_id + ")");
