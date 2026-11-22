@@ -343,10 +343,19 @@ def is_supplier_refresh_preview(response):
     return parsed.path == LOCAL_REFRESH_PREVIEW and response.request.method == "POST"
 
 
-def open_supplier_refresh_preview(page, expected_ids, preview_posts):
+def open_supplier_refresh_preview(page, expected_ids, preview_posts, *, via_header=False):
     """Open the real no-provider review and keep its signed token only in RAM."""
+    starting_url = page.url
     with page.expect_response(is_supplier_refresh_preview) as response_info:
-        action_steps = invoke_workspace_action(page, "refresh_supplier")
+        if via_header:
+            assert selected_browser_state(page)["selected"] == expected_ids
+            assert_supplier_updates_entry_state(
+                page, pressed=False, selected_count=len(expected_ids),
+            )
+            page.locator("[data-supplier-updates-entry]").click()
+            action_steps = 1
+        else:
+            action_steps = invoke_workspace_action(page, "refresh_supplier")
     assert action_steps == 1, "supplier refresh must be a one-click preview action"
     response = response_info.value
     assert response.status == 200
@@ -360,6 +369,9 @@ def open_supplier_refresh_preview(page, expected_ids, preview_posts):
     dialog = page.get_by_role("dialog", name="Проверка обновления из поставщика")
     dialog.wait_for(state="visible")
     dialog.locator(".mp-supplier-refresh-item").first.wait_for(state="visible")
+    if via_header:
+        assert page.url == starting_url
+        assert selected_browser_state(page)["selected"] == expected_ids
     return dialog, preview
 
 
@@ -392,10 +404,35 @@ def assert_status_filter_state(page, active_index):
         pressed: item.getAttribute('aria-pressed'),
         styledActive: item.classList.contains('is-active'),
     }))""")
-    assert len(state) == 7, state
-    assert [index for index, item in enumerate(state) if item["pressed"] == "true"] == [active_index], state
+    assert len(state) == 6, state
+    assert all(item["label"] != "Обновления поставщика" for item in state), state
+    expected_active = [] if active_index is None else [active_index]
+    assert [index for index, item in enumerate(state) if item["pressed"] == "true"] == expected_active, state
     assert all(item["pressed"] in ("true", "false") for item in state), state
     assert all((item["pressed"] == "true") == item["styledActive"] for item in state), state
+
+
+def assert_supplier_updates_entry_state(page, *, pressed, selected_count=0):
+    entry = page.locator("[data-supplier-updates-entry]")
+    assert entry.count() == 1
+    state = entry.evaluate("""button => ({
+        pressed: button.getAttribute('aria-pressed'),
+        label: button.getAttribute('aria-label') || '',
+        disabled: button.disabled,
+    })""")
+    assert state["disabled"] is False, state
+    if selected_count:
+        expected_plural = {1: "товар", 2: "товара", 3: "товара", 4: "товара"}.get(
+            selected_count, "товаров",
+        )
+        assert state["pressed"] is None, state
+        assert state["label"] == (
+            f"Обновить выбранные товары, {selected_count} {expected_plural} "
+            "из каталога поставщика"
+        ), state
+    else:
+        assert state["pressed"] == ("true" if pressed else "false"), state
+        assert state["label"].startswith("Обновления поставщика"), state
 
 
 def assert_mobile_row_checkbox_geometry(page, select_all):
@@ -1135,6 +1172,24 @@ def run():
         open_products(page)
         status_tabs = page.locator(".mp-tabs .mp-tab")
         assert_status_filter_state(page, 0)
+        updates_entry = page.locator("[data-supplier-updates-entry]")
+        assert_supplier_updates_entry_state(page, pressed=False)
+        catalog_url = page.url
+        with page.expect_response(lambda response: feed_matches(response, {"updates": "1"})) as updates_filter:
+            updates_entry.click()
+        assert updates_filter.value.status == 200
+        assert page.url == catalog_url
+        assert_status_filter_state(page, None)
+        assert_supplier_updates_entry_state(page, pressed=True)
+        with page.expect_response(lambda response: feed_matches(response, {})
+                                  and "status" not in parse_qs(urlsplit(response.url).query)
+                                  and "updates" not in parse_qs(urlsplit(response.url).query)) as all_from_updates:
+            updates_entry.click()
+        assert all_from_updates.value.status == 200
+        assert page.url == catalog_url
+        assert_status_filter_state(page, 0)
+        assert_supplier_updates_entry_state(page, pressed=False)
+        checks.append("supplier_updates_header_toggle_uses_aria_pressed_without_a_seventh_status_tab")
         with page.expect_response(lambda response: feed_matches(response, {"status": "pending"})) as pending_filter:
             status_tabs.nth(1).click()
         assert pending_filter.value.status == 200
@@ -2402,8 +2457,9 @@ def run():
         posts_before_mixed_refresh = len(posts)
         dialog, mixed_preview = open_supplier_refresh_preview(
             page, [fixture_ids["local_id"], fixture_ids["manual_id"]],
-            refresh_preview_posts,
+            refresh_preview_posts, via_header=True,
         )
+        checks.append("supplier_updates_selected_header_action_opens_exact_refresh_preview")
         assert (mixed_preview["eligible"], mixed_preview["changed"],
                 mixed_preview["skipped"]) == (1, 1, 1)
         assert mixed_preview["items"][0]["state"] == "changed"
