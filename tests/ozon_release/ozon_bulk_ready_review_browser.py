@@ -2155,7 +2155,10 @@ def _seed_review_editor_navigation_batch():
         drafts = [db.session.get(MarketplaceProductDraft, item.draft_id) for item in items]
         assert [draft.status for draft in drafts] == ["ready", "blocked", "ready"]
         draft_ids = [item.draft_id for item in items]
-        versions = {item.draft_id: item.version for item in drafts}
+        versions = {
+            queue_item.draft_id: draft.version
+            for queue_item, draft in zip(items, drafts)
+        }
         return job_uid, draft_ids, source_ids, titles, versions, stats
 
 
@@ -2186,6 +2189,24 @@ def run_review_editor_navigation_journey(page):
     state["review_editor_navigation_initial_version"] = prepared_versions[issue_draft_id]
 
     page.set_viewport_size({"width": 320, "height": 780})
+    review_html_navigations = []
+
+    def record_review_html_navigation(request):
+        if not request.is_navigation_request():
+            return
+        parts = urlsplit(request.url)
+        if parts.path != "/marketplaces/ozon/uploads/review":
+            return
+        query = parse_qs(parts.query, keep_blank_values=True)
+        review_html_navigations.append({
+            "account_id": int(query["account_id"][0]),
+            "draft_ids": [int(value) for value in query["draft_ids"][0].split(",")],
+            "page": int(query.get("page", ["1"])[0]),
+            "parent_prepare_job_uid": query.get("parent_prepare_job_uid", [None])[0],
+            "result_job_uid": query.get("result_job_uid", [None])[0],
+        })
+
+    page.on("request", record_review_html_navigation)
     page.goto(f"{base}/marketplaces/ozon/uploads/{job_uid}")
     source_review_link = page.locator("a[data-source-prepare-review]")
     source_review_link.wait_for()
@@ -2263,7 +2284,9 @@ def run_review_editor_navigation_journey(page):
     assert issue_query.get("focus_code") == [weight_issue["code"]]
     assert issue_query.get("focus_field") == [weight_issue["field"]]
 
-    issue_link.click()
+    issue_link.focus()
+    assert issue_link.evaluate("link => document.activeElement === link")
+    page.keyboard.press("Enter")
     page.wait_for_url(f"**/marketplaces/drafts/{issue_draft_id}?*")
     page.locator("#ozon-draft-editor:not([v-cloak])").wait_for()
     editor_boot = page.evaluate(
@@ -2418,7 +2441,17 @@ def run_review_editor_navigation_journey(page):
             OzonBulkUploadRun.account_id == account_id,
         ).count() == item_count
     assert report["provider_attempts"] == 0 and report["provider_dispatch_calls"] == 0
-    assert state["review_editor_navigation_api_pages"] == [1, 1], (
+    expected_review_navigation = {
+        "account_id": account_id,
+        "draft_ids": draft_ids,
+        "page": 1,
+        "parent_prepare_job_uid": job_uid,
+        "result_job_uid": None,
+    }
+    assert review_html_navigations == [
+        expected_review_navigation, expected_review_navigation,
+    ], review_html_navigations
+    assert state["review_editor_navigation_api_pages"] == [], (
         state["review_editor_navigation_api_pages"]
     )
     assert page.evaluate(
@@ -2447,6 +2480,8 @@ def run_review_editor_navigation_journey(page):
         "returned_selectable": returned_rows[issue_draft_id]["selectable"],
         "unchanged_selection_preserved": returned_selected == unchanged_ids,
         "changed_entry_not_auto_selected": not changed_checkbox.is_checked(),
+        "review_html_navigation_count": len(review_html_navigations),
+        "review_html_navigation_scopes": review_html_navigations,
         "review_api_page_numbers": state["review_editor_navigation_api_pages"],
         "review_api_page_request_count": len(state["review_editor_navigation_api_pages"]),
         "navigation_business_writes": 0,
