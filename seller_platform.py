@@ -183,6 +183,20 @@ def wb_photo_url(nm_id: int, photo_index: int = 1, size: str = 'big') -> str:
     return _wb_photo_url(nm_id, photo_index, size)
 
 
+def wb_photo_url_if_known(
+    nm_id: int,
+    photo_index: int | None = None,
+    size: str = 'big',
+    *,
+    observed_url: str | None = None,
+) -> str:
+    """Read-only WB thumbnail URL; unknown basket mappings stay unknown."""
+    from services.wb_media import wb_photo_url_if_known as _wb_photo_url_if_known
+    return _wb_photo_url_if_known(
+        nm_id, photo_index, size, observed_url=observed_url,
+    )
+
+
 # Добавляем встроенные функции Python в контекст Jinja2
 app.jinja_env.globals.update({
     'min': min,
@@ -3426,7 +3440,7 @@ def products_bulk_edit():
         # selection in token order; this is a presentation projection only
         # and must not trigger another catalog/provider read.
         products_by_id = {int(product.id): product for product in products}
-        photo_url_builder = app.jinja_env.globals.get('wb_photo_url', wb_photo_url)
+        photo_url_builder = wb_photo_url_if_known
         review_products = []
         review_products_by_id = {}
         for change in preview.get('diff') or []:
@@ -3463,19 +3477,24 @@ def products_bulk_edit():
                         stored_photos = []
                     if isinstance(stored_photos, list):
                         for photo in stored_photos:
-                            # The WB photo helper expects an observed photo
-                            # slot. Do not invent slot 1 for an unknown photo.
                             if isinstance(photo, int) and not isinstance(photo, bool) and photo > 0:
                                 try:
                                     photo_url = photo_url_builder(product.nm_id, photo, 'tm')
                                 except Exception:
                                     photo_url = ''
-                                break
-                            if isinstance(photo, str) and photo.isdecimal() and int(photo) > 0:
+                            elif isinstance(photo, str) and photo.isdecimal() and int(photo) > 0:
                                 try:
                                     photo_url = photo_url_builder(product.nm_id, int(photo), 'tm')
                                 except Exception:
                                     photo_url = ''
+                            elif isinstance(photo, str):
+                                try:
+                                    photo_url = photo_url_builder(
+                                        product.nm_id, observed_url=photo,
+                                    )
+                                except Exception:
+                                    photo_url = ''
+                            if photo_url:
                                 break
 
                 group = {

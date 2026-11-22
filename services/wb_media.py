@@ -22,7 +22,9 @@
 """
 import json
 import logging
+import re
 import threading
+from urllib.parse import urlsplit
 
 import requests
 
@@ -64,6 +66,86 @@ def _static_basket(vol: int):
         if vol <= max_vol:
             return basket
     return None
+
+
+def _valid_observed_wb_photo_url(nm_id: int, value: str) -> str:
+    """Return an already-stored exact WB CDN photo URL when it binds to nmID."""
+    if not isinstance(value, str) or not value or value != value.strip():
+        return ''
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return ''
+    host = parsed.hostname or ''
+    if (
+        parsed.scheme != 'https'
+        or not re.fullmatch(r'basket-\d{2,3}\.wbbasket\.ru', host)
+        or parsed.netloc.lower() != host
+        or parsed.query or parsed.fragment
+    ):
+        return ''
+    match = re.fullmatch(
+        r'/vol(\d+)/part(\d+)/(\d+)/images/(?:big|tm|c\d{1,4}x\d{1,4})/(\d+)\.webp',
+        parsed.path,
+    )
+    if not match:
+        return ''
+    vol, part, path_nm_id, photo_index = (int(item) for item in match.groups())
+    if (
+        path_nm_id != nm_id
+        or vol != nm_id // 100000
+        or part != nm_id // 1000
+        or photo_index <= 0
+    ):
+        return ''
+    return value
+
+
+def wb_photo_url_if_known(
+    nm_id: int,
+    photo_index: int | None = None,
+    size: str = 'big',
+    *,
+    observed_url: str | None = None,
+) -> str:
+    """Build a WB photo URL only from known mappings, with no I/O or persistence.
+
+    Static ranges and mappings already resident in this process are safe to
+    use. Unknown volumes return an empty string; unlike ``wb_photo_url``, this
+    helper never probes the CDN, loads a database cache, or writes a mapping.
+    An exact stored HTTPS WB CDN URL may be reused after nmID/path validation.
+    """
+    if isinstance(nm_id, bool) or not isinstance(nm_id, int) or nm_id <= 0:
+        return ''
+    if observed_url is not None:
+        return _valid_observed_wb_photo_url(nm_id, observed_url)
+    if (
+        isinstance(photo_index, bool)
+        or not isinstance(photo_index, int)
+        or photo_index <= 0
+        or not isinstance(size, str)
+        or not re.fullmatch(r'(?:big|tm|c\d{1,4}x\d{1,4})', size)
+    ):
+        return ''
+
+    vol = nm_id // 100000
+    if vol <= 0:
+        return ''
+    basket = _static_basket(vol)
+    if basket is None:
+        # Intentionally do not call _load_persisted(): review rendering is
+        # read-only and only an in-memory mapping is safe on this path.
+        with _cache_lock:
+            basket = _vol_cache.get(vol)
+    if not isinstance(basket, str) or not re.fullmatch(r'\d{1,3}', basket):
+        return ''
+    basket_number = int(basket)
+    if basket_number <= 0 or basket_number > 999:
+        return ''
+    return (
+        f'https://basket-{basket_number:02d}.wbbasket.ru/'
+        f'vol{vol}/part{nm_id // 1000}/{nm_id}/images/{size}/{photo_index}.webp'
+    )
 
 
 def _estimate_basket(vol: int) -> int:

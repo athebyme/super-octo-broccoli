@@ -38,6 +38,79 @@ class TestStaticRanges(unittest.TestCase):
         self.assertEqual(wb_media.wb_photo_url(None), '')
 
 
+class TestReadOnlyKnownPhotoLookup(unittest.TestCase):
+    def test_unknown_numeric_volume_returns_empty_without_network_or_persistence(self):
+        from services import wb_media
+        with (
+            patch.object(wb_media, '_vol_cache', {}),
+            patch.object(wb_media, '_load_persisted') as mock_load,
+            patch.object(wb_media, '_probe_vol') as mock_probe,
+            patch.object(wb_media, '_persist') as mock_persist,
+            patch.object(wb_media.requests, 'head') as mock_head,
+        ):
+            self.assertEqual(
+                wb_media.wb_photo_url_if_known(905908816, 2, 'tm'),
+                '',
+            )
+        mock_load.assert_not_called()
+        mock_probe.assert_not_called()
+        mock_persist.assert_not_called()
+        mock_head.assert_not_called()
+
+    def test_exact_observed_cdn_url_is_reused_without_network_or_persistence(self):
+        from services import wb_media
+        observed = (
+            'https://basket-39.wbbasket.ru/vol9059/part905908/'
+            '905908816/images/big/2.webp'
+        )
+        with (
+            patch.object(wb_media, '_vol_cache', {}),
+            patch.object(wb_media, '_load_persisted') as mock_load,
+            patch.object(wb_media, '_probe_vol') as mock_probe,
+            patch.object(wb_media, '_persist') as mock_persist,
+            patch.object(wb_media.requests, 'head') as mock_head,
+        ):
+            self.assertEqual(
+                wb_media.wb_photo_url_if_known(
+                    905908816, observed_url=observed,
+                ),
+                observed,
+            )
+            self.assertEqual(
+                wb_media.wb_photo_url_if_known(
+                    905908817, observed_url=observed,
+                ),
+                '',
+            )
+            self.assertEqual(
+                wb_media.wb_photo_url_if_known(
+                    905908816,
+                    observed_url='https://example.invalid/photo.webp',
+                ),
+                '',
+            )
+        mock_load.assert_not_called()
+        mock_probe.assert_not_called()
+        mock_persist.assert_not_called()
+        mock_head.assert_not_called()
+
+    def test_static_photo_slot_is_generated_without_loading_or_writing_cache(self):
+        from services import wb_media
+        with (
+            patch.object(wb_media, '_vol_cache', {}),
+            patch.object(wb_media, '_load_persisted') as mock_load,
+            patch.object(wb_media, '_probe_vol') as mock_probe,
+            patch.object(wb_media, '_persist') as mock_persist,
+        ):
+            self.assertEqual(
+                wb_media.wb_photo_url_if_known(14300000, 2, 'tm'),
+                'https://basket-01.wbbasket.ru/vol143/part14300/14300000/images/tm/2.webp',
+            )
+        mock_load.assert_not_called()
+        mock_probe.assert_not_called()
+        mock_persist.assert_not_called()
+
+
 class TestProbeResolution(unittest.TestCase):
     def setUp(self):
         from services import wb_media

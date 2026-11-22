@@ -4431,6 +4431,7 @@ def main() -> int:
         path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
         for path in (
             "seller_platform.py",
+            "services/wb_media.py",
             "services/product_selection.py",
             "services/wb_edit_review.py",
             "templates/products.html",
@@ -4444,6 +4445,7 @@ def main() -> int:
     # keeps the page structure while replacing those decorative URLs locally.
     app.jinja_env.globals["wb_photo_url"] = lambda *_args, **_kwargs: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="
     seller_platform.WildberriesAPIClient = FakeWBClient
+    seller_platform.wb_photo_url_if_known = lambda *_args, **_kwargs: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="
     fixture = seed_synthetic_wb(app)
     EXPECTED_NEGATIVE_HTTP[
         ("POST", f"/products/{fixture['product_id']}/edit")
