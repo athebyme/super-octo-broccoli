@@ -796,7 +796,23 @@ def run():
             page = context.new_page()
             page.on("pageerror", lambda error: errors.append(str(error)))
             open_products(page)
-            assert urlsplit(page.get_by_role("link", name="Импортировать товары").get_attribute("href")).path == "/supplier-catalog"
+            import_link = page.get_by_role("link", name="Импортировать товары")
+            import_target = urlsplit(import_link.get_attribute("href") or "")
+            assert import_target.path == "/supplier-catalog"
+            assert parse_qs(import_target.query) == {"action": ["import"]}
+            checks.append("main_import_entry_uses_import_intent")
+            if width == 320 and theme == "light":
+                with page.expect_navigation(wait_until="domcontentloaded") as import_navigation:
+                    import_link.click()
+                import_response = import_navigation.value
+                assert import_response and import_response.status == 200
+                assert urlsplit(page.url).path == (
+                    f"/supplier-catalog/{fixture.FIXTURE['supplier_id']}/products"
+                ), page.url
+                checks.append("main_import_entry_skips_single_connected_supplier_list")
+                page.goto(fixture.BASE + "/my-products/beta", wait_until="domcontentloaded")
+                page.locator("#my-products-app").wait_for(state="visible")
+                page.get_by_role("checkbox", name=f"Выбрать {MAIN_TITLE}").wait_for()
             other_sections = page.locator(".mp-head-more summary")
             other_sections.click()
             ozon_prices = page.get_by_role("link", name="Ценовые заявки Ozon").get_attribute("href")
