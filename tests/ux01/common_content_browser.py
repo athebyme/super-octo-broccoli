@@ -377,18 +377,19 @@ def authenticated_cookie() -> dict:
 def bridge(route):
     request = route.request
     parsed = urlsplit(request.url)
+    photo_capture = PHOTO_CASE_CAPTURE
     if parsed.scheme in {"data", "blob", "about"}:
         route.continue_()
         return
     if parsed.hostname == "127.0.0.1" and parsed.port == server.server_port:
         if (
-            PHOTO_CASE_CAPTURE is not None
+            photo_capture is not None
             and request.method == "GET"
             and parsed.path.startswith("/api/photos/imported-product/")
         ):
             try:
                 slot = int(parsed.path.rsplit("/", 1)[-1])
-                expected = PHOTO_CASE_CAPTURE["route_paths"][slot]
+                expected = photo_capture["route_paths"][slot]
             except (KeyError, TypeError, ValueError):
                 expected = None
             query = parse_qs(parsed.query, keep_blank_values=True)
@@ -401,8 +402,8 @@ def bridge(route):
             row = {
                 "attempt": attempt,
                 "trigger": (
-                    "initial" if attempt == 1 and PHOTO_CASE_CAPTURE["phase"] != "switch_pending"
-                    else "manual_retry" if PHOTO_CASE_CAPTURE["phase"] in {"manual_retry", "switch_pending"}
+                    "initial" if attempt == 1 and photo_capture["phase"] != "switch_pending"
+                    else "manual_retry" if photo_capture["phase"] in {"manual_retry", "switch_pending"}
                     else "automatic_retry"
                 ),
                 "method": request.method,
@@ -445,9 +446,9 @@ def bridge(route):
                 "queue_count": queue_count,
                 "cache_ready": PHOTO_CASE_CACHE.last_lookup_for(slot),
                 "_slot": slot,
-                "_phase": PHOTO_CASE_CAPTURE["phase"],
+                "_phase": photo_capture["phase"],
             })
-            PHOTO_CASE_CAPTURE["requests"].append(row)
+            photo_capture["requests"].append(row)
             route.fulfill(response=response)
             return
         if request.method in {"GET", "HEAD"}:
@@ -1857,7 +1858,10 @@ def _run_bulk_50_case(page) -> None:
     page.locator('input[data-action="acknowledge-preview"]').check()
     assert save_button.is_enabled()
     save_button.click()
-    page.get_by_text("Данные товара сохранены", exact=False).wait_for(timeout=30000)
+    page.get_by_text(
+        "Общий товар сохранён. Черновики и опубликованные карточки не изменены.",
+        exact=True,
+    ).wait_for(timeout=30000)
     page.wait_for_function("""() => {
         const root = document.querySelector('#common-content-editor');
         return root && root.getAttribute('aria-busy') === 'false' && !root.inert;
@@ -3130,7 +3134,10 @@ def run():
             product_ids[1],
         )
         release_delayed_fetch(page, read_key)
-        page.get_by_text("Данные товара сохранены", exact=False).wait_for(timeout=10000)
+        page.get_by_text(
+            "Общий товар сохранён. Черновики и опубликованные карточки не изменены.",
+            exact=True,
+        ).wait_for(timeout=10000)
         assert page.locator('#common-content-product-list button[aria-current="true"]').get_attribute("data-product-id") == str(product_ids[0])
         REPORT["checks"].append("signed_preview_apply_and_common_only_success_notice")
         REPORT["checks"].append("delayed_apply_and_readback_keep_captured_product_context")
