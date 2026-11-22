@@ -474,6 +474,7 @@
 
         <section v-if="listingUpdate.preview && listingUpdate.phase !== 'complete'"
                  class="mcat-update-review" aria-label="Проверенный список">
+            <h3 ref="listingUpdateReviewHeading" class="sr-only" tabindex="-1">Проверенный список карточек</h3>
             <div class="mcat-update-counts">
                 <span><b>{{ listingUpdate.preview.listing_ids.length }}</b> выбрано</span>
                 <span><b>{{ listingUpdateRowCount(listingUpdate.preview.rows, 'ready') }}</b> можно подготовить</span>
@@ -524,7 +525,7 @@
 
         <div v-if="listingUpdate.phase === 'review' && listingUpdateCanApply" class="mcat-update-confirm-box">
             <label class="mcat-update-confirm-check">
-                <input type="checkbox" v-model="listingUpdate.confirmLocal">
+                <input ref="listingUpdateConfirmCheckbox" type="checkbox" v-model="listingUpdate.confirmLocal">
                 <span>Подтверждаю локальную подготовку черновиков для выбранных карточек магазина {{ listingUpdate.preview.account_label || 'Ozon' }}. Это не публикует изменения на Ozon.</span>
             </label>
             <button ref="listingUpdateConfirm" type="button" class="sh-btn sh-btn--primary mcat-update-confirm"

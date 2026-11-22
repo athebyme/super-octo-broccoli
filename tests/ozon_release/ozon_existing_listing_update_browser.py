@@ -538,7 +538,12 @@ def exercise_workspace_update(page):
         workspace.get_by_role("checkbox", name="Выбрать " + title, exact=True).check()
     chosen = workspace.get_by_role("button", name="Что сделать", exact=True)
     chosen.click()
-    workspace.get_by_role("menuitem", name="Изменить карточки Ozon", exact=True).click()
+    workspace_update_action = workspace.get_by_role(
+        "menuitem", name=re.compile(r"^Изменить карточки Ozon(?:$|\s)"),
+    )
+    assert workspace_update_action.count() == 1
+    assert workspace_update_action.is_enabled()
+    workspace_update_action.click()
 
     page.wait_for_url(lambda value: urlsplit(value).path == "/marketplaces/listings/")
     handoff_url = urlsplit(page.url)
@@ -556,8 +561,9 @@ def exercise_workspace_update(page):
     shell.wait_for()
     dialog = page.locator("dialog.mcat-update-dialog[open]")
     confirm = dialog.locator("[data-listing-update-confirm]")
+    confirm_checkbox = dialog.get_by_role("checkbox")
     confirm.wait_for()
-    assert confirm.evaluate("element => element === document.activeElement")
+    assert confirm_checkbox.evaluate("element => element === document.activeElement")
     preview_text = dialog.inner_text()
     assert "Ozon CI 0" in preview_text
     assert all(title in preview_text for title in expected_titles)
@@ -587,7 +593,7 @@ def exercise_workspace_update(page):
     assert shell.locator("[data-workspace-return]").get_attribute("href") == workspace_state["return_to"]
     reopen.click()
     confirm.wait_for()
-    assert confirm.evaluate("element => element === document.activeElement")
+    assert confirm_checkbox.evaluate("element => element === document.activeElement")
     assert workspace_state["preview"] == 2 and workspace_state["apply"] == 0
     assert batch_snapshots() == before
 

@@ -847,10 +847,11 @@
                     this.listingUpdate.preview = data.preview;
                     this.listingUpdate.phase = 'review';
                     this.$nextTick(() => {
-                        if (this.$refs && this.$refs.listingUpdateConfirm &&
-                            this.$refs.listingUpdateConfirm.isConnected !== false) {
-                            this.$refs.listingUpdateConfirm.focus();
-                        }
+                        var focusTarget = this.listingUpdateCanApply
+                            ? this.$refs && this.$refs.listingUpdateConfirmCheckbox
+                            : this.$refs && this.$refs.listingUpdateReviewHeading;
+                        if (focusTarget && focusTarget.isConnected !== false &&
+                            typeof focusTarget.focus === 'function') focusTarget.focus();
                     });
                     return true;
                 } catch (error) {

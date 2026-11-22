@@ -412,9 +412,10 @@ global.Vue={createApp:opts=>{definition=opts;return {mount(){}}}};
 require('./static/marketplace-beta-shared.js');require('./static/marketplace-catalog-beta.js');
 const page=definition.data();Object.entries(definition.methods).forEach(([key,fn])=>page[key]=fn.bind(page));
 Object.entries(definition.computed).forEach(([key,fn])=>Object.defineProperty(page,key,{get:fn.bind(page)}));
-page.$nextTick=fn=>fn();let opened=false,focused=false;
+page.$nextTick=fn=>fn();let opened=false,focusedTarget='';
 page.$refs={workspaceUpdateReopen:{focus(){}},listingUpdateDialog:{open:false,showModal(){this.open=true;opened=true},close(){this.open=false}},
-    listingUpdateConfirm:{isConnected:true,focus(){focused=true}}};
+    listingUpdateConfirmCheckbox:{isConnected:true,focus(){focusedTarget='checkbox'}},
+    listingUpdateReviewHeading:{isConnected:true,focus(){focusedTarget='heading'}}};
 page.onKey=()=>{};page.onPopState=()=>{};
 (async()=>{
     definition.mounted.call(page);
@@ -422,7 +423,7 @@ page.onKey=()=>{};page.onPopState=()=>{};
     assert.equal(opened,true,'signed handoff opens the shared review dialog automatically');
     assert.equal(page.workspaceUpdate.accountId,2);assert.deepEqual(page.workspaceUpdate.listingIds,[101,102]);
     assert.equal(page.workspaceUpdate.accountLabel,'Магазин Ozon');assert.equal(page.accounts.length,0);
-    assert.equal(page.listingUpdateCanPreview,true);assert.equal(page.workspaceUpdateCanOpen,true);assert.equal(focused,true);
+    assert.equal(page.listingUpdateCanPreview,true);assert.equal(page.workspaceUpdateCanOpen,true);assert.equal(focusedTarget,'checkbox');
     assert.equal(calls.length,1);assert.equal(calls[0].url,'/marketplaces/listings/update-drafts/preview');
     assert.equal(calls[0].options.method,'POST');assert.deepEqual(JSON.parse(calls[0].options.body),{workspace_update:token});
     assert.equal(storageCalls,0);assert.equal(page.items.length,0);assert.deepEqual(page.pagination,{page:1,pages:1,total:0,has_next:false});
