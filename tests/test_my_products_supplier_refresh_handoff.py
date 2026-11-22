@@ -657,8 +657,8 @@ async function finishSupplierRefresh(data, ids) {
   assert.match(templateText, /<dialog ref="supplierRefreshDialog" class="mp-supplier-refresh-dialog"/);
   assert.match(templateText, /aria-labelledby="mp-supplier-refresh-dialog-title"/);
   assert.match(templateText, /Данные на площадках не меняются/);
-  assert.match(templateText, /filename='my-products-beta\.css', v='20261122-supplier-updated-batch-cta-r46'/);
-  assert.match(templateText, /filename='my-products-beta\.js', v='20261122-ozon-existing-update-r56'/);
+  assert.match(templateText, /filename='my-products-beta\.css', v='20261122-bulk-intent-rail-r58'/);
+  assert.match(templateText, /filename='my-products-beta\.js', v='20261122-bulk-intent-rail-r58'/);
   assert.match(templateText, /filename='common-product-content\.js', v='20261122-ozon-update-return-r56'/);
   assert.match(commonTemplateText, /filename='common-product-content\.js', v='20261121-common-content-workspace-return-r36'/);
   assert.match(stylesheetText, /\.mp-refresh-result\s*\{[^}]*scroll-margin-top:\s*72px/s);

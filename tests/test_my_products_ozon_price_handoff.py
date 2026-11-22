@@ -122,6 +122,9 @@ function makeApp(items, accounts, selected = items.map(row => row.id)) {
     },
   });
   Object.assign(app, component.methods);
+  Object.defineProperty(app, 'actionGroups', {
+    get() { return component.computed.actionGroups.call(this); },
+  });
   const buildWorkspaceReturnScope = app.buildWorkspaceReturnScope;
   app.buildWorkspaceReturnScope = function () {
     this.returnScopeBuildCount += 1;
@@ -224,6 +227,15 @@ const wbRow = product(301, []);
 wbRow.wb = {product_id: 4301};
 const wbApp = makeApp([wbRow], accounts);
 wbApp.urls.wbPriceChange = '/prices/change';
+const wbPriceIntent = component.computed.bulkIntentGroups.call(wbApp)
+  .find(group => group.key === 'prices');
+assert.deepEqual(plain(wbPriceIntent.actions.map(action => action.key)), ['wb_prices'],
+  'a linked WB-only selection has one direct price destination');
+assert.equal(wbPriceIntent.actions[0].shortLabel, 'Цены WB');
+const refreshIntent = component.computed.bulkIntentGroups.call(wbApp)
+  .find(group => group.key === 'refresh');
+assert.deepEqual(plain(refreshIntent.actions.map(action => action.key)), ['refresh_supplier'],
+  'supplier refresh remains a single direct preview action');
 wbApp.startAction({key: 'wb_prices'});
 assert.equal(assigned.length, 1);
 assert.equal(wbApp.returnScopeBuildCount, 1, 'WB return scope is captured once per launch');
@@ -257,6 +269,10 @@ const noCommon = [
 ];
 assigned.length = 0;
 const noCommonApp = makeApp(noCommon, accounts);
+const unavailablePrices = component.computed.bulkIntentGroups.call(noCommonApp)
+  .find(group => group.key === 'prices');
+assert.equal(unavailablePrices.actions.length, 0,
+  'Ozon price handoff is unavailable unless one shop has every exact linked card');
 noCommonApp.startAction({key: 'ozon_prices'});
 assert.equal(assigned.length, 0);
 assert.match(noCommonApp.ozonPriceError, /Не найден один магазин Ozon/);
@@ -281,6 +297,9 @@ const primaryActions = component.computed.actionGroups.call(disconnectedApp)
   .flatMap(group => group.items);
 const legacyOzonAction = primaryActions.find(action => action.key === 'ozon');
 assert.ok(legacyOzonAction && !legacyOzonAction.disabled);
+const cardsChoices = component.computed.bulkIntentGroups.call(disconnectedApp)
+  .find(group => group.key === 'cards');
+assert.ok(cardsChoices.actions.some(action => action.key === 'common_content'));
 disconnectedApp.startAction({key: 'ozon'});
 assert.equal(disconnectedApp.ozonAccountId, '11');
 assert.equal(disconnectedApp.$refs.ozonDialog.open, true);
@@ -601,7 +620,11 @@ class MyProductsOzonPriceHandoffTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
         template = (ROOT / 'templates' / 'my_products_beta.html').read_text()
-        self.assertIn("v='20261122-ozon-existing-update-r56'", template)
+        self.assertIn("v='20261122-bulk-intent-rail-r58'", template)
+        self.assertIn('data-bulk-action-group', template)
+        self.assertIn('data-bulk-direct-action', template)
+        self.assertIn('data-bulk-action-key', template)
+        self.assertNotIn('<sh-action-menu', template)
         self.assertIn("filename='common-product-content.js'", template)
 
     def test_template_keeps_normal_price_entry_and_uses_read_only_get_target(self):

@@ -946,6 +946,7 @@
                     sort: workspaceReturnScopeSeed ? workspaceReturnScopeSeed.sort : '',
                 },
                 selected: [],
+                activeBulkActionGroup: '',
                 ozonIds: [],
                 ozonAccountId: '',
                 ozonConfirmed: false,
@@ -1045,7 +1046,7 @@
                 return !this.ozonAccounts.length || !!this.ozonPending ||
                     this.ozonStorageProblem || !!this.ozonBusy || this.ozonSessionEnded;
             },
-            /* Основные операции показываются вместе; редкие — в «Ещё». */
+            /* Shared route availability stays tied to the existing guarded actions. */
             actionGroups: function () {
                 var chosen = this.selectedItems;
                 var createRows = chosen.filter(function (item) {
@@ -1060,6 +1061,18 @@
                 var ozonUpdateResult = exactOzonWorkspaceUpdateAccountChoices(
                     chosen, this.selected, this.ozonAccounts,
                 );
+                var ozonPriceResult = exactOzonPriceAccountChoices(
+                    chosen, this.selected, this.ozonAccounts,
+                );
+                var ozonPriceHint = ozonPriceResult.reason === 'no_accounts'
+                    ? 'подключите активный магазин Ozon'
+                    : ozonPriceResult.reason === 'accounts'
+                        ? 'не удалось проверить магазины Ozon; обновите страницу'
+                        : ozonPriceResult.reason === 'selection'
+                            ? 'список изменился или загружен не полностью; обновите его'
+                            : ozonPriceResult.reason === 'limit'
+                                ? 'за одно сравнение можно выбрать не больше 100 товаров'
+                                : 'не во всех товарах есть связанная карточка в одном магазине Ozon';
                 var ozonUpdateHint = !chosen.length
                     ? 'выберите товары с уже связанной карточкой Ozon'
                     : !underLimit
@@ -1168,12 +1181,10 @@
                         this.ozonEnabled ? {
                             key: 'ozon_prices',
                             label: 'Изменить цены Ozon',
-                            hint: !chosen.length
-                                ? 'выберите товары'
-                                : chosen.length > MAX_OZON_PRICE_HANDOFF
-                                    ? 'за одно сравнение можно выбрать не больше 100 товаров'
-                                    : 'откроется сравнение для одного магазина, где есть все выбранные карточки',
-                            disabled: !chosen.length || chosen.length > MAX_OZON_PRICE_HANDOFF,
+                            hint: ozonPriceResult.choices.length
+                                ? 'откроется сравнение и ценовые заявки для одного магазина со всеми выбранными карточками'
+                                : ozonPriceHint,
+                            disabled: !chosen.length || !ozonPriceResult.choices.length,
                         } : null,
                         this.ozonEnabled ? {
                             key: 'ozon_workspace_update',
@@ -1183,6 +1194,58 @@
                         } : null,
                     ].filter(Boolean),
                 }];
+            },
+            bulkIntentGroups: function () {
+                var items = (this.actionGroups || []).reduce(function (all, group) {
+                    return all.concat(group.items || []);
+                }, []);
+                var definitions = [
+                    {
+                        key: 'cards', label: 'Карточки', keys: ['common_content', 'wb_edit', 'ozon_workspace_update'],
+                        labels: {
+                            common_content: 'Общий контент',
+                            wb_edit: 'Карточки WB',
+                            ozon_workspace_update: 'Карточки Ozon',
+                        },
+                        emptyHint: this.selected.length > MAX_BULK_SELECTION
+                            ? 'За один раз можно выбрать не больше 200 товаров.'
+                            : this.selected.length > 50
+                                ? 'Общий редактор принимает до 50 товаров; для WB и Ozon нужны точные связанные карточки.'
+                                : 'Выберите до 50 товаров для общего контента или товары с доступными карточками WB/Ozon.',
+                    },
+                    {
+                        key: 'prices', label: 'Цены', keys: ['wb_prices', 'ozon_prices'],
+                        labels: { wb_prices: 'Цены WB', ozon_prices: 'Ценовые заявки Ozon' },
+                        emptyHint: this.selected.length > MAX_BULK_SELECTION
+                            ? 'За один раз можно выбрать не больше 200 товаров.'
+                            : this.selected.length > MAX_OZON_PRICE_HANDOFF
+                                ? 'Для Ozon доступно до 100 товаров; для WB нужны карточки с точной связью.'
+                                : 'Нужны связанные карточки WB или доступный набор в одном магазине Ozon.',
+                    },
+                    {
+                        key: 'create', label: 'Создать', keys: ['push_wb', 'ozon'],
+                        labels: { push_wb: 'Создать карточки WB', ozon: 'Подготовить для Ozon' },
+                        emptyHint: this.selected.length > MAX_BULK_SELECTION
+                            ? 'За один раз можно выбрать не больше 200 товаров.'
+                            : 'Для WB нужны товары без карточки; для Ozon — активный магазин и доступная подготовка.',
+                    },
+                    {
+                        key: 'refresh', label: 'Обновить', keys: ['refresh_supplier'],
+                        labels: { refresh_supplier: 'Из поставщика' },
+                        emptyHint: 'За один раз можно обновить не больше 200 товаров.',
+                    },
+                ];
+                return definitions.map(function (definition) {
+                    var actions = definition.keys.map(function (key) {
+                        return items.find(function (action) { return action.key === key; });
+                    }).filter(function (action) { return action && !action.disabled; })
+                        .map(function (action) {
+                            return Object.assign({}, action, {
+                                shortLabel: definition.labels[action.key] || action.label,
+                            });
+                        });
+                    return Object.assign({}, definition, { actions: actions });
+                });
             },
             secondaryActions: function () {
                 var chosen = this.selectedItems;
@@ -1279,6 +1342,8 @@
             selected: {
                 deep: true,
                 handler: function (next) {
+                    this.closeBulkActionPanel(false);
+                    if (this.$refs.moreActions) this.$refs.moreActions.open = false;
                     if (this._wbEditHandoff &&
                         !sameOrderedIds(next, this._wbEditHandoff.selectionIds)) {
                         this.invalidateWbEditHandoff();
@@ -1334,6 +1399,50 @@
         },
 
         methods: {
+            closeBulkActionPanel: function (restoreFocus) {
+                if (!this.activeBulkActionGroup) return;
+                this.activeBulkActionGroup = '';
+                var trigger = this._bulkActionTrigger;
+                this._bulkActionTrigger = null;
+                if (restoreFocus && trigger && trigger.isConnected) {
+                    this.$nextTick(function () {
+                        if (trigger.isConnected) trigger.focus();
+                    });
+                }
+            },
+            activateBulkIntent: function (group, event) {
+                var details = this.$refs.moreActions;
+                if (details) details.open = false;
+                var headMore = this.$refs.headMore;
+                if (headMore) headMore.open = false;
+                if (group.actions.length === 1) {
+                    this.closeBulkActionPanel(false);
+                    this.startAction(group.actions[0]);
+                    return;
+                }
+                if (this.activeBulkActionGroup === group.key) {
+                    this.closeBulkActionPanel(false);
+                    return;
+                }
+                this.activeBulkActionGroup = group.key;
+                this._bulkActionTrigger = event && event.currentTarget;
+            },
+            runBulkIntentAction: function (action) {
+                this.closeBulkActionPanel(false);
+                this.startAction(action);
+            },
+            onMoreActionsToggle: function (event) {
+                if (event && event.currentTarget && event.currentTarget.open) {
+                    this.closeBulkActionPanel(false);
+                    if (this.$refs.headMore) this.$refs.headMore.open = false;
+                }
+            },
+            onHeadMoreToggle: function (event) {
+                if (event && event.currentTarget && event.currentTarget.open) {
+                    this.closeBulkActionPanel(false);
+                    if (this.$refs.moreActions) this.$refs.moreActions.open = false;
+                }
+            },
             invalidateWbEditHandoff: function (expectedHandoff) {
                 var handoff = this._wbEditHandoff;
                 if (!handoff || (expectedHandoff && handoff !== expectedHandoff)) return;

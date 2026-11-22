@@ -6,7 +6,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261122-supplier-updated-batch-cta-r46') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261122-bulk-intent-rail-r58') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
     'wbConnected': wb_connected,
@@ -57,7 +57,6 @@
             <p class="shk-head-sub" v-if="supplierRefreshBatchMode">Выбор из классического списка будет проверен заново. Вы сможете посмотреть изменения перед применением.</p>
             <p class="shk-head-sub" v-if="supplierRefreshResultBatchMode">В списке только товары, обновлённые из каталога поставщика. Итог обновления остаётся на этой странице.</p>
             <p class="shk-head-sub" v-if="importBatchMode && !supplierRefreshResultBatchMode">Выберите товары из этой подборки для массовых действий.</p>
-            <p class="shk-head-sub" v-if="!importBatchMode && !supplierRefreshBatchMode">Выберите товары для массовых действий.</p>
         </div>
         <div v-if="supplierRefreshBatchMode" class="mp-batch-head-actions">
             <a class="sh-btn sh-btn--secondary" data-supplier-refresh-return
@@ -71,10 +70,13 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="shk-btn-icon"><path d="M12 5v14M5 12h14"/></svg>
                 Импортировать товары
             </a>
-            <nav class="mp-price-links" aria-label="Работа с ценами">
-                <a :href="urls.wbPriceChange">Цены WB</a>
-                <a v-if="ozonEnabled" :href="urls.ozonPriceProposals">Ценовые заявки Ozon</a>
-            </nav>
+            <details ref="headMore" class="mp-head-more" @toggle="onHeadMoreToggle">
+                <summary>Другие разделы</summary>
+                <nav class="mp-head-more-menu" aria-label="Работа с ценами">
+                    <a :href="urls.wbPriceChange">Цены WB</a>
+                    <a v-if="ozonEnabled" :href="urls.ozonPriceProposals">Ценовые заявки Ozon</a>
+                </nav>
+            </details>
         </div>
     </header>
 
@@ -343,17 +345,48 @@
         <a v-if="!importBatchMode && !supplierRefreshBatchMode" class="mp-legacy-link" :href="urls.classic">Прежний список</a>
     </div>
 
-    <!-- Основные операции собраны в одном списке; редкие действия скрыты до запроса. -->
+    <!-- Выбранный список сразу показывает четыре понятных намерения. -->
     <sh-bulk-bar class="mp-bulkbar" :count="selected.length" @clear="selected = []">
-        <sh-action-menu :count="selected.length" :groups="actionGroups"
-                        label="Что сделать" @pick="startAction"
-                        @opened="$refs.moreActions?.removeAttribute('open')"></sh-action-menu>
-        <details ref="moreActions" class="mp-more-actions" v-if="selected.length">
+        <div class="mp-bulk-intents" role="group" aria-label="Основные действия">
+            <div v-for="group in bulkIntentGroups" :key="group.key" class="mp-bulk-intent-group"
+                 @keydown.esc.stop.prevent="closeBulkActionPanel(true)">
+                <button type="button" class="mp-bulk-intent"
+                        :data-bulk-action-group="group.key"
+                        :data-bulk-direct-action="group.actions.length === 1 ? group.actions[0].key : null"
+                        :aria-expanded="group.actions.length !== 1 ? (activeBulkActionGroup === group.key ? 'true' : 'false') : null"
+                        @click="activateBulkIntent(group, $event)">
+                    <span class="mp-bulk-intent-name">{{ group.label }}</span>
+                    <span class="mp-bulk-intent-detail">
+                        {{ group.actions.length === 1 ? group.actions[0].shortLabel : group.actions.length > 1 ? 'Выбрать действие' : 'Проверить доступность' }}
+                    </span>
+                    <svg v-if="group.actions.length !== 1" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2" aria-hidden="true" class="mp-bulk-intent-caret">
+                        <path d="m6 9 6 6 6-6"/>
+                    </svg>
+                </button>
+                <div v-if="activeBulkActionGroup === group.key" :id="'mp-bulk-panel-' + group.key"
+                     class="mp-bulk-intent-popover" role="group" :aria-label="group.label">
+                    <template v-if="group.actions.length">
+                        <button v-for="action in group.actions" :key="action.key" type="button"
+                                class="mp-bulk-intent-option"
+                                :data-bulk-action-key="action.key"
+                                @click="runBulkIntentAction(action)">
+                            <span class="mp-bulk-intent-option-label">{{ action.shortLabel }}</span>
+                            <span v-if="action.hint" class="mp-bulk-intent-option-hint">{{ action.hint }}</span>
+                        </button>
+                    </template>
+                    <p v-else class="mp-bulk-intent-empty">{{ group.emptyHint }}</p>
+                </div>
+            </div>
+        </div>
+        <details ref="moreActions" class="mp-more-actions" v-if="selected.length"
+                 @toggle="onMoreActionsToggle">
             <summary>Ещё</summary>
             <div class="mp-more-actions-menu" role="group" aria-label="Дополнительные действия">
                 <span class="shk-actions-group-title">Дополнительно</span>
                 <button v-for="action in secondaryActions" :key="action.key" type="button"
                         class="shk-actions-item" :class="{'is-danger': action.danger}"
+                        :data-bulk-action-key="action.key"
                         :disabled="action.disabled"
                         @click="startAction(action); $event.currentTarget.closest('details').open = false">
                     <span class="shk-actions-item-label">{{ action.label }}</span>
@@ -475,5 +508,5 @@
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261122-ozon-update-return-r56') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-ozon-existing-update-r56') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-bulk-intent-rail-r58') }}"></script>
 {% endblock %}
