@@ -3020,6 +3020,10 @@ class OzonBulkRepairService:
                 raise OzonBulkUploadValidationError(
                     f"Строка {index}: save_mapping должен быть boolean"
                 )
+            if editor.get("mode") == "draft_selection" and save_mapping:
+                raise OzonBulkUploadValidationError(
+                    f"Строка {index}: в выбранном редакторе нельзя сохранять общую категорию"
+                )
             schema_cleanup = row.get("schema_cleanup", False)
             if not isinstance(schema_cleanup, bool):
                 raise OzonBulkUploadValidationError(

@@ -823,6 +823,55 @@ def test_draft_selection_local_edit_revalidates_and_never_touches_runs(case, mon
     assert MarketplaceOperation.query.count() == 0
 
 
+def test_draft_selection_rejects_shared_mapping_before_claim_or_write(case, monkeypatch):
+    scope = selection(case, [case.draft.id])
+    editor = Repair.editor_document(seller_id=case.seller.id, selection=scope)
+    row = editor['groups'][0]['rows'][0]
+    edit = selection_row(row, description='Локальная правка без mapping.')
+    edit['save_mapping'] = True
+    before = (
+        case.draft.version,
+        case.draft.content_json,
+        case.draft.category_mapping_id,
+    )
+    writes = []
+
+    def record_write(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().split(None, 1)[0].upper() in {
+            'INSERT', 'UPDATE', 'DELETE', 'REPLACE',
+        }:
+            writes.append(statement)
+
+    account_claim = Mock(side_effect=AssertionError(
+        'invalid selected-mode mapping must fail before account claim'
+    ))
+    monkeypatch.setattr(
+        'services.ozon_bulk_repair.try_account_operation_lock',
+        account_claim,
+    )
+    event.listen(db.engine, 'before_cursor_execute', record_write)
+    try:
+        with pytest.raises(OzonBulkUploadValidationError, match='общую категорию'):
+            Repair.apply_editor_rows(
+                seller_id=case.seller.id,
+                selection=scope,
+                rows=[edit],
+                corrected_by_user_id=case.user.id,
+            )
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', record_write)
+
+    db.session.refresh(case.draft)
+    assert account_claim.call_count == 0
+    assert writes == []
+    assert (
+        case.draft.version,
+        case.draft.content_json,
+        case.draft.category_mapping_id,
+    ) == before
+    assert MarketplaceOperation.query.count() == 0
+
+
 def test_draft_selection_stale_version_and_new_operation_hold_do_not_write(case, monkeypatch):
     scope = selection(case, [case.draft.id])
     editor = Repair.editor_document(seller_id=case.seller.id, selection=scope)
