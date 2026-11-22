@@ -1092,7 +1092,7 @@ def run():
         )
         assert before_confirmation_position["pageHeight"] > before_confirmation_position["viewportHeight"]
         assert before_confirmation_position["selectedCount"] == 2
-        assert before_confirmation_position["selectedIds"] == wb_selected_ids
+        assert before_confirmation_position["selectedIds"] == [str(value) for value in wb_selected_ids]
         assert before_confirmation_position["railVisible"]
         assert before_confirmation_position["selectedRowsVisible"], before_confirmation_position
         checks.append("last_two_signed_batch_rows_are_selected_from_a_measured_scrolled_position")
