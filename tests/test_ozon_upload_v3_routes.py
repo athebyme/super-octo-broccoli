@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 from unittest.mock import patch
 
 from sqlalchemy import event
@@ -260,6 +260,7 @@ class OzonUploadV3RoutesTest(OzonPublicationFixture, unittest.TestCase):
         )
         self.assertEqual(urls["dictionary_query"], scope_query)
         self.assertEqual(urls["drafts"], "/marketplaces/drafts/")
+        self.assertNotIn("catalog_return", urls)
         self.assertEqual(urlsplit(urls["result"]).path, "/marketplaces/drafts/")
         self.assertEqual(parse_qs(urlsplit(urls["result"]).query), {
             "account_id": [str(self.account.id)],
@@ -372,6 +373,84 @@ class OzonUploadV3RoutesTest(OzonPublicationFixture, unittest.TestCase):
             parse_qs(review.query)["draft_ids"],
             [f"{draft_ids[0]},{draft_ids[1]}"],
         )
+
+    def test_selected_repair_accepts_only_exact_ozon_catalog_return_context(self):
+        editor = self._selection_editor_document()
+        catalog_return = (
+            "/marketplaces/listings/beta?marketplace=ozon"
+            f"&account_id={self.account.id}&search=coat&page=2"
+        )
+        query = self._selection_query(suffix=urlencode({"return_to": catalog_return}))
+        with patch.object(
+            OzonBulkRepairService, "editor_document", return_value=editor,
+        ) as read, patch(
+            "routes.ozon_bulk_uploads.render_template", return_value="selection html",
+        ) as render:
+            response = self.client.get(
+                f"/marketplaces/ozon/uploads/selection/repair?{query}",
+                headers={"Accept": "text/html"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            render.call_args.kwargs["editor_urls"]["catalog_return"],
+            catalog_return,
+        )
+        self.assertEqual(
+            render.call_args.kwargs["editor_urls"]["catalog_return_label"],
+            "К каталогу Ozon",
+        )
+        read.assert_called_once_with(
+            seller_id=self.seller.id,
+            selection={"account_id": self.account.id, "draft_ids": [self.draft.id]},
+        )
+
+    def test_selected_repair_rejects_foreign_or_arbitrary_catalog_return(self):
+        editor = self._selection_editor_document()
+        invalid_returns = [
+            "https://example.invalid/marketplaces/listings/?marketplace=ozon"
+            f"&account_id={self.account.id}",
+            "/marketplaces/listings/?marketplace=ozon&account_id=999",
+            "/marketplaces/listings/?marketplace=wb"
+            f"&account_id={self.account.id}",
+            "/marketplaces/listings/?marketplace=ozon"
+            f"&account_id={self.account.id}&next=https://example.invalid",
+            "/marketplaces/listings/?marketplace=ozon"
+            f"&account_id={self.account.id}&account_id={self.account.id}",
+        ]
+        with patch.object(
+            OzonBulkRepairService,
+            "editor_document",
+            side_effect=AssertionError("unsafe return must stop before service"),
+        ) as read:
+            for return_to in invalid_returns:
+                with self.subTest(return_to=return_to):
+                    query = self._selection_query(suffix=urlencode({"return_to": return_to}))
+                    response = self.client.get(
+                        f"/marketplaces/ozon/uploads/selection/repair?{query}",
+                        headers={"Accept": "text/html"},
+                    )
+                    self.assertEqual(response.status_code, 302)
+                    self.assertIn("no-store", response.headers.get("Cache-Control", ""))
+        read.assert_not_called()
+
+    def test_selected_repair_json_does_not_accept_catalog_return_query(self):
+        with patch.object(
+            OzonBulkRepairService,
+            "editor_document",
+            side_effect=AssertionError("JSON selection has no catalog return context"),
+        ) as read:
+            response = self.client.get(
+                "/marketplaces/ozon/uploads/selection/repair?"
+                + self._selection_query(suffix=urlencode({
+                    "return_to": "/marketplaces/listings/?marketplace=ozon"
+                    f"&account_id={self.account.id}",
+                })),
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(response.json["csrf"])
+        self.assertIn("no-store", response.headers["Cache-Control"])
+        read.assert_not_called()
 
     def test_selected_repair_rejects_ambiguous_or_untyped_scope_before_service(self):
         base = "/marketplaces/ozon/uploads/selection/repair?"

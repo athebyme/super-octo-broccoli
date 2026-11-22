@@ -5,6 +5,7 @@ import re
 import secrets
 from io import BytesIO
 from typing import Any, Optional
+from urllib.parse import parse_qsl, urlsplit
 
 from flask import (
     Blueprint,
@@ -29,6 +30,7 @@ from services.ozon_bulk_upload import (
     OzonBulkUploadValidationError,
 )
 from services.ozon_bulk_repair import OzonBulkRepairService
+from services.listing_navigation import validate_listing_return_url
 
 
 ozon_bulk_uploads_bp = Blueprint(
@@ -899,6 +901,7 @@ def repair_draft_selection():
         allowed_extra = set() if as_json else {
             "return_page", "return_per_page", "return_status",
             "return_account_id", "q", "group", "state", "page",
+            "return_to",
         }
         selection, extras = _selection_query_values(allowed_extra)
         if as_json:
@@ -909,6 +912,26 @@ def repair_draft_selection():
             view, return_filters, return_context_supplied = (
                 _selection_view_context(extras)
             )
+        catalog_return_url = None
+        if "return_to" in extras:
+            catalog_return_url = validate_listing_return_url(extras["return_to"])
+            if catalog_return_url is None:
+                raise OzonBulkUploadValidationError(
+                    "Ссылка возврата в каталог недопустима"
+                )
+            catalog_query = dict(parse_qsl(
+                urlsplit(catalog_return_url).query,
+                keep_blank_values=True,
+                strict_parsing=True,
+                max_num_fields=8,
+            ))
+            if (
+                catalog_query.get("marketplace") != "ozon"
+                or catalog_query.get("account_id") != str(selection["account_id"])
+            ):
+                raise OzonBulkUploadValidationError(
+                    "Ссылка возврата должна вести в выбранный кабинет Ozon"
+                )
         return_url, _classic_url = _draft_list_urls(
             selection,
             return_filters,
@@ -931,6 +954,9 @@ def repair_draft_selection():
             return_filters,
             return_context_supplied=return_context_supplied,
         )
+        if catalog_return_url is not None:
+            editor_urls["catalog_return"] = catalog_return_url
+            editor_urls["catalog_return_label"] = "К каталогу Ozon"
         response = make_response(render_template(
             "ozon_bulk_repair.html",
             editor=editor,

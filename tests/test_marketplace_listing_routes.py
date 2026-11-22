@@ -7,6 +7,7 @@ import json
 import re
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 import unittest
 
 from flask import Flask
@@ -26,9 +27,15 @@ from models import (
     db,
 )
 from routes.marketplace_listings import register_marketplace_listing_routes
+import routes.marketplace_listings as marketplace_listing_routes
 from routes.marketplace_drafts import register_marketplace_draft_routes
+from routes.ozon_bulk_uploads import register_ozon_bulk_upload_routes
+from services.ozon_existing_update_batch import OzonExistingUpdateBatch
 from services.marketplace_listings import MarketplaceListingService
-from services.marketplace_drafts import MarketplaceDraftService
+from services.marketplace_drafts import (
+    MarketplaceDraftNotFound,
+    MarketplaceDraftService,
+)
 
 
 class MarketplaceListingRoutesTest(unittest.TestCase):
@@ -49,6 +56,7 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
         from routes.marketplace_accounts import register_marketplace_account_routes
         register_marketplace_account_routes(self.app)
         register_marketplace_draft_routes(self.app)
+        register_ozon_bulk_upload_routes(self.app)
         self._register_template_stubs()
         self.client = self.app.test_client()
         with self.app.app_context():
@@ -369,6 +377,245 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
             )
         self.assertEqual(no_seller.status_code, 403)
         self.assertEqual(no_seller.get_json()["code"], "seller_profile_required")
+
+    def _existing_update_preview_document(self, listing_ids=None):
+        listing_ids = listing_ids or [self.own_id]
+        return {
+            "account_id": self.account1_id,
+            "account_label": "Ozon One",
+            "listing_ids": listing_ids,
+            "rows": [{
+                "listing_id": listing_id,
+                "title": f"Listing {listing_id}",
+                "offer_id": f"offer-{listing_id}",
+                "status": "ready",
+            } for listing_id in listing_ids],
+            "digest": "a" * 64,
+        }
+
+    def _existing_update_token(self, *, account_id=None, listing_ids=None):
+        with self.app.test_request_context():
+            return marketplace_listing_routes._issue_existing_update_token(
+                user_id=self.seller1_id,
+                seller_id=self.seller1_id,
+                account_id=account_id or self.account1_id,
+                listing_ids=listing_ids or [self.own_id],
+                digest="a" * 64,
+                return_to=(
+                    "/marketplaces/listings/?marketplace=ozon"
+                    f"&account_id={account_id or self.account1_id}"
+                ),
+            )
+
+    def test_existing_update_preview_is_exact_local_scope_signed_and_private(self):
+        requested_ids = [self.own_id]
+        return_to = (
+            "/marketplaces/listings/beta?marketplace=ozon"
+            f"&account_id={self.account1_id}&search=coat&page=2"
+        )
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch,
+            "preview",
+            return_value=self._existing_update_preview_document(requested_ids),
+        ) as preview:
+            response = self.client.post(
+                "/marketplaces/listings/update-drafts/preview",
+                json={
+                    "account_id": self.account1_id,
+                    "listing_ids": requested_ids,
+                    "return_to": return_to,
+                },
+            )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.headers["Cache-Control"], "private, no-store")
+        result = response.get_json()["preview"]
+        self.assertEqual(result["listing_ids"], requested_ids)
+        self.assertEqual([row["listing_id"] for row in result["rows"]], requested_ids)
+        self.assertEqual(result["rows"][0]["status"], "ready")
+        self.assertNotIn("digest", result)
+        self.assertTrue(result["token"])
+        preview.assert_called_once_with(
+            seller_id=self.seller1_id,
+            account_id=self.account1_id,
+            listing_ids=requested_ids,
+        )
+        with self.app.test_request_context():
+            payload = marketplace_listing_routes._existing_update_serializer().loads(
+                result["token"],
+                max_age=marketplace_listing_routes._EXISTING_UPDATE_TOKEN_MAX_AGE,
+            )
+        self.assertEqual(payload["user_id"], self.seller1_id)
+        self.assertEqual(payload["seller_id"], self.seller1_id)
+        self.assertEqual(payload["account_id"], self.account1_id)
+        self.assertEqual(payload["listing_ids"], requested_ids)
+        self.assertEqual(payload["digest"], "a" * 64)
+        self.assertEqual(payload["return_to"], return_to)
+
+    def test_existing_update_apply_links_only_successful_exact_draft_ids(self):
+        rows = [
+            {"listing_id": self.own_id, "title": "Ready", "offer_id": "own-offer",
+             "status": "created", "draft_id": 701},
+            {"listing_id": self.own_id + 1, "title": "Existing", "offer_id": "offer-2",
+             "status": "existing", "draft_id": 702},
+            {"listing_id": self.own_id + 2, "title": "Blocked", "offer_id": "offer-3",
+             "status": "blocked", "message": "Нужно перечитать"},
+        ]
+        report = {
+            "account_id": self.account1_id,
+            "account_label": "Ozon One",
+            "listing_ids": [self.own_id, self.own_id + 1, self.own_id + 2],
+            "rows": rows,
+        }
+        token = self._existing_update_token(
+            listing_ids=report["listing_ids"],
+        )
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch, "apply", return_value=report,
+        ) as apply:
+            response = self.client.post(
+                "/marketplaces/listings/update-drafts/apply",
+                json={"token": token, "confirm_local": True},
+            )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.headers["Cache-Control"], "private, no-store")
+        result = response.get_json()["report"]
+        self.assertEqual([row["status"] for row in result["rows"]],
+                         ["created", "existing", "blocked"])
+        self.assertEqual(result["editor_url"].split("?", 1)[0],
+                         "/marketplaces/ozon/uploads/selection/repair")
+        query = parse_qs(urlsplit(result["editor_url"]).query)
+        self.assertEqual(query["account_id"], [str(self.account1_id)])
+        self.assertEqual(query["draft_ids"], ["701,702"])
+        self.assertEqual(query["return_to"], [
+            "/marketplaces/listings/?marketplace=ozon"
+            f"&account_id={self.account1_id}"
+        ])
+        apply.assert_called_once_with(
+            seller_id=self.seller1_id,
+            account_id=self.account1_id,
+            listing_ids=report["listing_ids"],
+            expected_digest="a" * 64,
+        )
+
+    def test_existing_update_apply_all_blocked_has_no_editor_link(self):
+        listing_ids = [self.own_id]
+        token = self._existing_update_token(listing_ids=listing_ids)
+        report = {
+            "account_id": self.account1_id,
+            "account_label": "Ozon One",
+            "listing_ids": listing_ids,
+            "rows": [{"listing_id": self.own_id, "status": "blocked",
+                      "title": "Own", "offer_id": "own-offer"}],
+        }
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch, "apply", return_value=report,
+        ):
+            response = self.client.post(
+                "/marketplaces/listings/update-drafts/apply",
+                json={"token": token, "confirm_local": True},
+            )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertIsNone(response.json["report"]["editor_url"])
+
+    def test_existing_update_preview_rejects_bad_ids_shop_url_and_unknown_fields(self):
+        user_patch, login_patch = self._auth(self.seller1_id)
+        wrong_shop_return = (
+            "/marketplaces/listings/?marketplace=ozon"
+            f"&account_id={self.account2_id}"
+        )
+        external_return = "https://example.invalid/marketplaces/listings/?marketplace=ozon"
+        bad_requests = [
+            {"account_id": self.account1_id, "listing_ids": [self.own_id, self.own_id]},
+            {"account_id": self.account1_id, "listing_ids": [True]},
+            {"account_id": self.account1_id, "listing_ids": ["1"]},
+            {"account_id": self.account1_id, "listing_ids": [self.own_id], "return_to": wrong_shop_return},
+            {"account_id": self.account1_id, "listing_ids": [self.own_id], "return_to": external_return},
+            {"account_id": self.account1_id, "listing_ids": [self.own_id], "unexpected": 1},
+        ]
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch,
+            "preview",
+            side_effect=AssertionError("invalid scope must not reach local preview"),
+        ) as preview:
+            for body in bad_requests:
+                with self.subTest(body=body):
+                    response = self.client.post(
+                        "/marketplaces/listings/update-drafts/preview",
+                        json=body,
+                    )
+                    self.assertEqual(response.status_code, 400, response.get_json())
+                    self.assertEqual(response.headers["Cache-Control"], "private, no-store")
+        preview.assert_not_called()
+
+    def test_existing_update_preview_cross_seller_listing_fails_closed(self):
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch,
+            "preview",
+            side_effect=MarketplaceDraftNotFound("Листинг не найден"),
+        ) as preview:
+            response = self.client.post(
+                "/marketplaces/listings/update-drafts/preview",
+                json={"account_id": self.account1_id, "listing_ids": [self.foreign_id]},
+            )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json["code"], "marketplace_draft_not_found")
+        self.assertEqual(response.headers["Cache-Control"], "private, no-store")
+        preview.assert_called_once_with(
+            seller_id=self.seller1_id,
+            account_id=self.account1_id,
+            listing_ids=[self.foreign_id],
+        )
+
+    def test_existing_update_apply_token_is_user_bound_and_expires(self):
+        token = self._existing_update_token()
+        user_patch, login_patch = self._auth(self.seller2_id)
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch, "apply",
+            side_effect=AssertionError("wrong seller must not apply"),
+        ) as apply:
+            wrong_seller = self.client.post(
+                "/marketplaces/listings/update-drafts/apply",
+                json={"token": token, "confirm_local": True},
+            )
+        self.assertEqual(wrong_seller.status_code, 409)
+        self.assertEqual(wrong_seller.json["code"], "existing_update_review_invalid")
+        apply.assert_not_called()
+
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            marketplace_listing_routes,
+            "_EXISTING_UPDATE_TOKEN_MAX_AGE",
+            -1,
+        ), patch.object(
+            OzonExistingUpdateBatch, "apply",
+            side_effect=AssertionError("expired token must not apply"),
+        ) as apply:
+            expired = self.client.post(
+                "/marketplaces/listings/update-drafts/apply",
+                json={"token": token, "confirm_local": True},
+            )
+        self.assertEqual(expired.status_code, 409)
+        self.assertEqual(expired.json["code"], "existing_update_review_invalid")
+        apply.assert_not_called()
+
+    def test_existing_update_posts_keep_global_csrf_protection(self):
+        self.app.config["WTF_CSRF_ENABLED"] = True
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch,
+            "preview",
+            side_effect=AssertionError("CSRF rejection must happen before preview"),
+        ) as preview:
+            response = self.client.post(
+                "/marketplaces/listings/update-drafts/preview",
+                json={"account_id": self.account1_id, "listing_ids": [self.own_id]},
+            )
+        self.assertEqual(response.status_code, 400)
+        preview.assert_not_called()
 
     def test_catalog_bootstrap_and_classic_setup_keep_last_completed_snapshot(self):
         with self.app.app_context():

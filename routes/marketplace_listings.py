@@ -1,12 +1,18 @@
 """Seller-facing unified marketplace listing read model."""
 
+import json
+import logging
+import re
+import secrets
 from typing import Any, Dict, Optional
+from urllib.parse import parse_qsl, urlsplit
 
 from flask import (
     Blueprint,
     current_app,
     flash,
     jsonify,
+    make_response,
     redirect,
     render_template,
     request,
@@ -14,6 +20,7 @@ from flask import (
 )
 from flask_login import current_user, login_required
 from flask_wtf.csrf import generate_csrf
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from models import MarketplaceCommercialProposal, db
 from services.marketplace_accounts import MarketplaceAccountError, MarketplaceAccountService
@@ -37,10 +44,12 @@ from services.marketplace_drafts import (
     MarketplaceDraftError,
     MarketplaceDraftService,
 )
+from services.ozon_existing_update_batch import OzonExistingUpdateBatch
 from services.listing_navigation import (
     build_listing_catalog_url,
     current_listing_catalog_url,
     listing_return_url,
+    validate_listing_return_url,
 )
 
 
@@ -49,6 +58,25 @@ marketplace_listings_bp = Blueprint(
     __name__,
     url_prefix="/marketplaces/listings",
 )
+
+logger = logging.getLogger(__name__)
+
+_EXISTING_UPDATE_TOKEN_SALT = "ozon-existing-update-batch-v1"
+_EXISTING_UPDATE_TOKEN_MAX_AGE = 600
+_EXISTING_UPDATE_TOKEN_MAX_BYTES = 16_384
+_EXISTING_UPDATE_REQUEST_MAX_BYTES = 65_536
+_EXISTING_UPDATE_RESPONSE_MAX_BYTES = 524_288
+_EXISTING_UPDATE_DIGEST_RE = re.compile(r"[0-9a-f]{64}\Z")
+_EXISTING_UPDATE_TOKEN_KEYS = {
+    "v", "user_id", "seller_id", "account_id", "listing_ids",
+    "digest", "return_to", "nonce",
+}
+_MAX_SIGNED_SQLITE_ID = 9_223_372_036_854_775_807
+
+
+class _ExistingUpdateReviewError(ValueError):
+    status_code = 409
+    code = "existing_update_review_invalid"
 
 
 def _seller_id() -> Optional[int]:
@@ -201,6 +229,293 @@ def _detail_return_url(listing=None) -> str:
         if listing is not None and listing.marketplace is not None
         else None
     )
+
+
+def _existing_update_serializer():
+    if not current_app.secret_key:
+        raise RuntimeError("Не настроена подпись проверки существующих карточек")
+    return URLSafeTimedSerializer(
+        current_app.secret_key,
+        salt=_EXISTING_UPDATE_TOKEN_SALT,
+    )
+
+
+def _positive_native_id(value: Any, field_name: str) -> int:
+    if (
+        type(value) is not int
+        or value <= 0
+        or value > _MAX_SIGNED_SQLITE_ID
+    ):
+        raise ValueError(f"{field_name} должен быть положительным целым числом")
+    return value
+
+
+def _existing_update_ids(value: Any) -> list[int]:
+    if (
+        not isinstance(value, list)
+        or not 1 <= len(value) <= OzonExistingUpdateBatch.MAX_ITEMS
+    ):
+        raise ValueError(
+            "Выберите от 1 до 200 собственных карточек Ozon"
+        )
+    ids = [_positive_native_id(item, "listing_id") for item in value]
+    if len(ids) != len(set(ids)):
+        raise ValueError("Выбранные карточки не должны повторяться")
+    return ids
+
+
+def _unique_update_json_pairs(pairs):
+    data = {}
+    for key, value in pairs:
+        if key in data:
+            raise ValueError("Поля JSON не должны повторяться")
+        data[key] = value
+    return data
+
+
+def _existing_update_body(*, required: set[str], allowed: set[str]) -> dict:
+    if request.args:
+        raise ValueError("Параметры запроса передаются только в JSON body")
+    if not request.is_json:
+        raise ValueError("Ожидается JSON body")
+    if (
+        request.content_length is not None
+        and request.content_length > _EXISTING_UPDATE_REQUEST_MAX_BYTES
+    ):
+        raise ValueError("Запрос превышает допустимый размер")
+    body = request.get_data(cache=True)
+    if len(body) > _EXISTING_UPDATE_REQUEST_MAX_BYTES:
+        raise ValueError("Запрос превышает допустимый размер")
+    try:
+        data = json.loads(body, object_pairs_hook=_unique_update_json_pairs)
+    except (ValueError, UnicodeError, TypeError):
+        raise ValueError("Некорректный JSON body") from None
+    if not isinstance(data, dict):
+        raise ValueError("JSON body должен быть объектом")
+    if set(data) - allowed:
+        raise ValueError("Переданы неизвестные поля")
+    if required - set(data):
+        raise ValueError("Не переданы обязательные поля")
+    return data
+
+
+def _default_ozon_catalog_return_url(account_id: int) -> str:
+    return build_listing_catalog_url(
+        filters={"marketplace": "ozon", "account_id": account_id},
+    )
+
+
+def _validate_ozon_catalog_return_url(value: Any, account_id: int) -> str:
+    """Accept only an allowlisted catalog URL pinned to this Ozon account."""
+    safe = validate_listing_return_url(value)
+    if safe is None:
+        raise ValueError("Ссылка возврата в каталог недопустима")
+    parsed = urlsplit(safe)
+    query = parse_qsl(
+        parsed.query,
+        keep_blank_values=True,
+        strict_parsing=True,
+        max_num_fields=8,
+    ) if parsed.query else []
+    values = dict(query)
+    if (
+        values.get("marketplace") != "ozon"
+        or values.get("account_id") != str(account_id)
+    ):
+        raise ValueError("Ссылка возврата должна вести в выбранный кабинет Ozon")
+    return safe
+
+
+def _existing_update_return_url(data: dict, account_id: int) -> str:
+    if "return_to" not in data:
+        return _default_ozon_catalog_return_url(account_id)
+    value = data["return_to"]
+    if not isinstance(value, str):
+        raise ValueError("return_to должен быть ссылкой на каталог Ozon")
+    return _validate_ozon_catalog_return_url(value, account_id)
+
+
+def _issue_existing_update_token(
+    *, user_id: int, seller_id: int, account_id: int,
+    listing_ids: list[int], digest: str, return_to: str,
+) -> str:
+    if not isinstance(digest, str) or not _EXISTING_UPDATE_DIGEST_RE.fullmatch(digest):
+        raise MarketplaceDraftError("Сервис вернул некорректную проверку")
+    token = _existing_update_serializer().dumps({
+        "v": 1,
+        "user_id": user_id,
+        "seller_id": seller_id,
+        "account_id": account_id,
+        "listing_ids": listing_ids,
+        "digest": digest,
+        "return_to": return_to,
+        "nonce": secrets.token_urlsafe(18),
+    })
+    if len(token.encode("utf-8")) > _EXISTING_UPDATE_TOKEN_MAX_BYTES:
+        raise MarketplaceDraftError("Проверка выбранных карточек превышает лимит")
+    return token
+
+
+def _load_existing_update_token(
+    token: Any,
+    *,
+    user_id: int,
+    seller_id: int,
+) -> dict:
+    if not isinstance(token, str) or not token:
+        raise ValueError("Проверка устарела; перечитайте выбранные карточки")
+    try:
+        token_size = len(token.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise _ExistingUpdateReviewError(
+            "Подпись проверки неверна; перечитайте выбранные карточки"
+        ) from exc
+    if (
+        token_size > _EXISTING_UPDATE_TOKEN_MAX_BYTES
+    ):
+        raise ValueError("Проверка устарела; перечитайте выбранные карточки")
+    try:
+        payload = _existing_update_serializer().loads(
+            token,
+            max_age=_EXISTING_UPDATE_TOKEN_MAX_AGE,
+        )
+    except SignatureExpired as exc:
+        raise _ExistingUpdateReviewError(
+            "Проверка устарела; перечитайте выбранные карточки"
+        ) from exc
+    except BadSignature as exc:
+        raise _ExistingUpdateReviewError(
+            "Подпись проверки неверна; перечитайте выбранные карточки"
+        ) from exc
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != _EXISTING_UPDATE_TOKEN_KEYS
+        or type(payload.get("v")) is not int
+        or payload.get("v") != 1
+        or type(payload.get("user_id")) is not int
+        or payload.get("user_id") != user_id
+        or type(payload.get("seller_id")) is not int
+        or payload.get("seller_id") != seller_id
+        or type(payload.get("account_id")) is not int
+        or not 0 < payload["account_id"] <= _MAX_SIGNED_SQLITE_ID
+        or not isinstance(payload.get("listing_ids"), list)
+        or not isinstance(payload.get("digest"), str)
+        or not _EXISTING_UPDATE_DIGEST_RE.fullmatch(payload["digest"])
+        or not isinstance(payload.get("return_to"), str)
+        or not isinstance(payload.get("nonce"), str)
+        or re.fullmatch(r"[A-Za-z0-9_-]{20,40}", payload["nonce"]) is None
+    ):
+        raise _ExistingUpdateReviewError(
+            "Проверка относится к другому продавцу или выбору"
+        )
+    try:
+        listing_ids = _existing_update_ids(payload["listing_ids"])
+    except ValueError as exc:
+        raise _ExistingUpdateReviewError(
+            "Проверка относится к другому набору карточек"
+        ) from exc
+    if listing_ids != payload["listing_ids"]:
+        raise _ExistingUpdateReviewError(
+            "Порядок выбранных карточек изменился"
+        )
+    try:
+        safe_return = _validate_ozon_catalog_return_url(
+            payload["return_to"], payload["account_id"],
+        )
+    except ValueError as exc:
+        raise _ExistingUpdateReviewError(
+            "Проверка содержит недопустимую ссылку возврата"
+        ) from exc
+    if safe_return != payload["return_to"]:
+        raise _ExistingUpdateReviewError(
+            "Ссылка возврата проверки изменилась"
+        )
+    payload["return_to"] = safe_return
+    return payload
+
+
+def _bounded_existing_update_document(
+    document: Any,
+    *,
+    account_id: int,
+    listing_ids: list[int],
+    allowed_statuses: set[str],
+    require_success_draft: bool,
+) -> dict:
+    if (
+        not isinstance(document, dict)
+        or type(document.get("account_id")) is not int
+        or document.get("account_id") != account_id
+        or not isinstance(document.get("listing_ids"), list)
+        or any(type(value) is not int for value in document["listing_ids"])
+        or document.get("listing_ids") != listing_ids
+        or not isinstance(document.get("account_label"), str)
+        or len(document["account_label"]) > 500
+        or not isinstance(document.get("rows"), list)
+        or len(document["rows"]) != len(listing_ids)
+    ):
+        raise MarketplaceDraftError("Сервис вернул неполный результат проверки")
+    rows = []
+    success_draft_ids = set()
+    for expected_id, source in zip(listing_ids, document["rows"]):
+        if (
+            not isinstance(source, dict)
+            or type(source.get("listing_id")) is not int
+            or source.get("listing_id") != expected_id
+            or not isinstance(source.get("status"), str)
+            or source.get("status") not in allowed_statuses
+        ):
+            raise MarketplaceDraftError("Порядок или результат карточек изменился")
+        row = {"listing_id": expected_id, "status": source["status"]}
+        for field in ("title", "offer_id", "message"):
+            if field in source:
+                value = source[field]
+                limit = 1000 if field == "message" else 2000
+                if not isinstance(value, str) or len(value) > limit:
+                    raise MarketplaceDraftError("Сервис вернул некорректное описание карточки")
+                row[field] = value
+        if "draft_id" in source:
+            row["draft_id"] = _positive_native_id(source["draft_id"], "draft_id")
+        if source["status"] == "existing" and "draft_id" not in row:
+            raise MarketplaceDraftError("Существующий черновик не подтверждён")
+        if source["status"] in {"ready", "blocked"} and "draft_id" in row:
+            raise MarketplaceDraftError("Неподготовленная строка не должна содержать черновик")
+        if require_success_draft and source["status"] in {"created", "existing"}:
+            if "draft_id" not in row or row["draft_id"] in success_draft_ids:
+                raise MarketplaceDraftError("Не удалось подтвердить созданный черновик")
+            success_draft_ids.add(row["draft_id"])
+        elif source["status"] == "blocked" and "draft_id" in row:
+            raise MarketplaceDraftError("Заблокированная строка не может открыть черновик")
+        rows.append(row)
+    result = {
+        "account_id": account_id,
+        "account_label": document["account_label"],
+        "listing_ids": listing_ids,
+        "rows": rows,
+    }
+    encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(encoded) > _EXISTING_UPDATE_RESPONSE_MAX_BYTES:
+        raise MarketplaceDraftError("Результат выбранных карточек превышает лимит")
+    return result
+
+
+def _existing_update_json(payload: dict, status_code: int = 200):
+    response = make_response(jsonify(payload), status_code)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+def _existing_update_error(
+    message: str,
+    *,
+    status_code: int = 400,
+    code: str = "invalid_existing_update_request",
+):
+    return _existing_update_json({
+        "success": False,
+        "error": message,
+        "code": code,
+    }, status_code)
     account_id = getattr(listing, "account_id", None) if listing is not None else None
     return listing_return_url(
         request.args.getlist("return_to"),
@@ -715,6 +1030,173 @@ def update_draft_context(listing_id: int):
     response = jsonify(response_data)
     response.headers["Cache-Control"] = "private, no-store"
     return response
+
+
+@marketplace_listings_bp.route(
+    "/update-drafts/preview",
+    methods=["POST"],
+)
+@login_required
+def preview_update_drafts():
+    """Read and sign an exact local preview for selected Ozon listings."""
+    seller_id = _seller_id()
+    if seller_id is None:
+        return _existing_update_error(
+            "Для работы с листингами нужна карточка продавца",
+            status_code=403,
+            code="seller_profile_required",
+        )
+    if not current_app.config.get("MARKETPLACE_OZON_ENABLED", False):
+        return _existing_update_error(
+            "Подготовка черновиков Ozon отключена",
+            status_code=404,
+            code="ozon_feature_disabled",
+        )
+    try:
+        user_id = _positive_native_id(
+            getattr(current_user, "id", None), "user_id",
+        )
+        seller_id = _positive_native_id(seller_id, "seller_id")
+        data = _existing_update_body(
+            required={"account_id", "listing_ids"},
+            allowed={"account_id", "listing_ids", "return_to"},
+        )
+        account_id = _positive_native_id(data["account_id"], "account_id")
+        listing_ids = _existing_update_ids(data["listing_ids"])
+        return_to = _existing_update_return_url(data, account_id)
+        raw_preview = OzonExistingUpdateBatch.preview(
+            seller_id=seller_id,
+            account_id=account_id,
+            listing_ids=listing_ids,
+        )
+        preview = _bounded_existing_update_document(
+            raw_preview,
+            account_id=account_id,
+            listing_ids=listing_ids,
+            allowed_statuses={"ready", "existing", "blocked"},
+            require_success_draft=False,
+        )
+        preview["token"] = _issue_existing_update_token(
+            user_id=user_id,
+            seller_id=seller_id,
+            account_id=account_id,
+            listing_ids=listing_ids,
+            digest=raw_preview.get("digest"),
+            return_to=return_to,
+        )
+        encoded = json.dumps(
+            {"success": True, "preview": preview},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(encoded) > _EXISTING_UPDATE_RESPONSE_MAX_BYTES:
+            raise ValueError("Предпросмотр выбранных карточек превышает лимит")
+        return _existing_update_json({"success": True, "preview": preview})
+    except MarketplaceDraftError as exc:
+        return _existing_update_error(
+            str(exc),
+            status_code=exc.status_code,
+            code=exc.code,
+        )
+    except ValueError as exc:
+        return _existing_update_error(str(exc))
+    except Exception:
+        logger.exception(
+            "Ozon existing-update preview failed seller_id=%s",
+            seller_id,
+        )
+        return _existing_update_error(
+            "Не удалось проверить выбранные карточки. Перечитайте список.",
+            status_code=500,
+            code="existing_update_preview_failed",
+        )
+
+
+@marketplace_listings_bp.route(
+    "/update-drafts/apply",
+    methods=["POST"],
+)
+@login_required
+def apply_update_drafts():
+    """Create only the exact locally reviewed existing-listing drafts."""
+    seller_id = _seller_id()
+    if seller_id is None:
+        return _existing_update_error(
+            "Для работы с листингами нужна карточка продавца",
+            status_code=403,
+            code="seller_profile_required",
+        )
+    if not current_app.config.get("MARKETPLACE_OZON_ENABLED", False):
+        return _existing_update_error(
+            "Подготовка черновиков Ozon отключена",
+            status_code=404,
+            code="ozon_feature_disabled",
+        )
+    try:
+        user_id = _positive_native_id(
+            getattr(current_user, "id", None), "user_id",
+        )
+        seller_id = _positive_native_id(seller_id, "seller_id")
+        data = _existing_update_body(
+            required={"token", "confirm_local"},
+            allowed={"token", "confirm_local"},
+        )
+        if data["confirm_local"] is not True:
+            raise ValueError("Подтвердите локальную подготовку выбранных черновиков")
+        payload = _load_existing_update_token(
+            data["token"],
+            user_id=user_id,
+            seller_id=seller_id,
+        )
+        raw_report = OzonExistingUpdateBatch.apply(
+            seller_id=seller_id,
+            account_id=payload["account_id"],
+            listing_ids=payload["listing_ids"],
+            expected_digest=payload["digest"],
+        )
+        report = _bounded_existing_update_document(
+            raw_report,
+            account_id=payload["account_id"],
+            listing_ids=payload["listing_ids"],
+            allowed_statuses={"created", "existing", "blocked"},
+            require_success_draft=True,
+        )
+        successful_draft_ids = [
+            row["draft_id"]
+            for row in report["rows"]
+            if row["status"] in {"created", "existing"}
+        ]
+        report["editor_url"] = None
+        if successful_draft_ids:
+            report["editor_url"] = url_for(
+                "ozon_bulk_uploads.repair_draft_selection",
+                account_id=payload["account_id"],
+                draft_ids=",".join(str(value) for value in successful_draft_ids),
+                return_to=payload["return_to"],
+            )
+        return _existing_update_json({"success": True, "report": report})
+    except _ExistingUpdateReviewError as exc:
+        return _existing_update_error(
+            str(exc), status_code=exc.status_code, code=exc.code,
+        )
+    except MarketplaceDraftError as exc:
+        return _existing_update_error(
+            str(exc),
+            status_code=exc.status_code,
+            code=exc.code,
+        )
+    except ValueError as exc:
+        return _existing_update_error(str(exc))
+    except Exception:
+        logger.exception(
+            "Ozon existing-update apply failed seller_id=%s",
+            seller_id,
+        )
+        return _existing_update_error(
+            "Результат подготовки не подтверждён. Перечитайте выбранные карточки.",
+            status_code=500,
+            code="existing_update_apply_unknown",
+        )
 
 
 def _link_write_payload(data: Dict[str, Any], allowed: set) -> None:
