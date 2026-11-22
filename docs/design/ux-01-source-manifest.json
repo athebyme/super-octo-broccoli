@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-22T07:32:47.142052+00:00",
+  "generated_at": "2026-11-22T08:46:12.299369+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "2af90ae1caff07e7429f08f6209eb70c8374057ca79a9af0a79f828151c61a8b"
+      "sha256": "f2d795dba49d5329288d9281346ac36b20e51c8deee40843d304fbe97aeac7aa"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -1493,7 +1493,7 @@
     },
     {
       "path": "routes/suppliers.py",
-      "sha256": "c38544b11b9d59a19db4c9387b0d65ec84bff4032afbce656972708b4b87790b"
+      "sha256": "841086bfe07d4ee7762372107580ee90e13292a64e838db80374f3764f1bf115"
     },
     {
       "path": "routes/telegram_alerts.py",
@@ -2393,7 +2393,7 @@
     },
     {
       "path": "services/supplier_service.py",
-      "sha256": "1a7542cd44648db5f711807a7ed8395be1c306a14dc62fab32a70f7c170d273d"
+      "sha256": "85d6a6835c21a36ad054014d9c748961366940f71ea6c758a4c1df8e3b841bdb"
     },
     {
       "path": "services/supplier_update_hub.py",
@@ -4881,7 +4881,7 @@
     },
     {
       "path": "tests/test_supplier_catalog_perf_paths.py",
-      "sha256": "5952d5ecc56cb4b7e6bba52158716642609cf9ff547f7ad112a8901554851faa"
+      "sha256": "cbfd0bb088221f824ac0933d4bb2f9f83e183f39d0bdafebcc968e280e7e4093"
     },
     {
       "path": "tests/test_supplier_catalog_refresh.py",
@@ -5188,5 +5188,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "fed24fa5982e3b2f1cfc6b0c7295d85ec4cb1ff670c6d170c5e17f45324e07ad"
+  "aggregate_sha256": "ff4f34ff77ab8aba5d5a0fc385b1d05450d07b2c27e0a9b3b04a2002d6a0f4a6"
 }
