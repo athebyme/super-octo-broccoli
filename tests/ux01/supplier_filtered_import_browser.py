@@ -21,6 +21,7 @@ from pathlib import Path
 import re
 import sys
 import time
+import traceback
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from playwright.sync_api import sync_playwright
@@ -1095,8 +1096,9 @@ def run():
                 "workspace switch must perform one ordinary product feed read",
             )
             full_workspace_read = product_feed_reads[-1]
-            assert full_workspace_read["query_keys"] == (
-                "has_photos", "page", "per_page", "search", "sort", "stock", "supplier",
+            assert full_workspace_read["query_keys"] == ("page", "per_page"), (
+                "the default workspace omits empty filters from its feed URL",
+                full_workspace_read["query_keys"],
             )
             assert full_workspace_read["status"] == 200
             full_workspace_payload = full_workspace_read["payload"]
@@ -1147,6 +1149,14 @@ def run():
             )
         except Exception as error:
             message = str(error).replace(batch_token, "[redacted]")
+            if not message:
+                frames = traceback.extract_tb(error.__traceback__)
+                location = frames[-1] if frames else None
+                message = (
+                    f"{type(error).__name__} at "
+                    f"{Path(location.filename).name}:{location.lineno}"
+                    if location else type(error).__name__
+                )
             raise AssertionError(f"import batch browser assertion failed: {message}") from None
         checks.append("normal_post_persists_only_the_exact_selected_owned_supplier_rows")
         checks.append("import_batch_mobile_screenshot_saved")
