@@ -282,7 +282,18 @@ def encode_workspace_return(value):
     return "workspace-return=" + encoded
 
 
-def review_bootstrap(page):
+def review_bootstrap(page, expected_page=1):
+    page.wait_for_function(
+        """expected => {
+            const node = document.querySelector('#our-bootstrap');
+            if (!node) return false;
+            try {
+                const review = JSON.parse(node.textContent).review;
+                return Number(review?.pagination?.page) === expected;
+            } catch (_) { return false; }
+        }""",
+        arg=expected_page,
+    )
     return page.evaluate(
         "() => JSON.parse(document.querySelector('#our-bootstrap').textContent).review"
     )
@@ -1280,7 +1291,7 @@ def exercise_signed_import_review_return(page):
     assert review_page_one_response.status == 200
     review_root = page.locator("#ozon-upload-review:not([v-cloak])")
     review_root.wait_for()
-    review_one = review_bootstrap(page)
+    review_one = review_bootstrap(page, expected_page=1)
     assert review_one["account_id"] == fixture["account_id"]
     assert review_one["draft_ids"] == draft_ids
     assert review_one["workspace_selection"] == compact_selection
@@ -1347,7 +1358,7 @@ def exercise_signed_import_review_return(page):
         next_page.click()
     review_page_two_response = review_page_two_info.value
     assert review_page_two_response.status == 200
-    review_two = review_bootstrap(page)
+    review_two = review_bootstrap(page, expected_page=2)
     assert review_two["account_id"] == fixture["account_id"]
     assert review_two["draft_ids"] == draft_ids
     assert review_two["workspace_selection"] == compact_selection
@@ -1449,7 +1460,7 @@ def exercise_signed_import_review_return(page):
     )) as returned_review_info:
         detail_return_link.click()
     assert returned_review_info.value.status == 200
-    returned_review = review_bootstrap(page)
+    returned_review = review_bootstrap(page, expected_page=2)
     assert returned_review["account_id"] == fixture["account_id"]
     assert returned_review["draft_ids"] == draft_ids
     assert returned_review["workspace_selection"] == compact_selection
