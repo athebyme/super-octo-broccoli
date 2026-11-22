@@ -106,6 +106,15 @@
         {% endfor %}
     </section>
 
+    {% if base_preview_token and preview.changed_count > 1 %}
+    <form id="wb-review-exclude" method="POST" action="{{ url_for('products_bulk_edit') }}" hidden>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="selection_token" value="{{ selection_token }}">
+        <input type="hidden" name="review_exclude" value="1">
+        <input type="hidden" name="base_preview_token" value="{{ base_preview_token }}">
+    </form>
+    {% endif %}
+
     {% if preview.diff %}
     <section class="sh-card sh-card--flush mt-6 overflow-hidden">
         <div class="border-b px-5 py-4" style="border-color:var(--border)">
@@ -124,6 +133,9 @@
                         {% if loop.first %}
                         <td rowspan="{{ product_group.changes|length }}" class="min-w-[20rem] align-top px-4 py-3" style="color:var(--text)" data-review-product-id="{{ product_group.product_id }}">
                             {{ review_product_identity(product_group) }}
+                            {% if base_preview_token and preview.changed_count > 1 %}
+                            <button type="submit" form="wb-review-exclude" name="excluded_product_id" value="{{ product_group.product_id }}" aria-label="Исключить из проверки: {{ product_group.product.title or 'Название не указано' }}, ID Seller Hub {{ product_group.product.id }}" data-review-exclude-product-id="{{ product_group.product_id }}" class="sh-btn sh-btn--secondary mt-3 min-h-[46px] w-full whitespace-normal">Исключить из проверки</button>
+                            {% endif %}
                         </td>
                         {% endif %}
                         <td class="px-4 py-3" style="color:var(--text)">{{ row.characteristic }}</td>
@@ -144,6 +156,9 @@
                             <header class="border-b pb-3" style="border-color:var(--border)">
                                 {{ review_product_identity(product_group, mobile_heading=true) }}
                             </header>
+                            {% if base_preview_token and preview.changed_count > 1 %}
+                            <button type="submit" form="wb-review-exclude" name="excluded_product_id" value="{{ product_group.product_id }}" aria-label="Исключить из проверки: {{ product_group.product.title or 'Название не указано' }}, ID Seller Hub {{ product_group.product.id }}" data-review-exclude-product-id="{{ product_group.product_id }}" class="sh-btn sh-btn--secondary mt-3 min-h-[46px] w-full whitespace-normal">Исключить из проверки</button>
+                            {% endif %}
                             <ol class="mt-3 space-y-3">
                                 {% for row in product_group.changes %}
                                 <li data-review-product-change-mobile="{{ product_group.product_id }}" class="min-w-0 rounded-md border p-3" style="border-color:var(--border)">
@@ -199,7 +214,7 @@
     {% endif %}
 
     <div class="mt-8 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <a href="{{ return_to }}" class="sh-btn sh-btn--secondary min-h-[44px] w-full whitespace-normal sm:w-auto" data-review-mobile-back>Вернуться к товарам</a>
+        <a href="{{ return_to }}" class="sh-btn sh-btn--secondary min-h-[46px] w-full whitespace-normal sm:w-auto" data-review-mobile-back>Вернуться к товарам</a>
         <form method="POST" action="{{ url_for('products_bulk_edit') }}" class="flex w-full items-center gap-3 sm:w-auto">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="selection_token" value="{{ selection_token }}">
@@ -215,7 +230,7 @@
             {% else %}
             <input type="hidden" name="value" value="{{ operation_value }}">
             {% endif %}
-            <button type="submit" class="sh-btn sh-btn--accent min-h-[44px] w-full whitespace-normal sm:w-auto" data-review-mobile-apply {% if not preview_token %}disabled{% endif %}>
+            <button type="submit" class="sh-btn sh-btn--accent min-h-[46px] w-full whitespace-normal sm:w-auto" data-review-mobile-apply {% if not preview_token %}disabled{% endif %}>
                 Подтвердить и применить {{ preview.changed_count }} карточек
             </button>
         </form>

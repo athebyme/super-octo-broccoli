@@ -2315,8 +2315,12 @@ def assert_bulk_review_mobile_projection(
 
     mobile_products = page.locator("[data-review-product-id-mobile]")
     mobile_changes = page.locator("[data-review-product-change-mobile]")
+    mobile_exclusions = page.locator(
+        "[data-review-mobile-projection] button[data-review-exclude-product-id]",
+    )
     assert mobile_products.count() == 50, mobile_products.count()
     assert mobile_changes.count() == 50, mobile_changes.count()
+    assert mobile_exclusions.count() == 50, mobile_exclusions.count()
     product_ids = mobile_products.evaluate_all(
         "nodes => nodes.map(node => node.getAttribute('data-review-product-id-mobile'))",
     )
@@ -2360,6 +2364,9 @@ def assert_bulk_review_mobile_projection(
         };
         const back = document.querySelector('[data-review-mobile-back]');
         const apply = document.querySelector('[data-review-mobile-apply]');
+        const exclude = document.querySelector(
+            '[data-review-mobile-projection] button[data-review-exclude-product-id]'
+        );
         return {
             viewportWidth: window.innerWidth,
             documentWidth: document.documentElement.scrollWidth,
@@ -2372,6 +2379,7 @@ def assert_bulk_review_mobile_projection(
             bounded,
             back: back ? boxes(back) : null,
             apply: apply ? boxes(apply) : null,
+            exclude: exclude ? boxes(exclude) : null,
         };
     }""")
     assert geometry["viewportWidth"] == 320, geometry
@@ -2380,7 +2388,7 @@ def assert_bulk_review_mobile_projection(
     assert geometry["regionScrollHeight"] > geometry["regionClientHeight"], geometry
     assert geometry["desktopDisplay"] == "none", geometry
     assert all(row["scrollWidth"] <= row["clientWidth"] + 1 for row in geometry["bounded"]), geometry
-    for name in ("back", "apply"):
+    for name in ("back", "apply", "exclude"):
         box = geometry[name]
         assert box and box["width"] >= 44 and box["height"] >= 44, geometry
         assert box["left"] >= -0.75 and box["right"] <= 320.75, geometry
@@ -2418,6 +2426,7 @@ def assert_bulk_review_mobile_projection(
         "document_width": geometry["documentWidth"],
         "product_count": mobile_products.count(),
         "change_count": mobile_changes.count(),
+        "exclude_button_count": mobile_exclusions.count(),
         "region_vertical_scroll": True,
         "region_horizontal_scroll": False,
         "touch_targets_at_least_44px": True,
@@ -2427,6 +2436,7 @@ def assert_bulk_review_mobile_projection(
         "bulk_review_mobile_projection_exact_rows_identity_and_touch_targets",
         products=mobile_products.count(),
         changes=mobile_changes.count(),
+        exclude_buttons=mobile_exclusions.count(),
         viewport_width=geometry["viewportWidth"],
         horizontal_overflow=False,
         touch_targets_at_least_44px=True,
@@ -4465,6 +4475,222 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
                 observation=REPORT["mixed_fixture_observations"],
             )
             interaction("mixed_fixture_confirm_writes_only_reviewed_rows_and_history_reads_back")
+
+            # A separate exact two-row selection verifies local exclusion:
+            # it must issue a fresh one-product preview before the ordinary
+            # apply button can write, without changing the preceding 50-row
+            # mixed-scope proof.
+            excluded_product_id, remaining_product_id = fixture[
+                "mixed_changed_product_ids"
+            ]
+            remaining_nm_id = fixture["mixed_nm_ids"][1]
+            mixed_page.goto(
+                BASE + "/products?search=Mixed&brand=Mixed%20Reviewed%20Brand"
+                "&sort=title&order=asc&page=1&per_page=50",
+                wait_until="domcontentloaded",
+            )
+            _assert_local_products_url(mixed_page.url, {
+                "search": ["Mixed"],
+                "brand": ["Mixed Reviewed Brand"],
+                "sort": ["title"],
+                "order": ["asc"],
+                "page": ["1"],
+                "per_page": ["50"],
+            })
+            assert mixed_page.locator(".product-checkbox").count() == 2
+            filtered_ids = sorted(int(value) for value in mixed_page.locator(
+                ".product-checkbox",
+            ).evaluate_all("inputs => inputs.map(input => input.value)"))
+            assert filtered_ids == fixture["mixed_changed_product_ids"], filtered_ids
+            for product_id in filtered_ids:
+                mixed_page.locator(
+                    f'.product-checkbox[value="{product_id}"]',
+                ).check()
+            mixed_page.wait_for_function(
+                "() => document.querySelector('#selectedCount')?.textContent?.trim() === '2'",
+                timeout=5000,
+            )
+            mixed_page.get_by_role("button", name="Редактировать", exact=True).click()
+            mixed_page.wait_for_url("**/products/bulk-edit")
+            mixed_page.locator('input[name="operation"][value="update_brand"]').check()
+            mixed_page.locator("#value_brand").fill("One Product After Exclusion")
+            with mixed_page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url == BASE + "/products/bulk-edit",
+                timeout=5000,
+            ) as exclusion_source_preview:
+                with mixed_page.expect_navigation(wait_until="domcontentloaded"):
+                    mixed_page.locator(
+                        'form[action="/products/bulk-edit"] button[type="submit"]',
+                    ).click()
+            assert exclusion_source_preview.value.status == 200
+            assert mixed_page.locator(
+                '[data-review-product-id="' + str(excluded_product_id) + '"]',
+            ).count() == 1
+            assert mixed_page.locator(
+                '[data-review-product-id="' + str(remaining_product_id) + '"]',
+            ).count() == 1
+            initial_exclusion_summary = mixed_page.locator(
+                "section[aria-label='Сводка предпросмотра'] div.sh-card",
+            ).evaluate_all("""cards => Object.fromEntries(cards.map(card => [
+                card.querySelector('p.text-xs').textContent.trim(),
+                Number(card.querySelector('p.text-2xl').textContent.trim()),
+            ]))""")
+            assert initial_exclusion_summary == {
+                "Выбрано": 2,
+                "Подходит для операции": 2,
+                "Изменится": 2,
+                "Пропущено": 0,
+                "Ошибки": 0,
+            }, initial_exclusion_summary
+
+            exclusion_form = mixed_page.locator("form#wb-review-exclude")
+            assert exclusion_form.count() == 1
+            exclusion_form_names = exclusion_form.locator("input").evaluate_all(
+                "inputs => inputs.map(input => input.name)",
+            )
+            assert exclusion_form_names == [
+                "csrf_token", "selection_token", "review_exclude", "base_preview_token",
+            ], exclusion_form_names
+            assert exclusion_form.locator(
+                'input[name="review_exclude"]',
+            ).input_value() == "1"
+            assert exclusion_form.locator(
+                'input[name="base_preview_token"]',
+            ).input_value()
+            exclude_button = mixed_page.locator(
+                f'[data-review-desktop-table] '
+                f'button[data-review-exclude-product-id="{excluded_product_id}"]',
+            )
+            assert exclude_button.count() == 1
+            exclude_name = exclude_button.get_attribute("aria-label") or ""
+            assert "Mixed isolated product 000" in exclude_name, exclude_name
+            assert f"ID Seller Hub {excluded_product_id}" in exclude_name, exclude_name
+            assert exclude_button.evaluate(
+                "button => button.form?.id === 'wb-review-exclude'"
+                " && button.type === 'submit'"
+                " && button.name === 'excluded_product_id'"
+                " && Number(button.value) > 0",
+            ) is True
+            assert exclude_button.inner_text().strip() == "Исключить из проверки"
+            assert REPORT["fake_wb_client_instances"] == mixed_fake_baseline["instances"] + 1
+            assert REPORT["fake_wb_write_calls"] == mixed_fake_baseline["write_calls"] + 1
+
+            with mixed_page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url == BASE + "/products/bulk-edit",
+                timeout=5000,
+            ) as exclusion_response:
+                with mixed_page.expect_navigation(wait_until="domcontentloaded"):
+                    exclude_button.click()
+            assert exclusion_response.value.status == 200
+            exclusion_request_fields = parse_qs(
+                exclusion_response.value.request.post_data or "",
+                keep_blank_values=True,
+            )
+            assert set(exclusion_request_fields) == {
+                "csrf_token", "selection_token", "review_exclude",
+                "base_preview_token", "excluded_product_id",
+            }, exclusion_request_fields.keys()
+            assert exclusion_request_fields["review_exclude"] == ["1"]
+            assert exclusion_request_fields["excluded_product_id"] == [
+                str(excluded_product_id),
+            ]
+            assert exclusion_request_fields["base_preview_token"]
+            assert exclusion_request_fields["selection_token"]
+            assert mixed_page.locator(
+                '[data-review-product-id="' + str(excluded_product_id) + '"]',
+            ).count() == 0
+            assert mixed_page.locator(
+                '[data-review-product-id="' + str(remaining_product_id) + '"]',
+            ).count() == 1
+            assert mixed_page.locator("form#wb-review-exclude").count() == 0, (
+                "A one-row preview must not offer an exclusion that would empty the selection"
+            )
+            reduced_summary = mixed_page.locator(
+                "section[aria-label='Сводка предпросмотра'] div.sh-card",
+            ).evaluate_all("""cards => Object.fromEntries(cards.map(card => [
+                card.querySelector('p.text-xs').textContent.trim(),
+                Number(card.querySelector('p.text-2xl').textContent.trim()),
+            ]))""")
+            assert reduced_summary == {
+                "Выбрано": 1,
+                "Подходит для операции": 1,
+                "Изменится": 1,
+                "Пропущено": 0,
+                "Ошибки": 0,
+            }, reduced_summary
+            assert mixed_page.locator(
+                '[data-review-product-id-mobile="' + str(remaining_product_id) + '"]',
+            ).count() == 1
+            assert mixed_page.locator(
+                '[data-review-product-change-mobile]',
+            ).count() == 1
+            assert REPORT["fake_wb_client_instances"] == mixed_fake_baseline["instances"] + 1
+            assert REPORT["fake_wb_write_calls"] == mixed_fake_baseline["write_calls"] + 1
+            check(
+                "wb_review_exclusion_rebuilds_exact_smaller_preview_without_write",
+                selected=1,
+                changed=1,
+                excluded_product_id=excluded_product_id,
+                remaining_product_id=remaining_product_id,
+                provider_calls_before_apply=1,
+                provider_write_calls_before_apply=1,
+            )
+
+            with mixed_page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url == BASE + "/products/bulk-edit",
+                timeout=5000,
+            ) as exclusion_apply_response:
+                with mixed_page.expect_navigation(wait_until="domcontentloaded"):
+                    mixed_page.get_by_role(
+                        "button", name="Подтвердить и применить 1 карточек", exact=True,
+                    ).click()
+            assert exclusion_apply_response.value.status == 302
+            assert "Успешно обновлено товаров: 1" in mixed_page.locator("body").inner_text()
+            exclusion_writes = REPORT["fake_wb_written_products"][
+                mixed_fake_baseline["written_products"] + 2:
+            ]
+            assert exclusion_writes == [remaining_nm_id], exclusion_writes
+            assert REPORT["fake_wb_write_calls"] - mixed_fake_baseline["write_calls"] == 2
+            assert REPORT["fake_wb_client_instances"] - mixed_fake_baseline["instances"] == 2
+            with seller_app.app_context():
+                exclusion_products = Product.query.filter(
+                    Product.id.in_(fixture["mixed_changed_product_ids"]),
+                ).order_by(Product.id.asc()).all()
+                assert [product.brand for product in exclusion_products] == [
+                    "Mixed Reviewed Brand", "One Product After Exclusion",
+                ]
+                exclusion_history = BulkEditHistory.query.filter_by(
+                    seller_id=fixture["mixed_seller_id"],
+                    operation_type="update_brand",
+                ).order_by(BulkEditHistory.id.desc()).first()
+                assert exclusion_history.status == "completed"
+                assert exclusion_history.total_products == 1
+                assert exclusion_history.success_count == 1
+                assert exclusion_history.error_count == 0
+                exclusion_summary = (
+                    exclusion_history.operation_params or {}
+                ).get("review_summary") or {}
+                assert exclusion_summary == {
+                    "selected": 1,
+                    "eligible": 1,
+                    "changed": 1,
+                    "skipped": 0,
+                    "errors": 0,
+                    "changed_product_ids": [remaining_product_id],
+                    "mode": "replace",
+                    "subject_id": None,
+                }, exclusion_summary
+            check(
+                "wb_review_exclusion_apply_reaches_only_remaining_product",
+                selected_product_id=remaining_product_id,
+                excluded_product_id=excluded_product_id,
+                provider_nm_id=remaining_nm_id,
+                local_changes=1,
+            )
+            interaction("mixed_review_excludes_exact_product_then_applies_remainder")
             mixed_context.close()
 
             assert REPORT["provider_attempts"] == 0
