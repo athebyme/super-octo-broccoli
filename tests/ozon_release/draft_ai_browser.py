@@ -28,6 +28,7 @@ for asset in manifest.values():
     assert hashlib.sha256((ASSETS/asset['file']).read_bytes()).hexdigest() == asset['sha256']
 report = {'status':'running','checks':[],'layouts':[],'js_errors':[],
           'unexpected_http':[],'external':[],'provider_attempts':0,'posts':{},
+          'review_responses':[],
           'scope':'synthetic_seller_ai_review'}
 temporary = tempfile.TemporaryDirectory(prefix='ozon-ai-browser-')
 os.environ.update(DATABASE_URL='sqlite:///'+str(Path(temporary.name)/'app.sqlite'),
@@ -210,6 +211,20 @@ def bridge(route):
             if state['drop_next']:
                 state['drop_next'] = False; route.abort(); return
     response = route.fetch(max_redirects=0)
+    if request.method == 'POST' and url.path == '/marketplaces/api/drafts/'+str(draft_id)+'/ai-suggestions/apply':
+        try:
+            body = response.json()
+        except Exception:
+            body = None
+        review_result = body.get('review') if isinstance(body,dict) else None
+        ids = review_result.get('suggestion_ids') if isinstance(review_result,dict) else None
+        report['review_responses'].append({
+            'status':response.status,
+            'success':isinstance(body,dict) and body.get('success') is True,
+            'action':review_result.get('action') if isinstance(review_result,dict) else None,
+            'selected_count':len(ids) if isinstance(ids,list) else None,
+            'replayed':review_result.get('replayed') if isinstance(review_result,dict) else None,
+        })
     if request.method == 'POST' and state['lose_next']:
         state['lose_next'] = False
         assert response.status in (200,202), (response.status,response.body()[:300])
@@ -406,14 +421,43 @@ try:
             state['lose_next'] = True
             page.locator('.ode-ai-dialog[open]').get_by_role('button',name='Подтвердить решение').click()
             page.get_by_text('Результат решения неизвестен.').wait_for()
+            read_state_button = page.get_by_role('button',name='Прочитать состояние')
+            page.wait_for_function('''() => {
+                const button = [...document.querySelectorAll('.ode-ai-review button')]
+                    .find(node => node.textContent.trim() === 'Прочитать состояние');
+                return !!button && !button.disabled;
+            }''')
+            assert read_state_button.is_enabled()
             assert state['review_effects'] == 1
-            page.get_by_role('button',name='Прочитать состояние').click()
-            page.get_by_role('button',name='Повторить то же решение').click()
+            assert report['review_responses'] == [{
+                'status':200,'success':True,'action':'apply',
+                'selected_count':1,'replayed':False,
+            }], report['review_responses']
+            read_state_button.click()
+            replay_button = page.get_by_role('button',name='Повторить то же решение')
+            replay_button.wait_for()
+            page.wait_for_function('''() => {
+                const button = [...document.querySelectorAll('.ode-ai-review button')]
+                    .find(node => node.textContent.trim() === 'Повторить то же решение');
+                return !!button && !button.disabled;
+            }''')
+            assert replay_button.is_enabled()
+            replay_button.click()
             page.get_by_text('Выбранные значения сохранены.').wait_for()
             page.locator('.ode-ai-item.is-accepted').wait_for()
             assert page.locator('.ode-ai-item.is-accepted').count() == 1
             assert page.locator('.ode-ai-item.is-proposed').count() == 1
             assert state['review_effects'] == 1
+            assert report['review_responses'] == [
+                {
+                    'status':200,'success':True,'action':'apply',
+                    'selected_count':1,'replayed':False,
+                },
+                {
+                    'status':200,'success':True,'action':'apply',
+                    'selected_count':1,'replayed':True,
+                },
+            ], report['review_responses']
             after_ai = editor_document(page)
             assert after_ai['draft']['version'] == before_ai['draft']['version']
             assert after_ai['draft']['source_fact_hash'] == before_ai['draft']['source_fact_hash']
