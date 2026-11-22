@@ -3400,6 +3400,12 @@ def products_bulk_edit():
         'ai_enabled': ai_enabled,
     }
 
+    def bulk_history_detail_url(bulk_id):
+        params = {'bulk_id': bulk_id}
+        if is_workspace_selection:
+            params['workspace_return'] = return_to
+        return url_for('bulk_edit_history_detail', **params)
+
     def render_bulk_editor():
         return render_template('products_bulk_edit.html', **bulk_context)
 
@@ -3494,9 +3500,7 @@ def products_bulk_edit():
                             'Этот предпросмотр уже был отправлен. Повторной отправки не было; проверьте историю операции.',
                             'info',
                         )
-                        return redirect(url_for(
-                            'bulk_edit_history_detail', bulk_id=existing_review.id,
-                        ))
+                        return redirect(bulk_history_detail_url(existing_review.id))
                     current_preview = validate_preview_against_current(
                         apply_preview_payload, products,
                     )
@@ -3568,9 +3572,7 @@ def products_bulk_edit():
                             'Этот предпросмотр уже был отправлен. Повторной отправки не было; проверьте историю операции.',
                             'info',
                         )
-                        return redirect(url_for(
-                            'bulk_edit_history_detail', bulk_id=existing_review.id,
-                        ))
+                        return redirect(bulk_history_detail_url(existing_review.id))
                     current_preview = validate_preview_against_current(
                         apply_preview_payload, products,
                     )
@@ -3678,9 +3680,7 @@ def products_bulk_edit():
                     'Этот предпросмотр уже был отправлен. Повторной отправки не было; проверьте историю операции.',
                     'info',
                 )
-                return redirect(url_for(
-                    'bulk_edit_history_detail', bulk_id=bulk_operation.id,
-                ))
+                return redirect(bulk_history_detail_url(bulk_operation.id))
         else:
             db.session.add(bulk_operation)
             db.session.commit()  # Коммитим чтобы получить ID
@@ -5111,6 +5111,19 @@ def bulk_edit_history_detail(bulk_id):
         seller_id=seller_id,
     ).first_or_404()
 
+    # The editor passes workspace context only after loading its signed
+    # selection. Revalidate that typed hint here; ordinary history navigation
+    # remains unchanged for missing or malformed values.
+    from services.product_selection import safe_workspace_return_url
+
+    workspace_return_values = request.args.getlist('workspace_return')
+    workspace_return = None
+    if len(workspace_return_values) == 1:
+        candidate = workspace_return_values[0]
+        sanitized = safe_workspace_return_url(candidate)
+        if candidate == sanitized:
+            workspace_return = sanitized
+
     # Получаем все изменения в рамках этой операции
     product_changes = CardEditHistory.query.filter_by(
         bulk_edit_id=bulk_id,
@@ -5153,6 +5166,7 @@ def bulk_edit_history_detail(bulk_id):
         bulk_operation=bulk_operation,
         product_changes=product_changes,
         owned_product_ids=owned_product_ids,
+        workspace_return=workspace_return,
     )
 
 

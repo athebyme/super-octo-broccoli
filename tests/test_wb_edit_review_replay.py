@@ -8,6 +8,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from html.parser import HTMLParser
+from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
 from flask import Flask
@@ -235,7 +236,9 @@ class WBBulkReviewReplayTest(unittest.TestCase):
             session['_fresh'] = True
         return client
 
-    def _review_submission(self):
+    def _review_submission(
+        self, *, return_to='/products?page=1', workspace_source_ids=None,
+    ):
         from models import Product
         from services.product_selection import (
             issue_product_selection_token,
@@ -258,8 +261,9 @@ class WBBulkReviewReplayTest(unittest.TestCase):
                 seller_id=self.seller_id,
                 product_ids=[self.product_id],
                 state=state,
-                return_to='/products?page=1',
+                return_to=return_to,
                 wb_account_id='synthetic-wb-account',
+                workspace_source_ids=workspace_source_ids,
             )
             selection_payload = load_product_selection_token(
                 selection_token,
@@ -421,10 +425,12 @@ class WBBulkReviewReplayTest(unittest.TestCase):
                 if operation == 'add_characteristic' else '',
             }
 
-    def _run_review_with_fake_provider(self, *, ambiguous=False):
+    def _run_review_with_fake_provider(
+        self, *, ambiguous=False, submission=None, expected_workspace_return=None,
+    ):
         from models import BulkEditHistory
 
-        submission = self._review_submission()
+        submission = submission or self._review_submission()
         fake_state = {'reads': 0, 'writes': 0}
 
         class FakeWBClient:
@@ -503,6 +509,8 @@ class WBBulkReviewReplayTest(unittest.TestCase):
             client = self._client()
             first = client.post('/products/bulk-edit', data=submission)
             self.assertEqual(first.status_code, 302)
+            if expected_workspace_return is not None:
+                self.assertEqual(first.headers['Location'], expected_workspace_return)
             with self.app.app_context():
                 history = BulkEditHistory.query.filter_by(
                     seller_id=self.seller_id,
@@ -515,12 +523,30 @@ class WBBulkReviewReplayTest(unittest.TestCase):
             # provider read or write.
             replay = client.post('/products/bulk-edit', data=submission)
             self.assertEqual(replay.status_code, 302)
-            self.assertEqual(
-                replay.headers['Location'],
-                f'/bulk-history/{history_id}',
-            )
+            replay_url = urlsplit(replay.headers['Location'])
+            self.assertEqual(replay_url.path, f'/bulk-history/{history_id}')
+            replay_query = parse_qs(replay_url.query)
+            if expected_workspace_return is None:
+                self.assertNotIn('workspace_return', replay_query)
+            else:
+                self.assertEqual(
+                    replay_query.get('workspace_return'),
+                    [expected_workspace_return],
+                )
             detail = client.get(replay.headers['Location'])
             self.assertEqual(detail.status_code, 200)
+            detail_html = detail.get_data(as_text=True)
+            if expected_workspace_return is not None:
+                self.assertIn('Вернуться к моим товарам', detail_html)
+                self.assertIn(f'href="{expected_workspace_return}"', detail_html)
+                invalid_hint = client.get(
+                    f'/bulk-history/{history_id}?workspace_return='
+                    'https%3A%2F%2Fevil.example%2Fmy-products%2Fbeta'
+                )
+                self.assertEqual(invalid_hint.status_code, 200)
+                invalid_html = invalid_hint.get_data(as_text=True)
+                self.assertIn('Назад к истории операций', invalid_html)
+                self.assertNotIn('Вернуться к моим товарам', invalid_html)
 
         return fake_state, history_id
 
@@ -530,6 +556,31 @@ class WBBulkReviewReplayTest(unittest.TestCase):
 
     def test_successful_apply_reload_does_not_retry_same_signed_post(self):
         fake_state, _history_id = self._run_review_with_fake_provider()
+        self.assertEqual(fake_state, {'reads': 1, 'writes': 1})
+
+    def test_workspace_replay_keeps_history_result_and_safe_return_without_rewriting(self):
+        from models import ImportedProduct
+
+        workspace_return = '/my-products/beta#workspace-return=' + 'd' * 32
+        with self.app.app_context():
+            source = ImportedProduct(
+                seller_id=self.seller_id,
+                product_id=self.product_id,
+                wb_nm_id=self.nm_id,
+                external_id='workspace-replay-source',
+            )
+            self.db.session.add(source)
+            self.db.session.commit()
+            source_id = source.id
+
+        submission = self._review_submission(
+            return_to=workspace_return,
+            workspace_source_ids=[source_id],
+        )
+        fake_state, _history_id = self._run_review_with_fake_provider(
+            submission=submission,
+            expected_workspace_return=workspace_return,
+        )
         self.assertEqual(fake_state, {'reads': 1, 'writes': 1})
 
     def test_manual_wb_claim_precedes_provider_and_replay_is_single_use(self):

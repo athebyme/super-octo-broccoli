@@ -72,6 +72,12 @@
             </svg>
             Назад к истории операций
         </a>
+        {% if workspace_return %}
+        <a href="{{ workspace_return }}"
+           class="ml-4 inline-flex items-center text-blue-600 hover:text-blue-700">
+            Вернуться к моим товарам
+        </a>
+        {% endif %}
     </div>
 
     {% include 'partials/operations_workspace_history_nav.html' %}
