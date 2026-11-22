@@ -2323,6 +2323,23 @@
                         this.filters.sort === scope.sort &&
                         (this.searchInput || '').trim().slice(0, 200) === scope.search;
             },
+            workspaceReturnScopeIsCurrent: function (scope) {
+                if (!scope || this.loading || this.loadingMore || this.selectAllLoading ||
+                    this.itemsScope !== this.feedScopeKey() ||
+                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search ||
+                    !validWorkspaceReturnScope(scope)) return false;
+                var current = {
+                    activeTab: this.activeTab,
+                    search: this.filters.search,
+                    supplier: this.filters.supplier,
+                    has_photos: this.filters.has_photos,
+                    stock: this.filters.stock,
+                    sort: this.filters.sort,
+                    visibleCount: Math.min(this.items.length, MAX_BULK_SELECTION),
+                };
+                return JSON.stringify(current) === JSON.stringify(scope) &&
+                    (!this.importBatchMode || defaultWorkspaceReturnScope(scope));
+            },
             workspaceReturnWbEditMatches: function (items, selectionIds) {
                 var capsule = workspaceReturnCapsule;
                 if (!capsule || capsule.v !== 5) return true;
@@ -3317,8 +3334,7 @@
                     (this.searchInput || '').trim().slice(0, 200) !== this.filters.search ||
                     (review.source === 'bulk' && !sameOrderedIds(this.selected, review.imported_product_ids)) ||
                     (review.source === 'row' && review.imported_product_ids.length !== 1) ||
-                    (review.source === 'bulk' &&
-                        JSON.stringify(this.buildWorkspaceReturnScope()) !== JSON.stringify(review.returnScope))) {
+                    (review.source === 'bulk' && !this.workspaceReturnScopeIsCurrent(review.returnScope))) {
                     this.closeOzonPriceHandoff();
                     this.setOzonPriceHandoffError(
                         'Выбор товаров изменился после проверки. Отметьте их заново перед сравнением.'
