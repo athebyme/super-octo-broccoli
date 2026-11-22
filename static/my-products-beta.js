@@ -560,7 +560,7 @@
         var outcome = supplierRefreshOutcome(data, submitted.ids, submitted.labels, commonContentUrl);
         if (!outcome) return null;
         outcome.saved = true;
-        outcome.title = 'Сохранённый итог обновления из поставщика';
+        outcome.title = 'Сохранённый итог обновления от поставщика';
         return outcome;
     }
 

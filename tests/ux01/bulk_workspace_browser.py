@@ -2042,7 +2042,7 @@ def run():
         page.wait_for_url(fixture.BASE + return_url, wait_until="domcontentloaded")
         restored_result = page.locator(".mp-refresh-result")
         restored_result.get_by_role(
-            "heading", name="Сохранённый итог обновления из поставщика", exact=True,
+            "heading", name="Сохранённый итог обновления от поставщика", exact=True,
         ).wait_for()
         restored_result.get_by_text("В запросе товаров: 2.", exact=False).wait_for()
         verify_mobile_supplier_refresh_focus(page)
@@ -2141,7 +2141,7 @@ def run():
         assert restored_manual.is_checked()
         restored_result = page.locator(".mp-refresh-result")
         restored_result.get_by_role(
-            "heading", name="Сохранённый итог обновления из поставщика", exact=True,
+            "heading", name="Сохранённый итог обновления от поставщика", exact=True,
         ).wait_for()
         restored_result.get_by_text("Карточки и итог (2)", exact=True).click()
         restored_result.get_by_text(REFRESHED_TITLE, exact=False).wait_for()
@@ -2179,7 +2179,7 @@ def run():
         assert selected_browser_state(page)["selected"] == [fixture_ids["local_id"]]
         scoped_result = page.locator(".mp-refresh-result")
         scoped_result.get_by_role(
-            "heading", name="Сохранённый итог обновления из поставщика", exact=True,
+            "heading", name="Сохранённый итог обновления от поставщика", exact=True,
         ).wait_for()
         assert scoped_result.locator(".mp-refresh-result-counts dd").all_text_contents() == ["1", "1", "0"]
         verify_bounds(page)
@@ -2201,7 +2201,7 @@ def run():
         page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").wait_for()
         assert page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").is_checked()
         page.locator(".mp-refresh-result").get_by_role(
-            "heading", name="Сохранённый итог обновления из поставщика", exact=True,
+            "heading", name="Сохранённый итог обновления от поставщика", exact=True,
         ).wait_for()
         assert len(posts) == posts_before_updated_selection
         assert fixture.REPORT["provider_attempts"] == 0
@@ -2211,7 +2211,7 @@ def run():
             page.goto(fixture.BASE + return_url, wait_until="domcontentloaded")
         assert_resumed_refresh(ordinary_result.value)
         page.locator(".mp-refresh-result").get_by_role(
-            "heading", name="Сохранённый итог обновления из поставщика", exact=True,
+            "heading", name="Сохранённый итог обновления от поставщика", exact=True,
         ).wait_for()
 
         result_gets_before_hide = len(resume_result_requests)
@@ -2674,7 +2674,7 @@ def run():
         assert mobile_page.url == zero_update_page_url
         restored_zero_update = mobile_page.locator(".mp-refresh-result")
         restored_zero_update.get_by_role(
-            "heading", name="Сохранённый итог обновления из поставщика", exact=True,
+            "heading", name="Сохранённый итог обновления от поставщика", exact=True,
         ).wait_for()
         restored_zero_update.get_by_text("В запросе товаров: 1.", exact=False).wait_for()
         restored_zero_update.get_by_text("Карточки и итог (1)", exact=True).click()

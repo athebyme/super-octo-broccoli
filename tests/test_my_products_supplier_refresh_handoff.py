@@ -936,7 +936,7 @@ async function finishSupplierRefresh(data, ids) {
   await restored.app.restoreSupplierRefreshResult();
   assert.equal(fetchCalls.length, 1, 'restoring one tab result performs one bounded GET');
   assert.equal(restored.app.supplierRefreshResult.saved, true);
-  assert.equal(restored.app.supplierRefreshResult.title, 'Сохранённый итог обновления из поставщика');
+  assert.equal(restored.app.supplierRefreshResult.title, 'Сохранённый итог обновления от поставщика');
   sameJson(restored.app.supplierRefreshOzonIds, [101, 303]);
   sameJson(restored.app.supplierRefreshWbProductIds, [9101]);
   sameJson(restored.app.supplierRefreshResult.entries.map(row => [row.productId, row.label]), [
