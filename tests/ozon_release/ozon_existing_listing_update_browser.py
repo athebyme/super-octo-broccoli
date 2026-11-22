@@ -260,10 +260,11 @@ def exercise_catalog_batch(page):
     page.goto(base + bulk_catalog)
     catalog = page.locator("#marketplace-catalog-app:not([v-cloak])")
     catalog.wait_for()
-    by_listing = catalog.get_by_role("button", name="По площадкам", exact=True)
-    if not by_listing.is_visible():
-        catalog.get_by_role("button", name="Фильтры", exact=True).click()
-    by_listing.press("Enter")
+    choose_updates = catalog.locator("[data-listing-update-switch-to-listings]")
+    choose_updates.wait_for()
+    choice_bounds = choose_updates.bounding_box()
+    assert choice_bounds and choice_bounds["height"] >= 44 and choice_bounds["width"] >= 44
+    choose_updates.press("Enter")
     toggle = catalog.locator("[data-listing-update-toggle]")
     checks = catalog.locator("[data-listing-update-select]")
     checks.first.wait_for()
