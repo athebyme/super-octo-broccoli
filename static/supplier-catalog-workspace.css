@@ -465,6 +465,10 @@
 
 .sc-action-count {
     margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
     color: var(--text-muted);
     font-size: 11px;
     font-variant-numeric: tabular-nums;
@@ -575,10 +579,10 @@
 .sc-product-badge--ai { background: var(--accent-bg, var(--bg)); color: var(--accent-strong); }
 .sc-product-badge--wb { background: var(--bg); color: var(--text-secondary); }
 .sc-product-channel { min-height: 24px; display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 11px; }
-.sc-product-price-row { gap: 8px; color: var(--text-secondary); font-size: 11px; }
-.sc-product-price { color: var(--text); font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sc-product-price-row { min-width: 0; flex-wrap: wrap; gap: 8px; color: var(--text-secondary); font-size: 11px; }
+.sc-product-price { flex: 0 0 auto; white-space: nowrap; color: var(--text); font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .sc-product-muted { color: var(--text-muted); }
-.sc-product-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 8px; color: var(--text-secondary); font-size: 10px; text-align: right; }
+.sc-product-status { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 8px; color: var(--text-secondary); font-size: 10px; text-align: right; }
 
 #category-modal input { min-height: 44px; }
 #category-modal button { min-height: 44px; min-width: 44px; }
@@ -683,7 +687,7 @@
     .sc-action-panel { padding: 9px 10px; }
     .sc-action-controls { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; }
     .sc-action-submit { width: 100%; }
-    .sc-action-count { min-height: 26px; display: flex; align-items: center; }
+    .sc-action-count { min-height: 26px; }
     .sc-action-scope { min-height: 44px; }
     .sc-review-page { width: min(100% - 1.25rem, 64rem); padding-top: 10px; }
     .sc-review-scope dl { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }

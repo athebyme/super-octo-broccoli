@@ -301,7 +301,10 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         self.assertTrue(all(title in review_html for title in rendered_titles))
         self.assertIn('Выбрано 55 из 57', review_html)
         self.assertIn('(55)', review_html)
-        self.assertIn('55 выбрано', review_html)
+        self.assertIn('id="supplier-selection-status"', review_html)
+        self.assertEqual(review_html.count('id="supplier-selection-count"'), 1)
+        self.assertIn('aria-describedby="supplier-selection-count"', review_html)
+        self.assertNotIn('id="import-selection-count"', review_html)
         self.assertNotIn('ID каталога:', review_html)
         self.assertIn('BulkChoice already imported', review_html)
         self.assertIn('В «Моих товарах»', review_html)
@@ -439,6 +442,10 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
             'Выбрано 55 из 55',
             review_html,
         )
+        self.assertIn('id="supplier-selection-status"', review_html)
+        self.assertEqual(review_html.count('id="supplier-selection-count"'), 1)
+        self.assertIn('aria-describedby="supplier-selection-count"', review_html)
+        self.assertNotIn('id="update-selection-count"', review_html)
         self.assertIn('update_product_ids', review_html)
         self.assertNotIn('update_all_for_supplier', review_html)
         self.assertEqual(ImportedProduct.query.count(), before_count)

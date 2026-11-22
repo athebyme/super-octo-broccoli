@@ -827,6 +827,12 @@ def run():
             '[data-supplier-products] [aria-live="polite"] strong',
         ).inner_text()
         assert review_text == "Выбрано 53 из 53", review_text
+        assert page.locator("#supplier-selection-status").get_attribute("aria-live") == "polite"
+        assert page.locator("#supplier-selection-count").count() == 1
+        assert page.locator("#import-selection-count").count() == 0
+        import_submit = page.locator('button[form="supplier-import-form"].sc-action-submit')
+        assert import_submit.get_attribute("aria-describedby") == "supplier-selection-count"
+        assert " ".join(import_submit.inner_text().split()) == "Импортировать товары (53)"
         for excluded_id in fixture_ids["excluded_ids"]:
             assert excluded_id not in rendered_ids, excluded_id
         assert page.get_by_text("R28 Mass batch out of stock", exact=True).count() == 0
@@ -844,6 +850,7 @@ def run():
             '[data-supplier-products] [aria-live="polite"] strong',
         ).inner_text()
         assert review_text == "Выбрано 50 из 53", review_text
+        assert " ".join(import_submit.inner_text().split()) == "Импортировать товары (50)"
 
         selected_ids = set(rendered_ids) - excluded_ids
         submitted = page.evaluate("""() => ({
@@ -1750,6 +1757,31 @@ def run():
         assert ordinary_update_inputs.evaluate_all(
             "items => items.filter(item => item.checked).map(item => item.value)",
         ) == []
+        ordinary_count = page.locator("#update-selection-count")
+        assert " ".join(ordinary_count.inner_text().split()) == (
+            "0 выбрано из 55 с обновлениями"
+        )
+        ordinary_count_geometry = ordinary_count.evaluate("""element => {
+            const parts = Array.from(element.children).map(child => child.getBoundingClientRect());
+            const style = getComputedStyle(element);
+            const bounds = element.getBoundingClientRect();
+            return {
+                partCount: parts.length,
+                separated: parts.length === 2 && (
+                    parts[0].bottom <= parts[1].top || parts[1].bottom <= parts[0].top ||
+                    parts[0].right + parseFloat(style.columnGap || style.gap || '0') <= parts[1].left + 1
+                ),
+                left: bounds.left,
+                right: bounds.right,
+                viewport: document.documentElement.clientWidth,
+                scroll: document.documentElement.scrollWidth,
+            };
+        }""")
+        assert ordinary_count_geometry["partCount"] == 2
+        assert ordinary_count_geometry["separated"]
+        assert ordinary_count_geometry["left"] >= 0
+        assert ordinary_count_geometry["right"] <= ordinary_count_geometry["viewport"]
+        assert ordinary_count_geometry["scroll"] <= ordinary_count_geometry["viewport"] + 1
 
         filtered_update_link = page.locator("a[data-supplier-filter-update-select]")
         assert filtered_update_link.count() == 1
@@ -1822,6 +1854,14 @@ def run():
         assert selection_screenshot_geometry["viewport"] == 320
         assert selection_screenshot_geometry["scroll"] <= 321
         assert selection_screenshot_geometry["checkedUpdateCount"] == 55
+        selection_status_container = page.locator("#supplier-selection-status")
+        assert selection_status_container.get_attribute("role") == "status"
+        assert selection_status_container.get_attribute("aria-live") == "polite"
+        assert page.locator("#supplier-selection-count").count() == 1
+        assert page.locator("#update-selection-count").count() == 0
+        update_submit = page.locator('button[form="supplier-update-form"].sc-action-submit')
+        assert update_submit.get_attribute("aria-describedby") == "supplier-selection-count"
+        assert " ".join(update_submit.inner_text().split()) == "Проверить выбранное (55)"
         selection_status = page.locator('[role="status"] strong').filter(
             has_text="Выбрано 55 из 55",
         )
@@ -1836,6 +1876,69 @@ def run():
             path=REPORT_PATH.parent / update_selection_screenshot,
             animations="disabled",
         )
+        selected_count_geometry = page.evaluate("""() => {
+            const status = document.querySelector('#supplier-selection-status');
+            const count = document.querySelector('#supplier-selection-count');
+            const button = document.querySelector('button[form="supplier-update-form"].sc-action-submit');
+            const statusRect = status.getBoundingClientRect();
+            const buttonRect = button.getBoundingClientRect();
+            return {
+                statusText: count.innerText.trim(),
+                statusRole: status.getAttribute('role'),
+                live: status.getAttribute('aria-live'),
+                duplicate: !!document.querySelector('#update-selection-count'),
+                describedBy: button.getAttribute('aria-describedby'),
+                buttonText: button.innerText.replace(/\\s+/g, ' ').trim(),
+                statusBounds: [statusRect.left, statusRect.top, statusRect.right, statusRect.bottom],
+                buttonBounds: [buttonRect.left, buttonRect.top, buttonRect.right, buttonRect.bottom],
+                viewport: [document.documentElement.clientWidth, window.innerHeight],
+                scroll: document.documentElement.scrollWidth,
+                overlap: !(statusRect.bottom <= buttonRect.top || buttonRect.bottom <= statusRect.top ||
+                    statusRect.right <= buttonRect.left || buttonRect.right <= statusRect.left),
+            };
+        }""")
+        assert selected_count_geometry["statusText"] == "Выбрано 55 из 55"
+        assert selected_count_geometry["statusRole"] == "status"
+        assert selected_count_geometry["live"] == "polite"
+        assert not selected_count_geometry["duplicate"]
+        assert selected_count_geometry["describedBy"] == "supplier-selection-count"
+        assert selected_count_geometry["buttonText"] == "Проверить выбранное (55)"
+        assert selected_count_geometry["statusBounds"][0] >= 0
+        assert selected_count_geometry["statusBounds"][2] <= selected_count_geometry["viewport"][0]
+        assert selected_count_geometry["buttonBounds"][0] >= 0
+        assert selected_count_geometry["buttonBounds"][2] <= selected_count_geometry["viewport"][0]
+        assert not selected_count_geometry["overlap"]
+        assert selected_count_geometry["scroll"] <= selected_count_geometry["viewport"][0] + 1
+
+        first_price = page.locator(".sc-product-price").first
+        assert " ".join(first_price.inner_text().split()) == "200 ₽"
+        first_price_geometry = first_price.evaluate("""price => {
+            const range = document.createRange();
+            range.selectNodeContents(price);
+            const textRects = Array.from(range.getClientRects());
+            const row = price.closest('.sc-product-price-row');
+            const status = row && row.querySelector('.sc-product-status');
+            const tile = price.closest('.sc-product-tile');
+            const priceRect = price.getBoundingClientRect();
+            const statusRect = status && status.getBoundingClientRect();
+            const tileRect = tile.getBoundingClientRect();
+            return {
+                whiteSpace: getComputedStyle(price).whiteSpace,
+                lineCount: textRects.length,
+                priceBounds: [priceRect.left, priceRect.top, priceRect.right, priceRect.bottom],
+                statusBounds: statusRect && [statusRect.left, statusRect.top, statusRect.right, statusRect.bottom],
+                tileBounds: [tileRect.left, tileRect.top, tileRect.right, tileRect.bottom],
+                overlaps: !!statusRect && priceRect.left < statusRect.right &&
+                    priceRect.right > statusRect.left && priceRect.top < statusRect.bottom &&
+                    priceRect.bottom > statusRect.top,
+            };
+        }""")
+        assert first_price_geometry["whiteSpace"] == "nowrap"
+        assert first_price_geometry["lineCount"] == 1
+        assert first_price_geometry["priceBounds"][0] >= first_price_geometry["tileBounds"][0]
+        assert first_price_geometry["priceBounds"][2] <= first_price_geometry["tileBounds"][2]
+        assert first_price_geometry["statusBounds"] is not None
+        assert not first_price_geometry["overlaps"]
 
         # The duplicate current copy is included in preview scope, while the
         # explicitly unchecked source remains outside preview and apply.

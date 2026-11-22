@@ -5,7 +5,7 @@
 
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='supplier-feed-freshness.css', v='20261121-r34') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='supplier-catalog-workspace.css', v='20261122-r58') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='supplier-catalog-workspace.css', v='20261122-r58-g2') }}">
 {% endblock %}
 
 {% block content %}
@@ -185,14 +185,14 @@
         </form>
 
         {% if selection_review and selection_mode == 'updates' %}
-        <div class="sc-selection-note sc-selection-note--updates" role="status" aria-live="polite">
-            <strong x-text="'Выбрано ' + updateSelected.length + ' из ' + {{ action_counts.updatable }}">Выбрано {{ selected_update_ids|length }} из {{ action_counts.updatable }}</strong>
+        <div id="supplier-selection-status" class="sc-selection-note sc-selection-note--updates" role="status" aria-live="polite">
+            <strong id="supplier-selection-count" x-text="'Выбрано ' + updateSelected.length + ' из ' + {{ action_counts.updatable }}">Выбрано {{ selected_update_ids|length }} из {{ action_counts.updatable }}</strong>
             <span>Обновятся связанные локальные карточки.</span>
             <a href="{{ update_intent_url }}">Снять выбор</a>
         </div>
         {% elif selection_review and selection_mode == 'import' %}
-        <div class="sc-selection-note" role="status" aria-live="polite">
-            <strong x-text="'Выбрано ' + importSelected.length + ' из ' + {{ pagination.total }}">Выбрано {{ selected_import_ids|length }} из {{ pagination.total }}</strong>
+        <div id="supplier-selection-status" class="sc-selection-note" role="status" aria-live="polite">
+            <strong id="supplier-selection-count" x-text="'Выбрано ' + importSelected.length + ' из ' + {{ pagination.total }}">Выбрано {{ selected_import_ids|length }} из {{ pagination.total }}</strong>
             {% if pagination.total > selected_import_ids|length %}
             <span>Отметьте ниже товары, которые нужно добавить.</span>
             {% endif %}
@@ -249,13 +249,15 @@
                 <button type="submit" form="supplier-import-form" disabled
                         class="sh-btn sh-btn--primary sc-action-submit"
                         :disabled="importSelected.length === 0"
-                        aria-describedby="import-selection-count">
+                        aria-describedby="{{ 'supplier-selection-count' if selection_review else 'import-selection-count' }}">
                     Импортировать товары <span x-text="'(' + importSelected.length + ')'">({{ selected_import_ids|length }})</span>
                 </button>
+                {% if not selection_review %}
                 <p id="import-selection-count" class="sc-action-count" aria-live="polite">
                     <span x-text="importSelected.length + ' выбрано'">{{ selected_import_ids|length }} выбрано</span>
-                    из {{ action_counts.importable }} доступных
+                    <span>из {{ action_counts.importable }} доступных</span>
                 </p>
+                {% endif %}
             </div>
             {% if ozon_auto_account_ids or draft_options.count %}
             <details class="sc-action-more">
@@ -316,13 +318,15 @@
                 <button type="submit" form="supplier-update-form" disabled
                         class="sh-btn sh-btn--secondary sc-action-submit"
                         :disabled="updateSelected.length === 0"
-                        aria-describedby="update-selection-count">
+                        aria-describedby="{{ 'supplier-selection-count' if selection_review else 'update-selection-count' }}">
                     Проверить выбранное <span x-text="'(' + updateSelected.length + ')'">(0)</span>
                 </button>
+                {% if not selection_review %}
                 <p id="update-selection-count" class="sc-action-count" aria-live="polite">
                     <span x-text="updateSelected.length + ' выбрано'">{{ selected_update_ids|length }} выбрано</span>
-                    из {{ action_counts.updatable }} с обновлениями
+                    <span>из {{ action_counts.updatable }} с обновлениями</span>
                 </p>
+                {% endif %}
             </div>
         </section>
         {% endif %}
