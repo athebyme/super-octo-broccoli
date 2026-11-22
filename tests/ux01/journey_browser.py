@@ -345,8 +345,46 @@ def set_theme(page, theme: str):
     return actual
 
 
-def supplier_catalog_assertions(page, name: str):
+def supplier_catalog_macro_state(page, name: str):
+    """Recheck supplier defaults during responsive measurement without navigation."""
+    assert page.locator(".preparation-journey").count() == 0, name
+    if name == "supplier_catalog":
+        assert urlsplit(page.url).path == urlsplit(PAGE_PATHS["supplier_catalog"]).path
+        assert page.get_by_role("heading", name="Каталог поставщиков", exact=True).count() == 1
+        card = page.locator(".sc-card").filter(has_text="UX Synthetic Supplier")
+        assert card.count() == 1
+        primary = card.locator("a.sc-card-primary")
+        assert primary.count() == 1 and primary.inner_text().strip() == "Открыть товары"
+        assert urlsplit(primary.get_attribute("href")).path == urlsplit(PAGE_PATHS["supplier_products"]).path
+        assert page.locator(".sc-action-panel").count() == 0
+        return None
+
+    if name == "supplier_products":
+        assert urlsplit(page.url).path == urlsplit(PAGE_PATHS["supplier_products"]).path
+        assert parse_qs(urlsplit(page.url).query).get("stock_status") == ["all"]
+        assert page.get_by_role("heading", name="UX Synthetic Supplier", exact=True).count() == 1
+        switch = page.locator("nav.sc-intent-switch[aria-label='Действие с товарами поставщика']")
+        assert switch.count() == 1 and switch.locator("a").count() == 2
+        assert switch.get_by_role("link", name="Импорт", exact=True).get_attribute("aria-current") == "page"
+        assert switch.get_by_role("link", name="Обновления", exact=True).get_attribute("aria-current") is None
+        assert page.locator("section.sc-action-panel--import").count() == 1
+        assert page.locator("section.sc-action-panel").count() == 1
+        assert page.locator("section.sc-action-panel--updates").count() == 0
+        panel = page.locator("section.sc-action-panel--import")
+        copy = panel.inner_text()
+        assert "После импорта откроются «Мои товары»." in copy, copy
+        assert "Отправки на площадки здесь нет." in copy, copy
+        import_button = page.locator("button[form='supplier-import-form'].sc-action-submit")
+        assert import_button.count() == 1 and import_button.is_disabled()
+        return None
+
+    raise AssertionError(("Unexpected supplier catalog page", name))
+
+
+def supplier_catalog_assertions(page, name: str, rich: bool = True):
     """Check the redesigned supplier entry/list routes without a journey banner."""
+    if not rich:
+        return supplier_catalog_macro_state(page, name)
     assert page.locator(".preparation-journey").count() == 0, name
 
     if name == "supplier_catalog":
@@ -524,9 +562,15 @@ def supplier_catalog_assertions(page, name: str):
     return None
 
 
-def journey_assertions(page, name: str, current: str, account_id: int | None = None):
+def journey_assertions(
+    page,
+    name: str,
+    current: str,
+    account_id: int | None = None,
+    supplier_rich: bool = True,
+):
     if name in {"supplier_catalog", "supplier_products"}:
-        return supplier_catalog_assertions(page, name)
+        return supplier_catalog_assertions(page, name, rich=supplier_rich)
     section = page.locator("section.preparation-journey")
     section.wait_for()
     text = section.inner_text()
@@ -1289,7 +1333,13 @@ def run():
             for name, path, current in macro_pages:
                 wait_document(page, name, path)
                 scoped_account = None if name in {"supplier_catalog", "supplier_products", "supplier_source_detail"} else FIXTURE["account_id"]
-                journey_assertions(page, name, current, scoped_account)
+                journey_assertions(
+                    page,
+                    name,
+                    current,
+                    scoped_account,
+                    supplier_rich=False,
+                )
                 for theme in ("light", "dark"):
                     for width in (320, 390, 768, 1024, 1440):
                         geometry(page, name, width, theme)
