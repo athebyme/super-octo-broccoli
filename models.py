@@ -10043,6 +10043,12 @@ class WBRealizationRow(db.Model):
 class BackgroundJob(db.Model):
     __tablename__ = 'background_jobs'
 
+    # A completed supplier import receipt is read only through its dedicated
+    # owner/key endpoint.  It shares this persistence table, but its bounded
+    # exact product IDs and selection fingerprint must not escape through the
+    # generic task tray/status serializer.
+    SUPPLIER_IMPORT_RECEIPT_TYPE = 'supplier_import_receipt'
+
     id = db.Column(db.Integer, primary_key=True)
     job_uid = db.Column(db.String(64), unique=True, nullable=False, index=True)
     seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False)
@@ -10087,6 +10093,7 @@ class BackgroundJob(db.Model):
             return {}
 
     def to_dict(self):
+        private_receipt = self.job_type == self.SUPPLIER_IMPORT_RECEIPT_TYPE
         return {
             'job_uid': self.job_uid,
             'job_type': self.job_type,
@@ -10096,9 +10103,9 @@ class BackgroundJob(db.Model):
             'succeeded': self.succeeded,
             'failed_count': self.failed_count,
             # WB stock pages are private worker state, not a public API blob.
-            'progress': {} if self.job_type in {'wb_warehouse_stocks', 'ozon_account_sync', 'ozon_quality_recompute'} else self.get_progress(),
-            'result': self.get_result(),
-            'error_message': self.error_message,
+            'progress': {} if private_receipt or self.job_type in {'wb_warehouse_stocks', 'ozon_account_sync', 'ozon_quality_recompute'} else self.get_progress(),
+            'result': {} if private_receipt else self.get_result(),
+            'error_message': None if private_receipt else self.error_message,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

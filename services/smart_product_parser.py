@@ -920,10 +920,16 @@ class SmartProductParser:
         parse_result = self.parse_and_apply_bulk(supplier_product_ids)
 
         # Step 2: Import to seller
+        # Parsing commits its own supplier-source changes above. Acquire the
+        # writer transaction only now, at the exact seller import boundary,
+        # so concurrent normal/receipt imports serialize without holding the
+        # lock across enrichment work.
+        SupplierService._begin_supplier_import_transaction()
         import_result = SupplierService.import_to_seller(
             seller_id,
             supplier_product_ids,
             draft_account_ids=draft_account_ids,
+            transaction_started=True,
         )
 
         # Step 3: Post-import enrichment — resolve brands on ImportedProducts

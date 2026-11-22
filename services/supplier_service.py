@@ -2370,6 +2370,9 @@ class SupplierService:
         seller_id: int,
         supplier_product_ids: List[int],
         draft_account_ids: Optional[List[int]] = None,
+        *,
+        before_commit=None,
+        transaction_started: bool = False,
     ) -> ImportResult:
         """
         Импортировать товары из базы поставщика к продавцу.
@@ -2381,8 +2384,15 @@ class SupplierService:
         """
         result = ImportResult(total_requested=len(supplier_product_ids))
 
+        if before_commit is not None and transaction_started is not True:
+            raise RuntimeError(
+                'supplier_import_receipt_requires_writer_transaction'
+            )
+
         seller = db.session.get(Seller, seller_id)
         if not seller:
+            if transaction_started:
+                db.session.rollback()
             result.success = False
             result.error_messages.append("Продавец не найден")
             return result
@@ -2396,6 +2406,8 @@ class SupplierService:
         ).all()
 
         if not supplier_products:
+            if transaction_started:
+                db.session.rollback()
             result.error_messages.append("Товары не найдены")
             return result
 
@@ -2406,6 +2418,8 @@ class SupplierService:
                 seller_id=seller_id, supplier_id=sup_id, is_active=True
             ).first()
             if not conn:
+                if transaction_started:
+                    db.session.rollback()
                 result.success = False
                 result.error_messages.append(f"Продавец не подключён к поставщику id={sup_id}")
                 return result
@@ -2461,6 +2475,12 @@ class SupplierService:
                 ).count()
                 conn.last_import_at = datetime.utcnow()
 
+        # The JSON import endpoint writes its durable, owner/key-bound receipt
+        # in the same transaction as these ImportedProduct rows.  A lost HTTP
+        # response can then be recovered without guessing whether this exact
+        # import committed or trying the import a second time.
+        if before_commit is not None:
+            before_commit(result)
         db.session.commit()
 
         # ImportedProduct остаётся WB-compatible source draft, а каждый
@@ -2567,6 +2587,17 @@ class SupplierService:
         except Exception:
             db.session.rollback()
             raise
+
+    @staticmethod
+    def _begin_supplier_import_transaction() -> None:
+        """Start a fresh write transaction before import scope/receipt reads.
+
+        On SQLite, BEGIN IMMEDIATE serializes same-source import attempts before
+        duplicate checks and the keyed receipt lookup.  Callers must capture
+        scalar caller IDs before this helper because the initial rollback also
+        expires ORM state loaded during authentication.
+        """
+        SupplierService._begin_supplier_update_transaction()
 
     @staticmethod
     def _validate_imported_product_ids(seller_id, imported_product_ids):

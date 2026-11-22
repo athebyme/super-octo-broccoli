@@ -538,6 +538,19 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         self.assertNotIn('importSelected: ["', parsed.root_state or '')
         self.assertEqual(ImportedProduct.query.count(), before_import_count)
 
+        json_response = self.client.get(
+            f'/supplier-catalog/{self.supplier_id}/products'
+            '?search=Cap%20target&stock_status=all&select_all=1',
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(json_response.status_code, 200)
+        json_payload = json_response.get_json()
+        self.assertEqual(json_payload['total'], 205)
+        self.assertEqual(len(json_payload['items']), 50)
+        self.assertEqual(json_payload['selection'], [])
+        self.assertEqual(json_payload['selection_block_reason'], 'limit')
+        self.assertEqual(ImportedProduct.query.count(), before_import_count)
+
     def test_declared_supplier_import_rejects_mixed_invalid_and_over_cap_sets(self):
         from models import SupplierProduct
 
@@ -560,6 +573,7 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         self.assertEqual(valid.status_code, 302)
         importer.assert_called_once_with(
             self.seller_id, [own.id], draft_account_ids=None,
+            transaction_started=True,
         )
 
         invalid_forms = [
@@ -704,11 +718,427 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
             self.seller_id,
             [source_a.id, source_b.id],
             draft_account_ids=None,
+            transaction_started=True,
         )
         with self.client.session_transaction() as session:
             message = ' '.join(value for _, value in session.get('_flashes', []))
         self.assertIn('Ozon-черновиков: 1', message)
         self.assertNotIn('на WB', message)
+
+    def test_catalog_json_is_owner_scoped_bounded_and_read_only(self):
+        from models import ImportedProduct, SellerSupplier
+
+        source = self._product(
+            title='JSON catalog source',
+            product_id=9_007_199_254_741_029,
+        )
+        self.db.session.commit()
+        before_imports = ImportedProduct.query.count()
+
+        with patch(
+            'routes.suppliers.SupplierService.get_product_stats',
+        ) as product_stats, patch(
+            'routes.suppliers.SupplierService.get_price_stock_stats',
+        ) as price_stock_stats:
+            response = self.client.get(
+                f'/supplier-catalog/{self.supplier_id}/products?search=JSON%20catalog',
+                headers={'Accept': 'application/json'},
+            )
+        product_stats.assert_not_called()
+        price_stock_stats.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('no-store', response.headers['Cache-Control'])
+        payload = response.get_json()
+        self.assertTrue(payload['success'])
+        self.assertEqual(payload['supplier']['id'], str(self.supplier_id))
+        self.assertEqual(payload['items'], [{
+            'id': str(source.id),
+            'title': source.title,
+            'article': source.vendor_code or source.external_id or '',
+            'photo_url': None,
+            'purchase_price': source.supplier_price,
+            'currency': source.currency,
+            'stock': source.supplier_quantity,
+            'importable': True,
+            'imported': False,
+            'on_wb': False,
+            'updatable': False,
+        }])
+        self.assertEqual(payload['eligible_count'], 1)
+        self.assertEqual(payload['selection'], [])
+        self.assertEqual(ImportedProduct.query.count(), before_imports)
+
+        selected = self.client.get(
+            f'/supplier-catalog/{self.supplier_id}/products?'
+            'search=JSON%20catalog&select_all=1',
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(selected.status_code, 200)
+        self.assertEqual(selected.get_json()['selection'], [str(source.id)])
+        self.assertEqual(ImportedProduct.query.count(), before_imports)
+
+        connection = self.db.session.query(SellerSupplier).filter_by(
+            seller_id=self.seller_id,
+            supplier_id=self.supplier_id,
+        ).one()
+        connection.is_active = False
+        self.db.session.commit()
+        denied = self.client.get(
+            f'/supplier-catalog/{self.supplier_id}/products',
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(denied.status_code, 404)
+        self.assertFalse(denied.get_json()['success'])
+        self.assertEqual(ImportedProduct.query.count(), before_imports)
+
+    def test_duplicate_vendor_code_marks_every_matching_source_and_blocks_import(self):
+        from models import Product, SellerSupplier
+
+        first = self._product(title='Duplicate vendor source A')
+        second = self._product(title='Duplicate vendor source B')
+        first.vendor_code = 'SHARED-SOURCE-CODE'
+        second.vendor_code = 'SHARED-SOURCE-CODE'
+        connection = SellerSupplier.query.filter_by(
+            seller_id=self.seller_id,
+            supplier_id=self.supplier_id,
+        ).one()
+        connection.vendor_code_pattern = '{external_vendor_code}'
+        self.db.session.add(Product(
+            seller_id=self.seller_id,
+            nm_id=987654321,
+            vendor_code='SHARED-SOURCE-CODE',
+            title='Existing WB card for shared vendor code',
+            is_active=True,
+        ))
+        self.db.session.commit()
+
+        catalog = self.client.get(
+            f'/supplier-catalog/{self.supplier_id}/products',
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(catalog.status_code, 200)
+        by_id = {item['id']: item for item in catalog.get_json()['items']}
+        self.assertTrue(by_id[str(first.id)]['on_wb'])
+        self.assertTrue(by_id[str(second.id)]['on_wb'])
+
+        filtered = self.client.get(
+            f'/supplier-catalog/{self.supplier_id}/products?'
+            'wb_filter=on_wb&show_imported=1&select_all=1',
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual(
+            {item['id'] for item in filtered.get_json()['items']},
+            {str(first.id), str(second.id)},
+        )
+
+        blocked = self.client.post(
+            '/supplier-catalog/import',
+            data={
+                'supplier_id': str(self.supplier_id),
+                'product_ids': [str(first.id)],
+                'request_key': 'b' * 32,
+            },
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(
+            blocked.get_json()['code'], 'supplier_import_scope_changed',
+        )
+
+    def test_beta_bootstrap_separates_active_import_sources_from_local_filters(self):
+        from models import SellerSupplier
+
+        inactive = SellerSupplier.query.filter_by(
+            seller_id=self.seller_id,
+            supplier_id=self.other_supplier_id,
+        ).one()
+        inactive.is_active = False
+        self.db.session.commit()
+        with patch(
+            'routes.suppliers.render_template', return_value='rendered-page',
+        ) as render:
+            response = self.client.get('/my-products/beta')
+        self.assertEqual(response.status_code, 200)
+        kwargs = render.call_args.kwargs
+        self.assertEqual(
+            [item['id'] for item in kwargs['supplier_import_sources']],
+            [str(self.supplier_id)],
+        )
+        self.assertEqual(
+            [item['catalog_url'] for item in kwargs['supplier_import_sources']],
+            [f'/supplier-catalog/{self.supplier_id}/products'],
+        )
+        # Existing local filter choices retain their previous semantics.
+        self.assertEqual(
+            {item['id'] for item in kwargs['suppliers_payload']},
+            {self.supplier_id, self.other_supplier_id},
+        )
+
+    def test_json_import_receipt_replay_conflict_and_privacy(self):
+        from models import (
+            BackgroundJob, ImportedProduct, Marketplace,
+            SellerMarketplaceAccount, SellerSupplier,
+        )
+        from itsdangerous import URLSafeTimedSerializer
+        from routes.suppliers import SUPPLIER_IMPORT_BATCH_TOKEN_SALT
+
+        source_a = self._product(title='JSON import A')
+        source_b = self._product(title='JSON import B')
+        source_wb = self._product(title='JSON import already on WB')
+        self.db.session.flush()
+        self._link_import(source_wb, on_wb=True)
+        marketplace = Marketplace(
+            name='Ozon', code='ozon', adapter_code='ozon', is_active=True,
+        )
+        self.db.session.add(marketplace)
+        self.db.session.flush()
+        account = SellerMarketplaceAccount(
+            seller_id=self.seller_id,
+            marketplace_id=marketplace.id,
+            external_account_id='json-import-account',
+            label='JSON import account',
+            is_active=True,
+            connection_status='connected',
+            _credentials_encrypted='synthetic-credential',
+        )
+        self.db.session.add(account)
+        self.db.session.commit()
+        request_key = 'a' * 32
+        form = {
+            'supplier_id': str(self.supplier_id),
+            'product_ids': [str(source_a.id), str(source_b.id)],
+            'draft_account_ids': [str(account.id)],
+            'request_key': request_key,
+        }
+        with patch(
+            'services.marketplace_auto_publish.MarketplaceDraftProvisioner.provision_in_chunks',
+            return_value={
+                'created': 0, 'existing': 0, 'failed': 0,
+                'draft_ids': [], 'errors': [],
+            },
+        ), patch(
+            'services.marketplace_drafts.MarketplaceDraftService.bulk_prepare',
+            return_value={'created': 0, 'existing': 0, 'failed': 0},
+        ), patch('services.supplier_service._notify_products_without_photos'):
+            first = self.client.post(
+                '/supplier-catalog/import',
+                data=form,
+                headers={'Accept': 'application/json'},
+            )
+
+        self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+        self.assertIn('no-store', first.headers['Cache-Control'])
+        result = first.get_json()
+        self.assertTrue(result['success'])
+        self.assertFalse(result['replayed'])
+        self.assertEqual(result['requested'], 2)
+        self.assertEqual(result['imported'], 2)
+        self.assertEqual(result['skipped'], 0)
+        self.assertEqual(result['errors'], 0)
+        self.assertEqual(result['drafts_status'], 'complete')
+        self.assertEqual(result['drafts_created'], 0)
+        self.assertEqual(result['draft_errors'], 0)
+        self.assertTrue(result['batch_url'].startswith('/my-products/beta?import_batch='))
+        token = result['import_batch']
+        batch_payload = URLSafeTimedSerializer(
+            self.app.secret_key,
+            salt=SUPPLIER_IMPORT_BATCH_TOKEN_SALT,
+        ).loads(token, max_age=3600)
+        imported_ids = batch_payload['ids']
+        self.assertEqual(len(imported_ids), 2)
+        self.assertEqual(
+            ImportedProduct.query.filter(
+                ImportedProduct.seller_id == self.seller_id,
+                ImportedProduct.supplier_product_id.in_([source_a.id, source_b.id]),
+            ).count(),
+            2,
+        )
+
+        stale_wb_selection = self.client.post(
+            '/supplier-catalog/import',
+            data={
+                'supplier_id': str(self.supplier_id),
+                'product_ids': [str(source_wb.id)],
+                'request_key': 'f' * 32,
+            },
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(stale_wb_selection.status_code, 409)
+        self.assertEqual(
+            stale_wb_selection.get_json()['code'],
+            'supplier_import_scope_changed',
+        )
+        self.assertEqual(ImportedProduct.query.filter_by(
+            seller_id=self.seller_id,
+            supplier_product_id=source_wb.id,
+        ).count(), 1)
+
+        receipt_job = BackgroundJob.query.filter_by(
+            seller_id=self.seller_id,
+            job_type=BackgroundJob.SUPPLIER_IMPORT_RECEIPT_TYPE,
+        ).one()
+        private_payload = receipt_job.get_result()
+        self.assertNotIn(request_key, json.dumps(private_payload))
+        self.assertEqual(private_payload['imported_product_ids'], imported_ids)
+        generic = receipt_job.to_dict()
+        self.assertEqual(generic['result'], {})
+        self.assertEqual(generic['progress'], {})
+        self.assertIsNone(generic['error_message'])
+
+        recovered = self.client.get(
+            '/supplier-catalog/import/result',
+            headers={'X-Import-Request-Key': request_key},
+        )
+        self.assertEqual(recovered.status_code, 200)
+        self.assertIn('no-store', recovered.headers['Cache-Control'])
+        recovered_data = recovered.get_json()
+        self.assertEqual(recovered_data['imported'], 2)
+        recovered_token = recovered_data['import_batch']
+        recovered_payload = URLSafeTimedSerializer(
+            self.app.secret_key,
+            salt=SUPPLIER_IMPORT_BATCH_TOKEN_SALT,
+        ).loads(recovered_token, max_age=3600)
+        self.assertEqual(recovered_payload['ids'], imported_ids)
+
+        # A receipt stays readable after access/source/account state changes;
+        # no import or account provisioning is repeated to rebuild the result.
+        connection = SellerSupplier.query.filter_by(
+            seller_id=self.seller_id,
+            supplier_id=self.supplier_id,
+        ).one()
+        connection.is_active = False
+        source_a.status = 'archived'
+        account.is_active = False
+        self.db.session.commit()
+
+        with patch('routes.suppliers.SupplierService.import_to_seller') as importer:
+            replay = self.client.post(
+                '/supplier-catalog/import',
+                data=form,
+                headers={'Accept': 'application/json'},
+            )
+        self.assertEqual(replay.status_code, 200)
+        self.assertTrue(replay.get_json()['replayed'])
+        importer.assert_not_called()
+        self.assertEqual(
+            ImportedProduct.query.filter(
+                ImportedProduct.seller_id == self.seller_id,
+                ImportedProduct.supplier_product_id.in_([source_a.id, source_b.id]),
+            ).count(),
+            2,
+        )
+
+        connection.is_active = True
+        source_a.status = 'ready'
+        account.is_active = True
+        self.db.session.commit()
+        bad_account_source = self._product(title='Invalid Ozon account source')
+        self.db.session.commit()
+        malformed_accounts = self.client.post(
+            '/supplier-catalog/import',
+            data={
+                'supplier_id': str(self.supplier_id),
+                'product_ids': [str(bad_account_source.id)],
+                'draft_account_ids': [str(account.id), str(account.id)],
+                'request_key': 'c' * 32,
+            },
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(malformed_accounts.status_code, 400)
+        self.assertEqual(ImportedProduct.query.filter_by(
+            seller_id=self.seller_id,
+            supplier_product_id=bad_account_source.id,
+        ).count(), 0)
+        foreign_account = self.client.post(
+            '/supplier-catalog/import',
+            data={
+                'supplier_id': str(self.supplier_id),
+                'product_ids': [str(bad_account_source.id)],
+                'draft_account_ids': ['999999999'],
+                'request_key': 'd' * 32,
+            },
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(foreign_account.status_code, 400)
+        self.assertEqual(ImportedProduct.query.filter_by(
+            seller_id=self.seller_id,
+            supplier_product_id=bad_account_source.id,
+        ).count(), 0)
+
+        retry_key = 'e' * 32
+        before_retry = self.client.get(
+            '/supplier-catalog/import/result',
+            headers={'X-Import-Request-Key': retry_key},
+        )
+        self.assertEqual(before_retry.status_code, 404)
+        self.assertEqual(ImportedProduct.query.filter_by(
+            seller_id=self.seller_id,
+            supplier_product_id=bad_account_source.id,
+        ).count(), 0)
+        retry_form = {
+            'supplier_id': str(self.supplier_id),
+            'product_ids': [str(bad_account_source.id)],
+            'draft_account_ids': [str(account.id)],
+            'request_key': retry_key,
+        }
+        with patch(
+            'services.marketplace_auto_publish.MarketplaceDraftProvisioner.provision_in_chunks',
+            return_value={
+                'created': 0, 'existing': 0, 'failed': 0,
+                'draft_ids': [], 'errors': [],
+            },
+        ), patch(
+            'services.marketplace_drafts.MarketplaceDraftService.bulk_prepare',
+            return_value={'created': 0, 'existing': 0, 'failed': 0},
+        ), patch('services.supplier_service._notify_products_without_photos'):
+            manually_retried = self.client.post(
+                '/supplier-catalog/import',
+                data=retry_form,
+                headers={'Accept': 'application/json'},
+            )
+        self.assertEqual(manually_retried.status_code, 200)
+        self.assertFalse(manually_retried.get_json()['replayed'])
+        self.assertEqual(ImportedProduct.query.filter_by(
+            seller_id=self.seller_id,
+            supplier_product_id=bad_account_source.id,
+        ).count(), 1)
+
+        changed_order = {
+            **form,
+            'product_ids': [str(source_b.id), str(source_a.id)],
+        }
+        conflict = self.client.post(
+            '/supplier-catalog/import',
+            data=changed_order,
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(
+            conflict.get_json()['code'],
+            'supplier_import_request_key_conflict',
+        )
+        self.assertEqual(
+            ImportedProduct.query.filter(
+                ImportedProduct.seller_id == self.seller_id,
+                ImportedProduct.supplier_product_id.in_([source_a.id, source_b.id]),
+            ).count(),
+            2,
+        )
+
+        missing = self.client.get(
+            '/supplier-catalog/import/result',
+            headers={'X-Import-Request-Key': 'b' * 32},
+        )
+        self.assertEqual(missing.status_code, 404)
+        self.assertFalse(missing.get_json()['success'])
+        self.assertEqual(
+            ImportedProduct.query.filter(
+                ImportedProduct.seller_id == self.seller_id,
+                ImportedProduct.supplier_product_id.in_([source_a.id, source_b.id]),
+            ).count(),
+            2,
+        )
 
     def test_modern_zero_import_returns_to_selected_supplier_with_truthful_flash(self):
         source = self._product(title='Duplicate source')
@@ -842,6 +1272,7 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         self.assertEqual(response.location, '/my-products')
         importer.assert_called_once_with(
             self.seller_id, [own.id], draft_account_ids=None,
+            transaction_started=True,
         )
 
         # The smart path rejects a mixed declared-supplier set before parsing

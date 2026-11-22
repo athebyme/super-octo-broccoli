@@ -2,6 +2,7 @@
 """
 Маршруты для управления поставщиками (админ) и каталога (продавец)
 """
+import hashlib
 import json
 import re
 import logging
@@ -35,6 +36,9 @@ MAX_BULK_PRODUCTS = 200
 SUPPLIER_IMPORT_BATCH_TOKEN_SALT = 'supplier-import-workspace-v1'
 SUPPLIER_IMPORT_BATCH_MAX_AGE_SECONDS = 60 * 60
 SUPPLIER_IMPORT_BATCH_MAX_TOKEN_BYTES = 8 * 1024
+SUPPLIER_IMPORT_RECEIPT_SCHEMA = 'seller_hub.supplier_import_receipt'
+SUPPLIER_IMPORT_RECEIPT_KEY_HEADER = 'X-Import-Request-Key'
+SUPPLIER_IMPORT_REQUEST_KEY_RE = re.compile(r'^[0-9a-f]{32}$')
 SUPPLIER_REFRESH_RESULT_BATCH_TOKEN_SALT = 'supplier-refresh-result-batch-v1'
 SUPPLIER_REFRESH_RESULT_BATCH_MAX_AGE_SECONDS = SUPPLIER_IMPORT_BATCH_MAX_AGE_SECONDS
 SUPPLIER_REFRESH_RESULT_BATCH_MAX_TOKEN_BYTES = SUPPLIER_IMPORT_BATCH_MAX_TOKEN_BYTES
@@ -269,6 +273,10 @@ class SupplierImportBatchTokenError(ValueError):
         self.status_code = status_code
 
 
+class SupplierImportScopeChanged(ValueError):
+    """A previously selectable source is no longer eligible for exact import."""
+
+
 class SupplierRefreshHandoffTokenError(ValueError):
     """A signed classic-to-beta supplier refresh selection is invalid."""
 
@@ -469,6 +477,555 @@ def _issue_supplier_import_batch_token(*, user_id, seller_id, imported_product_i
     if len(token.encode('utf-8')) > SUPPLIER_IMPORT_BATCH_MAX_TOKEN_BYTES:
         return None
     return token
+
+
+def _supplier_import_request_identity(*, user_id, seller_id, request_key):
+    """Derive a durable opaque receipt key without persisting the request key."""
+    if (
+        not isinstance(request_key, str)
+        or SUPPLIER_IMPORT_REQUEST_KEY_RE.fullmatch(request_key) is None
+        or type(user_id) is not int or user_id <= 0
+        or type(seller_id) is not int or seller_id <= 0
+    ):
+        raise ValueError('Ключ импорта недействителен')
+    scoped = f'v1|{user_id}|{seller_id}|{request_key}'.encode('ascii')
+    scoped_hash = hashlib.sha256(scoped).hexdigest()
+    key_hash = hashlib.sha256(request_key.encode('ascii')).hexdigest()
+    return 'si-' + scoped_hash[:61], key_hash
+
+
+def _supplier_import_selection_fingerprint(
+    *, user_id, seller_id, supplier_id, product_ids, draft_account_ids,
+):
+    """Fingerprint the ordered exact request scope, not its submitted body."""
+    document = {
+        'v': 1,
+        'user_id': user_id,
+        'seller_id': seller_id,
+        'supplier_id': supplier_id,
+        'product_ids': list(product_ids),
+        'draft_account_ids': list(draft_account_ids),
+    }
+    encoded = json.dumps(
+        document, sort_keys=True, ensure_ascii=True, separators=(',', ':'),
+    ).encode('ascii')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _supplier_import_receipt_document(
+    job, *, user_id, seller_id, request_key_hash,
+):
+    """Validate the private receipt and mint its exact signed batch handoff."""
+    if (
+        job is None
+        or job.job_type != BackgroundJob.SUPPLIER_IMPORT_RECEIPT_TYPE
+        or job.seller_id != seller_id
+        or job.status != 'completed'
+    ):
+        return None
+    payload = job.get_result()
+    expected_keys = {
+        'schema', 'version', 'user_id', 'seller_id', 'supplier_id',
+        'request_key_hash', 'selection_fingerprint', 'requested', 'imported',
+        'skipped', 'errors', 'imported_product_ids', 'drafts_status',
+        'drafts_created', 'draft_errors',
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
+        return None
+    if (
+        payload.get('schema') != SUPPLIER_IMPORT_RECEIPT_SCHEMA
+        or type(payload.get('version')) is not int or payload['version'] != 1
+        or type(payload.get('user_id')) is not int
+        or type(payload.get('seller_id')) is not int
+        or type(payload.get('supplier_id')) is not int
+        or payload['user_id'] != user_id
+        or payload['seller_id'] != seller_id
+        or payload.get('request_key_hash') != request_key_hash
+        or not isinstance(payload.get('selection_fingerprint'), str)
+        or re.fullmatch(r'[0-9a-f]{64}', payload['selection_fingerprint']) is None
+    ):
+        return None
+    counts = [payload.get(key) for key in ('requested', 'imported', 'skipped', 'errors')]
+    if any(type(value) is not int or value < 0 for value in counts):
+        return None
+    requested, imported, skipped, errors = counts
+    if (
+        requested < 1 or requested > MAX_BULK_PRODUCTS
+        or imported > requested or skipped > requested or errors > requested
+        or imported + skipped + errors != requested
+    ):
+        return None
+    try:
+        imported_ids = _bulk_product_ids(payload.get('imported_product_ids')) if imported else []
+    except ValueError:
+        return None
+    if (
+        len(imported_ids) != imported
+        or any(value > MAX_SIGNED_SQLITE_ID for value in imported_ids)
+    ):
+        return None
+    drafts_status = payload.get('drafts_status')
+    drafts_created = payload.get('drafts_created')
+    draft_errors = payload.get('draft_errors')
+    if drafts_status == 'pending':
+        if drafts_created is not None or draft_errors is not None:
+            return None
+    elif drafts_status == 'complete':
+        if (
+            type(drafts_created) is not int or drafts_created < 0
+            or type(draft_errors) is not int or draft_errors < 0
+        ):
+            return None
+    else:
+        return None
+
+    if imported_ids:
+        rows = db.session.query(ImportedProduct.id).filter(
+            ImportedProduct.seller_id == seller_id,
+            ImportedProduct.supplier_id == payload['supplier_id'],
+            ImportedProduct.id.in_(imported_ids),
+        ).all()
+        if len(rows) != len(imported_ids):
+            return None
+        batch = _issue_supplier_import_batch_token(
+            user_id=user_id,
+            seller_id=seller_id,
+            imported_product_ids=imported_ids,
+        )
+        if not batch:
+            return None
+        batch_url = url_for('seller_my_products_beta', import_batch=batch)
+    else:
+        batch = None
+        batch_url = None
+
+    return {
+        'success': True,
+        'supplier_id': str(payload['supplier_id']),
+        'requested': requested,
+        'imported': imported,
+        'skipped': skipped,
+        'errors': errors,
+        'drafts_status': drafts_status,
+        'drafts_created': drafts_created,
+        'draft_errors': draft_errors,
+        'import_batch': batch,
+        'batch_url': batch_url,
+    }
+
+
+def _supplier_import_no_store_json(payload, status=200):
+    response = make_response(jsonify(payload), status)
+    response.headers['Cache-Control'] = 'private, no-store'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
+
+def _supplier_import_json_form_scope(form):
+    """Strictly parse the JSON opt-in form before owner-scoped DB checks."""
+    supplier_values = form.getlist('supplier_id')
+    if len(supplier_values) != 1 or not supplier_values[0].isdecimal():
+        raise ValueError('Не удалось проверить выбранного поставщика')
+    supplier_id = _coerce_positive_int(supplier_values[0])
+    if supplier_id is None or supplier_id > MAX_SIGNED_SQLITE_ID:
+        raise ValueError('Не удалось проверить выбранного поставщика')
+    product_ids = _form_bulk_product_ids(form.getlist('product_ids'))
+    if not product_ids:
+        raise ValueError('Не выбраны товары для импорта')
+    if any(product_id > MAX_SIGNED_SQLITE_ID for product_id in product_ids):
+        raise ValueError('Список товаров содержит некорректный ID')
+
+    raw_accounts = form.getlist('draft_account_ids')
+    if len(raw_accounts) > MAX_BULK_PRODUCTS:
+        raise ValueError(
+            f'За один запрос можно выбрать не более {MAX_BULK_PRODUCTS} кабинетов Ozon'
+        )
+    draft_account_ids = []
+    seen_accounts = set()
+    for index, value in enumerate(raw_accounts):
+        if not isinstance(value, str) or not value.isdecimal():
+            raise ValueError(
+                f'Некорректный кабинет Ozon в позиции {index + 1}'
+            )
+        account_id = _coerce_positive_int(value)
+        if account_id is None or account_id > MAX_SIGNED_SQLITE_ID:
+            raise ValueError(
+                f'Некорректный кабинет Ozon в позиции {index + 1}'
+            )
+        if account_id in seen_accounts:
+            raise ValueError('В списке кабинетов Ozon есть повторы')
+        seen_accounts.add(account_id)
+        draft_account_ids.append(account_id)
+    return supplier_id, product_ids, draft_account_ids
+
+
+def _validate_supplier_import_json_write_scope(
+    *, seller_id, supplier_id, product_ids, draft_account_ids,
+):
+    """Recheck active owner/source/account scope under the writer transaction."""
+    connection = SellerSupplier.query.filter_by(
+        seller_id=seller_id,
+        supplier_id=supplier_id,
+        is_active=True,
+    ).first()
+    if connection is None:
+        raise ValueError('Нет активного доступа к этому поставщику')
+
+    eligible_source_ids = {
+        row[0]
+        for row in db.session.query(SupplierProduct.id).filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.id.in_(product_ids),
+            SupplierProduct.status.in_(['draft', 'validated', 'ready']),
+        ).all()
+    }
+    if eligible_source_ids != set(product_ids):
+        raise SupplierImportScopeChanged(
+            'Выбранные товары изменились или больше не доступны для импорта. '
+            'Обновите список и повторите выбор.'
+        )
+
+    supplier = SupplierService.get_supplier(supplier_id)
+    if supplier is None:
+        raise ValueError('Поставщик больше не доступен')
+    wb_source_ids = _supplier_wb_existing_source_ids(
+        seller_id=seller_id,
+        supplier_id=supplier_id,
+        supplier=supplier,
+        source_ids=product_ids,
+    )
+    if wb_source_ids:
+        raise SupplierImportScopeChanged(
+            'Часть выбранных товаров уже связана с карточками WB. '
+            'Обновите список и выберите доступные товары.'
+        )
+
+    if draft_account_ids:
+        active_account_ids = {
+            row[0]
+            for row in db.session.query(SellerMarketplaceAccount.id).join(
+                Marketplace,
+                Marketplace.id == SellerMarketplaceAccount.marketplace_id,
+            ).filter(
+                SellerMarketplaceAccount.seller_id == seller_id,
+                SellerMarketplaceAccount.id.in_(draft_account_ids),
+                SellerMarketplaceAccount.is_active.is_(True),
+                Marketplace.code == 'ozon',
+                Marketplace.is_active.is_(True),
+            ).all()
+        }
+        if active_account_ids != set(draft_account_ids):
+            raise ValueError(
+                'Один из выбранных кабинетов Ozon больше недоступен. '
+                'Обновите список и выберите кабинет заново.'
+            )
+
+
+def _supplier_wb_existing_source_ids(
+    *, seller_id, supplier_id, supplier, source_ids=None,
+):
+    """Return WB-linked or vendor-matched sources, optionally for an exact set.
+
+    ``source_ids`` bounds both catalog and write-time rechecks to the supplied
+    source IDs. ``None`` is used only by the existing catalog WB filter that
+    needs to classify the full visible supplier scope.
+    """
+    linked_query = db.session.query(ImportedProduct.supplier_product_id).join(
+        SupplierProduct,
+        SupplierProduct.id == ImportedProduct.supplier_product_id,
+    ).filter(
+        ImportedProduct.seller_id == seller_id,
+        ImportedProduct.product_id.isnot(None),
+        SupplierProduct.supplier_id == supplier_id,
+    )
+    source_query = db.session.query(
+        SupplierProduct.id,
+        SupplierProduct.external_id,
+        SupplierProduct.vendor_code,
+    ).filter(SupplierProduct.supplier_id == supplier_id)
+    if source_ids is not None:
+        if not source_ids:
+            return set()
+        linked_query = linked_query.filter(
+            ImportedProduct.supplier_product_id.in_(source_ids),
+        )
+        source_query = source_query.filter(
+            SupplierProduct.id.in_(source_ids),
+        )
+    linked_ids = {row[0] for row in linked_query.all()}
+    from services.pricing_engine import (
+        generate_vendor_code, resolve_vendor_code_settings,
+    )
+    pattern, supplier_code, _ = resolve_vendor_code_settings(
+        seller_id, supplier_id,
+    )
+    if linked_ids:
+        source_query = source_query.filter(~SupplierProduct.id.in_(linked_ids))
+    vendor_code_to_sources = {}
+    for source_id, external_id, external_vendor_code in source_query.all():
+        vendor_code = generate_vendor_code(
+            pattern=pattern,
+            supplier_code=supplier_code,
+            external_id=external_id,
+            external_vendor_code=str(external_vendor_code or ''),
+            supplier=supplier,
+        )
+        if vendor_code:
+            vendor_code_to_sources.setdefault(vendor_code, set()).add(source_id)
+    existing_vendor_codes = {
+        row[0] for row in db.session.query(Product.vendor_code).filter(
+            Product.seller_id == seller_id,
+            Product.vendor_code.in_(list(vendor_code_to_sources)),
+        ).all()
+    } if vendor_code_to_sources else set()
+    vendor_matched_ids = {
+        source_id
+        for code in existing_vendor_codes
+        for source_id in vendor_code_to_sources.get(code, ())
+    }
+    return linked_ids | vendor_matched_ids
+
+
+def _supplier_catalog_import_json(*, user_id, seller_id):
+    """Run a form-shaped import once and persist its exact result atomically."""
+    key_values = request.form.getlist('request_key')
+    if (
+        request.args
+        or len(key_values) != 1
+        or SUPPLIER_IMPORT_REQUEST_KEY_RE.fullmatch(key_values[0] or '') is None
+    ):
+        return _supplier_import_no_store_json({
+            'success': False,
+            'error': 'Ключ импорта недействителен',
+        }, 400)
+    request_key = key_values[0]
+    try:
+        job_uid, key_hash = _supplier_import_request_identity(
+            user_id=user_id,
+            seller_id=seller_id,
+            request_key=request_key,
+        )
+        supplier_id, product_ids, draft_account_ids = (
+            _supplier_import_json_form_scope(request.form)
+        )
+        fingerprint = _supplier_import_selection_fingerprint(
+            user_id=user_id,
+            seller_id=seller_id,
+            supplier_id=supplier_id,
+            product_ids=product_ids,
+            draft_account_ids=draft_account_ids,
+        )
+        # Clear any transaction begun by authentication/session reads, then
+        # serialize duplicate checks, receipt lookup, and insertion on SQLite.
+        SupplierService._begin_supplier_import_transaction()
+        job = BackgroundJob.query.filter_by(
+            job_uid=job_uid,
+            seller_id=seller_id,
+            job_type=BackgroundJob.SUPPLIER_IMPORT_RECEIPT_TYPE,
+        ).first()
+        if job is not None:
+            receipt = job.get_result()
+            if (
+                not isinstance(receipt, dict)
+                or receipt.get('schema') != SUPPLIER_IMPORT_RECEIPT_SCHEMA
+                or receipt.get('user_id') != user_id
+                or receipt.get('seller_id') != seller_id
+                or receipt.get('supplier_id') != supplier_id
+                or receipt.get('request_key_hash') != key_hash
+            ):
+                db.session.rollback()
+                return _supplier_import_no_store_json({
+                    'success': False,
+                    'error': 'Ключ импорта уже занят другим запросом',
+                    'code': 'supplier_import_request_key_conflict',
+                }, 409)
+            if receipt.get('selection_fingerprint') != fingerprint:
+                db.session.rollback()
+                return _supplier_import_no_store_json({
+                    'success': False,
+                    'error': 'Состав запроса изменился. Начните импорт заново.',
+                    'code': 'supplier_import_request_key_conflict',
+                }, 409)
+            document = _supplier_import_receipt_document(
+                job,
+                user_id=user_id,
+                seller_id=seller_id,
+                request_key_hash=key_hash,
+            )
+            db.session.rollback()
+            if document is None:
+                return _supplier_import_no_store_json({
+                    'success': False,
+                    'error': 'Сохранённый итог импорта недоступен',
+                }, 409)
+            document['replayed'] = True
+            return _supplier_import_no_store_json(document)
+
+        # A genuinely new write rechecks both the supplier source eligibility
+        # and any explicitly selected Ozon accounts under the same writer lock.
+        _validate_supplier_import_json_write_scope(
+            seller_id=seller_id,
+            supplier_id=supplier_id,
+            product_ids=product_ids,
+            draft_account_ids=draft_account_ids,
+        )
+
+        job = BackgroundJob(
+            job_uid=job_uid,
+            seller_id=seller_id,
+            job_type=BackgroundJob.SUPPLIER_IMPORT_RECEIPT_TYPE,
+            status='pending',
+            total=len(product_ids),
+            processed=0,
+            succeeded=0,
+            failed_count=0,
+            progress_data='{}',
+            result_data='{}',
+            error_message=None,
+        )
+        db.session.add(job)
+        db.session.flush()
+
+        def persist_exact_import_receipt(result):
+            if (
+                not result.success
+                or type(result.total_requested) is not int
+                or result.total_requested != len(product_ids)
+                or any(type(value) is not int or value < 0 for value in (
+                    result.imported, result.skipped, result.errors,
+                ))
+                or result.imported + result.skipped + result.errors != len(product_ids)
+            ):
+                raise ValueError('Не удалось подтвердить точный результат импорта')
+            imported_ids = []
+            if result.imported:
+                imported_ids = _ordered_committed_import_ids(
+                    seller_id,
+                    product_ids,
+                    result.imported,
+                    result.imported_product_ids,
+                )
+                if len(imported_ids) != result.imported:
+                    raise ValueError('Не удалось подтвердить точный список импорта')
+            elif result.imported_product_ids:
+                raise ValueError('Результат импорта содержит лишние карточки')
+
+            job.status = 'completed'
+            job.total = len(product_ids)
+            job.processed = len(product_ids)
+            job.succeeded = result.imported
+            job.failed_count = result.errors
+            job.set_result({
+                'schema': SUPPLIER_IMPORT_RECEIPT_SCHEMA,
+                'version': 1,
+                'user_id': user_id,
+                'seller_id': seller_id,
+                'supplier_id': supplier_id,
+                'request_key_hash': key_hash,
+                'selection_fingerprint': fingerprint,
+                'requested': len(product_ids),
+                'imported': result.imported,
+                'skipped': result.skipped,
+                'errors': result.errors,
+                'imported_product_ids': imported_ids,
+                'drafts_status': 'pending',
+                'drafts_created': None,
+                'draft_errors': None,
+            })
+            db.session.flush()
+
+        result = SupplierService.import_to_seller(
+            seller_id,
+            product_ids,
+            draft_account_ids=draft_account_ids or None,
+            before_commit=persist_exact_import_receipt,
+            transaction_started=True,
+        )
+        if not result.success:
+            db.session.rollback()
+            return _supplier_import_no_store_json({
+                'success': False,
+                'error': '; '.join(result.error_messages[:3]) or 'Импорт не выполнен',
+            }, 400)
+
+        # The import rows and the incomplete-draft receipt are already durable.
+        # Local Ozon draft provisioning runs after that transaction; update its
+        # counts separately, leaving an explicit pending value if this write
+        # fails or the process stops before the service returns.
+        receipt_job = BackgroundJob.query.filter_by(
+            job_uid=job_uid,
+            seller_id=seller_id,
+            job_type=BackgroundJob.SUPPLIER_IMPORT_RECEIPT_TYPE,
+        ).first()
+        if receipt_job is None:
+            db.session.rollback()
+            return _supplier_import_no_store_json({
+                'success': False,
+                'error': 'Импорт завершён, но итог нужно восстановить по ключу',
+                'code': 'supplier_import_receipt_unavailable',
+            }, 503)
+        receipt_payload = receipt_job.get_result()
+        drafts_created = getattr(result, 'marketplace_drafts_created', None)
+        draft_errors = getattr(result, 'marketplace_draft_errors', None)
+        if (
+            isinstance(receipt_payload, dict)
+            and type(drafts_created) is int and drafts_created >= 0
+            and type(draft_errors) is int and draft_errors >= 0
+        ):
+            receipt_payload['drafts_status'] = 'complete'
+            receipt_payload['drafts_created'] = drafts_created
+            receipt_payload['draft_errors'] = draft_errors
+            receipt_job.set_result(receipt_payload)
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                # The initial receipt remains committed with explicit pending
+                # draft state; never report uncommitted metrics as final.
+                receipt_job = BackgroundJob.query.filter_by(
+                    job_uid=job_uid,
+                    seller_id=seller_id,
+                    job_type=BackgroundJob.SUPPLIER_IMPORT_RECEIPT_TYPE,
+                ).first()
+
+        document = _supplier_import_receipt_document(
+            receipt_job,
+            user_id=user_id,
+            seller_id=seller_id,
+            request_key_hash=key_hash,
+        )
+        if document is None:
+            return _supplier_import_no_store_json({
+                'success': False,
+                'error': 'Импорт завершён, но итог недоступен. Проверьте его по ключу.',
+                'code': 'supplier_import_receipt_unavailable',
+            }, 503)
+        document['replayed'] = False
+        return _supplier_import_no_store_json(document)
+    except SupplierImportScopeChanged as exc:
+        db.session.rollback()
+        return _supplier_import_no_store_json({
+            'success': False,
+            'error': str(exc),
+            'code': 'supplier_import_scope_changed',
+        }, 409)
+    except ValueError as exc:
+        db.session.rollback()
+        return _supplier_import_no_store_json({
+            'success': False,
+            'error': str(exc),
+        }, 400)
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            'Supplier import request failed for seller %s', seller_id,
+        )
+        return _supplier_import_no_store_json({
+            'success': False,
+            'error': 'Не удалось подтвердить результат импорта. Проверьте его по ключу.',
+            'code': 'supplier_import_result_unknown',
+        }, 503)
 
 
 def _issue_supplier_refresh_result_batch_token(
@@ -2947,17 +3504,31 @@ def register_supplier_routes(app):
     def supplier_catalog_products(supplier_id):
         """Каталог товаров поставщика для продавца"""
         seller = current_user.seller
+        explicit_json = any(
+            media.split(';', 1)[0].strip().lower() == 'application/json'
+            for media in request.headers.get('Accept', '').split(',')
+        )
 
         # Проверяем подключение
         conn = SellerSupplier.query.filter_by(
             seller_id=seller.id, supplier_id=supplier_id, is_active=True
         ).first()
         if not conn:
+            if explicit_json:
+                return _supplier_import_no_store_json({
+                    'success': False,
+                    'error': 'Нет активного доступа к этому поставщику',
+                }, 404)
             flash('У вас нет доступа к этому поставщику', 'danger')
             return redirect(url_for('supplier_catalog'))
 
         supplier = SupplierService.get_supplier(supplier_id)
         if not supplier:
+            if explicit_json:
+                return _supplier_import_no_store_json({
+                    'success': False,
+                    'error': 'Поставщик не найден',
+                }, 404)
             flash('Поставщик не найден', 'danger')
             return redirect(url_for('supplier_catalog'))
 
@@ -3003,71 +3574,25 @@ def register_supplier_routes(app):
                 seller.id, supplier_id,
             )
         )
-        supplier_update_count = SupplierProduct.query.filter(
-            SupplierProduct.supplier_id == supplier_id,
-            SupplierProduct.id.in_(stale_supplier_product_ids),
-        ).count()
+        supplier_update_count = 0
+        if not explicit_json:
+            supplier_update_count = SupplierProduct.query.filter(
+                SupplierProduct.supplier_id == supplier_id,
+                SupplierProduct.id.in_(stale_supplier_product_ids),
+            ).count()
 
         # Определение «уже на WB»: по связи ImportedProduct → Product и по
         # совпадению вычисленного артикула. Полный проход по каталогу нужен
         # только когда wb-фильтр реально фильтрует выборку; для бейджей
         # достаточно товаров текущей страницы.
-        from services.pricing_engine import resolve_vendor_code_settings, generate_vendor_code
-
-        vc_pattern, vc_supplier_code, _ = resolve_vendor_code_settings(
-            seller.id, supplier_id
-        )
-
-        def _linked_wb_sp_ids(page_ids=None):
-            """SP этого поставщика, уже связанные с WB-карточкой продавца."""
-            q = db.session.query(ImportedProduct.supplier_product_id).join(
-                SupplierProduct,
-                SupplierProduct.id == ImportedProduct.supplier_product_id,
-            ).filter(
-                ImportedProduct.seller_id == seller.id,
-                ImportedProduct.product_id.isnot(None),
-                SupplierProduct.supplier_id == supplier_id,
+        wb_existing_sp_ids = (
+            _supplier_wb_existing_source_ids(
+                seller_id=seller.id,
+                supplier_id=supplier_id,
+                supplier=supplier,
             )
-            if page_ids is not None:
-                q = q.filter(ImportedProduct.supplier_product_id.in_(page_ids))
-            return {row[0] for row in q.all()}
-
-        def _vendor_code_wb_sp_ids(exclude_ids, page_ids=None):
-            """SP, чей вычисленный артикул уже существует среди Product WB."""
-            q = db.session.query(
-                SupplierProduct.id,
-                SupplierProduct.external_id,
-                SupplierProduct.vendor_code,
-            ).filter(SupplierProduct.supplier_id == supplier_id)
-            if page_ids is not None:
-                q = q.filter(SupplierProduct.id.in_(page_ids))
-            if exclude_ids:
-                q = q.filter(~SupplierProduct.id.in_(exclude_ids))
-            vc_to_sp = {}
-            for sp_id, ext_id, ext_vc in q.all():
-                vc = generate_vendor_code(
-                    pattern=vc_pattern,
-                    supplier_code=vc_supplier_code,
-                    external_id=ext_id,
-                    external_vendor_code=str(ext_vc or ''),
-                    supplier=supplier,
-                )
-                if vc:
-                    vc_to_sp[vc] = sp_id
-            if not vc_to_sp:
-                return set()
-            existing_vc = {
-                row[0] for row in db.session.query(Product.vendor_code).filter(
-                    Product.seller_id == seller.id,
-                    Product.vendor_code.in_(list(vc_to_sp.keys()))
-                ).all()
-            }
-            return {vc_to_sp[vc] for vc in existing_vc}
-
-        wb_existing_sp_ids = set()
-        if wb_filter:
-            wb_existing_sp_ids = _linked_wb_sp_ids()
-            wb_existing_sp_ids |= _vendor_code_wb_sp_ids(wb_existing_sp_ids)
+            if wb_filter else set()
+        )
 
         page_size = MAX_BULK_PRODUCTS + 1 if select_all_requested else 50
         pagination = SupplierService.get_available_products_for_seller(
@@ -3084,6 +3609,7 @@ def register_supplier_routes(app):
         supplier_update_filtered_count = 0
         if (
             not select_all_requested
+            and not explicit_json
             and pagination.total > 50
             and pagination.total <= MAX_BULK_PRODUCTS
             and can_filter_to_imported
@@ -3126,9 +3652,12 @@ def register_supplier_routes(app):
                 )
         page_sp_ids = [p.id for p in pagination.items]
         if not wb_filter and page_sp_ids:
-            wb_existing_sp_ids = _linked_wb_sp_ids(page_sp_ids)
-            wb_existing_sp_ids |= _vendor_code_wb_sp_ids(
-                wb_existing_sp_ids, page_sp_ids)
+            wb_existing_sp_ids = _supplier_wb_existing_source_ids(
+                seller_id=seller.id,
+                supplier_id=supplier_id,
+                supplier=supplier,
+                source_ids=page_sp_ids,
+            )
 
         # Imported status intentionally counts every seller-linked row for
         # compatibility; update eligibility below requires an exact supplier
@@ -3163,8 +3692,11 @@ def register_supplier_routes(app):
             and product.id in supplier_update_sp_ids
         ]
 
-        stats = SupplierService.get_product_stats(supplier_id)
-        price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
+        stats = None
+        price_stock_stats = None
+        if not explicit_json:
+            stats = SupplierService.get_product_stats(supplier_id)
+            price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
 
         # Каналы для блока «Подготовить Ozon» в форме импорта: активные
         # кабинеты + отметка, какие уже покрыты авто-публикацией (для них
@@ -3201,7 +3733,7 @@ def register_supplier_routes(app):
 
         # Индикатор «есть Ozon-черновик» для карточек страницы каталога
         ozon_draft_sp_ids = set()
-        if ozon_import_accounts:
+        if ozon_import_accounts and not explicit_json:
             page_sp_ids = [p.id for p in pagination.items]
             if page_sp_ids:
                 ozon_draft_sp_ids = {
@@ -3240,6 +3772,86 @@ def register_supplier_routes(app):
             'supplier_catalog_products', supplier_id=supplier_id,
             **catalog_filter_args,
         )
+        if explicit_json:
+            action_mode = (
+                selection_mode
+                if selection_mode
+                else 'updates' if request.args.get('intent') == 'updates' or updates_only
+                else 'import'
+            )
+            importable_count = 0
+            updatable_count = 0
+            items = []
+            for product in pagination.items:
+                is_imported = product.id in imported_sp_ids
+                is_on_wb = product.id in wb_existing_sp_ids
+                is_updatable = product.id in supplier_update_sp_ids
+                is_importable = not is_updatable and not is_imported and not is_on_wb
+                importable_count += int(is_importable)
+                updatable_count += int(is_updatable)
+                items.append({
+                    'id': str(product.id),
+                    'title': product.title or 'Без названия',
+                    'article': product.vendor_code or product.external_id or '',
+                    'photo_url': (
+                        url_for(
+                            'serve_supplier_product_photo',
+                            supplier_product_id=product.id,
+                            photo_idx=0,
+                        ) if product.has_photos() else None
+                    ),
+                    'purchase_price': product.supplier_price,
+                    'currency': product.currency,
+                    'stock': product.supplier_quantity,
+                    'importable': is_importable,
+                    'imported': is_imported,
+                    'on_wb': is_on_wb,
+                    'updatable': is_updatable,
+                })
+            selected_ids = (
+                selected_update_ids if action_mode == 'updates'
+                else selected_import_ids
+            )
+            classic_url = url_for(
+                'supplier_catalog_products',
+                supplier_id=supplier_id,
+                intent=action_mode,
+                page=page,
+                search=search or None,
+                show_imported='1' if show_imported else None,
+                updates_only='1' if updates_only or action_mode == 'updates' else None,
+                stock_status=stock_status,
+                wb_filter=wb_filter or None,
+                ai_filter=ai_filter or None,
+            )
+            auto_draft_accounts = [
+                {'id': str(account.id), 'label': account.label}
+                for account in ozon_import_accounts
+                if account.id in ozon_auto_account_ids
+            ]
+            draft_account_choices = [
+                {'id': str(account.id), 'label': account.label}
+                for account in ozon_import_accounts
+                if account.id not in ozon_auto_account_ids
+            ]
+            return _supplier_import_no_store_json({
+                'success': True,
+                'supplier': {'id': str(supplier.id), 'name': supplier.name},
+                'mode': action_mode,
+                'items': items,
+                'page': pagination.page,
+                'pages': pagination.pages,
+                'total': pagination.total,
+                'eligible_count': (
+                    updatable_count if action_mode == 'updates' else importable_count
+                ),
+                'selection': [str(value) for value in selected_ids],
+                'selection_block_reason': selection_block_reason,
+                'selection_block_total': selection_block_total,
+                'auto_draft_accounts': auto_draft_accounts,
+                'draft_account_choices': draft_account_choices,
+                'classic_url': classic_url,
+            })
         return render_template('supplier_catalog_products.html',
                                supplier=supplier, pagination=pagination,
                                stats=stats, search=search,
@@ -3310,17 +3922,33 @@ def register_supplier_routes(app):
     def supplier_catalog_import():
         """Импорт выбранных товаров к продавцу"""
         seller = current_user.seller
+        seller_id = seller.id
+        explicit_json = any(
+            media.split(';', 1)[0].strip().lower() == 'application/json'
+            for media in request.headers.get('Accept', '').split(',')
+        )
+        if explicit_json:
+            return _supplier_catalog_import_json(
+                user_id=current_user.id,
+                seller_id=seller_id,
+            )
         try:
+            # Serialize declared and legacy form imports with the same exact
+            # duplicate check used by the JSON receipt path. Authentication
+            # reads are rolled back before the SQLite writer lock is acquired.
+            SupplierService._begin_supplier_import_transaction()
             supplier_id, product_ids = _supplier_import_form_selection(
-                seller.id, request.form,
+                seller_id, request.form,
             )
         except ValueError as exc:
+            db.session.rollback()
             flash(str(exc), 'warning')
             return _redirect_seller_supplier_catalog(
                 request.form.get('supplier_id', type=int)
             )
 
         if not product_ids:
+            db.session.rollback()
             flash('Не выбраны товары для импорта', 'warning')
             return _redirect_seller_supplier_catalog(supplier_id)
 
@@ -3328,11 +3956,16 @@ def register_supplier_routes(app):
             int(v) for v in request.form.getlist('draft_account_ids')
             if v.isdigit()
         ]
-        result = SupplierService.import_to_seller(
-            seller.id,
-            product_ids,
-            draft_account_ids=draft_account_ids or None,
-        )
+        try:
+            result = SupplierService.import_to_seller(
+                seller_id,
+                product_ids,
+                draft_account_ids=draft_account_ids or None,
+                transaction_started=True,
+            )
+        except Exception:
+            db.session.rollback()
+            raise
 
         if result.success:
             marketplace_note = ''
@@ -3367,7 +4000,7 @@ def register_supplier_routes(app):
                     else 'info'
                 )
                 return _redirect_after_supplier_import(
-                    seller_id=seller.id,
+                    seller_id=seller_id,
                     user_id=current_user.id,
                     supplier_id=supplier_id,
                     supplier_product_ids=product_ids,
@@ -3387,6 +4020,52 @@ def register_supplier_routes(app):
             return redirect(url_for('seller_my_products'))
         flash(f'Ошибка импорта: {"; ".join(result.error_messages[:3])}', 'danger')
         return _redirect_seller_supplier_catalog(supplier_id)
+
+    @app.route('/supplier-catalog/import/result', methods=['GET'])
+    @login_required
+    @seller_required
+    def supplier_catalog_import_result():
+        """Read a completed exact import receipt without repeating the write."""
+        header_values = request.headers.getlist(SUPPLIER_IMPORT_RECEIPT_KEY_HEADER)
+        if (
+            request.query_string
+            or len(header_values) != 1
+            or SUPPLIER_IMPORT_REQUEST_KEY_RE.fullmatch(header_values[0] or '') is None
+        ):
+            return _supplier_import_no_store_json({
+                'success': False,
+                'error': 'Итог импорта недоступен',
+            }, 400)
+        user_id = current_user.id
+        seller_id = current_user.seller.id
+        job_uid, key_hash = _supplier_import_request_identity(
+            user_id=user_id,
+            seller_id=seller_id,
+            request_key=header_values[0],
+        )
+        job = BackgroundJob.query.filter_by(
+            job_uid=job_uid,
+            seller_id=seller_id,
+            job_type=BackgroundJob.SUPPLIER_IMPORT_RECEIPT_TYPE,
+        ).first()
+        if job is None:
+            return _supplier_import_no_store_json({
+                'success': False,
+                'error': 'Итог импорта пока не подтверждён',
+                'code': 'supplier_import_receipt_not_found',
+            }, 404)
+        document = _supplier_import_receipt_document(
+            job,
+            user_id=user_id,
+            seller_id=seller_id,
+            request_key_hash=key_hash,
+        )
+        if document is None:
+            return _supplier_import_no_store_json({
+                'success': False,
+                'error': 'Итог импорта недоступен',
+            }, 409)
+        return _supplier_import_no_store_json(document)
 
     # -------------------------------------------------------------------
     # Мои импортированные товары — просмотр и управление
@@ -3456,6 +4135,21 @@ def register_supplier_routes(app):
                 SellerSupplier, SellerSupplier.supplier_id == Supplier.id,
             ).filter(SellerSupplier.seller_id == seller.id).all()
         ]
+        supplier_import_sources = [
+            {
+                'id': str(row.id),
+                'name': row.name,
+                'catalog_url': url_for(
+                    'supplier_catalog_products', supplier_id=row.id,
+                ),
+            }
+            for row in Supplier.query.join(
+                SellerSupplier, SellerSupplier.supplier_id == Supplier.id,
+            ).filter(
+                SellerSupplier.seller_id == seller.id,
+                SellerSupplier.is_active.is_(True),
+            ).order_by(Supplier.name.asc(), Supplier.id.asc()).all()
+        ]
         try:
             ozon_uploads_url = url_for('ozon_bulk_uploads.index')
         except Exception:
@@ -3471,6 +4165,7 @@ def register_supplier_routes(app):
             ozon_enabled=ozon_enabled,
             ozon_accounts=ozon_accounts,
             suppliers_payload=suppliers_payload,
+            supplier_import_sources=supplier_import_sources,
             ozon_uploads_url=ozon_uploads_url,
             import_batch=import_batch,
             batch_kind=batch_kind,
