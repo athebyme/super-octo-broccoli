@@ -30,8 +30,13 @@ from services.ozon_bulk_upload import (
     OzonBulkUploadService,
     OzonBulkUploadValidationError,
 )
-from services.ozon_bulk_repair import OzonBulkRepairService
+from services.ozon_bulk_repair import (
+    OzonBulkRepairService,
+    decode_compact_draft_ids,
+    encode_compact_draft_ids,
+)
 from services.listing_navigation import validate_listing_return_url
+from services.product_selection import safe_workspace_return_url
 
 
 ozon_bulk_uploads_bp = Blueprint(
@@ -399,6 +404,9 @@ _SELECTION_RETURN_STATUSES = {
 _SELECTION_VIEW_STATES = {
     "", "needs_input", "ready_to_retry", "excluded", "changed", "error",
 }
+_WORKSPACE_SELECTION_QUERY_KEY = "workspace_selection"
+_WORKSPACE_RETURN_FRAGMENT_PREFIX = "workspace-return="
+_WORKSPACE_REPAIR_MAX_URL_BYTES = 32_768
 
 
 def _selection_query_integer(raw: Any, field_name: str) -> int:
@@ -421,7 +429,7 @@ def _selection_query_integer(raw: Any, field_name: str) -> int:
 
 def _selection_query_values(extra_allowed: set[str]) -> tuple[dict, dict]:
     """Read one strict account/draft selection and explicitly allowed extras."""
-    allowed = {"account_id", "draft_ids"} | set(extra_allowed)
+    allowed = {"account_id", "draft_ids", _WORKSPACE_SELECTION_QUERY_KEY} | set(extra_allowed)
     if set(request.args.keys()) - allowed:
         raise OzonBulkUploadValidationError(
             "Переданы неизвестные параметры выбора черновиков"
@@ -434,31 +442,45 @@ def _selection_query_values(extra_allowed: set[str]) -> tuple[dict, dict]:
                 f"Параметр {key} не должен повторяться"
             )
         values[key] = items[0]
-    if "account_id" not in values or "draft_ids" not in values:
+    if "account_id" not in values or not (
+        "draft_ids" in values or _WORKSPACE_SELECTION_QUERY_KEY in values
+    ):
         raise OzonBulkUploadValidationError(
             "Укажите account_id и точный список draft_ids"
         )
+    if "draft_ids" in values and _WORKSPACE_SELECTION_QUERY_KEY in values:
+        raise OzonBulkUploadValidationError(
+            "Укажите только один точный список черновиков"
+        )
 
     account_id = _selection_query_integer(values["account_id"], "account_id")
-    raw_ids = values["draft_ids"]
-    if not raw_ids or len(raw_ids) > 4_200:
-        raise OzonBulkUploadValidationError(
-            "Укажите от 1 до 200 уникальных черновиков"
+    if _WORKSPACE_SELECTION_QUERY_KEY in values:
+        draft_ids = decode_compact_draft_ids(
+            values[_WORKSPACE_SELECTION_QUERY_KEY]
         )
-    id_parts = raw_ids.split(",")
-    if not 1 <= len(id_parts) <= _SELECTION_MAX_IDS:
-        raise OzonBulkUploadValidationError(
-            "Укажите от 1 до 200 уникальных черновиков"
-        )
-    draft_ids = [
-        _selection_query_integer(value, "draft_id")
-        for value in id_parts
-    ]
-    if len(draft_ids) != len(set(draft_ids)):
-        raise OzonBulkUploadValidationError(
-            "Список черновиков не должен содержать повторов"
-        )
-    extras = {key: value for key, value in values.items() if key not in {"account_id", "draft_ids"}}
+    else:
+        raw_ids = values["draft_ids"]
+        if not raw_ids or len(raw_ids) > 4_200:
+            raise OzonBulkUploadValidationError(
+                "Укажите от 1 до 200 уникальных черновиков"
+            )
+        id_parts = raw_ids.split(",")
+        if not 1 <= len(id_parts) <= _SELECTION_MAX_IDS:
+            raise OzonBulkUploadValidationError(
+                "Укажите от 1 до 200 уникальных черновиков"
+            )
+        draft_ids = [
+            _selection_query_integer(value, "draft_id")
+            for value in id_parts
+        ]
+        if len(draft_ids) != len(set(draft_ids)):
+            raise OzonBulkUploadValidationError(
+                "Список черновиков не должен содержать повторов"
+            )
+    extras = {
+        key: value for key, value in values.items()
+        if key not in {"account_id", "draft_ids", _WORKSPACE_SELECTION_QUERY_KEY}
+    }
     return {"account_id": account_id, "draft_ids": draft_ids}, extras
 
 
@@ -525,7 +547,13 @@ def _selection_page(raw: Any, field_name: str) -> int:
     return page
 
 
-def _selection_scope_query(selection: dict) -> str:
+def _selection_scope_query(selection: dict, *, compact: bool = False) -> str:
+    if compact:
+        encoded_ids = encode_compact_draft_ids(selection["draft_ids"])
+        return (
+            f"?account_id={selection['account_id']}&"
+            f"{_WORKSPACE_SELECTION_QUERY_KEY}={encoded_ids}"
+        )
     return (
         f"?account_id={selection['account_id']}&draft_ids="
         f"{','.join(str(draft_id) for draft_id in selection['draft_ids'])}"
@@ -553,8 +581,9 @@ def _selection_editor_urls(
     return_filters: dict,
     *,
     return_context_supplied: bool,
+    compact_selection: bool = False,
 ) -> dict:
-    scope_query = _selection_scope_query(selection)
+    scope_query = _selection_scope_query(selection, compact=compact_selection)
     drafts_url = url_for(
         "marketplace_drafts.detail", draft_id=123456789,
     ).replace("123456789", "")
@@ -595,11 +624,20 @@ def _selection_editor_urls(
         account_id=selection["account_id"],
     )
     if review_draft_ids:
-        review_url = url_for(
-            "ozon_bulk_uploads.review",
-            account_id=selection["account_id"],
-            draft_ids=",".join(str(draft_id) for draft_id in review_draft_ids),
-        )
+        if compact_selection:
+            review_url = (
+                url_for("ozon_bulk_uploads.review", account_id=selection["account_id"])
+                + "&"
+                + _WORKSPACE_SELECTION_QUERY_KEY
+                + "="
+                + encode_compact_draft_ids(review_draft_ids)
+            )
+        else:
+            review_url = url_for(
+                "ozon_bulk_uploads.review",
+                account_id=selection["account_id"],
+                draft_ids=",".join(str(draft_id) for draft_id in review_draft_ids),
+            )
     return {
         "read": url_for("ozon_bulk_uploads.repair_draft_selection") + scope_query,
         "apply": url_for("ozon_bulk_uploads.apply_draft_selection_repair") + scope_query,
@@ -908,9 +946,17 @@ def repair_draft_selection():
         allowed_extra = set() if as_json else {
             "return_page", "return_per_page", "return_status",
             "return_account_id", "q", "group", "state", "page",
-            "return_to",
+            "return_to", "workspace_return",
         }
         selection, extras = _selection_query_values(allowed_extra)
+        workspace_return_compact = extras.get("workspace_return") == "1"
+        if workspace_return_compact and (
+            not request.args.getlist(_WORKSPACE_SELECTION_QUERY_KEY)
+            or request.args.getlist("draft_ids")
+        ):
+            raise OzonBulkUploadValidationError(
+                "Ссылка возврата в «Мои товары» требует точный компактный список"
+            )
         if as_json:
             view = {"q": "", "group": "", "state": "", "page": 1}
             return_filters = {}
@@ -920,7 +966,12 @@ def repair_draft_selection():
                 _selection_view_context(extras)
             )
         catalog_return_url = None
+        workspace_return_url = None
         if "return_to" in extras:
+            if "workspace_return" in extras:
+                raise OzonBulkUploadValidationError(
+                    "Укажите только одну ссылку возврата"
+                )
             catalog_return_url = validate_listing_return_url(extras["return_to"])
             if catalog_return_url is None:
                 raise OzonBulkUploadValidationError(
@@ -939,6 +990,17 @@ def repair_draft_selection():
                 raise OzonBulkUploadValidationError(
                     "Ссылка возврата должна вести в выбранный кабинет Ozon"
                 )
+        if "workspace_return" in extras:
+            candidate = extras["workspace_return"]
+            if candidate != "1" or not workspace_return_compact:
+                raise OzonBulkUploadValidationError(
+                    "Ссылка возврата в «Мои товары» недопустима"
+                )
+            # Browser fragments never reach the server request. Keep a
+            # same-scope safe fallback for JS-disabled or invalid fragments.
+            workspace_return_url = safe_workspace_return_url(
+                "/my-products/beta"
+            )
         return_url, _classic_url = _draft_list_urls(
             selection,
             return_filters,
@@ -960,10 +1022,14 @@ def repair_draft_selection():
             editor,
             return_filters,
             return_context_supplied=return_context_supplied,
+            compact_selection=workspace_return_compact,
         )
         if catalog_return_url is not None:
             editor_urls["catalog_return"] = catalog_return_url
             editor_urls["catalog_return_label"] = "К каталогу Ozon"
+        elif workspace_return_url is not None:
+            editor_urls["catalog_return"] = workspace_return_url
+            editor_urls["catalog_return_label"] = "К моим товарам"
         response = make_response(render_template(
             "ozon_bulk_repair.html",
             editor=editor,
@@ -1502,15 +1568,25 @@ def review():
         return jsonify({"success": False, "error": "Seller account required"}), 403
     try:
         allowed = {
-            "account_id", "draft_ids", "parent_prepare_job_uid",
+            "account_id", "draft_ids", _WORKSPACE_SELECTION_QUERY_KEY,
+            "parent_prepare_job_uid",
             "result_job_uid", "page",
         }
         if set(request.args) - allowed or any(len(request.args.getlist(key)) != 1 for key in request.args):
             raise OzonBulkUploadValidationError("Неизвестный или повторяющийся параметр просмотра")
-        raw_ids = request.args.get("draft_ids", "")
-        if len(raw_ids) > 4200:
-            raise OzonBulkUploadValidationError("Слишком большой список черновиков")
-        draft_ids = _bounded_integer_list(raw_ids.split(","), "draft_ids")
+        if "draft_ids" in request.args and _WORKSPACE_SELECTION_QUERY_KEY in request.args:
+            raise OzonBulkUploadValidationError(
+                "Укажите только один точный список черновиков"
+            )
+        if _WORKSPACE_SELECTION_QUERY_KEY in request.args:
+            draft_ids = decode_compact_draft_ids(
+                request.args[_WORKSPACE_SELECTION_QUERY_KEY]
+            )
+        else:
+            raw_ids = request.args.get("draft_ids", "")
+            if len(raw_ids) > 4200:
+                raise OzonBulkUploadValidationError("Слишком большой список черновиков")
+            draft_ids = _bounded_integer_list(raw_ids.split(","), "draft_ids")
         parent_uid = request.args.get("parent_prepare_job_uid") or None
         if parent_uid is not None and not re.fullmatch(r"ozon-upload-[0-9a-f]{32}", parent_uid):
             raise OzonBulkUploadValidationError("Некорректный запуск подготовки")

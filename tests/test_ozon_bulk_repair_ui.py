@@ -127,9 +127,10 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const saved=new Map(),scope='a'.repeat(64),active={focus(){}};
 const window={ozonDraftEditor:{fieldComponent:{},photoComponent:{}},document:{activeElement:active,getElementById(){return null}},
  location:{href:'https://app.test/repair?account_id=1&draft_ids=1',origin:'https://app.test',pathname:'/repair',search:'?account_id=1&draft_ids=1'},
- history:{replaceState(){}},addEventListener(){},removeEventListener(){},sessionStorage:{setItem(k,v){saved.set(k,v)},getItem(k){return saved.get(k)},removeItem(k){saved.delete(k)}}};
+ history:{replaceState(){}},btoa:value=>Buffer.from(value,'binary').toString('base64'),atob:value=>Buffer.from(value,'base64').toString('binary'),
+ addEventListener(){},removeEventListener(){},sessionStorage:{setItem(k,v){saved.set(k,v)},getItem(k){return saved.get(k)},removeItem(k){saved.delete(k)}}};
 let transport=async()=>{throw Error('Unexpected fetch')},calls=[];
-vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),{window,URL,URLSearchParams,TextEncoder,AbortController,
+vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),{window,URL,URLSearchParams,TextEncoder,TextDecoder,AbortController,
  setTimeout,clearTimeout,fetch:async(url,options)=>{calls.push({url,method:options.method||'GET',body:options.body?.toString()});return transport(url,options);}});
 const core=window.ozonBulkRepair;
 const fixture=()=>({draft_id:1,draft_version:1,imported_product_id:7,offer_id:'offer-1',title:'Товар один',action:'ИСПРАВИТЬ',
@@ -140,7 +141,7 @@ const editor=()=>({mode:'draft_selection',scope_key:scope,job_uid:null,account_i
  groups:[{id:'g',source_category:'Категория',rows:[fixture()]}],review_draft_ids:[1],blocked_review_items:[],bulk_fields:[{key:'price_rub',label:'Цена продавца'}]});
 const config={editor:editor(),enabled:true,csrf:'csrf',urls:{read:'/read?account_id=1&draft_ids=1',apply:'/apply?account_id=1&draft_ids=1',types:'/types?account_id=1&draft_ids=1',
  dictionaries:'/dict/',dictionary_query:'account_id=1&draft_ids=1',drafts:'/draft/',result:'/drafts?account_id=1',review:'/review?account_id=1&draft_ids=1',classic:'/classic'}};
-function state(){const options=core.createOptions(config),value=options.data();for(const [key,fn]of Object.entries(options.methods))value[key]=fn.bind(value);
+function state(activeConfig=config){const options=core.createOptions(activeConfig),value=options.data();for(const [key,fn]of Object.entries(options.methods))value[key]=fn.bind(value);
  for(const [key,fn]of Object.entries(options.computed))Object.defineProperty(value,key,{get:fn.bind(value)});
  value.$nextTick=fn=>fn();value.$refs={modal:{showModal(){},close(){}},error:{focus(){}}};return {options,value};}
 const response=data=>({status:200,ok:true,redirected:false,json:async()=>({...data,csrf:'fresh-csrf'})});
@@ -172,6 +173,22 @@ const response=data=>({status:200,ok:true,redirected:false,json:async()=>({...da
  saved.set('ozon-repair:1:draft-selection:'+encodeURIComponent(scope),JSON.stringify({selected:[],uncertain:false}));
  const restored=state();restored.options.mounted.call(restored.value);
  assert.deepEqual(restored.value.rows.map(row=>row.selected),[false],'an explicit persisted deselection overrides selection defaults');
+ assert.equal(core.encodeCompactDraftIds([1]),'AAAAAAAAAAE','compact IDs use ordered eight-byte big-endian values');
+ const compactConfig={...config,urls:{...config.urls,review:'/review?account_id=1&workspace_selection=AAAAAAAAAAE'}};
+ const scoped=state(compactConfig);transport=async()=>response({success:true,editor:editor()});
+ assert.equal(await scoped.value.reload(),true);
+ const scopedReview=new URL(scoped.value.urls.review,'https://app.test');
+ assert.equal(scopedReview.searchParams.get('workspace_selection'),'AAAAAAAAAAE');
+ assert.equal(scopedReview.searchParams.has('draft_ids'),false,'compact review scope stays exclusive after readback');
+ const nonce='0123456789abcdef0123456789abcdef';
+ const nested='/my-products/beta?import_batch='+'A'.repeat(8188)+'.B.C#workspace-return='+nonce;
+ assert.equal(core.safeWorkspaceReturn(nested),nested,'the maximum supported import-batch context survives exact validation');
+ assert.equal(core.safeWorkspaceReturn('https://outside.test/my-products/beta'),null,'external workspace returns fail closed');
+ const capsule=Buffer.from(nested,'utf8').toString('base64url');
+ window.location.href='https://app.test/marketplaces/ozon/uploads/selection/repair?account_id=1&workspace_selection=AAAAAAAAAAE&workspace_return=1#workspace-return='+capsule;
+ assert.equal(core.workspaceReturnFromFragment(),nested,'the nested return rides the browser fragment, outside the request line');
+ window.location.href='https://app.test/repair?workspace_return=1#workspace-return='+'A'.repeat(11265);
+ assert.equal(core.workspaceReturnFromFragment(),null,'oversized fragments are rejected before decode');
  console.log('draft-selection initial rows, exact scope, local confirmation and uncertain save: passed');
 })().catch(error=>{console.error(error);process.exitCode=1});
 """
@@ -184,6 +201,7 @@ const response=data=>({status:200,ok:true,redirected:false,json:async()=>({...da
     assert "'Обработано черновиков: '" in template
     assert 'Изменено: {{ report.updated }}' in template
     assert template.count('v-if="!draftSelection" class="orb-check"') == 2
+    assert "urls.catalog_return_label || 'К каталогу Ozon'" in template
 
 
 def test_mixed_bulk_field_picker_filters_selected_schema_and_unavailable_rows():

@@ -7,6 +7,8 @@ retry remains the only path to a provider write.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import hashlib
@@ -65,6 +67,65 @@ from services.ozon_product_state import (
     OzonProductStateContract,
     OzonProductStateError,
 )
+
+
+def encode_compact_draft_ids(values: Any) -> str:
+    """Encode an ordered exact draft selection as fixed-width URL-safe IDs."""
+    if (
+        not isinstance(values, list)
+        or not 1 <= len(values) <= OzonBulkUploadService.MAX_ITEMS
+        or any(
+            type(value) is not int
+            or not 0 < value <= (1 << 63) - 1
+            for value in values
+        )
+        or len(values) != len(set(values))
+    ):
+        raise OzonBulkUploadValidationError(
+            "Укажите от 1 до 200 уникальных черновиков"
+        )
+    raw = b"".join(value.to_bytes(8, "big", signed=False) for value in values)
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def decode_compact_draft_ids(value: Any) -> list[int]:
+    """Decode and canonicalize an exact 1–200 ID compact selection."""
+    max_chars = (OzonBulkUploadService.MAX_ITEMS * 8 * 4 + 2) // 3
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > max_chars
+        or not re.fullmatch(r"[A-Za-z0-9_-]+", value)
+    ):
+        raise OzonBulkUploadValidationError(
+            "Компактный список черновиков повреждён"
+        )
+    try:
+        payload = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except (binascii.Error, ValueError) as exc:
+        raise OzonBulkUploadValidationError(
+            "Компактный список черновиков повреждён"
+        ) from exc
+    if (
+        len(payload) % 8
+        or not 8 <= len(payload) <= OzonBulkUploadService.MAX_ITEMS * 8
+        or base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii") != value
+    ):
+        raise OzonBulkUploadValidationError(
+            "Компактный список черновиков повреждён"
+        )
+    values = [
+        int.from_bytes(payload[offset:offset + 8], "big", signed=False)
+        for offset in range(0, len(payload), 8)
+    ]
+    if (
+        any(not 0 < item <= (1 << 63) - 1 for item in values)
+        or len(values) != len(set(values))
+    ):
+        raise OzonBulkUploadValidationError(
+            "Компактный список черновиков содержит недопустимые ID"
+        )
+    return values
 
 
 class OzonBulkRepairService:

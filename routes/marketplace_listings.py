@@ -1,5 +1,6 @@
 """Seller-facing unified marketplace listing read model."""
 
+import base64
 import json
 import logging
 import re
@@ -22,7 +23,14 @@ from flask_login import current_user, login_required
 from flask_wtf.csrf import generate_csrf
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from models import MarketplaceCommercialProposal, db
+from models import (
+    ImportedProduct,
+    Marketplace,
+    MarketplaceCommercialProposal,
+    MarketplaceListing,
+    SellerMarketplaceAccount,
+    db,
+)
 from services.marketplace_accounts import MarketplaceAccountError, MarketplaceAccountService
 from services.ozon_account_sync import enqueue_account_sync, latest_account_jobs
 from services.marketplace_listings import (
@@ -40,11 +48,13 @@ from services.marketplace_canonical_content import (
 )
 from services.marketplace_warehouses import MarketplaceWarehouseService
 from services.marketplace_listing_display import listing_display
+from services.product_selection import safe_workspace_return_url
 from services.marketplace_drafts import (
     MarketplaceDraftError,
     MarketplaceDraftService,
 )
 from services.ozon_existing_update_batch import OzonExistingUpdateBatch
+from services.ozon_bulk_repair import encode_compact_draft_ids
 from services.listing_navigation import (
     build_listing_catalog_url,
     current_listing_catalog_url,
@@ -71,12 +81,33 @@ _EXISTING_UPDATE_TOKEN_KEYS = {
     "v", "user_id", "seller_id", "account_id", "listing_ids",
     "digest", "return_to", "nonce",
 }
+_WORKSPACE_UPDATE_TOKEN_SALT = "ozon-existing-update-workspace-v1"
+_WORKSPACE_UPDATE_TOKEN_MAX_AGE = 600
+_WORKSPACE_UPDATE_TOKEN_MAX_BYTES = 32_768
+_WORKSPACE_UPDATE_MAX_URL_BYTES = 32_768
+_WORKSPACE_UPDATE_SHELL_MAX_URL_BYTES = 512
+_WORKSPACE_UPDATE_TOKEN_KEYS = {
+    "v", "user_id", "seller_id", "account_id", "source_ids",
+    "listing_ids", "return_to", "nonce",
+}
+_WORKSPACE_UPDATE_CONFIRM_TOKEN_KEYS = {
+    "v", "user_id", "seller_id", "account_id", "source_ids",
+    "listing_ids", "digest", "workspace_return", "nonce",
+}
 _MAX_SIGNED_SQLITE_ID = 9_223_372_036_854_775_807
+_MAX_SAFE_JS_ID = 9_007_199_254_740_991
 
 
 class _ExistingUpdateReviewError(ValueError):
     status_code = 409
     code = "existing_update_review_invalid"
+
+
+class _WorkspaceUpdateError(ValueError):
+    def __init__(self, message: str, *, status_code: int = 409, code: str = "workspace_update_invalid"):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
 
 
 def _seller_id() -> Optional[int]:
@@ -341,6 +372,260 @@ def _existing_update_return_url(data: dict, account_id: int) -> str:
     return _validate_ozon_catalog_return_url(value, account_id)
 
 
+def _workspace_update_serializer():
+    if not current_app.secret_key:
+        raise RuntimeError("Не настроена подпись выбранных товаров Ozon")
+    return URLSafeTimedSerializer(
+        current_app.secret_key,
+        salt=_WORKSPACE_UPDATE_TOKEN_SALT,
+    )
+
+
+def _workspace_update_ids(value: Any, field_name: str) -> list[int]:
+    if (
+        not isinstance(value, list)
+        or not 1 <= len(value) <= OzonExistingUpdateBatch.MAX_ITEMS
+        or any(
+            type(item) is not int
+            or item <= 0
+            or item > _MAX_SAFE_JS_ID
+            for item in value
+        )
+        or len(value) != len(set(value))
+    ):
+        raise ValueError(
+            f"{field_name} должен содержать от 1 до "
+            f"{OzonExistingUpdateBatch.MAX_ITEMS} разных положительных ID"
+        )
+    return list(value)
+
+
+def _workspace_return_url(value: Any) -> str:
+    safe = safe_workspace_return_url(value)
+    if not isinstance(value, str) or safe != value:
+        raise ValueError("Ссылка возврата в «Мои товары» недопустима")
+    return safe
+
+
+def _validate_workspace_update_mapping(
+    *, seller_id: int, account_id: int,
+    source_ids: list[int], listing_ids: list[int],
+):
+    """Re-read the exact seller source→listing relation before every lane step."""
+    if len(source_ids) != len(listing_ids):
+        raise _WorkspaceUpdateError(
+            "Выбранные товары и карточки Ozon не совпадают",
+            code="workspace_update_scope_changed",
+        )
+    try:
+        account = MarketplaceAccountService.get_owned_account(
+            seller_id=seller_id,
+            account_id=account_id,
+            marketplace_code="ozon",
+        )
+    except MarketplaceAccountError as exc:
+        raise _WorkspaceUpdateError(
+            "Выбранный магазин Ozon недоступен этому продавцу",
+            status_code=404,
+            code="workspace_update_account_unavailable",
+        ) from exc
+    if not account.is_active:
+        raise _WorkspaceUpdateError(
+            "Выбранный магазин Ozon отключён; список не изменён",
+            code="workspace_update_account_inactive",
+        )
+    if account.connection_status != "connected":
+        raise _WorkspaceUpdateError(
+            "Подключение выбранного магазина Ozon не подтверждено; список не изменён",
+            code="workspace_update_account_not_connected",
+        )
+
+    owned_source_ids = {
+        row[0] for row in db.session.query(ImportedProduct.id).filter(
+            ImportedProduct.seller_id == seller_id,
+            ImportedProduct.id.in_(source_ids),
+        ).all()
+    }
+    if owned_source_ids != set(source_ids):
+        raise _WorkspaceUpdateError(
+            "Часть исходных товаров больше не принадлежит этому продавцу",
+            status_code=404,
+            code="workspace_update_source_unavailable",
+        )
+
+    rows = db.session.query(
+        MarketplaceListing.id,
+        MarketplaceListing.imported_product_id,
+        MarketplaceListing.is_available,
+        MarketplaceListing.is_archived,
+    ).join(
+        Marketplace,
+        Marketplace.id == MarketplaceListing.marketplace_id,
+    ).join(
+        SellerMarketplaceAccount,
+        SellerMarketplaceAccount.id == MarketplaceListing.account_id,
+    ).filter(
+        MarketplaceListing.seller_id == seller_id,
+        MarketplaceListing.account_id == account_id,
+        MarketplaceListing.imported_product_id.in_(source_ids),
+        Marketplace.code == "ozon",
+        SellerMarketplaceAccount.seller_id == seller_id,
+        SellerMarketplaceAccount.marketplace_id == MarketplaceListing.marketplace_id,
+    ).all()
+
+    by_source: dict[int, list[tuple[int, bool, bool]]] = {}
+    for listing_id, source_id, is_available, is_archived in rows:
+        by_source.setdefault(source_id, []).append(
+            (listing_id, bool(is_available), bool(is_archived))
+        )
+    resolved = []
+    for source_id in source_ids:
+        source_rows = by_source.get(source_id, [])
+        if len(source_rows) != 1:
+            raise _WorkspaceUpdateError(
+                "Для каждого выбранного товара нужна ровно одна связанная карточка в этом магазине Ozon",
+                code="workspace_update_mapping_not_one_to_one",
+            )
+        listing_id, is_available, is_archived = source_rows[0]
+        if not is_available or is_archived:
+            raise _WorkspaceUpdateError(
+                "Одна из связанных карточек недоступна или находится в архиве; выбор не сокращён",
+                code="workspace_update_listing_unavailable",
+            )
+        resolved.append(listing_id)
+    if resolved != listing_ids:
+        raise _WorkspaceUpdateError(
+            "Связь исходных товаров с карточками Ozon изменилась; обновите список",
+            code="workspace_update_mapping_changed",
+        )
+    return account
+
+
+def _issue_workspace_update_token(
+    *, user_id: int, seller_id: int, account_id: int,
+    source_ids: list[int], listing_ids: list[int], return_to: str,
+) -> str:
+    token = _workspace_update_serializer().dumps({
+        "v": 1,
+        "user_id": user_id,
+        "seller_id": seller_id,
+        "account_id": account_id,
+        "source_ids": source_ids,
+        "listing_ids": listing_ids,
+        "return_to": return_to,
+        "nonce": secrets.token_urlsafe(18),
+    })
+    if len(token.encode("utf-8")) > _WORKSPACE_UPDATE_TOKEN_MAX_BYTES:
+        raise ValueError("Выбранный набор Ozon превышает поддерживаемый размер")
+    return token
+
+
+def _load_workspace_update_token(
+    token: Any, *, user_id: int, seller_id: int,
+    expected_account_id: Optional[int] = None,
+) -> dict:
+    if not isinstance(token, str) or not token:
+        raise _WorkspaceUpdateError(
+            "Проверка выбора отсутствует; вернитесь в «Мои товары» и выберите карточки снова",
+            code="workspace_update_token_invalid",
+        )
+    try:
+        token_size = len(token.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise _WorkspaceUpdateError(
+            "Подпись выбора Ozon повреждена", code="workspace_update_token_invalid",
+        ) from exc
+    if token_size > _WORKSPACE_UPDATE_TOKEN_MAX_BYTES:
+        raise _WorkspaceUpdateError(
+            "Проверка выбора превышает допустимый размер",
+            code="workspace_update_token_invalid",
+        )
+    try:
+        payload = _workspace_update_serializer().loads(
+            token, max_age=_WORKSPACE_UPDATE_TOKEN_MAX_AGE,
+        )
+    except (SignatureExpired, BadSignature) as exc:
+        raise _WorkspaceUpdateError(
+            "Проверка выбора устарела или повреждена; вернитесь в «Мои товары»",
+            code="workspace_update_token_expired_or_invalid",
+        ) from exc
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != _WORKSPACE_UPDATE_TOKEN_KEYS
+        or type(payload.get("v")) is not int
+        or payload["v"] != 1
+        or type(payload.get("user_id")) is not int
+        or payload["user_id"] != user_id
+        or type(payload.get("seller_id")) is not int
+        or payload["seller_id"] != seller_id
+        or type(payload.get("account_id")) is not int
+        or payload["account_id"] <= 0
+        or payload["account_id"] > _MAX_SIGNED_SQLITE_ID
+        or (expected_account_id is not None and payload["account_id"] != expected_account_id)
+        or not isinstance(payload.get("nonce"), str)
+        or re.fullmatch(r"[A-Za-z0-9_-]{20,40}", payload["nonce"]) is None
+    ):
+        raise _WorkspaceUpdateError(
+            "Выбор относится к другому продавцу, магазину или набору",
+            code="workspace_update_scope_invalid",
+        )
+    try:
+        source_ids = _workspace_update_ids(payload.get("source_ids"), "source_ids")
+        listing_ids = _workspace_update_ids(payload.get("listing_ids"), "listing_ids")
+        return_to = _workspace_return_url(payload.get("return_to"))
+    except ValueError as exc:
+        raise _WorkspaceUpdateError(
+            "Проверка выбора повреждена; вернитесь в «Мои товары»",
+            code="workspace_update_scope_invalid",
+        ) from exc
+    if (
+        len(source_ids) != len(listing_ids)
+        or source_ids != payload.get("source_ids")
+        or listing_ids != payload.get("listing_ids")
+        or return_to != payload.get("return_to")
+    ):
+        raise _WorkspaceUpdateError(
+            "Порядок выбора изменился; вернитесь в «Мои товары»",
+            code="workspace_update_scope_invalid",
+        )
+    account = _validate_workspace_update_mapping(
+        seller_id=seller_id,
+        account_id=payload["account_id"],
+        source_ids=source_ids,
+        listing_ids=listing_ids,
+    )
+    return {
+        **payload,
+        "source_ids": source_ids,
+        "listing_ids": listing_ids,
+        "return_to": return_to,
+        "account_label": account.label or "",
+    }
+
+
+def _issue_workspace_existing_update_confirm_token(
+    *, user_id: int, seller_id: int, account_id: int,
+    source_ids: list[int], listing_ids: list[int], digest: str,
+    workspace_return: str,
+) -> str:
+    if not isinstance(digest, str) or not _EXISTING_UPDATE_DIGEST_RE.fullmatch(digest):
+        raise MarketplaceDraftError("Сервис вернул некорректную проверку")
+    token = _existing_update_serializer().dumps({
+        "v": 2,
+        "user_id": user_id,
+        "seller_id": seller_id,
+        "account_id": account_id,
+        "source_ids": source_ids,
+        "listing_ids": listing_ids,
+        "digest": digest,
+        "workspace_return": workspace_return,
+        "nonce": secrets.token_urlsafe(18),
+    })
+    if len(token.encode("utf-8")) > _WORKSPACE_UPDATE_TOKEN_MAX_BYTES:
+        raise MarketplaceDraftError("Проверка выбранных карточек превышает лимит")
+    return token
+
+
 def _issue_existing_update_token(
     *, user_id: int, seller_id: int, account_id: int,
     listing_ids: list[int], digest: str, return_to: str,
@@ -376,9 +661,7 @@ def _load_existing_update_token(
         raise _ExistingUpdateReviewError(
             "Подпись проверки неверна; перечитайте выбранные карточки"
         ) from exc
-    if (
-        token_size > _EXISTING_UPDATE_TOKEN_MAX_BYTES
-    ):
+    if token_size > _WORKSPACE_UPDATE_TOKEN_MAX_BYTES:
         raise ValueError("Проверка устарела; перечитайте выбранные карточки")
     try:
         payload = _existing_update_serializer().loads(
@@ -393,11 +676,26 @@ def _load_existing_update_token(
         raise _ExistingUpdateReviewError(
             "Подпись проверки неверна; перечитайте выбранные карточки"
         ) from exc
-    if (
-        not isinstance(payload, dict)
-        or set(payload) != _EXISTING_UPDATE_TOKEN_KEYS
-        or type(payload.get("v")) is not int
-        or payload.get("v") != 1
+    if not isinstance(payload, dict):
+        raise _ExistingUpdateReviewError(
+            "Проверка относится к другому продавцу или выбору"
+        )
+    version = payload.get("v")
+    expected_keys = (
+        _EXISTING_UPDATE_TOKEN_KEYS
+        if type(version) is int and version == 1
+        else _WORKSPACE_UPDATE_CONFIRM_TOKEN_KEYS
+        if type(version) is int and version == 2
+        else set()
+    )
+    max_bytes = (
+        _EXISTING_UPDATE_TOKEN_MAX_BYTES
+        if version == 1
+        else _WORKSPACE_UPDATE_TOKEN_MAX_BYTES
+    )
+    common_invalid = (
+        set(payload) != expected_keys
+        or type(version) is not int
         or type(payload.get("user_id")) is not int
         or payload.get("user_id") != user_id
         or type(payload.get("seller_id")) is not int
@@ -407,10 +705,10 @@ def _load_existing_update_token(
         or not isinstance(payload.get("listing_ids"), list)
         or not isinstance(payload.get("digest"), str)
         or not _EXISTING_UPDATE_DIGEST_RE.fullmatch(payload["digest"])
-        or not isinstance(payload.get("return_to"), str)
         or not isinstance(payload.get("nonce"), str)
         or re.fullmatch(r"[A-Za-z0-9_-]{20,40}", payload["nonce"]) is None
-    ):
+    )
+    if token_size > max_bytes or common_invalid:
         raise _ExistingUpdateReviewError(
             "Проверка относится к другому продавцу или выбору"
         )
@@ -424,19 +722,42 @@ def _load_existing_update_token(
         raise _ExistingUpdateReviewError(
             "Порядок выбранных карточек изменился"
         )
-    try:
-        safe_return = _validate_ozon_catalog_return_url(
-            payload["return_to"], payload["account_id"],
-        )
-    except ValueError as exc:
-        raise _ExistingUpdateReviewError(
-            "Проверка содержит недопустимую ссылку возврата"
-        ) from exc
-    if safe_return != payload["return_to"]:
-        raise _ExistingUpdateReviewError(
-            "Ссылка возврата проверки изменилась"
-        )
-    payload["return_to"] = safe_return
+    if version == 1:
+        if not isinstance(payload.get("return_to"), str):
+            raise _ExistingUpdateReviewError(
+                "Проверка содержит недопустимую ссылку возврата"
+            )
+        try:
+            safe_return = _validate_ozon_catalog_return_url(
+                payload["return_to"], payload["account_id"],
+            )
+        except ValueError as exc:
+            raise _ExistingUpdateReviewError(
+                "Проверка содержит недопустимую ссылку возврата"
+            ) from exc
+        if safe_return != payload["return_to"]:
+            raise _ExistingUpdateReviewError(
+                "Ссылка возврата проверки изменилась"
+            )
+        payload["return_to"] = safe_return
+    else:
+        try:
+            source_ids = _workspace_update_ids(payload.get("source_ids"), "source_ids")
+            safe_return = _workspace_return_url(payload.get("workspace_return"))
+        except ValueError as exc:
+            raise _ExistingUpdateReviewError(
+                "Проверка содержит недопустимую ссылку или выбор"
+            ) from exc
+        if (
+            source_ids != payload.get("source_ids")
+            or len(source_ids) != len(listing_ids)
+            or safe_return != payload.get("workspace_return")
+        ):
+            raise _ExistingUpdateReviewError(
+                "Порядок выбора или ссылка возврата проверки изменились"
+            )
+        payload["source_ids"] = source_ids
+        payload["workspace_return"] = safe_return
     return payload
 
 
@@ -603,6 +924,10 @@ def index():
     seller_id = _seller_id()
     if seller_id is None:
         return "Seller account required", 403
+    workspace_tokens = request.args.getlist("workspace_update")
+    workspace_update_mode = bool(workspace_tokens)
+    workspace_update_error = ""
+    filters = None
     try:
         filters = _listing_filters(normalize_pagination=True)
         if filters['account_id'] is not None:
@@ -610,7 +935,86 @@ def index():
                 seller_id=seller_id, account_id=filters['account_id'], marketplace_code='ozon',
             )
     except (ValueError, MarketplaceAccountError) as exc:
-        return _error_response(exc)
+        if workspace_update_mode:
+            # A malformed scoped shell must never fall through into the regular
+            # catalog page or expose its feed bootstrap.
+            workspace_update_error = str(exc)[:300]
+            filters = {
+                "marketplace_code": "ozon",
+                "account_id": None,
+                "normalized_status": None,
+                "link_status": None,
+                "include_unavailable": False,
+                "search": None,
+                "page": 1,
+                "per_page": 60,
+            }
+        else:
+            return _error_response(exc)
+    if workspace_update_mode:
+        expected_shell = None
+        try:
+            if (
+                len(workspace_tokens) != 1
+                or workspace_tokens[0] != "1"
+                or request.args.getlist("marketplace") != ["ozon"]
+                or len(request.args.getlist("account_id")) != 1
+                or filters["marketplace_code"] != "ozon"
+                or filters["account_id"] is None
+                or any(key not in {"marketplace", "account_id", "workspace_update"} for key in request.args)
+            ):
+                raise _WorkspaceUpdateError(
+                    "Эта ссылка относится к другому списку или магазину Ozon",
+                    code="workspace_update_url_invalid",
+                )
+            expected_shell = url_for(
+                "marketplace_listings.index",
+                marketplace="ozon",
+                account_id=filters["account_id"],
+                workspace_update="1",
+            )
+            if len(expected_shell.encode("utf-8")) > _WORKSPACE_UPDATE_SHELL_MAX_URL_BYTES:
+                raise _WorkspaceUpdateError(
+                    "Ссылка выбора превышает допустимый размер",
+                    code="workspace_update_url_invalid",
+                )
+        except _WorkspaceUpdateError as exc:
+            workspace_update_error = str(exc)[:300]
+        if expected_shell is None:
+            workspace_update_error = workspace_update_error or (
+                "Не удалось открыть точный список. Вернитесь в «Мои товары» и повторите действие."
+            )
+        if filters is None:
+            filters = {
+                "marketplace_code": "ozon",
+                "account_id": None,
+                "normalized_status": None,
+                "link_status": None,
+                "include_unavailable": False,
+                "search": None,
+                "page": 1,
+                "per_page": 60,
+            }
+        response = make_response(render_template(
+            "marketplace_listings_beta.html",
+            accounts_payload=[],
+            initial_filters=filters,
+            catalog_return_url=url_for("seller_my_products_beta"),
+            catalog_page=filters["page"],
+            catalog_per_page=filters["per_page"],
+            workspace_update=None,
+            workspace_update_mode=True,
+            workspace_update_error=workspace_update_error,
+            workspace_update_fallback_url=url_for("seller_my_products_beta"),
+            ozon_enabled=bool(
+                current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
+            ),
+        ))
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+
+    workspace_update = None
+    workspace_update_error = ""
     accounts = MarketplaceAccountService.list_accounts(seller_id=seller_id)
     latest_syncs = MarketplaceListingService.latest_syncs(seller_id=seller_id)
     ozon_account_ids = [
@@ -651,17 +1055,24 @@ def index():
             "last_completed_at": catalog_completed_at.get(account.id),
             "sync_job": onboarding_jobs.get(account.id),
         })
-    return render_template(
+    response = make_response(render_template(
         "marketplace_listings_beta.html",
         accounts_payload=accounts_payload,
         initial_filters=filters,
         catalog_return_url=_catalog_return_url(filters),
         catalog_page=filters["page"],
         catalog_per_page=filters["per_page"],
+        workspace_update=workspace_update,
+        workspace_update_mode=False,
+        workspace_update_error=workspace_update_error,
+        workspace_update_fallback_url=url_for("seller_my_products"),
         ozon_enabled=bool(
             current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
         ),
-    )
+    ))
+    if workspace_tokens:
+        response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @marketplace_listings_bp.route("/beta/<int:listing_id>")
@@ -1033,6 +1444,92 @@ def update_draft_context(listing_id: int):
 
 
 @marketplace_listings_bp.route(
+    "/update-drafts/workspace-handoff",
+    methods=["POST"],
+)
+@login_required
+def workspace_update_handoff():
+    """Sign an exact seller/account mapping from My Products into the Ozon catalog."""
+    seller_id = _seller_id()
+    if seller_id is None:
+        return _existing_update_error(
+            "Для работы с листингами нужна карточка продавца",
+            status_code=403,
+            code="seller_profile_required",
+        )
+    if not current_app.config.get("MARKETPLACE_OZON_ENABLED", False):
+        return _existing_update_error(
+            "Подготовка черновиков Ozon отключена",
+            status_code=404,
+            code="ozon_feature_disabled",
+        )
+    try:
+        user_id = _positive_native_id(
+            getattr(current_user, "id", None), "user_id",
+        )
+        seller_id = _positive_native_id(seller_id, "seller_id")
+        data = _existing_update_body(
+            required={"account_id", "source_ids", "listing_ids", "return_to"},
+            allowed={"account_id", "source_ids", "listing_ids", "return_to"},
+        )
+        account_id = _positive_native_id(data["account_id"], "account_id")
+        source_ids = _workspace_update_ids(data["source_ids"], "source_ids")
+        listing_ids = _workspace_update_ids(data["listing_ids"], "listing_ids")
+        return_to = _workspace_return_url(data["return_to"])
+        if len(source_ids) != len(listing_ids):
+            raise ValueError("Выбранные товары и карточки Ozon не совпадают")
+        account = _validate_workspace_update_mapping(
+            seller_id=seller_id,
+            account_id=account_id,
+            source_ids=source_ids,
+            listing_ids=listing_ids,
+        )
+        token = _issue_workspace_update_token(
+            user_id=user_id,
+            seller_id=seller_id,
+            account_id=account_id,
+            source_ids=source_ids,
+            listing_ids=listing_ids,
+            return_to=return_to,
+        )
+        shell_url = url_for(
+            "marketplace_listings.index",
+            marketplace="ozon",
+            account_id=account_id,
+            workspace_update="1",
+        )
+        target = f"{shell_url}#workspace-update={token}"
+        if (
+            len(shell_url.encode("utf-8")) > _WORKSPACE_UPDATE_SHELL_MAX_URL_BYTES
+            or len(target.encode("utf-8")) > _WORKSPACE_UPDATE_MAX_URL_BYTES
+        ):
+            raise _WorkspaceUpdateError(
+                "Ссылка для этого выбора превышает допустимый размер. "
+                "Сузьте выбор или вернитесь в «Мои товары».",
+                status_code=413,
+                code="workspace_update_url_too_large",
+            )
+        response = _existing_update_json({"success": True, "url": target})
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+    except _WorkspaceUpdateError as exc:
+        return _existing_update_error(
+            str(exc), status_code=exc.status_code, code=exc.code,
+        )
+    except (MarketplaceDraftError, ValueError) as exc:
+        return _existing_update_error(str(exc))
+    except Exception:
+        logger.exception(
+            "Ozon workspace update handoff failed seller_id=%s", seller_id,
+        )
+        return _existing_update_error(
+            "Не удалось проверить выбранные карточки Ozon; список не изменён",
+            status_code=500,
+            code="workspace_update_handoff_failed",
+        )
+
+
+@marketplace_listings_bp.route(
     "/update-drafts/preview",
     methods=["POST"],
 )
@@ -1058,12 +1555,29 @@ def preview_update_drafts():
         )
         seller_id = _positive_native_id(seller_id, "seller_id")
         data = _existing_update_body(
-            required={"account_id", "listing_ids"},
-            allowed={"account_id", "listing_ids", "return_to"},
+            required=set(),
+            allowed={"account_id", "listing_ids", "return_to", "workspace_update"},
         )
-        account_id = _positive_native_id(data["account_id"], "account_id")
-        listing_ids = _existing_update_ids(data["listing_ids"])
-        return_to = _existing_update_return_url(data, account_id)
+        workspace_payload = None
+        if "workspace_update" in data:
+            if set(data) != {"workspace_update"}:
+                raise ValueError(
+                    "Передайте workspace_update отдельно от обычного выбора карточек"
+                )
+            workspace_payload = _load_workspace_update_token(
+                data["workspace_update"],
+                user_id=user_id,
+                seller_id=seller_id,
+            )
+            account_id = workspace_payload["account_id"]
+            listing_ids = workspace_payload["listing_ids"]
+            return_to = workspace_payload["return_to"]
+        else:
+            if not {"account_id", "listing_ids"}.issubset(data):
+                raise ValueError("Не передан точный список выбранных карточек")
+            account_id = _positive_native_id(data["account_id"], "account_id")
+            listing_ids = _existing_update_ids(data["listing_ids"])
+            return_to = _existing_update_return_url(data, account_id)
         raw_preview = OzonExistingUpdateBatch.preview(
             seller_id=seller_id,
             account_id=account_id,
@@ -1076,22 +1590,45 @@ def preview_update_drafts():
             allowed_statuses={"ready", "existing", "blocked"},
             require_success_draft=False,
         )
-        preview["token"] = _issue_existing_update_token(
-            user_id=user_id,
-            seller_id=seller_id,
-            account_id=account_id,
-            listing_ids=listing_ids,
-            digest=raw_preview.get("digest"),
-            return_to=return_to,
-        )
+        if workspace_payload is not None:
+            preview["token"] = _issue_workspace_existing_update_confirm_token(
+                user_id=user_id,
+                seller_id=seller_id,
+                account_id=account_id,
+                source_ids=workspace_payload["source_ids"],
+                listing_ids=listing_ids,
+                digest=raw_preview.get("digest"),
+                workspace_return=return_to,
+            )
+        else:
+            preview["token"] = _issue_existing_update_token(
+                user_id=user_id,
+                seller_id=seller_id,
+                account_id=account_id,
+                listing_ids=listing_ids,
+                digest=raw_preview.get("digest"),
+                return_to=return_to,
+            )
+        response_data = {"success": True, "preview": preview}
+        if workspace_payload is not None:
+            response_data["workspace_update"] = {
+                "account_id": account_id,
+                "account_label": workspace_payload["account_label"],
+                "listing_ids": list(listing_ids),
+                "return_to": return_to,
+            }
         encoded = json.dumps(
-            {"success": True, "preview": preview},
+            response_data,
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
         if len(encoded) > _EXISTING_UPDATE_RESPONSE_MAX_BYTES:
             raise ValueError("Предпросмотр выбранных карточек превышает лимит")
-        return _existing_update_json({"success": True, "preview": preview})
+        return _existing_update_json(response_data)
+    except _WorkspaceUpdateError as exc:
+        return _existing_update_error(
+            str(exc), status_code=exc.status_code, code=exc.code,
+        )
     except MarketplaceDraftError as exc:
         return _existing_update_error(
             str(exc),
@@ -1148,6 +1685,14 @@ def apply_update_drafts():
             user_id=user_id,
             seller_id=seller_id,
         )
+        if payload["v"] == 2:
+            # Validate the source relation again before any local draft writes.
+            _validate_workspace_update_mapping(
+                seller_id=seller_id,
+                account_id=payload["account_id"],
+                source_ids=payload["source_ids"],
+                listing_ids=payload["listing_ids"],
+            )
         raw_report = OzonExistingUpdateBatch.apply(
             seller_id=seller_id,
             account_id=payload["account_id"],
@@ -1168,14 +1713,40 @@ def apply_update_drafts():
         ]
         report["editor_url"] = None
         if successful_draft_ids:
-            report["editor_url"] = url_for(
-                "ozon_bulk_uploads.repair_draft_selection",
-                account_id=payload["account_id"],
-                draft_ids=",".join(str(value) for value in successful_draft_ids),
-                return_to=payload["return_to"],
-            )
+            if payload["v"] == 2:
+                editor_url = url_for(
+                    "ozon_bulk_uploads.repair_draft_selection",
+                    account_id=payload["account_id"],
+                    workspace_selection=encode_compact_draft_ids(
+                        successful_draft_ids
+                    ),
+                    workspace_return="1",
+                )
+                encoded_return = base64.urlsafe_b64encode(
+                    payload["workspace_return"].encode("utf-8")
+                ).rstrip(b"=").decode("ascii")
+                workspace_editor_url = (
+                    editor_url + "#workspace-return=" + encoded_return
+                )
+                report["editor_url"] = (
+                    workspace_editor_url
+                    if len(workspace_editor_url.encode("utf-8"))
+                    <= _WORKSPACE_UPDATE_MAX_URL_BYTES
+                    else editor_url
+                )
+            else:
+                report["editor_url"] = url_for(
+                    "ozon_bulk_uploads.repair_draft_selection",
+                    account_id=payload["account_id"],
+                    draft_ids=",".join(str(value) for value in successful_draft_ids),
+                    return_to=payload["return_to"],
+                )
         return _existing_update_json({"success": True, "report": report})
     except _ExistingUpdateReviewError as exc:
+        return _existing_update_error(
+            str(exc), status_code=exc.status_code, code=exc.code,
+        )
+    except _WorkspaceUpdateError as exc:
         return _existing_update_error(
             str(exc), status_code=exc.status_code, code=exc.code,
         )

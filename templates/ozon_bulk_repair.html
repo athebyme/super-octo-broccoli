@@ -21,7 +21,7 @@
     }
 }|tojson }}</script>
 {% set fallback_classic = editor_urls.classic if editor.mode == 'draft_selection' and editor_urls is defined else url_for('ozon_bulk_uploads.repair_editor_classic', job_uid=editor.job_uid) %}
-<p id="orb-fallback" class="orb-fallback" role="status">Загружаем редактор… Если он не открылся, <a href="{{ fallback_classic }}">{{ 'вернитесь к списку черновиков' if editor.mode == 'draft_selection' else 'перейдите к простой форме' }}</a>.{% if editor.mode == 'draft_selection' and editor_urls is defined and editor_urls.catalog_return %} <a href="{{ editor_urls.catalog_return }}">{{ editor_urls.catalog_return_label }}</a>{% endif %}</p>
+<p id="orb-fallback" class="orb-fallback" role="status">Загружаем редактор… Если он не открылся, <a href="{{ fallback_classic }}">{{ 'вернитесь к списку черновиков' if editor.mode == 'draft_selection' else 'перейдите к простой форме' }}</a>.{% if editor.mode == 'draft_selection' and editor_urls is defined and editor_urls.catalog_return %} <a data-workspace-return-fallback href="{{ editor_urls.catalog_return }}">{{ editor_urls.catalog_return_label }}</a>{% endif %}</p>
 <div id="ozon-bulk-repair" class="orb" v-cloak x-ignore
      data-editor-mode="{{ editor.mode or 'legacy' }}"
      {% if editor.mode == 'source_prepare' %}data-source-prepare-editor{% endif %}
@@ -30,7 +30,7 @@
         <a class="orb-back" {% if editor.mode == 'draft_selection' %}data-draft-selection-return{% endif %}
            :href="urls.result">{{ icon('arrow-left', size=16) }} {{ 'К черновикам' if editor.mode == 'draft_selection' else 'К результатам подготовки' if editor.mode == 'source_prepare' else 'К результатам загрузки' }}</a>
         <a v-if="draftSelection && urls.catalog_return" class="orb-back" data-existing-update-catalog-return
-           :href="urls.catalog_return">{{ icon('arrow-left', size=16) }} {{ 'К каталогу Ozon' }}</a>
+           :href="urls.catalog_return">{{ icon('arrow-left', size=16) }} {{ urls.catalog_return_label || 'К каталогу Ozon' }}</a>
         <h1>{{ 'Черновики партии' if editor.mode == 'source_prepare' else 'Изменение черновиков' if editor.mode == 'draft_selection' else 'Исправление карточек' }}</h1>
         <p>{{ editor.account_label or 'Магазин Ozon' }}. {% if editor.mode == 'source_prepare' %}Локальные изменения сохраняются в Seller Hub; перед отправкой проверьте актуальные версии.{% elif editor.mode == 'draft_selection' %}Изменения сохраняются только в Seller Hub. Перед отправкой карточек Ozon потребуется отдельная проверка.{% else %}Подготовьте нужные значения и сохраните черновики.{% endif %}</p>
         <button type="button" class="orb-link" :disabled="busy || sessionExpired" @click="reload({manual:true})">Прочитать текущее состояние</button>
@@ -196,5 +196,5 @@
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
 <script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}" defer></script>
 <script src="{{ url_for('static', filename='ozon-draft-editor.js') }}" defer></script>
-<script src="{{ url_for('static', filename='ozon-bulk-repair-vue.js', v='20261122-draft-selection-r45') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-bulk-repair-vue.js', v='20261122-ozon-workspace-return-r56') }}" defer></script>
 {% endblock %}

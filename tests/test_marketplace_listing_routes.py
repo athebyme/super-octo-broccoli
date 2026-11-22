@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """Unified listing HTTP APIs preserve seller/account and feature boundaries."""
 
+import base64
 from datetime import datetime
 from pathlib import Path
 import json
+import random
 import re
+import string
 from types import SimpleNamespace
 from unittest.mock import patch
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 import unittest
 
 from flask import Flask
@@ -28,10 +31,15 @@ from models import (
 )
 from routes.marketplace_listings import register_marketplace_listing_routes
 import routes.marketplace_listings as marketplace_listing_routes
+import routes.ozon_bulk_uploads as ozon_bulk_upload_routes
 from routes.marketplace_drafts import register_marketplace_draft_routes
 from routes.ozon_bulk_uploads import register_ozon_bulk_upload_routes
 from services.ozon_existing_update_batch import OzonExistingUpdateBatch
 from services.marketplace_listings import MarketplaceListingService
+from services.ozon_bulk_repair import (
+    decode_compact_draft_ids,
+    encode_compact_draft_ids,
+)
 from services.marketplace_drafts import (
     MarketplaceDraftNotFound,
     MarketplaceDraftService,
@@ -406,6 +414,604 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
                     f"&account_id={account_id or self.account1_id}"
                 ),
             )
+
+    def _workspace_update_source_selection(self):
+        with self.app.app_context():
+            listing = self._link_fresh()
+            listing.is_available = True
+            listing.is_archived = False
+            db.session.commit()
+            return [self.own_source_id], [self.own_id]
+
+    @staticmethod
+    def _workspace_return_url():
+        return (
+            "/my-products/beta?import_batch=AbC.123.XyZ"
+            "#workspace-return=0123456789abcdef0123456789abcdef"
+        )
+
+    def test_workspace_existing_update_handoff_previews_and_confirms_exact_scope(self):
+        source_ids, listing_ids = self._workspace_update_source_selection()
+        return_to = self._workspace_return_url()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            handoff = self.client.post(
+                "/marketplaces/listings/update-drafts/workspace-handoff",
+                json={
+                    "account_id": self.account1_id,
+                    "source_ids": source_ids,
+                    "listing_ids": listing_ids,
+                    "return_to": return_to,
+                },
+            )
+        self.assertEqual(handoff.status_code, 200, handoff.get_json())
+        self.assertEqual(handoff.headers["Cache-Control"], "private, no-store")
+        target = urlsplit(handoff.json["url"])
+        self.assertEqual(target.path, "/marketplaces/listings/")
+        self.assertEqual(parse_qs(target.query)["marketplace"], ["ozon"])
+        self.assertEqual(parse_qs(target.query)["account_id"], [str(self.account1_id)])
+        self.assertEqual(parse_qs(target.query)["workspace_update"], ["1"])
+        workspace_token = target.fragment.removeprefix("workspace-update=")
+        self.assertTrue(workspace_token)
+        self.assertLess(len((target.path + "?" + target.query).encode("utf-8")), 4094)
+        self.assertLessEqual(
+            len(workspace_token.encode("utf-8")),
+            marketplace_listing_routes._WORKSPACE_UPDATE_TOKEN_MAX_BYTES,
+        )
+
+        with self.app.test_request_context():
+            token_payload = marketplace_listing_routes._workspace_update_serializer().loads(
+                workspace_token,
+                max_age=marketplace_listing_routes._WORKSPACE_UPDATE_TOKEN_MAX_AGE,
+            )
+        self.assertEqual(token_payload["source_ids"], source_ids)
+        self.assertEqual(token_payload["listing_ids"], listing_ids)
+        self.assertEqual(token_payload["account_id"], self.account1_id)
+        self.assertEqual(token_payload["return_to"], return_to)
+
+        # The GET is a short scoped shell; only the preview POST receives the
+        # signed mapping token, so no ordinary catalog bootstrap/feed is read.
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch(
+            "routes.marketplace_listings.render_template",
+            side_effect=lambda _name, **context: json.dumps({
+                "workspace_update": context["workspace_update"],
+                "workspace_update_mode": context["workspace_update_mode"],
+                "workspace_update_error": context["workspace_update_error"],
+                "workspace_update_fallback_url": context["workspace_update_fallback_url"],
+            }),
+        ), patch.object(
+            marketplace_listing_routes.MarketplaceListingService,
+            "latest_syncs",
+            side_effect=AssertionError("workspace shell must not read catalog state"),
+        ), patch.object(
+            marketplace_listing_routes.MarketplaceAccountService,
+            "list_accounts",
+            side_effect=AssertionError("workspace shell must not bootstrap catalog accounts"),
+        ):
+            catalog = self.client.get(handoff.json["url"])
+        self.assertEqual(catalog.status_code, 200)
+        self.assertEqual(catalog.headers["Cache-Control"], "private, no-store")
+        boot = json.loads(catalog.get_data(as_text=True))
+        self.assertTrue(boot["workspace_update_mode"])
+        self.assertIsNone(boot["workspace_update"])
+        with self.app.test_request_context():
+            expected_workspace_return = marketplace_listing_routes.url_for(
+                "seller_my_products_beta"
+            )
+        self.assertEqual(boot["workspace_update_fallback_url"], expected_workspace_return)
+        self.assertEqual(boot["workspace_update_error"], "")
+
+        preview_doc = self._existing_update_preview_document(listing_ids)
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch, "preview", return_value=preview_doc,
+        ) as preview:
+            preview_response = self.client.post(
+                "/marketplaces/listings/update-drafts/preview",
+                json={"workspace_update": workspace_token},
+            )
+        self.assertEqual(preview_response.status_code, 200, preview_response.get_json())
+        self.assertEqual(preview_response.json["workspace_update"], {
+            "account_id": self.account1_id,
+            "account_label": "Ozon One",
+            "listing_ids": listing_ids,
+            "return_to": return_to,
+        })
+        preview.assert_called_once_with(
+            seller_id=self.seller1_id,
+            account_id=self.account1_id,
+            listing_ids=listing_ids,
+        )
+        confirm_token = preview_response.json["preview"]["token"]
+        with self.app.test_request_context():
+            confirm_payload = marketplace_listing_routes._existing_update_serializer().loads(
+                confirm_token,
+                max_age=marketplace_listing_routes._EXISTING_UPDATE_TOKEN_MAX_AGE,
+            )
+        self.assertEqual(confirm_payload["v"], 2)
+        self.assertEqual(confirm_payload["source_ids"], source_ids)
+        self.assertEqual(confirm_payload["listing_ids"], listing_ids)
+        self.assertEqual(confirm_payload["workspace_return"], return_to)
+
+        apply_report = {
+            "account_id": self.account1_id,
+            "account_label": "Ozon One",
+            "listing_ids": listing_ids,
+            "rows": [{
+                "listing_id": listing_ids[0],
+                "title": "Own listing",
+                "offer_id": "own-offer",
+                "status": "created",
+                "draft_id": 701,
+            }],
+        }
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch, "apply", return_value=apply_report,
+        ) as apply:
+            applied = self.client.post(
+                "/marketplaces/listings/update-drafts/apply",
+                json={"token": confirm_token, "confirm_local": True},
+            )
+        self.assertEqual(applied.status_code, 200, applied.get_json())
+        apply.assert_called_once_with(
+            seller_id=self.seller1_id,
+            account_id=self.account1_id,
+            listing_ids=listing_ids,
+            expected_digest="a" * 64,
+        )
+        editor_url = urlsplit(applied.json["report"]["editor_url"])
+        editor_query = parse_qs(editor_url.query)
+        self.assertEqual(editor_query["workspace_return"], ["1"])
+        self.assertNotIn("return_to", editor_query)
+        self.assertEqual(decode_compact_draft_ids(editor_query["workspace_selection"][0]), [701])
+        editor_return = base64.urlsafe_b64decode(
+            editor_url.fragment.removeprefix("workspace-return=")
+            + "=" * (-len(editor_url.fragment.removeprefix("workspace-return=")) % 4)
+        ).decode("utf-8")
+        self.assertEqual(editor_return, return_to)
+        self.assertLess(len((editor_url.path + "?" + editor_url.query).encode("utf-8")), 4094)
+
+    def test_workspace_update_rejects_mixed_or_stale_scope_before_preview_or_apply(self):
+        source_ids, listing_ids = self._workspace_update_source_selection()
+        return_to = self._workspace_return_url()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        invalid_bodies = [
+            {
+                "account_id": self.account1_id,
+                "source_ids": source_ids,
+                "listing_ids": listing_ids + [listing_ids[0]],
+                "return_to": return_to,
+            },
+            {
+                "account_id": self.account1_id,
+                "source_ids": source_ids + [source_ids[0]],
+                "listing_ids": listing_ids + [listing_ids[0]],
+                "return_to": return_to,
+            },
+            {
+                "account_id": self.account1_id,
+                "source_ids": source_ids,
+                "listing_ids": listing_ids,
+                "return_to": "https://example.invalid/my-products/beta",
+            },
+        ]
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch,
+            "preview",
+            side_effect=AssertionError("invalid selection must not be previewed"),
+        ) as preview:
+            for body in invalid_bodies:
+                with self.subTest(body=body):
+                    rejected = self.client.post(
+                        "/marketplaces/listings/update-drafts/workspace-handoff",
+                        json=body,
+                    )
+                    self.assertIn(rejected.status_code, (400, 409))
+                    self.assertFalse(rejected.json["success"])
+        preview.assert_not_called()
+
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            handoff = self.client.post(
+                "/marketplaces/listings/update-drafts/workspace-handoff",
+                json={
+                    "account_id": self.account1_id,
+                    "source_ids": source_ids,
+                    "listing_ids": listing_ids,
+                    "return_to": return_to,
+                },
+            )
+        workspace_token = urlsplit(handoff.json["url"]).fragment.removeprefix(
+            "workspace-update="
+        )
+        with self.app.app_context():
+            listing = db.session.get(MarketplaceListing, listing_ids[0])
+            listing.imported_product_id = None
+            db.session.commit()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch,
+            "preview",
+            side_effect=AssertionError("stale mapping must not be previewed"),
+        ) as preview:
+            stale_preview = self.client.post(
+                "/marketplaces/listings/update-drafts/preview",
+                json={"workspace_update": workspace_token},
+            )
+        self.assertEqual(stale_preview.status_code, 409)
+        self.assertEqual(stale_preview.json["code"], "workspace_update_mapping_not_one_to_one")
+        preview.assert_not_called()
+
+        with self.app.test_request_context():
+            confirm_token = marketplace_listing_routes._issue_workspace_existing_update_confirm_token(
+                user_id=self.seller1_id,
+                seller_id=self.seller1_id,
+                account_id=self.account1_id,
+                source_ids=source_ids,
+                listing_ids=listing_ids,
+                digest="a" * 64,
+                workspace_return=return_to,
+            )
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch,
+            "apply",
+            side_effect=AssertionError("stale mapping must not be applied"),
+        ) as apply:
+            stale_apply = self.client.post(
+                "/marketplaces/listings/update-drafts/apply",
+                json={"token": confirm_token, "confirm_local": True},
+            )
+        self.assertEqual(stale_apply.status_code, 409)
+        self.assertEqual(stale_apply.json["code"], "workspace_update_mapping_not_one_to_one")
+        apply.assert_not_called()
+
+    def test_workspace_update_token_is_bound_to_user_and_catalog_account(self):
+        source_ids, listing_ids = self._workspace_update_source_selection()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            handoff = self.client.post(
+                "/marketplaces/listings/update-drafts/workspace-handoff",
+                json={
+                    "account_id": self.account1_id,
+                    "source_ids": source_ids,
+                    "listing_ids": listing_ids,
+                    "return_to": self._workspace_return_url(),
+                },
+            )
+        target = urlsplit(handoff.json["url"])
+        token = target.fragment.removeprefix("workspace-update=")
+        user_patch, login_patch = self._auth(self.seller2_id)
+        with user_patch, login_patch, patch(
+            "routes.marketplace_listings.render_template",
+            side_effect=lambda _name, **context: json.dumps({
+                "workspace_update": context["workspace_update"],
+                "workspace_update_mode": context["workspace_update_mode"],
+                "workspace_update_error": context["workspace_update_error"],
+            }),
+        ):
+            foreign = self.client.get(
+                f"/marketplaces/listings/?marketplace=ozon&account_id={self.account1_id}&workspace_update=1"
+            )
+        self.assertEqual(foreign.status_code, 200)
+        boot = json.loads(foreign.get_data(as_text=True))
+        self.assertTrue(boot["workspace_update_mode"])
+        self.assertIsNone(boot["workspace_update"])
+        self.assertIn("другому", boot["workspace_update_error"])
+
+        user_patch, login_patch = self._auth(self.seller2_id)
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch,
+            "preview",
+            side_effect=AssertionError("foreign token must be rejected before preview"),
+        ) as preview:
+            foreign_preview = self.client.post(
+                "/marketplaces/listings/update-drafts/preview",
+                json={"workspace_update": token},
+            )
+        self.assertEqual(foreign_preview.status_code, 409)
+        self.assertEqual(foreign_preview.json["code"], "workspace_update_scope_invalid")
+        preview.assert_not_called()
+
+    def test_workspace_update_rechecks_connected_account_before_preview_and_apply(self):
+        source_ids, listing_ids = self._workspace_update_source_selection()
+        with self.app.app_context():
+            db.session.get(SellerMarketplaceAccount, self.account1_id).connection_status = "disconnected"
+            db.session.commit()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            disconnected_handoff = self.client.post(
+                "/marketplaces/listings/update-drafts/workspace-handoff",
+                json={
+                    "account_id": self.account1_id,
+                    "source_ids": source_ids,
+                    "listing_ids": listing_ids,
+                    "return_to": self._workspace_return_url(),
+                },
+            )
+        self.assertEqual(disconnected_handoff.status_code, 409)
+        self.assertEqual(
+            disconnected_handoff.json["code"],
+            "workspace_update_account_not_connected",
+        )
+        with self.app.app_context():
+            db.session.get(SellerMarketplaceAccount, self.account1_id).connection_status = "connected"
+            db.session.commit()
+
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            handoff = self.client.post(
+                "/marketplaces/listings/update-drafts/workspace-handoff",
+                json={
+                    "account_id": self.account1_id,
+                    "source_ids": source_ids,
+                    "listing_ids": listing_ids,
+                    "return_to": self._workspace_return_url(),
+                },
+            )
+        self.assertEqual(handoff.status_code, 200, handoff.get_json())
+        token = urlsplit(handoff.json["url"]).fragment.removeprefix(
+            "workspace-update="
+        )
+
+        with self.app.app_context():
+            db.session.get(SellerMarketplaceAccount, self.account1_id).connection_status = "disconnected"
+            db.session.commit()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch,
+            "preview",
+            side_effect=AssertionError("disconnected account must not preview"),
+        ) as preview:
+            disconnected_preview = self.client.post(
+                "/marketplaces/listings/update-drafts/preview",
+                json={"workspace_update": token},
+            )
+        self.assertEqual(disconnected_preview.status_code, 409)
+        self.assertEqual(
+            disconnected_preview.json["code"],
+            "workspace_update_account_not_connected",
+        )
+        preview.assert_not_called()
+
+        with self.app.app_context():
+            db.session.get(SellerMarketplaceAccount, self.account1_id).connection_status = "connected"
+            db.session.commit()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch,
+            "preview",
+            return_value=self._existing_update_preview_document(listing_ids),
+        ):
+            preview_response = self.client.post(
+                "/marketplaces/listings/update-drafts/preview",
+                json={"workspace_update": token},
+            )
+        self.assertEqual(preview_response.status_code, 200, preview_response.get_json())
+        confirm_token = preview_response.json["preview"]["token"]
+        with self.app.app_context():
+            db.session.get(SellerMarketplaceAccount, self.account1_id).connection_status = "invalid"
+            db.session.commit()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            OzonExistingUpdateBatch,
+            "apply",
+            side_effect=AssertionError("disconnected account must not apply"),
+        ) as apply:
+            disconnected_apply = self.client.post(
+                "/marketplaces/listings/update-drafts/apply",
+                json={"token": confirm_token, "confirm_local": True},
+            )
+        self.assertEqual(disconnected_apply.status_code, 409)
+        self.assertEqual(
+            disconnected_apply.json["code"],
+            "workspace_update_account_not_connected",
+        )
+        apply.assert_not_called()
+
+    def test_workspace_shell_rejects_duplicate_marker_without_catalog_reads(self):
+        user_patch, login_patch = self._auth(self.seller1_id)
+        path = (
+            "/marketplaces/listings/?marketplace=ozon"
+            f"&account_id={self.account1_id}&workspace_update=1&workspace_update=1"
+        )
+        with user_patch, login_patch, patch(
+            "routes.marketplace_listings.render_template",
+            side_effect=lambda _name, **context: json.dumps({
+                "workspace_update_mode": context["workspace_update_mode"],
+                "workspace_update_error": context["workspace_update_error"],
+                "fallback": context["workspace_update_fallback_url"],
+            }),
+        ), patch.object(
+            marketplace_listing_routes.MarketplaceAccountService,
+            "list_accounts",
+            side_effect=AssertionError("invalid scoped shell must not bootstrap catalog"),
+        ), patch.object(
+            marketplace_listing_routes.MarketplaceListingService,
+            "latest_syncs",
+            side_effect=AssertionError("invalid scoped shell must not read catalog state"),
+        ):
+            response = self.client.get(path)
+        self.assertEqual(response.status_code, 200)
+        boot = json.loads(response.get_data(as_text=True))
+        self.assertTrue(boot["workspace_update_mode"])
+        self.assertIn("другому", boot["workspace_update_error"])
+        with self.app.test_request_context():
+            expected_workspace_return = marketplace_listing_routes.url_for(
+                "seller_my_products_beta"
+            )
+        self.assertEqual(boot["fallback"], expected_workspace_return)
+
+    def test_workspace_repair_return_uses_my_products_label_without_changing_catalog_contract(self):
+        workspace_return = self._workspace_return_url()
+        compact_ids = encode_compact_draft_ids([701])
+        selection_path = "/marketplaces/ozon/uploads/selection/repair?" + urlencode({
+            "account_id": self.account1_id,
+            "workspace_selection": compact_ids,
+            "workspace_return": "1",
+        })
+        minimal_editor = {
+            "mode": "draft_selection",
+            "account_id": self.account1_id,
+            "review_draft_ids": [701],
+            "scope_key": "workspace-return-fixture",
+            "groups": [],
+        }
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            ozon_bulk_upload_routes.OzonBulkRepairService,
+            "editor_document",
+            return_value=minimal_editor,
+        ), patch.object(
+            ozon_bulk_upload_routes, "_validate_selection_editor",
+        ), patch.object(
+            ozon_bulk_upload_routes, "_selection_editor_urls",
+            return_value={"catalog_return": None},
+        ), patch(
+            "routes.ozon_bulk_uploads.render_template",
+            side_effect=lambda _name, **context: json.dumps(context["editor_urls"]),
+        ):
+            workspace = self.client.get(selection_path)
+        self.assertEqual(workspace.status_code, 200, workspace.get_data(as_text=True))
+        workspace_boot = json.loads(workspace.get_data(as_text=True))
+        self.assertEqual(workspace_boot["catalog_return"], "/my-products/beta")
+        self.assertEqual(workspace_boot["catalog_return_label"], "К моим товарам")
+
+        catalog_return = (
+            "/marketplaces/listings/?marketplace=ozon"
+            f"&account_id={self.account1_id}&search=shirt"
+        )
+        legacy_path = "/marketplaces/ozon/uploads/selection/repair?" + urlencode({
+            "account_id": self.account1_id,
+            "draft_ids": "701",
+            "return_to": catalog_return,
+        })
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch.object(
+            ozon_bulk_upload_routes.OzonBulkRepairService,
+            "editor_document",
+            return_value=minimal_editor,
+        ), patch.object(
+            ozon_bulk_upload_routes, "_validate_selection_editor",
+        ), patch.object(
+            ozon_bulk_upload_routes, "_selection_editor_urls",
+            return_value={"catalog_return": None},
+        ), patch(
+            "routes.ozon_bulk_uploads.render_template",
+            side_effect=lambda _name, **context: json.dumps(context["editor_urls"]),
+        ):
+            legacy = self.client.get(legacy_path)
+        self.assertEqual(legacy.status_code, 200, legacy.get_data(as_text=True))
+        legacy_boot = json.loads(legacy.get_data(as_text=True))
+        self.assertEqual(legacy_boot["catalog_return"], catalog_return)
+        self.assertEqual(legacy_boot["catalog_return_label"], "К каталогу Ozon")
+
+    def test_workspace_update_handoff_bounds_high_id_200_selection_and_long_batch_url(self):
+        rng = random.Random(20261122)
+        high_ids = rng.sample(
+            range(8_000_000_000_000_000, 9_007_199_254_740_991),
+            400,
+        )
+        source_ids, listing_ids = high_ids[:200], high_ids[200:]
+        batch_alphabet = string.ascii_letters + string.digits + "_-"
+        batch_payload = "".join(rng.choice(batch_alphabet) for _ in range(8188))
+        return_to = (
+            "/my-products/beta?import_batch=" + batch_payload + ".B.C"
+            "#workspace-return=0123456789abcdef0123456789abcdef"
+        )
+        self.assertEqual(len(return_to.split("import_batch=", 1)[1].split("#", 1)[0]), 8192)
+        with self.app.app_context():
+            account = db.session.get(SellerMarketplaceAccount, self.account1_id)
+            marketplace_id = account.marketplace_id
+            sources = [ImportedProduct(
+                id=source_id,
+                seller_id=self.seller1_id,
+                source_type="synthetic",
+                external_id=f"workspace-r56-source-{source_id}",
+                external_vendor_code=f"workspace-r56-vendor-{source_id}",
+                title=f"Workspace item {index}",
+            ) for index, source_id in enumerate(source_ids)]
+            db.session.add_all(sources)
+            db.session.flush()
+            listings = [MarketplaceListing(
+                id=listing_id,
+                seller_id=self.seller1_id,
+                marketplace_id=marketplace_id,
+                account_id=self.account1_id,
+                imported_product_id=source_ids[index],
+                offer_id=f"workspace-r56-offer-{index}",
+                external_product_id=f"workspace-r56-external-{index}",
+                title=f"Workspace listing {index}",
+                normalized_status="active",
+                sync_fingerprint="c" * 64,
+                is_available=True,
+                is_archived=False,
+                link_status="linked",
+            ) for index, listing_id in enumerate(listing_ids)]
+            db.session.add_all(listings)
+            db.session.commit()
+
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            response = self.client.post(
+                "/marketplaces/listings/update-drafts/workspace-handoff",
+                json={
+                    "account_id": self.account1_id,
+                    "source_ids": source_ids,
+                    "listing_ids": listing_ids,
+                    "return_to": return_to,
+                },
+            )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        target_url = response.json["url"]
+        self.assertLessEqual(
+            len(target_url.encode("utf-8")),
+            marketplace_listing_routes._WORKSPACE_UPDATE_MAX_URL_BYTES,
+        )
+        target = urlsplit(target_url)
+        self.assertEqual(parse_qs(target.query)["workspace_update"], ["1"])
+        self.assertLess(len((target.path + "?" + target.query).encode("utf-8")), 4094)
+        token = target.fragment.removeprefix("workspace-update=")
+        with self.app.test_request_context():
+            payload = marketplace_listing_routes._workspace_update_serializer().loads(
+                token,
+                max_age=marketplace_listing_routes._WORKSPACE_UPDATE_TOKEN_MAX_AGE,
+            )
+        self.assertEqual(payload["source_ids"], source_ids)
+        self.assertEqual(payload["listing_ids"], listing_ids)
+        self.assertEqual(payload["return_to"], return_to)
+        self.assertLessEqual(
+            len(token.encode("utf-8")),
+            marketplace_listing_routes._WORKSPACE_UPDATE_TOKEN_MAX_BYTES,
+        )
+        high_draft_ids = list(range(
+            9_223_372_036_854_775_600,
+            9_223_372_036_854_775_800,
+        ))
+        compact = encode_compact_draft_ids(high_draft_ids)
+        self.assertEqual(len(compact), 2134)
+        self.assertEqual(decode_compact_draft_ids(compact), high_draft_ids)
+        with self.app.test_request_context():
+            editor_urls = ozon_bulk_upload_routes._selection_editor_urls(
+                {
+                    "account_id": 9_223_372_036_854_775_700,
+                    "draft_ids": high_draft_ids,
+                },
+                {"review_draft_ids": high_draft_ids},
+                {},
+                return_context_supplied=False,
+                compact_selection=True,
+            )
+        for key in ("read", "apply", "types", "dictionaries", "dictionary_query", "review"):
+            value = editor_urls[key]
+            request_part = value.split("#", 1)[0]
+            self.assertLess(len(request_part.encode("utf-8")), 4094, key)
+        self.assertEqual(
+            decode_compact_draft_ids(parse_qs(urlsplit(editor_urls["review"]).query)["workspace_selection"][0]),
+            high_draft_ids,
+        )
 
     def test_existing_update_preview_is_exact_local_scope_signed_and_private(self):
         requested_ids = [self.own_id]

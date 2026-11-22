@@ -46,6 +46,16 @@
     function definition(field) {
         return {...field,id:field.external_id,required:true,collection:field.is_collection,max_values:field.max_values || 1};
     }
+    function encodeCompactDraftIds(values) {
+        if(!Array.isArray(values) || !values.length || values.length>200 ||
+            values.some(value=>!Number.isSafeInteger(value) || value<=0))return null;
+        const bytes=[];
+        for(const value of values){
+            let id=BigInt(value),offset=bytes.length;
+            for(let index=7;index>=0;index--){bytes[offset+index]=Number(id&255n);id>>=8n;}
+        }
+        return global.btoa(String.fromCharCode(...bytes)).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_');
+    }
     function display(value) {
         if (Array.isArray(value)) return value.map(v => asText(v.value)).join(', ') || 'Не заполнено';
         if (value === true) return 'Да';
@@ -280,7 +290,7 @@
                     for (const [key,value] of Object.entries({q:this.query,group:this.group,state:this.state,page:this.page>1 ? this.page : ''})) {
                         if (value) url.searchParams.set(key,String(value));else url.searchParams.delete(key);
                     }
-                    global.history.replaceState(null,'',url.pathname+url.search);
+                    global.history.replaceState(null,'',url.pathname+url.search+url.hash);
                 },
                 fromURL() { const args=new URL(global.location.href).searchParams;this.query=(args.get('q') || '').slice(0,200);
                     this.group=args.get('group') || '';this.state=args.get('state') || '';if(this.sourcePrepare && this.state==='excluded')this.state='';this.page=Math.max(1,Math.min(this.pages,Number(args.get('page')) || 1)); },
@@ -353,7 +363,15 @@
                             this.urls.review=reviewUrl.pathname+reviewUrl.search;}
                         if(this.reviewable && this.urls.review && this.draftSelection){const reviewUrl=new URL(this.urls.review,global.location.origin);
                             reviewUrl.searchParams.set('account_id',String(data.editor.account_id));
-                            reviewUrl.searchParams.set('draft_ids',data.editor.review_draft_ids.join(','));
+                            if(reviewUrl.searchParams.has('workspace_selection')){
+                                const compact=encodeCompactDraftIds(data.editor.review_draft_ids);
+                                if(!compact)throw new Error('Не удалось сохранить точный короткий список черновиков.');
+                                reviewUrl.searchParams.delete('draft_ids');
+                                reviewUrl.searchParams.set('workspace_selection',compact);
+                            }else{
+                                reviewUrl.searchParams.delete('workspace_selection');
+                                reviewUrl.searchParams.set('draft_ids',data.editor.review_draft_ids.join(','));
+                            }
                             reviewUrl.searchParams.delete('parent_prepare_job_uid');
                             this.urls.review=reviewUrl.pathname+reviewUrl.search;}
                         this.page=Math.min(this.page,this.pages);
@@ -548,7 +566,50 @@
             beforeUnmount(){alive=false;controller?.abort();this.cancelSearch();global.removeEventListener('beforeunload',unload);global.removeEventListener('popstate',pop);},
         };
     }
-    global.ozonBulkRepair={makeRows,snapshot,changes,definition,serialize,planBulk,validEditor,createOptions};
+    global.ozonBulkRepair={makeRows,snapshot,changes,definition,serialize,planBulk,validEditor,encodeCompactDraftIds,createOptions,
+        safeWorkspaceReturn,workspaceReturnFromFragment};
     const bootstrap=global.document?.getElementById('orb-bootstrap');
-    if(bootstrap && global.Vue)global.Vue.createApp(createOptions(JSON.parse(bootstrap.textContent))).mount('#ozon-bulk-repair');
+    function safeWorkspaceReturn(value) {
+        if(typeof value!=='string' || new TextEncoder().encode(value).length>8448 || /[\\\u0000-\u001f\u007f]/.test(value))return null;
+        let url;try{url=new URL(value,global.location.origin);}catch(_){return null;}
+        if(url.origin!==global.location.origin || url.pathname!=='/my-products/beta' || url.username || url.password)return null;
+        let batch='';
+        if(url.search) {
+            const params=url.searchParams;
+            const values=params.getAll('import_batch');
+            if(params.size!==1 || values.length!==1)return null;
+            batch=values[0];
+            let parts=batch.split('.');if(parts.length===4 && parts[0]==='')parts=parts.slice(1);
+            if(parts.length!==3 || parts.some(part=>!part || !/^[A-Za-z0-9_-]+$/.test(part)) || new TextEncoder().encode(batch).length>8192)return null;
+        }
+        const fragment=url.hash ? url.hash.slice(1) : '';
+        if(fragment && !/^workspace-return=[0-9a-f]{32}$/.test(fragment))return null;
+        const canonical='/my-products/beta'+(batch?'?import_batch='+encodeURIComponent(batch):'')+(fragment?'#'+fragment:'');
+        return value===canonical ? value : null;
+    }
+    function workspaceReturnFromFragment() {
+        const page=new URL(global.location.href);
+        if(page.searchParams.getAll('workspace_return').length!==1 || page.searchParams.get('workspace_return')!=='1')return null;
+        const match=/^#workspace-return=([A-Za-z0-9_-]+)$/.exec(page.hash);
+        if(!match || match[1].length>11264)return null;
+        try {
+            const encoded=match[1],binary=global.atob(encoded.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-encoded.length%4)%4));
+            const bytes=Uint8Array.from(binary,character=>character.charCodeAt(0));
+            if(bytes.length>8448 || global.btoa(String.fromCharCode(...bytes)).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_')!==encoded)return null;
+            return safeWorkspaceReturn(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
+        } catch(_) {return null;}
+    }
+    if(bootstrap) {
+        try {
+            const config=JSON.parse(bootstrap.textContent);
+            const workspaceReturn=workspaceReturnFromFragment();
+            if(workspaceReturn && config.editor?.mode==='draft_selection' && config.urls) {
+                config.urls.catalog_return=workspaceReturn;
+                const fallback=global.document.querySelector('[data-workspace-return-fallback]');
+                if(fallback)fallback.href=workspaceReturn;
+            }
+            bootstrap.textContent=JSON.stringify(config);
+            if(global.Vue)global.Vue.createApp(createOptions(config)).mount('#ozon-bulk-repair');
+        } catch(_) { /* Keep the server-rendered safe fallback if bootstrap is invalid. */ }
+    }
 })(window);
