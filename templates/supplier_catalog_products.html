@@ -5,7 +5,7 @@
 
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='supplier-feed-freshness.css', v='20261121-r34') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='supplier-catalog-workspace.css', v='20261122-r60') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='supplier-catalog-workspace.css', v='20261122-r60-g2') }}">
 {% endblock %}
 
 {% block content %}
@@ -191,7 +191,6 @@
             <h2 id="supplier-update-inline-title" tabindex="-1">Проверить обновления</h2>
             <p data-supplier-update-state role="status" aria-live="polite"></p>
             <div data-supplier-update-summary class="sc-inline-review-summary"></div>
-            <div data-supplier-update-items class="sc-inline-review-items"></div>
             <div class="sc-inline-review-actions">
                 <button type="button" data-supplier-update-apply class="sh-btn sh-btn--primary" hidden>
                     Сохранить выбранные изменения
@@ -203,6 +202,7 @@
                     Вернуться к выбору
                 </button>
             </div>
+            <div data-supplier-update-items class="sc-inline-review-items"></div>
         </section>
 
         {% if selection_review and selection_mode == 'updates' %}
@@ -645,5 +645,5 @@
     }
 })();
 </script>
-<script defer src="{{ url_for('static', filename='supplier-catalog-update-review.js', v='20261122-r60') }}"></script>
+<script defer src="{{ url_for('static', filename='supplier-catalog-update-review.js', v='20261122-r60-g2') }}"></script>
 {% endblock %}

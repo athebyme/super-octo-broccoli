@@ -22,7 +22,14 @@
     product_details: 'Данные карточки',
     purchase_price: 'Закупочная цена',
     supplier_quantity: 'Остаток у поставщика',
-    source_snapshot: 'Снимок поставщика',
+  };
+  const SUMMARY_CHANGE_COPY = {
+    description: 'Описание изменится.',
+    photos: 'Набор фотографий изменится.',
+    characteristics: 'Значения характеристик изменятся.',
+    category: 'Категория и её параметры изменятся.',
+    product_details: 'Дополнительные данные карточки изменятся.',
+    source_snapshot: 'Данные каталога обновятся.',
   };
   const REASON_LABELS = {
     no_supplier_link: 'Нет связи с каталогом поставщика',
@@ -71,6 +78,11 @@
     }
     if (Array.isArray(value)) return value.map(valueText).join(', ');
     return 'Содержимое изменится';
+  }
+
+  function hasDisplayValue(value) {
+    return value !== null && value !== undefined && value !== ''
+      && (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean');
   }
 
   function lockSelection(locked) {
@@ -140,10 +152,6 @@
     const dl = document.createElement('dl');
     values.forEach(([label, value]) => appendCount(dl, label, value));
     summary.appendChild(dl);
-    const note = document.createElement('p');
-    note.className = 'sc-inline-review-note';
-    text(note, 'Сохранение меняет только карточки Seller Hub. WB и Ozon не обновляются.');
-    summary.appendChild(note);
   }
 
   function renderPreviewRows(payload) {
@@ -177,23 +185,32 @@
       rowHeading.append(name, badge);
       article.appendChild(rowHeading);
 
-      const changes = Array.isArray(item.changes) ? item.changes : [];
+      const allChanges = Array.isArray(item.changes) ? item.changes : [];
+      let changes = allChanges.filter((change) => change.field !== 'source_snapshot');
+      if (!changes.length && item.state === 'changed'
+          && allChanges.some((change) => change.field === 'source_snapshot')) {
+        changes = allChanges.filter((change) => change.field === 'source_snapshot');
+      }
       if (changes.length) {
         const list = document.createElement('ul');
         changes.forEach((change) => {
           const entry = document.createElement('li');
-          const field = document.createElement('strong');
-          text(field, `${FIELD_LABELS[change.field] || 'Данные карточки'}: `);
-          const before = document.createElement('span');
-          before.className = 'sc-inline-review-before';
-          text(before, valueText(change.before));
-          const arrow = document.createElement('span');
-          arrow.className = 'sc-inline-review-arrow';
-          text(arrow, ' → ');
-          const after = document.createElement('span');
-          after.className = 'sc-inline-review-after';
-          text(after, valueText(change.after));
-          entry.append(field, before, arrow, after);
+          if (hasDisplayValue(change.before) || hasDisplayValue(change.after)) {
+            const field = document.createElement('strong');
+            text(field, `${FIELD_LABELS[change.field] || 'Данные карточки'}: `);
+            const before = document.createElement('span');
+            before.className = 'sc-inline-review-before';
+            text(before, hasDisplayValue(change.before) ? valueText(change.before) : '—');
+            const arrow = document.createElement('span');
+            arrow.className = 'sc-inline-review-arrow';
+            text(arrow, ' → ');
+            const after = document.createElement('span');
+            after.className = 'sc-inline-review-after';
+            text(after, hasDisplayValue(change.after) ? valueText(change.after) : '—');
+            entry.append(field, before, arrow, after);
+          } else {
+            text(entry, SUMMARY_CHANGE_COPY[change.field] || 'Содержимое группы изменится.');
+          }
           list.appendChild(entry);
         });
         article.appendChild(list);
@@ -292,7 +309,7 @@
           : 'Текущее сравнение показывает изменения. Для сохранения требуется новое явное подтверждение.');
       } else {
         text(status, changed > 0
-          ? 'Проверьте набор. Сохранение затронет только локальные карточки Seller Hub.'
+          ? 'Проверьте набор. Изменения сохранятся в Seller Hub, без отправки в WB или Ozon.'
           : 'Изменений нет. Сохранять нечего.');
       }
       applyButton.hidden = !(changed > 0 && reviewToken);
