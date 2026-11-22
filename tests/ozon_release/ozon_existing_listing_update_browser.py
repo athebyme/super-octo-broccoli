@@ -541,6 +541,7 @@ def exercise_workspace_update(page):
     dialog = page.locator("dialog.mcat-update-dialog[open]")
     confirm = dialog.locator("[data-listing-update-confirm]")
     confirm.wait_for()
+    assert confirm.evaluate("element => element === document.activeElement")
     preview_text = dialog.inner_text()
     assert "Ozon CI 0" in preview_text
     assert all(title in preview_text for title in expected_titles)
@@ -550,6 +551,7 @@ def exercise_workspace_update(page):
 
     reopen = shell.locator("[data-workspace-update-reopen]")
     return_link = shell.locator("[data-workspace-return]")
+    assert return_link.is_visible()
     assert return_link.get_attribute("href") == workspace_state["return_to"]
     for theme in ("light", "dark"):
         page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
@@ -569,6 +571,7 @@ def exercise_workspace_update(page):
     assert shell.locator("[data-workspace-return]").get_attribute("href") == workspace_state["return_to"]
     reopen.click()
     confirm.wait_for()
+    assert confirm.evaluate("element => element === document.activeElement")
     assert workspace_state["preview"] == 2 and workspace_state["apply"] == 0
     assert batch_snapshots() == before
 
