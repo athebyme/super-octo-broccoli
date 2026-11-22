@@ -9,10 +9,7 @@ from typing import Any, Optional
 from flask import current_app, url_for
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from services.ozon_bulk_repair import (
-    decode_compact_draft_ids,
-    encode_compact_draft_ids,
-)
+from services.ozon_bulk_repair import decode_compact_draft_ids
 from services.ozon_bulk_upload import OzonBulkUploadValidationError
 from services.ozon_upload_review import OzonUploadReviewService
 
@@ -107,10 +104,7 @@ class OzonReviewNavigation:
                 decoded_ids = decode_compact_draft_ids(compact_ids)
             except OzonBulkUploadValidationError:
                 return None
-            if (
-                encode_compact_draft_ids(decoded_ids) != compact_ids
-                or decoded_ids != draft_ids
-            ):
+            if decoded_ids != draft_ids:
                 return None
             return {
                 "v": 2,
@@ -161,7 +155,7 @@ class OzonReviewNavigation:
     @classmethod
     def _load_payload(
         cls, token: Any, *, user_id: Any, seller_id: Any,
-    ) -> Optional[dict]:
+    ) -> Optional[tuple[dict, list[int]]]:
         if (
             not isinstance(token, str)
             or not token
@@ -199,8 +193,6 @@ class OzonReviewNavigation:
                 decoded_ids = decode_compact_draft_ids(compact_ids)
             except OzonBulkUploadValidationError:
                 return None
-            if encode_compact_draft_ids(decoded_ids) != compact_ids:
-                return None
             ids = decoded_ids
         else:
             return None
@@ -226,21 +218,7 @@ class OzonReviewNavigation:
             or (parent_uid is not None and result_uid is not None)
         ):
             return None
-        return payload
-
-    @classmethod
-    def _payload_ids(cls, payload: dict) -> Optional[list[int]]:
-        if payload.get("v") == 1:
-            return cls._ordered_ids(payload.get("draft_ids"))
-        if payload.get("v") == 2:
-            try:
-                ids = decode_compact_draft_ids(payload.get("workspace_selection"))
-            except OzonBulkUploadValidationError:
-                return None
-            if encode_compact_draft_ids(ids) != payload.get("workspace_selection"):
-                return None
-            return ids
-        return None
+        return payload, ids
 
     @staticmethod
     def _bounded_focus_value(value: Any, *, maximum: int) -> Optional[str]:
@@ -266,14 +244,14 @@ class OzonReviewNavigation:
         focus_field: Any = None,
     ) -> Optional[dict]:
         """Resolve a valid token to a local review URL and optional focus hint."""
-        payload = cls._load_payload(
+        loaded = cls._load_payload(
             token, user_id=user_id, seller_id=seller_id,
         )
-        payload_ids = cls._payload_ids(payload) if payload is not None else None
+        if loaded is None:
+            return None
+        payload, payload_ids = loaded
         if (
-            payload is None
-            or payload_ids is None
-            or not cls._positive(draft_id)
+            not cls._positive(draft_id)
             or not cls._positive(draft_account_id)
             or draft_account_id != payload["account_id"]
             or draft_id not in payload_ids[
