@@ -284,6 +284,7 @@
     <nav v-if="!importBatchMode && !supplierRefreshBatchMode" class="mp-tabs" aria-label="Статус карточек">
         <button v-for="tab in tabs" :key="tab.key" type="button"
                 class="mp-tab" :class="{'is-active': activeTab === tab.key}"
+                :aria-pressed="activeTab === tab.key"
                 @click="setTab(tab.key)">
             {{ tab.label }}
             <span v-if="facets[tab.countKey] !== undefined" class="mp-tab-n">{{ facets[tab.countKey] }}</span>

@@ -181,6 +181,7 @@
 .mp-row.is-selected { border-color: var(--accent); background: var(--accent-light); }
 .mp-row--skeleton { grid-template-columns: 52px 1fr; }
 .mp-check input { accent-color: var(--accent); cursor: pointer; }
+.mp-check input:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
 
 .mp-photo {
     position: relative;
@@ -572,6 +573,9 @@
     .mp-more-actions { position:static; }
     .mp-more-actions-menu { inset-inline:0; width:auto; }
     .mp-row { grid-template-columns: 24px 44px minmax(0, 1fr) 24px; gap: 10px; padding: 10px; }
+    .mp-row:not(.mp-row--skeleton) { grid-template-columns: 44px 44px minmax(0, 1fr) 24px; }
+    .mp-check { display:grid; place-items:center; width:44px; min-width:44px; height:44px; }
+    .mp-check input { width:20px; height:20px; margin:0; }
     .mp-channels { display: none; }
     .mp-select { max-width: 140px; }
     .mp-ozon-dialog { padding:17px; }

@@ -379,6 +379,68 @@ def filter_bulk_results(page):
     assert searching.value.status == 200
 
 
+def assert_status_filter_state(page, active_index):
+    tabs = page.locator(".mp-tabs .mp-tab")
+    state = tabs.evaluate_all("""items => items.map(item => ({
+        label: item.innerText.trim(),
+        pressed: item.getAttribute('aria-pressed'),
+        styledActive: item.classList.contains('is-active'),
+    }))""")
+    assert len(state) == 7, state
+    assert [index for index, item in enumerate(state) if item["pressed"] == "true"] == [active_index], state
+    assert all(item["pressed"] in ("true", "false") for item in state), state
+    assert all((item["pressed"] == "true") == item["styledActive"] for item in state), state
+
+
+def assert_mobile_row_checkbox_geometry(page, select_all):
+    page.set_viewport_size({"width": 320, "height": 480})
+    page.evaluate("window.scrollTo(0, 0)")
+    select_all.focus()
+    page.keyboard.press("Tab")
+    geometry = page.evaluate("""() => {
+        const input = document.querySelector('.mp-row:not(.mp-row--skeleton) .mp-check input[type="checkbox"]');
+        const label = input && input.closest('.mp-check');
+        if (!input || !label) return null;
+        const bounds = label.getBoundingClientRect();
+        const inputStyle = getComputedStyle(input);
+        const points = [
+            [bounds.left + 1, bounds.top + 1],
+            [bounds.right - 1, bounds.top + 1],
+            [bounds.left + 1, bounds.bottom - 1],
+            [bounds.right - 1, bounds.bottom - 1],
+        ];
+        return {
+            width: bounds.width,
+            height: bounds.height,
+            left: bounds.left,
+            right: bounds.right,
+            top: bounds.top,
+            bottom: bounds.bottom,
+            viewportWidth: innerWidth,
+            viewportHeight: innerHeight,
+            scrollY,
+            focused: document.activeElement === input,
+            outlineStyle: inputStyle.outlineStyle,
+            outlineWidth: inputStyle.outlineWidth,
+            outlineOffset: inputStyle.outlineOffset,
+            targetHits: points.map(([x, y]) => document.elementFromPoint(x, y)?.closest('.mp-check') === label),
+        };
+    }""")
+    assert geometry, geometry
+    assert geometry["viewportWidth"] == 320, geometry
+    assert geometry["width"] >= 44 and geometry["height"] >= 44, geometry
+    assert geometry["left"] >= 0 and geometry["right"] <= geometry["viewportWidth"], geometry
+    assert geometry["top"] >= 0 and geometry["bottom"] <= geometry["viewportHeight"], geometry
+    assert geometry["scrollY"] > 0, geometry
+    assert geometry["focused"], geometry
+    assert geometry["outlineStyle"] == "solid" and geometry["outlineWidth"] == "2px", geometry
+    assert geometry["outlineOffset"] == "2px", geometry
+    assert geometry["targetHits"] == [True, True, True, True], geometry
+    verify_bounds(page)
+    page.set_viewport_size({"width": 320, "height": 900})
+    page.evaluate("document.activeElement?.blur(); window.scrollTo(0, 0)")
+
+
 def run():
     fixture_ids = seed_bulk_selection()
     OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -1060,6 +1122,19 @@ def run():
         page = context.new_page()
         page.on("pageerror", lambda error: errors.append(str(error)))
         open_products(page)
+        status_tabs = page.locator(".mp-tabs .mp-tab")
+        assert_status_filter_state(page, 0)
+        with page.expect_response(lambda response: feed_matches(response, {"status": "pending"})) as pending_filter:
+            status_tabs.nth(1).click()
+        assert pending_filter.value.status == 200
+        assert_status_filter_state(page, 1)
+        with page.expect_response(lambda response: feed_matches(response, {})
+                                  and "status" not in parse_qs(urlsplit(response.url).query)
+                                  and "updates" not in parse_qs(urlsplit(response.url).query)) as all_filter:
+            status_tabs.nth(0).click()
+        assert all_filter.value.status == 200
+        assert_status_filter_state(page, 0)
+        checks.append("my_products_status_filter_exposes_current_selection_to_accessibility_tree")
         filter_bulk_results(page)
         select_all = page.get_by_role("button", name=f"Выбрать все {len(fixture_ids['bulk_ids'])}")
         try:
@@ -1098,6 +1173,9 @@ def run():
         verify_bounds(page)
         control_bounds = select_all.bounding_box()
         assert control_bounds and control_bounds["height"] >= 44 and control_bounds["width"] >= 44
+        assert_mobile_row_checkbox_geometry(page, select_all)
+        verify_bounds(page)
+        checks.append("my_products_mobile_row_checkbox_has_44px_scrollable_keyboard_focus_target")
         page.screenshot(path=OUTPUT / "filtered-select-light-320.png", animations="disabled")
         initial_ids = page.locator(".mp-list article.mp-row input[type=checkbox]").evaluate_all(
             "boxes => boxes.map(box => Number(box.value))"
