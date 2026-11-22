@@ -256,6 +256,7 @@ python scripts/probe_ozon_read_contracts.py --env-file /tmp/ozon_live.env
   карточек или WB по догадке. НДС может прийти только из явного account default
   либо карточки; product-specific compliance и цена должны быть наблюдены или
   введены продавцом;
+- для первого NEW-пилота идентичность товара можно сверить по GTIN и модели изготовителя. Сам штрихкод подтверждает только идентификатор после сверки с реестром. Источник ТН ВЭД — совпадающий по изготовителю и модели действующий документ о соответствии. Требование маркировки сверяется по актуальным правилам товарной группы. Результат поиска по коду у оператора носит рекомендательный характер. [Сведения Verified by GS1](https://support.gs1.org/support/solutions/articles/43000734119-what-information-is-available-in-verified-by-gs1-) · [Разъяснение «Честного знака»](https://re.markirovka.ru/knowledge/tovarnye-gruppy/obschie-voprosy-gis/kak-uznat-kod-tn-ved-eaes-okpd-2-tovara).
 - для update свежий (не старше 48 часов) exact-account catalog snapshot становится
   preservation baseline: текущие Ozon attributes/media/physical/commercial и
   один представимый barcode не исчезают из replace-style payload из-за пробела
