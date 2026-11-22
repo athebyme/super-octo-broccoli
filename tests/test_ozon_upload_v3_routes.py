@@ -5,14 +5,20 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
 from sqlalchemy import event
 from werkzeug.datastructures import MultiDict
 
 from models import BackgroundJob, MarketplaceOperation, OzonBulkUploadItem, OzonBulkUploadRun, db
+from routes.marketplace_drafts import register_marketplace_draft_routes
 from routes.ozon_bulk_uploads import register_ozon_bulk_upload_routes
-from services.ozon_bulk_upload import OzonBulkUploadService
+from services.ozon_bulk_repair import OzonBulkRepairService
+from services.ozon_bulk_upload import (
+    OzonBulkUploadNotFound,
+    OzonBulkUploadService,
+)
 from services.ozon_upload_review import OzonUploadReviewService
 from tests.test_marketplace_publications import OzonPublicationFixture
 
@@ -27,6 +33,7 @@ class OzonUploadV3RoutesTest(OzonPublicationFixture, unittest.TestCase):
                                MARKETPLACE_OZON_PUBLICATION_ENABLED=True)
         self.account._credentials_encrypted = "synthetic-encrypted-value"
         db.session.commit()
+        register_marketplace_draft_routes(self.app)
         register_ozon_bulk_upload_routes(self.app)
         self.client = self.app.test_client()
         self.user_view = SimpleNamespace(id=self.user.id,
@@ -153,6 +160,430 @@ class OzonUploadV3RoutesTest(OzonPublicationFixture, unittest.TestCase):
         item.phase = phase
         db.session.commit()
         return acceptance.job, run, item
+
+    def _selection_editor_document(self):
+        return {
+            "mode": "draft_selection",
+            "account_id": self.account.id,
+            "account_label": self.account.label,
+            "groups": [{
+                "id": "group-1",
+                "source_category": "Категория",
+                "rows": [{
+                    "draft_id": self.draft.id,
+                    "imported_product_id": self.source.id,
+                    "cleanup_candidates": [],
+                    "attributes": [],
+                }],
+            }],
+            "bulk_fields": [],
+            "total": 1,
+            "review_draft_ids": [self.draft.id],
+            "blocked_review_items": [],
+            "scope_key": "a" * 64,
+        }
+
+    def _selection_query(self, *, account_id=None, draft_ids=None, suffix=""):
+        account_id = account_id or self.account.id
+        draft_ids = draft_ids if draft_ids is not None else [self.draft.id]
+        raw_ids = ",".join(str(value) for value in draft_ids)
+        return (
+            f"account_id={account_id}&draft_ids={raw_ids}"
+            + (f"&{suffix}" if suffix else "")
+        )
+
+    def _selection_form(self, *, confirmed=True):
+        form = MultiDict()
+        if confirmed:
+            form.add("confirm_local", "1")
+        draft_id = self.draft.id
+        prefix = f"row_{draft_id}_"
+        form.add("selected_draft_id", str(draft_id))
+        form.add(prefix + "draft_version", str(self.draft.version))
+        form.add(prefix + "imported_product_id", str(self.source.id))
+        form.add(prefix + "action", "ИСПРАВИТЬ")
+        form.add(prefix + "product_type_id", str(self.product_type.id))
+        form.add(prefix + "save_mapping", "0")
+        for field in (
+            "price_rub", "package_width_mm", "package_height_mm",
+            "package_depth_mm", "package_weight_g", "description",
+        ):
+            form.add(prefix + field, "")
+        return form
+
+    def test_selected_repair_html_uses_canonical_scope_and_safe_return_urls(self):
+        selection = {
+            "account_id": self.account.id,
+            "draft_ids": [self.draft.id],
+        }
+        query = self._selection_query(suffix=(
+            f"return_page=2&return_per_page=1&return_status=draft"
+            f"&return_account_id={self.account.id}&q=coat&group=group-1"
+            "&state=needs_input&page=3"
+        ))
+        editor = self._selection_editor_document()
+        with patch.object(
+            OzonBulkRepairService, "editor_document", return_value=editor,
+        ) as read, patch(
+            "routes.ozon_bulk_uploads.render_template", return_value="selection html",
+        ) as render:
+            response = self.client.get(
+                f"/marketplaces/ozon/uploads/selection/repair?{query}",
+                headers={"Accept": "text/html"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("no-store", response.headers["Cache-Control"])
+        read.assert_called_once_with(seller_id=self.seller.id, selection=selection)
+        self.assertEqual(render.call_args.args[0], "ozon_bulk_repair.html")
+        context = render.call_args.kwargs
+        self.assertTrue(context["selection_mode"])
+        self.assertEqual(context["editor_view"], {
+            "q": "coat", "group": "group-1", "state": "needs_input", "page": 3,
+        })
+        urls = context["editor_urls"]
+        scope_query = f"?account_id={self.account.id}&draft_ids={self.draft.id}"
+        self.assertEqual(
+            urls["read"],
+            "/marketplaces/ozon/uploads/selection/repair" + scope_query,
+        )
+        self.assertEqual(
+            urls["apply"],
+            "/marketplaces/ozon/uploads/selection/repair/apply" + scope_query,
+        )
+        self.assertEqual(
+            urls["types"],
+            "/marketplaces/ozon/uploads/selection/repair/types" + scope_query,
+        )
+        self.assertEqual(
+            urls["dictionaries"],
+            "/marketplaces/ozon/uploads/selection/repair/dictionaries/",
+        )
+        self.assertEqual(urls["dictionary_query"], scope_query)
+        self.assertEqual(urls["drafts"], "/marketplaces/drafts/")
+        self.assertEqual(urlsplit(urls["result"]).path, "/marketplaces/drafts/")
+        self.assertEqual(parse_qs(urlsplit(urls["result"]).query), {
+            "account_id": [str(self.account.id)],
+            "status": ["draft"],
+            "page": ["2"],
+            "per_page": ["1"],
+        })
+        self.assertEqual(urlsplit(urls["classic"]).path, "/marketplaces/drafts/classic")
+        review = urlsplit(urls["review"])
+        self.assertEqual(review.path, "/marketplaces/ozon/uploads/review")
+        self.assertEqual(parse_qs(review.query), {
+            "account_id": [str(self.account.id)],
+            "draft_ids": [str(self.draft.id)],
+        })
+
+    def test_selected_repair_review_url_is_safe_base_when_all_rows_are_held(self):
+        editor = self._selection_editor_document()
+        editor["review_draft_ids"] = []
+        editor["blocked_review_items"] = [{
+            "draft_id": self.draft.id,
+            "title": "Безопасный товар",
+            "message": "Операция ещё выполняется",
+        }]
+        with patch.object(
+            OzonBulkRepairService, "editor_document", return_value=editor,
+        ), patch(
+            "routes.ozon_bulk_uploads.render_template", return_value="selection html",
+        ) as render:
+            response = self.client.get(
+                "/marketplaces/ozon/uploads/selection/repair?"
+                + self._selection_query(),
+                headers={"Accept": "text/html"},
+            )
+        self.assertEqual(response.status_code, 200)
+        review = urlsplit(render.call_args.kwargs["editor_urls"]["review"])
+        self.assertEqual(review.path, "/marketplaces/ozon/uploads/review")
+        self.assertEqual(parse_qs(review.query), {
+            "account_id": [str(self.account.id)],
+        })
+
+    def test_selected_repair_preserves_explicit_all_stores_and_direct_account_fallback(self):
+        editor = self._selection_editor_document()
+        with patch.object(
+            OzonBulkRepairService, "editor_document", return_value=editor,
+        ), patch(
+            "routes.ozon_bulk_uploads.render_template", return_value="selection html",
+        ) as render:
+            explicit_all_stores = self.client.get(
+                "/marketplaces/ozon/uploads/selection/repair?"
+                + self._selection_query(suffix=(
+                    "return_page=1&return_per_page=20&return_status=&return_account_id="
+                )),
+                headers={"Accept": "text/html"},
+            )
+            direct_link = self.client.get(
+                "/marketplaces/ozon/uploads/selection/repair?"
+                + self._selection_query(),
+                headers={"Accept": "text/html"},
+            )
+        self.assertEqual(explicit_all_stores.status_code, 200)
+        self.assertEqual(direct_link.status_code, 200)
+        explicit_filters = parse_qs(urlsplit(
+            render.call_args_list[0].kwargs["editor_urls"]["result"]
+        ).query)
+        self.assertNotIn("account_id", explicit_filters)
+        self.assertNotIn("status", explicit_filters)
+        self.assertEqual(explicit_filters["page"], ["1"])
+        self.assertEqual(explicit_filters["per_page"], ["20"])
+        direct_filters = parse_qs(urlsplit(
+            render.call_args_list[1].kwargs["editor_urls"]["result"]
+        ).query)
+        self.assertEqual(direct_filters, {"account_id": [str(self.account.id)]})
+
+    def test_selected_repair_json_is_csrf_bearing_and_uncacheable(self):
+        editor = self._selection_editor_document()
+        query = self._selection_query()
+        with patch.object(OzonBulkRepairService, "editor_document", return_value=editor) as read:
+            response = self.client.get(
+                f"/marketplaces/ozon/uploads/selection/repair?{query}",
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.json["editor"]["mode"], "draft_selection")
+        self.assertTrue(response.json["csrf"])
+        self.assertIn("no-store", response.headers["Cache-Control"])
+        read.assert_called_once_with(
+            seller_id=self.seller.id,
+            selection={"account_id": self.account.id, "draft_ids": [self.draft.id]},
+        )
+
+    def test_selected_repair_preserves_order_in_service_scope_and_review_url(self):
+        draft_ids = [self.draft.id + 1, self.draft.id]
+        editor = self._selection_editor_document()
+        editor["review_draft_ids"] = draft_ids.copy()
+        selection = {"account_id": self.account.id, "draft_ids": draft_ids}
+        query = self._selection_query(draft_ids=draft_ids)
+        with patch.object(
+            OzonBulkRepairService, "editor_document", return_value=editor,
+        ) as read, patch(
+            "routes.ozon_bulk_uploads.render_template", return_value="selection html",
+        ) as render:
+            response = self.client.get(
+                f"/marketplaces/ozon/uploads/selection/repair?{query}",
+                headers={"Accept": "text/html"},
+            )
+        self.assertEqual(response.status_code, 200)
+        read.assert_called_once_with(seller_id=self.seller.id, selection=selection)
+        review = urlsplit(render.call_args.kwargs["editor_urls"]["review"])
+        self.assertEqual(
+            parse_qs(review.query)["draft_ids"],
+            [f"{draft_ids[0]},{draft_ids[1]}"],
+        )
+
+    def test_selected_repair_rejects_ambiguous_or_untyped_scope_before_service(self):
+        base = "/marketplaces/ozon/uploads/selection/repair?"
+        valid = self._selection_query()
+        invalid_queries = [
+            f"account_id={self.account.id}",
+            valid + f"&account_id={self.account.id}",
+            valid + f"&draft_ids={self.draft.id}",
+            f"account_id=0&draft_ids={self.draft.id}",
+            f"account_id={self.account.id}&draft_ids=",
+            f"account_id={self.account.id}&draft_ids={self.draft.id},0",
+            f"account_id={self.account.id}&draft_ids={self.draft.id},{self.draft.id}",
+            f"account_id={self.account.id}&draft_ids=0{self.draft.id}",
+            f"account_id={'9' * 4_300}&draft_ids={self.draft.id}",
+            f"account_id={self.account.id}&draft_ids={'9' * 4_300}",
+            valid + "&next=https://example.invalid",
+            valid + "&return_page=0",
+            valid + "&return_per_page=101",
+            valid + "&return_status=unknown",
+        ]
+        too_many = ",".join(str(value) for value in range(1, 202))
+        invalid_queries.append(f"account_id={self.account.id}&draft_ids={too_many}")
+        with patch.object(
+            OzonBulkRepairService,
+            "editor_document",
+            side_effect=AssertionError("invalid selection must not reach service"),
+        ) as read:
+            for query in invalid_queries:
+                with self.subTest(query=query[:100]):
+                    response = self.client.get(
+                        base + query,
+                        headers={"Accept": "application/json"},
+                    )
+                    self.assertEqual(response.status_code, 400, response.get_json())
+                    self.assertTrue(response.json["csrf"])
+                    self.assertIn("no-store", response.headers["Cache-Control"])
+        read.assert_not_called()
+
+    def test_selected_repair_rejects_foreign_scope_through_seller_service(self):
+        query = self._selection_query(account_id=self.account.id, draft_ids=[self.draft.id])
+        with patch.object(
+            OzonBulkRepairService,
+            "editor_document",
+            side_effect=OzonBulkUploadNotFound("Черновик не найден"),
+        ) as read:
+            response = self.client.get(
+                f"/marketplaces/ozon/uploads/selection/repair?{query}",
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json["code"], "ozon_bulk_upload_not_found")
+        self.assertIn("no-store", response.headers["Cache-Control"])
+        read.assert_called_once_with(
+            seller_id=self.seller.id,
+            selection={"account_id": self.account.id, "draft_ids": [self.draft.id]},
+        )
+
+    def test_selected_repair_type_and_dictionary_searches_keep_exact_scope(self):
+        scope = {"account_id": self.account.id, "draft_ids": [self.draft.id]}
+        query = self._selection_query()
+        with patch.object(
+            OzonBulkRepairService, "search_product_types", return_value=[{"id": 7}],
+        ) as type_search, patch.object(
+            OzonBulkRepairService,
+            "search_dictionary_values",
+            return_value={"items": [{"id": "1", "value": "Хлопок"}], "truncated": False},
+        ) as dictionary_search:
+            type_response = self.client.get(
+                f"/marketplaces/ozon/uploads/selection/repair/types?{query}&q=shirt",
+                headers={"Accept": "application/json"},
+            )
+            dictionary_response = self.client.get(
+                f"/marketplaces/ozon/uploads/selection/repair/dictionaries/{self.draft.id}/4191?"
+                f"{query}&q=cotton",
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(type_response.status_code, 200, type_response.get_json())
+        self.assertEqual(type_response.json["items"], [{"id": 7}])
+        self.assertTrue(type_response.json["csrf"])
+        self.assertIn("no-store", type_response.headers["Cache-Control"])
+        type_search.assert_called_once_with(
+            seller_id=self.seller.id,
+            selection=scope,
+            query="shirt",
+        )
+        self.assertEqual(dictionary_response.status_code, 200, dictionary_response.get_json())
+        self.assertEqual(dictionary_response.json["items"], [{"id": "1", "value": "Хлопок"}])
+        self.assertTrue(dictionary_response.json["csrf"])
+        self.assertIn("no-store", dictionary_response.headers["Cache-Control"])
+        dictionary_search.assert_called_once_with(
+            seller_id=self.seller.id,
+            selection=scope,
+            draft_id=self.draft.id,
+            external_attribute_id="4191",
+            query="cotton",
+        )
+
+    def test_selected_repair_search_rejects_repeated_and_unknown_query_fields(self):
+        scope = self._selection_query()
+        with patch.object(
+            OzonBulkRepairService,
+            "search_product_types",
+            side_effect=AssertionError("invalid search must not reach service"),
+        ) as search:
+            for suffix in ("q=a&q=b", "q=a&job_uid=ozon-upload-abc"):
+                with self.subTest(suffix=suffix):
+                    response = self.client.get(
+                        f"/marketplaces/ozon/uploads/selection/repair/types?{scope}&{suffix}",
+                        headers={"Accept": "application/json"},
+                    )
+                    self.assertEqual(response.status_code, 400, response.get_json())
+                    self.assertTrue(response.json["csrf"])
+                    self.assertIn("no-store", response.headers["Cache-Control"])
+        search.assert_not_called()
+
+    def test_selected_repair_apply_requires_local_confirmation_and_only_calls_local_service(self):
+        editor = self._selection_editor_document()
+        scope = {"account_id": self.account.id, "draft_ids": [self.draft.id]}
+        report = {
+            "mode": "draft_selection",
+            "scope_key": "a" * 64,
+            "total": 1, "updated": 1, "ready_to_retry": 0,
+            "needs_input": 1, "excluded": 0, "failed": 0,
+        }
+        url = "/marketplaces/ozon/uploads/selection/repair/apply?" + self._selection_query()
+        with patch.object(
+            OzonBulkRepairService, "editor_document", return_value=editor,
+        ) as read, patch.object(
+            OzonBulkRepairService, "apply_editor_rows", return_value=report,
+        ) as apply, patch.object(
+            OzonBulkUploadService,
+            "accept_reviewed_publish",
+            side_effect=AssertionError("local repair must not queue an upload"),
+        ) as publish, patch.object(
+            OzonBulkUploadService,
+            "accept_source_prepare",
+            side_effect=AssertionError("local repair must not queue preparation"),
+        ) as prepare:
+            response = self.client.post(
+                url,
+                data=self._selection_form(),
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.json["report"], report)
+        self.assertEqual(response.json["mode"], "draft_selection")
+        self.assertEqual(response.json["scope_key"], "a" * 64)
+        self.assertTrue(response.json["csrf"])
+        self.assertIn("no-store", response.headers["Cache-Control"])
+        read.assert_called_once_with(seller_id=self.seller.id, selection=scope)
+        apply_kwargs = apply.call_args.kwargs
+        self.assertEqual(apply_kwargs["seller_id"], self.seller.id)
+        self.assertEqual(apply_kwargs["selection"], scope)
+        self.assertEqual(apply_kwargs["corrected_by_user_id"], self.user.id)
+        self.assertEqual(len(apply_kwargs["rows"]), 1)
+        self.assertEqual(apply_kwargs["rows"][0]["draft_id"], self.draft.id)
+        self.assertEqual(apply_kwargs["rows"][0]["expected_version"], self.draft.version)
+        publish.assert_not_called()
+        prepare.assert_not_called()
+
+    def test_selected_repair_apply_rejects_json_unknown_repeated_and_unconfirmed_input(self):
+        editor = self._selection_editor_document()
+        url = "/marketplaces/ozon/uploads/selection/repair/apply?" + self._selection_query()
+        with patch.object(
+            OzonBulkRepairService, "editor_document", return_value=editor,
+        ) as read, patch.object(
+            OzonBulkRepairService,
+            "apply_editor_rows",
+            side_effect=AssertionError("invalid local form must not be applied"),
+        ) as apply:
+            responses = [
+                self.client.post(url, json={"confirm_local": True, "selected_draft_id": [self.draft.id]}),
+                self.client.post(url, data=self._selection_form(confirmed=False),
+                                 headers={"Accept": "application/json"}),
+            ]
+            repeated = self._selection_form()
+            repeated.add("confirm_local", "1")
+            responses.append(self.client.post(url, data=repeated,
+                                              headers={"Accept": "application/json"}))
+            unknown = self._selection_form()
+            unknown.add("extra", "x")
+            responses.append(self.client.post(url, data=unknown,
+                                              headers={"Accept": "application/json"}))
+        for response in responses:
+            self.assertEqual(response.status_code, 400, response.get_json())
+            self.assertTrue(response.json["csrf"])
+            self.assertIn("no-store", response.headers["Cache-Control"])
+        self.assertEqual(read.call_count, 3)  # JSON is rejected before reading the editor.
+        apply.assert_not_called()
+
+    def test_selected_repair_apply_feature_guard_blocks_before_service(self):
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = False
+        url = "/marketplaces/ozon/uploads/selection/repair/apply?" + self._selection_query()
+        with patch.object(
+            OzonBulkRepairService,
+            "editor_document",
+            side_effect=AssertionError("disabled repair must stop before local service"),
+        ) as read, patch.object(
+            OzonBulkRepairService,
+            "apply_editor_rows",
+            side_effect=AssertionError("disabled repair must not apply"),
+        ) as apply:
+            response = self.client.post(
+                url,
+                data=self._selection_form(),
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json["code"], "ozon_feature_disabled")
+        self.assertIn("no-store", response.headers["Cache-Control"])
+        read.assert_not_called()
+        apply.assert_not_called()
 
     def test_reviewed_result_recovery_scope_is_read_only_and_replayable(self):
         job, run, item = self._reviewed_local_result()

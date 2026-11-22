@@ -23,6 +23,7 @@ from flask_wtf.csrf import generate_csrf
 
 from models import db
 from services.ozon_bulk_upload import (
+    OzonBulkUploadConflict,
     OzonBulkUploadError,
     OzonBulkUploadService,
     OzonBulkUploadValidationError,
@@ -225,8 +226,24 @@ def _single_form_value(key: str, *, required: bool = False) -> str:
     return values[0]
 
 
-def _parse_editor_rows(editor: dict) -> list[dict]:
-    """Parse the server-rendered exact editor scope from one HTML form."""
+def _parse_editor_rows(editor: dict, *, mode: str = "job") -> list[dict]:
+    """Parse one bounded mass-editor form under a specific local workflow."""
+    if mode not in {"job", "local_only"}:
+        raise ValueError("unsupported Ozon repair form mode")
+    if mode == "local_only":
+        repeated_fields = [
+            key for key in request.form
+            if key != "selected_draft_id" and len(request.form.getlist(key)) > 1
+        ]
+        if repeated_fields:
+            raise OzonBulkUploadValidationError(
+                "Поля формы не должны повторяться"
+            )
+        confirmation = _single_form_value("confirm_local", required=True)
+        if confirmation != "1":
+            raise OzonBulkUploadValidationError(
+                "Подтвердите локальное сохранение выбранных исправлений"
+            )
     rows_by_id = {
         row["draft_id"]: row
         for group in editor["groups"]
@@ -257,6 +274,8 @@ def _parse_editor_rows(editor: dict) -> list[dict]:
         "csrf_token",
         "selected_draft_id",
     }
+    if mode == "local_only":
+        allowed_keys.add("confirm_local")
     fixed_fields = sorted(
         OzonBulkRepairService.EDITABLE_FIXED - {"action"}
     )
@@ -361,6 +380,281 @@ def _parse_editor_rows(editor: dict) -> list[dict]:
             "values": values,
         })
     return result
+
+
+_SELECTION_MAX_IDS = 200
+_SELECTION_MAX_INT = 9223372036854775807
+_SELECTION_RETURN_STATUSES = {
+    "needs_category", "draft", "blocked", "ready", "published", "archived",
+}
+_SELECTION_VIEW_STATES = {
+    "", "needs_input", "ready_to_retry", "excluded", "changed", "error",
+}
+
+
+def _selection_query_integer(raw: Any, field_name: str) -> int:
+    if (
+        not isinstance(raw, str)
+        or len(raw) > 19
+        or not raw.isascii()
+        or not re.fullmatch(r"[1-9][0-9]*", raw)
+    ):
+        raise OzonBulkUploadValidationError(
+            f"{field_name} должен быть положительным целым числом"
+        )
+    value = int(raw)
+    if value > _SELECTION_MAX_INT:
+        raise OzonBulkUploadValidationError(
+            f"{field_name} выходит за допустимый предел"
+        )
+    return value
+
+
+def _selection_query_values(extra_allowed: set[str]) -> tuple[dict, dict]:
+    """Read one strict account/draft selection and explicitly allowed extras."""
+    allowed = {"account_id", "draft_ids"} | set(extra_allowed)
+    if set(request.args.keys()) - allowed:
+        raise OzonBulkUploadValidationError(
+            "Переданы неизвестные параметры выбора черновиков"
+        )
+    values = {}
+    for key in request.args.keys():
+        items = request.args.getlist(key)
+        if len(items) != 1:
+            raise OzonBulkUploadValidationError(
+                f"Параметр {key} не должен повторяться"
+            )
+        values[key] = items[0]
+    if "account_id" not in values or "draft_ids" not in values:
+        raise OzonBulkUploadValidationError(
+            "Укажите account_id и точный список draft_ids"
+        )
+
+    account_id = _selection_query_integer(values["account_id"], "account_id")
+    raw_ids = values["draft_ids"]
+    if not raw_ids or len(raw_ids) > 4_200:
+        raise OzonBulkUploadValidationError(
+            "Укажите от 1 до 200 уникальных черновиков"
+        )
+    id_parts = raw_ids.split(",")
+    if not 1 <= len(id_parts) <= _SELECTION_MAX_IDS:
+        raise OzonBulkUploadValidationError(
+            "Укажите от 1 до 200 уникальных черновиков"
+        )
+    draft_ids = [
+        _selection_query_integer(value, "draft_id")
+        for value in id_parts
+    ]
+    if len(draft_ids) != len(set(draft_ids)):
+        raise OzonBulkUploadValidationError(
+            "Список черновиков не должен содержать повторов"
+        )
+    extras = {key: value for key, value in values.items() if key not in {"account_id", "draft_ids"}}
+    return {"account_id": account_id, "draft_ids": draft_ids}, extras
+
+
+def _selection_view_context(extras: dict) -> tuple[dict, dict, bool]:
+    """Validate local editor view state and seller draft-list return filters."""
+    view = {}
+    query = extras.get("q", "")
+    if len(query) > 200 or any(ord(character) < 32 or ord(character) == 127 for character in query):
+        raise OzonBulkUploadValidationError("Поиск должен содержать не более 200 символов")
+    view["q"] = query
+
+    group = extras.get("group", "")
+    if group and not re.fullmatch(r"group-(?:[1-9][0-9]{0,2})", group):
+        raise OzonBulkUploadValidationError("Некорректная группа карточек")
+    view["group"] = group
+
+    state = extras.get("state", "")
+    if state not in _SELECTION_VIEW_STATES:
+        raise OzonBulkUploadValidationError("Некорректное состояние карточек")
+    view["state"] = state
+
+    page_raw = extras.get("page")
+    view["page"] = 1 if page_raw is None else _selection_page(page_raw, "page")
+
+    return_filters = {}
+    return_context_supplied = any(
+        key in extras
+        for key in (
+            "return_account_id", "return_status", "return_page",
+            "return_per_page",
+        )
+    )
+    if extras.get("return_account_id", ""):
+        return_filters["account_id"] = _selection_query_integer(
+            extras["return_account_id"], "return_account_id"
+        )
+    if extras.get("return_status", ""):
+        status = extras["return_status"]
+        if status not in _SELECTION_RETURN_STATUSES:
+            raise OzonBulkUploadValidationError("Некорректный статус списка черновиков")
+        return_filters["status"] = status
+    if extras.get("return_page", ""):
+        return_filters["page"] = _selection_page(
+            extras["return_page"], "return_page"
+        )
+    if extras.get("return_per_page", ""):
+        per_page = _selection_query_integer(
+            extras["return_per_page"], "return_per_page"
+        )
+        if per_page > 100:
+            raise OzonBulkUploadValidationError(
+                "return_per_page должен быть от 1 до 100"
+            )
+        return_filters["per_page"] = per_page
+    return view, return_filters, return_context_supplied
+
+
+def _selection_page(raw: Any, field_name: str) -> int:
+    page = _selection_query_integer(raw, field_name)
+    if page > 10_000:
+        raise OzonBulkUploadValidationError(
+            f"{field_name} выходит за допустимый предел"
+        )
+    return page
+
+
+def _selection_scope_query(selection: dict) -> str:
+    return (
+        f"?account_id={selection['account_id']}&draft_ids="
+        f"{','.join(str(draft_id) for draft_id in selection['draft_ids'])}"
+    )
+
+
+def _draft_list_urls(
+    selection: dict,
+    return_filters: dict,
+    *,
+    return_context_supplied: bool,
+) -> tuple[str, str]:
+    filters = dict(return_filters)
+    if not return_context_supplied:
+        filters.setdefault("account_id", selection["account_id"])
+    return (
+        url_for("marketplace_drafts.index", **filters),
+        url_for("marketplace_drafts.classic_index", **filters),
+    )
+
+
+def _selection_editor_urls(
+    selection: dict,
+    editor: dict,
+    return_filters: dict,
+    *,
+    return_context_supplied: bool,
+) -> dict:
+    scope_query = _selection_scope_query(selection)
+    drafts_url = url_for(
+        "marketplace_drafts.detail", draft_id=123456789,
+    ).replace("123456789", "")
+    dictionaries_route = url_for(
+        "ozon_bulk_uploads.repair_draft_selection_dictionary",
+        draft_id=1,
+        external_attribute_id="attribute_id",
+    )
+    suffix = "/1/attribute_id"
+    if not dictionaries_route.endswith(suffix):
+        raise RuntimeError("unexpected Ozon dictionary route shape")
+    dictionaries_url = dictionaries_route[:-len(suffix)] + "/"
+    result_url, classic_url = _draft_list_urls(
+        selection,
+        return_filters,
+        return_context_supplied=return_context_supplied,
+    )
+
+    review_draft_ids = editor.get("review_draft_ids", [])
+    if (
+        not isinstance(review_draft_ids, list)
+    ):
+        raise OzonBulkUploadError("Некорректный набор для проверки черновиков")
+    if (
+        any(type(draft_id) is not int or draft_id <= 0 for draft_id in review_draft_ids)
+        or len(review_draft_ids) != len(set(review_draft_ids))
+        or any(draft_id not in selection["draft_ids"] for draft_id in review_draft_ids)
+    ):
+        raise OzonBulkUploadError("Некорректный набор для проверки черновиков")
+    ordered_review_ids = [
+        draft_id for draft_id in selection["draft_ids"]
+        if draft_id in set(review_draft_ids)
+    ]
+    if review_draft_ids != ordered_review_ids:
+        raise OzonBulkUploadError("Некорректный порядок проверки черновиков")
+    review_url = url_for(
+        "ozon_bulk_uploads.review",
+        account_id=selection["account_id"],
+    )
+    if review_draft_ids:
+        review_url = url_for(
+            "ozon_bulk_uploads.review",
+            account_id=selection["account_id"],
+            draft_ids=",".join(str(draft_id) for draft_id in review_draft_ids),
+        )
+    return {
+        "read": url_for("ozon_bulk_uploads.repair_draft_selection") + scope_query,
+        "apply": url_for("ozon_bulk_uploads.apply_draft_selection_repair") + scope_query,
+        "types": url_for("ozon_bulk_uploads.repair_draft_selection_types") + scope_query,
+        "dictionaries": dictionaries_url,
+        "dictionary_query": scope_query,
+        "drafts": drafts_url,
+        "result": result_url,
+        "review": review_url,
+        "classic": classic_url,
+    }
+
+
+def _validate_selection_editor(editor: Any, selection: dict) -> str:
+    if (
+        not isinstance(editor, dict)
+        or editor.get("mode") != "draft_selection"
+        or editor.get("account_id") != selection["account_id"]
+        or not isinstance(editor.get("scope_key"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", editor["scope_key"]) is None
+    ):
+        raise OzonBulkUploadError(
+            "Сервис вернул некорректный результат проверки выбранных черновиков"
+        )
+    return editor["scope_key"]
+
+
+def _selection_response(payload: dict, *, status: int = 200):
+    response = make_response(jsonify(payload), status)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+def _selection_error_response(
+    error: OzonBulkUploadError,
+    *,
+    as_json: bool,
+    return_url: str,
+):
+    if as_json:
+        return _selection_response({
+            "success": False,
+            "error": str(error),
+            "code": error.code,
+            "csrf": generate_csrf(),
+        }, status=error.status_code)
+    flash(str(error), "danger")
+    response = redirect(return_url)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+def _selection_internal_error(*, as_json: bool, return_url: str, seller_id: int):
+    db.session.rollback()
+    current_app.logger.exception(
+        "Ozon selected-draft repair failed seller_id=%s",
+        seller_id,
+    )
+    error = OzonBulkUploadError("Не удалось безопасно обработать выбранные черновики")
+    error.status_code = 500
+    error.code = "ozon_bulk_selection_repair_failed"
+    return _selection_error_response(
+        error, as_json=as_json, return_url=return_url,
+    )
 
 
 def _search_error_response(error: OzonBulkUploadError):
@@ -585,6 +879,266 @@ def repair_editor(job_uid: str):
         editor=editor,
         ozon_enabled=bool(current_app.config.get("MARKETPLACE_OZON_ENABLED", False)),
     )
+
+
+@ozon_bulk_uploads_bp.route("/selection/repair", methods=["GET"])
+@login_required
+def repair_draft_selection():
+    """Open a local repair editor for an exact seller-owned draft selection."""
+    seller_id = _seller_id()
+    as_json = _wants_json()
+    return_url = url_for("marketplace_drafts.index")
+    if seller_id is None:
+        error = OzonBulkUploadError("Seller account required")
+        error.status_code = 403
+        error.code = "seller_required"
+        return _selection_error_response(
+            error, as_json=as_json, return_url=return_url,
+        )
+    try:
+        allowed_extra = set() if as_json else {
+            "return_page", "return_per_page", "return_status",
+            "return_account_id", "q", "group", "state", "page",
+        }
+        selection, extras = _selection_query_values(allowed_extra)
+        if as_json:
+            view = {"q": "", "group": "", "state": "", "page": 1}
+            return_filters = {}
+            return_context_supplied = False
+        else:
+            view, return_filters, return_context_supplied = (
+                _selection_view_context(extras)
+            )
+        return_url, _classic_url = _draft_list_urls(
+            selection,
+            return_filters,
+            return_context_supplied=return_context_supplied,
+        )
+        editor = OzonBulkRepairService.editor_document(
+            seller_id=seller_id,
+            selection=selection,
+        )
+        _validate_selection_editor(editor, selection)
+        if as_json:
+            return _selection_response({
+                "success": True,
+                "editor": editor,
+                "csrf": generate_csrf(),
+            })
+        editor_urls = _selection_editor_urls(
+            selection,
+            editor,
+            return_filters,
+            return_context_supplied=return_context_supplied,
+        )
+        response = make_response(render_template(
+            "ozon_bulk_repair.html",
+            editor=editor,
+            editor_urls=editor_urls,
+            editor_view=view,
+            selection_mode=True,
+            ozon_enabled=bool(
+                current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
+            ),
+        ))
+    except OzonBulkUploadError as exc:
+        return _selection_error_response(
+            exc, as_json=as_json, return_url=return_url,
+        )
+    except Exception:
+        return _selection_internal_error(
+            as_json=as_json, return_url=return_url, seller_id=seller_id,
+        )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@ozon_bulk_uploads_bp.route("/selection/repair/apply", methods=["POST"])
+@login_required
+def apply_draft_selection_repair():
+    """Apply only explicitly selected local edits to the exact draft scope."""
+    seller_id = _seller_id()
+    as_json = _wants_json()
+    return_url = url_for("marketplace_drafts.index")
+    if seller_id is None:
+        error = OzonBulkUploadError("Seller account required")
+        error.status_code = 403
+        error.code = "seller_required"
+        return _selection_error_response(
+            error, as_json=as_json, return_url=return_url,
+        )
+    try:
+        selection, _extras = _selection_query_values(set())
+        return_url, _classic_url = _draft_list_urls(
+            selection,
+            {},
+            return_context_supplied=False,
+        )
+        if not current_app.config.get("MARKETPLACE_OZON_ENABLED", False):
+            error = OzonBulkUploadConflict(
+                "Изменение черновиков Ozon временно выключено оператором"
+            )
+            error.code = "ozon_feature_disabled"
+            raise error
+        if request.is_json:
+            raise OzonBulkUploadValidationError(
+                "Используйте форму локального массового редактора Seller Hub"
+            )
+        if (
+            request.content_length is not None
+            and request.content_length > OzonBulkRepairService.MAX_EDITOR_FORM_BYTES
+        ):
+            raise OzonBulkUploadValidationError(
+                "Форма массового редактора больше допустимых 2 МБ"
+            )
+        editor = OzonBulkRepairService.editor_document(
+            seller_id=seller_id,
+            selection=selection,
+        )
+        scope_key = _validate_selection_editor(editor, selection)
+        rows = _parse_editor_rows(editor, mode="local_only")
+        report = OzonBulkRepairService.apply_editor_rows(
+            seller_id=seller_id,
+            selection=selection,
+            rows=rows,
+            corrected_by_user_id=getattr(current_user, "id", None),
+        )
+        if (
+            not isinstance(report, dict)
+            or report.get("mode") != "draft_selection"
+            or report.get("scope_key") != scope_key
+        ):
+            raise OzonBulkUploadError(
+                "Сервис вернул некорректный результат локального сохранения"
+            )
+    except OzonBulkUploadError as exc:
+        return _selection_error_response(
+            exc, as_json=as_json, return_url=return_url,
+        )
+    except Exception:
+        return _selection_internal_error(
+            as_json=as_json, return_url=return_url, seller_id=seller_id,
+        )
+
+    if as_json:
+        return _selection_response({
+            "success": True,
+            "mode": "draft_selection",
+            "scope_key": scope_key,
+            "report": report,
+            "csrf": generate_csrf(),
+        })
+    flash(
+        (
+            f"Сохранено локально: обновлено {report['updated']}, "
+            f"готово к повторной проверке {report['ready_to_retry']}, "
+            f"ещё нужны данные {report['needs_input']}, "
+            f"исключено {report['excluded']}, ошибок строк {report['failed']}. "
+            "В Ozon ничего не отправлялось."
+        ),
+        "success" if report["updated"] and not report["failed"] else "warning",
+    )
+    response = redirect(return_url, code=303)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@ozon_bulk_uploads_bp.route("/selection/repair/types", methods=["GET"])
+@login_required
+def repair_draft_selection_types():
+    """Search locally cached Ozon product types for one exact selection."""
+    seller_id = _seller_id()
+    if seller_id is None:
+        error = OzonBulkUploadError("Seller account required")
+        error.status_code = 403
+        error.code = "seller_required"
+        return _selection_error_response(
+            error, as_json=True, return_url=url_for("marketplace_drafts.index"),
+        )
+    try:
+        selection, extras = _selection_query_values({"q"})
+        if "q" not in extras:
+            raise OzonBulkUploadValidationError("Передайте один параметр q")
+        query = extras["q"]
+        if (
+            not query.strip()
+            or len(query) > 200
+            or any(ord(character) < 32 or ord(character) == 127 for character in query)
+        ):
+            raise OzonBulkUploadValidationError(
+                "Введите название типа Ozon длиной до 200 символов"
+            )
+        items = OzonBulkRepairService.search_product_types(
+            seller_id=seller_id,
+            selection=selection,
+            query=query,
+        )
+        return _selection_response({
+            "success": True,
+            "items": items,
+            "csrf": generate_csrf(),
+        })
+    except OzonBulkUploadError as exc:
+        return _selection_error_response(
+            exc, as_json=True, return_url=url_for("marketplace_drafts.index"),
+        )
+    except Exception:
+        return _selection_internal_error(
+            as_json=True,
+            return_url=url_for("marketplace_drafts.index"),
+            seller_id=seller_id,
+        )
+
+
+@ozon_bulk_uploads_bp.route(
+    "/selection/repair/dictionaries/<int:draft_id>/<external_attribute_id>",
+    methods=["GET"],
+)
+@login_required
+def repair_draft_selection_dictionary(draft_id: int, external_attribute_id: str):
+    """Search one cached dictionary for one row in the exact selection."""
+    seller_id = _seller_id()
+    if seller_id is None:
+        error = OzonBulkUploadError("Seller account required")
+        error.status_code = 403
+        error.code = "seller_required"
+        return _selection_error_response(
+            error, as_json=True, return_url=url_for("marketplace_drafts.index"),
+        )
+    try:
+        selection, extras = _selection_query_values({"q"})
+        if draft_id <= 0:
+            raise OzonBulkUploadValidationError("draft_id должен быть положительным")
+        query = extras.get("q", "")
+        if (
+            len(query) > 200
+            or any(ord(character) < 32 or ord(character) == 127 for character in query)
+        ):
+            raise OzonBulkUploadValidationError(
+                "Поиск по справочнику должен содержать не более 200 символов"
+            )
+        result = OzonBulkRepairService.search_dictionary_values(
+            seller_id=seller_id,
+            selection=selection,
+            draft_id=draft_id,
+            external_attribute_id=external_attribute_id,
+            query=query,
+        )
+        return _selection_response({
+            "success": True,
+            **result,
+            "csrf": generate_csrf(),
+        })
+    except OzonBulkUploadError as exc:
+        return _selection_error_response(
+            exc, as_json=True, return_url=url_for("marketplace_drafts.index"),
+        )
+    except Exception:
+        return _selection_internal_error(
+            as_json=True,
+            return_url=url_for("marketplace_drafts.index"),
+            seller_id=seller_id,
+        )
 
 
 @ozon_bulk_uploads_bp.route("/<job_uid>/repair/apply", methods=["POST"])
