@@ -2127,6 +2127,67 @@ def run():
         assert sum(post["path"] == LOCAL_REFRESH for post in posts) == refresh_posts_before_ozon_return
         checks.append("supplier_refresh_ozon_result_returns_to_same_receipt_and_wb_scope")
 
+        posts_before_updated_selection = len(posts)
+
+        def is_updated_batch_feed(response):
+            path = urlsplit(response.url)
+            return (
+                path.path == "/api/my-products" and response.request.method == "GET"
+                and "import_batch" in parse_qs(path.query)
+            )
+
+        select_updated = restored_result.get_by_role(
+            "button", name=re.compile(r"^Выбрать обновлённые товары"),
+        )
+        assert select_updated.is_enabled()
+        assert select_updated.bounding_box()["height"] >= 44
+        with page.expect_response(is_updated_batch_feed) as updated_feed:
+            select_updated.press("Enter")
+        assert updated_feed.value.status == 200
+        scoped = updated_feed.value.json()
+        assert scoped["batch_kind"] == "supplier_refresh_result"
+        assert [item["id"] for item in scoped["items"]] == [fixture_ids["local_id"]]
+        page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").wait_for()
+        assert page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").is_checked()
+        assert page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").count() == 0
+        assert selected_browser_state(page)["selected"] == [fixture_ids["local_id"]]
+        scoped_result = page.locator(".mp-refresh-result")
+        scoped_result.get_by_role(
+            "heading", name="Сохранённый итог обновления из поставщика", exact=True,
+        ).wait_for()
+        assert scoped_result.locator(".mp-refresh-result-counts dd").all_text_contents() == ["1", "1", "0"]
+        verify_bounds(page)
+        page.screenshot(path=OUTPUT / "supplier-refresh-selected-price-scope-320.png", animations="disabled")
+        assert len(posts) == posts_before_updated_selection
+
+        with page.expect_response(
+            lambda response: urlsplit(response.url).path == "/prices/change"
+            and response.request.method == "GET",
+        ) as price_entry:
+            pick_action(page, "Изменить цены WB")
+        assert price_entry.value.status == 200
+        price_query = parse_qs(urlsplit(price_entry.value.url).query)
+        assert price_query["product_ids"] == [str(fixture_ids["wb_id"])], price_query.get("product_ids")
+        with page.expect_response(is_updated_batch_feed) as returned_updated_feed:
+            page.get_by_role("link", name="Вернуться к товарам", exact=True).first.click()
+        assert returned_updated_feed.value.status == 200
+        assert returned_updated_feed.value.json()["batch_kind"] == "supplier_refresh_result"
+        page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").wait_for()
+        assert page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").is_checked()
+        page.locator(".mp-refresh-result").get_by_role(
+            "heading", name="Сохранённый итог обновления из поставщика", exact=True,
+        ).wait_for()
+        assert len(posts) == posts_before_updated_selection
+        assert fixture.REPORT["provider_attempts"] == 0
+        checks.append("supplier_refresh_updated_selection_keeps_exact_price_scope_and_signed_result")
+
+        with page.expect_response(is_supplier_refresh_result) as ordinary_result:
+            page.goto(fixture.BASE + return_url, wait_until="domcontentloaded")
+        assert_resumed_refresh(ordinary_result.value)
+        page.locator(".mp-refresh-result").get_by_role(
+            "heading", name="Сохранённый итог обновления из поставщика", exact=True,
+        ).wait_for()
+
         result_gets_before_hide = len(resume_result_requests)
         refresh_posts_before_hide = sum(post["path"] == LOCAL_REFRESH for post in posts)
         page.get_by_role("button", name="Скрыть итог обновления", exact=True).click()
