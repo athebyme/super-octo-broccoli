@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-22T21:19:08.158977+00:00",
+  "generated_at": "2026-11-22T21:57:06.046124+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "97b3add7cd5a4cb12bda4f35aa622b041036f5aa080940baa61cf1316e796e6e"
+      "sha256": "f7d2f9f25b39c081ec93889c4326aeb59ed191524d039519d42136a696132b6c"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -453,7 +453,7 @@
     },
     {
       "path": "docs/design/ozon-prices.md",
-      "sha256": "f0034f13fe84427d26423523bc111feaf515243128671567f5b2675575e45c95"
+      "sha256": "4427b05a16beb9090f70f87ab147595a43e881fc27d40a763d74459222215139"
     },
     {
       "path": "docs/design/ozon-quality-workspace.md",
@@ -489,7 +489,7 @@
     },
     {
       "path": "docs/design/seller-cabinet-redesign-2026-11-22.md",
-      "sha256": "8cb2a940503f8cd7d54e71b65425adf2388f02fef45f76a0b0303af2b3b6f631"
+      "sha256": "d7a4d16d1bb50c80d8707f39f4f9b1c432171a57d858217f44430998a7a09532"
     },
     {
       "path": "docs/design/startup-migration-performance.md",
@@ -852,6 +852,10 @@
       "sha256": "c2062228f5a31e222ba0afc62d7e89ed69b5fb18b10ad3b4a601c6bab7b3f3c5"
     },
     {
+      "path": "frontend/src/WorkspacePriceDialog.vue",
+      "sha256": "221c097f478fcc66ba49bbb5a4b68643811d36f85fbd00946c028437142b4af1"
+    },
+    {
       "path": "frontend/src/import-contract.js",
       "sha256": "b7ea89cf23886d2b5b57467f3e6ca93cab39a3bbe34a28d7181f67fb7fd1ba02"
     },
@@ -861,11 +865,19 @@
     },
     {
       "path": "frontend/src/index.js",
-      "sha256": "b6e92efc20fcbb7dc980459ddcaaa35ad2614194127c7f97df2b469c175ae356"
+      "sha256": "a1a7d07e64b2596aa8edc9039b98d4fda19d74b38b7e3db32fb93c2546a9b683"
+    },
+    {
+      "path": "frontend/src/price-workspace-contract.js",
+      "sha256": "9ca8a7c2dd09436f9b63d0aefc682b9d0eae147e2973a469a707ce53ad3b05d8"
     },
     {
       "path": "frontend/test/import-contract.test.mjs",
       "sha256": "45253baf8bbf7e1553c421c2b8660c722ae8479a3d2e1fbe2ffe9c125ba1d906"
+    },
+    {
+      "path": "frontend/test/price-workspace-contract.test.mjs",
+      "sha256": "de853596bb4cceb75b80a20d8a1858b3a95fbe35f84843909f3e8f1986ba7475"
     },
     {
       "path": "frontend/vite.config.mjs",
@@ -2649,11 +2661,11 @@
     },
     {
       "path": "static/my-products-beta.css",
-      "sha256": "a27ff3ca75cd129a5296e377a55b8bf81ae4eb3f774fc5ba102ce82f96f781d6"
+      "sha256": "bfed0871295030f5284dbdcff99e522881971c5b82f42640fea8fbf6fd2e0a14"
     },
     {
       "path": "static/my-products-beta.js",
-      "sha256": "14220266a240b96e499b5b1a5098d3c30dc68998589ba712df3479b419911368"
+      "sha256": "d0c4ec9dc5250f1af649577952fdb51aa8b7d42c7ca9e1a93e81fb6e733d83ee"
     },
     {
       "path": "static/operations-workspace.css",
@@ -2897,11 +2909,11 @@
     },
     {
       "path": "static/workspace/my-products-import.css",
-      "sha256": "daa4057646dc9243dfe1bac81a2ab66ede6ba778ee5fdcc14798f46f32860888"
+      "sha256": "8e8df3a37528e373cac2b58c2fb9e4aba808d09b4fbcedadeaa5310fb9f473d8"
     },
     {
       "path": "static/workspace/my-products-import.iife.js",
-      "sha256": "0fe87462d885e634754d0565cf71f335517500cce6c1e38666ed0fa6eb45218c"
+      "sha256": "91e9cbd820e158d26bcc269686d173bbf9f3c6b245c5315ca308f2acb3573571"
     },
     {
       "path": "templates/add_seller.html",
@@ -3329,7 +3341,7 @@
     },
     {
       "path": "templates/my_products_beta.html",
-      "sha256": "25f7004ca9c8b57f5804e01a7d23dc8e5610686415338650548ed914cb2eacac"
+      "sha256": "550185e657b4843a22b6289c57121eaf2f9fc8ed5e377161bc2c108a2e2f8c23"
     },
     {
       "path": "templates/notifications.html",
@@ -3581,7 +3593,7 @@
     },
     {
       "path": "templates/seller_my_products.html",
-      "sha256": "ec5598fa1162f487b0049c4fe1a11a55714df4ddea195a5dd72596071d714429"
+      "sha256": "7ea7e1b2bc04bf5d6c7670aeaf79d8870c4fbac83f4f2618bc6d259002f74d7d"
     },
     {
       "path": "templates/seller_prohibited_words.html",
@@ -3769,7 +3781,7 @@
     },
     {
       "path": "tests/ozon_release/ozon_bulk_price_proposals_browser.py",
-      "sha256": "405ee374cf2b093ce8acad2f910d5f61c5e6e0015713a8d1894f118e8f9a9f35"
+      "sha256": "32471dbdc6fe5cec120db054bbf6419f49d4d3552cc5b812c3f4894e2768811a"
     },
     {
       "path": "tests/ozon_release/ozon_bulk_ready_review_browser.py",
@@ -4821,7 +4833,7 @@
     },
     {
       "path": "tests/test_ozon_upload_v3_routes.py",
-      "sha256": "ddf4f53fa0177b0174ae33a6c3b9dde77504ed5aabcb1ca995c463b44b7cad9b"
+      "sha256": "94985df5b9aad8c3ff5a8d50fecd3bc9384a13772aada44c41e91464ddb98295"
     },
     {
       "path": "tests/test_ozon_upload_v3_service.py",
@@ -5241,15 +5253,15 @@
     },
     {
       "path": "tests/ux01/bulk_action_controls.py",
-      "sha256": "a50c305a17c663c48a53243d23d5c5c33fcd4d65984a0070eb56258878e1fe11"
+      "sha256": "7941cc2444cc1da38978231a81aa5228257ded788da2f91225d4d41f205c3eb9"
     },
     {
       "path": "tests/ux01/bulk_workspace_browser.py",
-      "sha256": "d1b29762428539058568370b1460f51cca8e56dd0b891b8300e99c9e394fa022"
+      "sha256": "4c11d1664c535926ca3455e002347937d146190887dbc862f4dc007de04cf132"
     },
     {
       "path": "tests/ux01/common_content_browser.py",
-      "sha256": "9a57c03ece81d91ca74306fa64f28bbe8ab98770c173bc450826a284235f9709"
+      "sha256": "622cb45380747ba3bbeddf5b613527d1027ea8d4b67981ba3e9c282ea13a5c44"
     },
     {
       "path": "tests/ux01/common_product_content_focus_dom.js",
@@ -5277,7 +5289,7 @@
     },
     {
       "path": "tests/ux01/supplier_filtered_import_browser.py",
-      "sha256": "9eb6a2955ccc083cb6b14d0ede38bbcba1765db5010e4ee40bcf21241fedd3fb"
+      "sha256": "a14c89529389056e35554342f48eaa7a93e4f28ce89cf83ceb5b04f36a8e5b92"
     },
     {
       "path": "tests/ux01/wb_edit_browser.py",
@@ -5290,7 +5302,15 @@
     {
       "path": "tests/ux01/workspace_browser.py",
       "sha256": "1365ad05c62c72d241724ee7a8a4370c7704362262c7e0f54e2d8cdaafeb0606"
+    },
+    {
+      "path": "tests/ux01/workspace_catalog_layout_browser.py",
+      "sha256": "81a84cd239f58333a9105b32927a44a9e0ad15e9e1a867d22815960b8230ff2e"
+    },
+    {
+      "path": "tests/ux01/workspace_catalog_price_browser.py",
+      "sha256": "6f39e443d991ebaa3f7ff379c1051438fd727de24a3d7ba25764acfa5691f63d"
     }
   ],
-  "aggregate_sha256": "cb37ce4d869bd4dd9a9825b236f992e6528451f7722706388395689e7a4f1406"
+  "aggregate_sha256": "f759dec41f40199cbab083e4239579bf0fbba232a9b95e76c8a20351a640687e"
 }
