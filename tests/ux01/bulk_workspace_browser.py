@@ -2560,9 +2560,16 @@ def run():
             failure_source.content_revision += 1
             db.session.commit()
 
+        ozon_ids_before_failure_selection = selected_browser_state(mobile_page)["ozonIds"]
         mobile_page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").check()
-        assert selected_browser_state(mobile_page) == {
-            "selected": [failure_target_id], "ozonIds": [],
+        failure_selection_state = selected_browser_state(mobile_page)
+        assert failure_selection_state and failure_selection_state["selected"] == [failure_target_id], {
+            "expected_selected_ids": [failure_target_id],
+            "actual_browser_state": failure_selection_state,
+        }
+        assert failure_selection_state["ozonIds"] == ozon_ids_before_failure_selection, {
+            "ozon_ids_before_supplier_selection": ozon_ids_before_failure_selection,
+            "actual_browser_state": failure_selection_state,
         }
         failure_dialog, failure_preview = open_supplier_refresh_preview(
             mobile_page, [failure_target_id], refresh_preview_posts,
