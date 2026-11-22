@@ -16,15 +16,15 @@
     <!-- Hero Banner -->
     <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
         <div class="relative">
-            <p class="text-xs uppercase tracking-wide text-gray-400">Аккаунт: {{ account_label }} · Канал: Wildberries</p>
+            <p class="text-xs uppercase tracking-wide text-gray-400">Аккаунт: {{ account_label }} · Маркетплейс: Wildberries</p>
             <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Массовое редактирование</h1>
             <p class="mt-2 text-sm text-gray-400 flex items-center">
                 <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-white/10 text-white mr-2">
-                    {{ products|length }} товаров
+                    {{ products|length }} выбрано
                 </span>
-                Изменения применятся ко всем выбранным товарам
+                Для характеристик выберите категорию: товары других категорий не изменятся.
             </p>
-            <p class="mt-2 text-xs text-gray-400">Схема характеристик читается из локального справочника Seller Hub. Открытие редактора не запрашивает каталог или схему у WB.</p>
+            <p class="mt-2 text-xs text-gray-400">Характеристики читаются из локального справочника Seller Hub. Открытие редактора не обращается к Wildberries.</p>
         </div>
     </div>
 
@@ -42,7 +42,7 @@
         {% endif %}
         {% if categories %}
         <div class="mt-3">
-            <p class="text-sm font-medium text-gray-700 mb-2">Категории товаров:</p>
+            <p class="text-sm font-medium text-gray-700 mb-2">Категории в выбранных товарах:</p>
             <div class="flex flex-wrap gap-2">
                 {% for category in categories %}
                 <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium
@@ -55,7 +55,7 @@
         </div>
         {% else %}
         <p class="mt-2 text-sm text-yellow-700">
-            Точные WB subjectID не найдены у выбранных товаров. Категория по названию не подставляется.
+            Для выбранных товаров не подтверждена категория Wildberries. Массовое изменение характеристик недоступно; мы не подставляем категорию по похожему названию.
         </p>
         {% endif %}
     </div>
@@ -99,7 +99,7 @@
                     <div>
                         <div class="font-medium text-gray-900">{{ product.vendor_code }}</div>
                         <div class="text-sm text-gray-600">{{ product.title[:50] }}{% if product.title|length > 50 %}...{% endif %}</div>
-                        <div class="text-xs text-gray-500">NM ID: {{ product.nm_id }}</div>
+                        <div class="text-xs text-gray-500">ID карточки Wildberries: {{ product.nm_id }}</div>
                     </div>
                 </div>
                 <div class="text-sm text-gray-500">
@@ -237,7 +237,7 @@
 
             if (this.operation === 'update_characteristic') {
                 if (!this.selectedCategory) {
-                    alert('Выберите точный предмет WB по subjectID');
+                    alert('Выберите категорию Wildberries из списка.');
                     return false;
                 }
                 if (this.pendingChanges.length === 0) {
@@ -256,7 +256,7 @@
 
             if (this.operation === 'add_characteristic') {
                 if (!this.selectedCategory) {
-                    alert('Выберите точный предмет WB по subjectID');
+                    alert('Выберите категорию Wildberries из списка.');
                     return false;
                 }
                 const charIdField = document.getElementById('char_id_common');
@@ -391,7 +391,7 @@
             }
 
             const char = this.characteristics.find(c => c.id == this.addingCharId);
-            const charName = char ? char.name : `ID: ${this.addingCharId}`;
+            const charName = char ? char.name : 'Неизвестная характеристика';
 
             let value = String(this.addingValue).trim();
             if (char && char.charc_type === 1 && char.max_count > 1) {
@@ -481,7 +481,7 @@
 
             if (!this.categories || this.categories.length === 0) {
                 this.loading = false;
-                this.loadError = 'У выбранных товаров нет подтверждённого subjectID WB.';
+                this.loadError = 'Для выбранных товаров не подтверждена категория Wildberries.';
                 return;
             }
 
@@ -538,14 +538,14 @@
                     }
                 }
                 if (!requestedCategory && this.categories.length > 1) {
-                    this.loadError = 'Сначала выберите точный предмет WB. Общие поля между разными subjectID не объединяются.';
+                    this.loadError = 'В выборе несколько категорий. Выберите одну: поля из разных категорий не объединяются.';
                 } else if (!this.characteristics.length) {
-                    this.loadError = 'Локальная схема для этого subjectID пуста или недоступна. Проверьте freshness справочника WB.';
+                    this.loadError = 'Для этой категории нет доступных полей в локальном справочнике Wildberries. Проверьте дату его обновления.';
                 }
             } catch (e) {
                 if (!contextMatches()) return;
-                console.error('Failed to load cached exact-subject characteristics:', e);
-                this.loadError = e.message;
+                console.error('Failed to load cached category characteristics:', e);
+                this.loadError = 'Не удалось загрузить поля этой категории из локального справочника. Попробуйте обновить справочник.';
             } finally {
                 if (ownsLoad()) this.loading = false;
             }
@@ -553,7 +553,12 @@
 
         selectedSubjectLabel() {
             const group = this.categories.find(category => String(category.subject_id) === String(this.selectedCategory));
-            return group ? `${group.name} (subjectID ${group.subject_id})` : (this.selectedCategory ? `subjectID ${this.selectedCategory}` : '');
+            return group ? group.name : (this.selectedCategory ? 'Категория Wildberries' : '');
+        },
+
+        selectedCategoryCount() {
+            const group = this.categories.find(category => String(category.subject_id) === String(this.selectedCategory));
+            return group ? Number(group.count) || 0 : 0;
         },
 
         selectCategory(subjectId) {
@@ -621,7 +626,7 @@
                                     <div class="flex items-center gap-2">
                                         <span class="font-medium text-sm text-gray-900" :class="operation === '{{ op.id }}' ? 'text-indigo-700' : ''">{{ op.name }}</span>
                                         {% if op.id == 'update_characteristic' or op.id == 'add_characteristic' %}
-                                        <span class="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full">Проверка WB</span>
+                                        <span class="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full">Проверка Wildberries</span>
                                         {% elif op.id == 'update_keywords' %}
                                         <span class="text-xs px-1.5 py-0.5 bg-emerald-100 text-emerald-600 rounded-full">SEO</span>
                                         {% endif %}
@@ -692,19 +697,19 @@
                                 <template x-if="isAiOpSelected('ai_seo_title')">
                                     <li class="text-xs text-violet-600 flex items-center gap-1.5">
                                         <svg class="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
-                                        Заголовок до 60 символов → синхр. WB
+                                        Заголовок до 60 символов → отправка в Wildberries
                                     </li>
                                 </template>
                                 <template x-if="isAiOpSelected('ai_enhance_description')">
                                     <li class="text-xs text-violet-600 flex items-center gap-1.5">
                                         <svg class="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
-                                        Описание SEO-оптимизированное → синхр. WB
+                                        Описание SEO-оптимизированное → отправка в Wildberries
                                     </li>
                                 </template>
                                 <template x-if="isAiOpSelected('ai_detect_brand')">
                                     <li class="text-xs text-violet-600 flex items-center gap-1.5">
                                         <svg class="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
-                                        Бренд (только при уверенности ≥70%) → синхр. WB
+                                        Бренд (только при уверенности ≥70%) → отправка в Wildberries
                                     </li>
                                 </template>
                                 <template x-if="isAiOpSelected('ai_keywords')">
@@ -854,7 +859,7 @@
                             </div>
                             <div class="flex items-center text-violet-600">
                                 <svg class="w-3.5 h-3.5 mr-1.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
-                                Лимит 60 символов WB
+                                Название Wildberries: до 60 символов
                             </div>
                             <div class="flex items-center text-violet-600">
                                 <svg class="w-3.5 h-3.5 mr-1.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
@@ -953,9 +958,9 @@
                                 <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
                             </svg>
                             <div class="ml-3">
-                                <h3 class="text-sm font-medium text-yellow-800">Нет точного subjectID WB</h3>
+                                <h3 class="text-sm font-medium text-yellow-800">Нет подтверждённой категории Wildberries</h3>
                                 <div class="mt-2 text-sm text-yellow-700">
-                                    <p>Редактор характеристик требует subjectID, подтверждённый для выбранной карточки. Категория по имени не подставляется автоматически.</p>
+                                    <p>Редактор характеристик использует категорию, сохранённую у карточки. Если она неизвестна, товар не изменится; похожее название категории не используется как замена.</p>
                                 </div>
                             </div>
                         </div>
@@ -972,13 +977,16 @@
                             </h4>
                             <p class="text-xs text-blue-700 mb-3">
                                 <template x-if="!selectedCategory && categories.length > 1">
-                                    <span>Выберите точный subjectID. Схемы разных предметов не объединяются.</span>
+                                    <span>В выборе {{ products|length }} товаров из нескольких категорий. Выберите категорию; поля разных категорий не смешиваются.</span>
                                 </template>
-                                <template x-if="selectedCategory">
-                                    <span>Точная схема: <strong x-text="selectedSubjectLabel()"></strong></span>
+                                <template x-if="selectedCategory && categories.length > 1">
+                                    <span>Категория <strong x-text="selectedSubjectLabel()"></strong>: <strong x-text="selectedCategoryCount()"></strong> из {{ products|length }} выбранных товаров. Другие категории не изменятся.</span>
                                 </template>
-                                <template x-if="categories.length === 1">
-                                    <span>Категория: <strong x-text="`${categories[0].name} (subjectID ${categories[0].subject_id || 'нет'})`"></strong></span>
+                                <template x-if="categories.length === 1 && categories[0].subject_id">
+                                    <span>Категория <strong x-text="selectedSubjectLabel()"></strong>: все {{ products|length }} выбранных товаров.</span>
+                                </template>
+                                <template x-if="categories.length === 1 && !categories[0].subject_id">
+                                    <span>Категория Wildberries у выбранного товара не подтверждена, поэтому его характеристики нельзя менять.</span>
                                 </template>
                             </p>
                             <template x-if="categories.length > 1">
@@ -986,14 +994,18 @@
                                     <template x-for="category in categories" :key="category.subject_id || category.name">
                                         <button type="button" :disabled="!category.subject_id"
                                                 @click="selectCategory(category.subject_id)"
+                                                :title="!category.subject_id ? 'Категория не подтверждена; редактирование недоступно' : ''"
                                                 class="px-3 py-1 text-xs rounded-md transition"
                                                 :class="String(selectedCategory) === String(category.subject_id) ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'">
                                             <span x-text="category.name"></span>
-                                            <span class="ml-1 font-semibold" x-text="`(${category.count})`"></span>
+                                            <span class="ml-1 font-semibold" x-text="`${category.count} карточек`"></span>
                                         </button>
                                     </template>
                                 </div>
                             </template>
+                            <p x-show="categories.some(category => !category.subject_id)" class="mt-3 text-xs text-amber-800">
+                                У части карточек нет подтверждённой категории Wildberries. Они останутся без изменений.
+                            </p>
                         </div>
                     </div>
 
@@ -1047,7 +1059,7 @@
                             <label class="block text-sm font-medium text-gray-700 mb-1.5">
                                 Новое значение
                                 <span x-show="addingChar && addingChar.required" class="text-red-500 ml-0.5">*</span>
-                                <span x-show="addingChar && addingChar.unit_name" class="text-xs text-gray-500 font-normal ml-1" x-text="addingChar && addingChar.unit_name"></span>
+                                <span x-show="addingChar && addingChar.unit_name" class="text-xs text-gray-500 font-normal ml-1" x-text="'Единица: ' + addingChar.unit_name"></span>
                                 <span x-show="addingChar && addingChar.max_count > 1" class="text-xs text-gray-500 font-normal ml-1">
                                     (до <span x-text="addingChar && addingChar.max_count"></span> значений)
                                 </span>
@@ -1246,13 +1258,16 @@
                                     </h4>
                                     <p class="text-xs text-blue-700 mb-3">
                                         <template x-if="!selectedCategory && categories.length > 1">
-                                            <span>Выберите точный subjectID. Схемы разных предметов не объединяются.</span>
+                                            <span>В выборе {{ products|length }} товаров из нескольких категорий. Выберите категорию; поля разных категорий не смешиваются.</span>
                                         </template>
-                                        <template x-if="selectedCategory">
-                                            <span>Точная схема: <strong x-text="selectedSubjectLabel()"></strong></span>
+                                        <template x-if="selectedCategory && categories.length > 1">
+                                            <span>Категория <strong x-text="selectedSubjectLabel()"></strong>: <strong x-text="selectedCategoryCount()"></strong> из {{ products|length }} выбранных товаров. Другие категории не изменятся.</span>
                                         </template>
-                                        <template x-if="categories.length === 1">
-                                            <span>Категория: <strong x-text="`${categories[0].name} (subjectID ${categories[0].subject_id || 'нет'})`"></strong></span>
+                                        <template x-if="categories.length === 1 && categories[0].subject_id">
+                                            <span>Категория <strong x-text="selectedSubjectLabel()"></strong>: все {{ products|length }} выбранных товаров.</span>
+                                        </template>
+                                        <template x-if="categories.length === 1 && !categories[0].subject_id">
+                                            <span>Категория Wildberries у выбранного товара не подтверждена, поэтому его характеристики нельзя менять.</span>
                                         </template>
                                     </p>
 
@@ -1261,14 +1276,18 @@
                                             <template x-for="category in categories" :key="category.subject_id || category.name">
                                                 <button type="button" :disabled="!category.subject_id"
                                                         @click="selectCategory(category.subject_id)"
+                                                        :title="!category.subject_id ? 'Категория не подтверждена; редактирование недоступно' : ''"
                                                         class="px-3 py-1 text-xs rounded-md transition"
                                                         :class="String(selectedCategory) === String(category.subject_id) ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'">
                                                     <span x-text="category.name"></span>
-                                                    <span class="ml-1 font-semibold" x-text="`(${category.count})`"></span>
+                                                    <span class="ml-1 font-semibold" x-text="`${category.count} карточек`"></span>
                                                 </button>
                                             </template>
                                         </div>
                                     </template>
+                                    <p x-show="categories.some(category => !category.subject_id)" class="mt-3 text-xs text-amber-800">
+                                        У части карточек нет подтверждённой категории Wildberries. Они останутся без изменений.
+                                    </p>
                                 </div>
                             </div>
                         </div>
@@ -1286,7 +1305,7 @@
                                     <p>Для работы с характеристиками необходимо:</p>
                                     <ol class="list-decimal ml-5 mt-2 space-y-1">
                                         <li>Перейти в раздел <a href="{{ url_for('products_list') }}" class="underline font-medium">Товары</a></li>
-                                        <li>Нажать кнопку "Синхронизировать с WB"</li>
+                                        <li>Нажать кнопку «Синхронизировать с Wildberries»</li>
                                         <li>Дождаться завершения синхронизации</li>
                                     </ol>
                                     <p class="mt-2">Текущая локальная схема читается из кэша справочников Seller Hub.</p>
@@ -1317,7 +1336,7 @@
                                 :disabled="loading || characteristics.length === 0">
                             <option value="">-- Выберите характеристику --</option>
                             <template x-for="char in characteristics" :key="char.id">
-                                <option :value="char.id" :disabled="!char.usable" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}${char.usable ? '' : ' — недоступно'}`"></option>
+                                <option :value="char.id" :disabled="!char.usable" x-text="`${char.name}${char.required ? ' *' : ''}${char.usable ? '' : ' — недоступно'}`"></option>
                             </template>
                         </select>
 
@@ -1551,7 +1570,7 @@
                         <svg class="w-4 h-4 mr-2 mt-0.5 text-yellow-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/>
                         </svg>
-                        <span>Характеристики проходят локальную проверку по exact subjectID и отправляются в WB только после отдельного подтверждения.</span>
+                        <span>Характеристики проверяются по категории карточки и отправляются в Wildberries только после отдельного подтверждения.</span>
                     </li>
                     <li class="flex items-start">
                         <svg class="w-4 h-4 mr-2 mt-0.5 text-yellow-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">

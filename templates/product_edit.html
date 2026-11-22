@@ -69,7 +69,7 @@
                     </div>
                     <p class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-400">
                         <span class="relative inline-flex items-center" x-data="{ show: false }" @mouseenter="show = true" @mouseleave="show = false">
-                            <span class="font-mono bg-white/15 px-1.5 py-0.5 rounded text-xs text-white">NM ID: {{ product.nm_id }}</span>
+                            <span class="font-mono bg-white/15 px-1.5 py-0.5 rounded text-xs text-white">ID карточки Wildberries: {{ product.nm_id }}</span>
                             <span x-show="show" x-transition class="absolute left-0 top-full mt-2 z-50 px-2 py-1 text-xs bg-gray-900 text-white rounded shadow-lg whitespace-nowrap">
                                 Идентификатор карточки в Wildberries
                             </span>
@@ -351,7 +351,7 @@
             </div>
         </div>
 
-        <!-- WB characteristics use the exact locally cached subjectID schema. -->
+        <!-- Wildberries characteristics use the exact locally cached category schema. -->
         <section class="overflow-hidden rounded-xl border border-gray-200 bg-white" aria-labelledby="wb-characteristics-title">
             <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-6 py-4">
                 <div>
@@ -362,8 +362,8 @@
                         Характеристики
                     </h2>
                     <p class="mt-1 text-xs text-gray-500">
-                        {% if product.subject_id and subject_name %}{{ subject_name }} · subjectID {{ product.subject_id }}{% elif product.subject_id %}subjectID {{ product.subject_id }}{% else %}subjectID отсутствует{% endif %}
-                        {% if schema_synced_at %} · локальный справочник обновлён {{ schema_synced_at }}{% endif %}
+                        {% if product.subject_id and subject_name %}{{ subject_name }}{% elif product.subject_id %}Категория Wildberries подтверждена{% else %}Категория Wildberries не подтверждена{% endif %}
+                        {% if schema_synced_at %} · справочник обновлён {{ schema_synced_at }}{% endif %}
                     </p>
                 </div>
                 <span class="wb-characteristics-filled-count rounded bg-gray-100 px-2 py-1 text-xs text-gray-600">
@@ -376,8 +376,11 @@
             <div class="p-6">
                 {% if not schema_usable %}
                 <div class="mb-5 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
-                    <p class="font-medium">Редактирование характеристик недоступно без свежей локальной WB-схемы.</p>
-                    {% for issue in schema_issues %}<p class="mt-1">{{ issue.message }}</p>{% endfor %}
+                    <p class="font-medium">Характеристики недоступны без актуального локального справочника Wildberries.</p>
+                    {% for issue in schema_issues %}
+                    {% set issue_message = issue.message|replace('subjectID не задан', 'Категория Wildberries не подтверждена')|replace('У карточки не задан exact subjectID', 'Категория Wildberries не подтверждена') %}
+                    <p class="mt-1">{{ issue_message }}</p>
+                    {% endfor %}
                 </div>
                 {% endif %}
 
@@ -427,9 +430,8 @@
                          data-wb-characteristic-source="saved-or-required">
                         <label for="char_{{ field.id }}" class="mb-2 flex flex-wrap items-center gap-2 text-sm font-medium text-gray-800">
                             <span>{{ field.name }}</span>
-                            <span class="text-xs text-gray-400">#{{ field.id }}</span>
                             {% if field.required %}<span class="text-xs font-semibold text-red-600">обязательное</span>{% endif %}
-                            {% if field.unit_name %}<span class="text-xs text-gray-500">({{ field.unit_name }})</span>{% endif %}
+                            {% if field.unit_name %}<span class="text-xs text-gray-500">Единица: {{ field.unit_name }}</span>{% endif %}
                             {% if field.required and not field.current_values %}
                             <span class="rounded bg-red-50 px-1.5 py-0.5 text-xs text-red-700">Не заполнено · обязательное</span>
                             {% elif field.present %}
@@ -492,9 +494,8 @@
                              data-wb-characteristic-source="optional-picker">
                             <label :for="'char_' + field.id" class="mb-2 flex flex-wrap items-center gap-2 text-sm font-medium text-gray-800">
                                 <span x-text="field.name"></span>
-                                <span class="text-xs text-gray-400" x-text="'#' + field.id"></span>
                                 <template x-if="field.unit_name">
-                                    <span class="text-xs text-gray-500" x-text="'(' + field.unit_name + ')' "></span>
+                                <span class="text-xs text-gray-500" x-text="'Единица: ' + field.unit_name"></span>
                                 </template>
                                 <span class="rounded bg-indigo-50 px-1.5 py-0.5 text-xs text-indigo-700">Добавлено в форму</span>
                             </label>
@@ -552,7 +553,7 @@
                 {% elif not schema_usable %}
                 <p class="text-sm text-gray-500">Локальная схема не содержит редактируемых полей.</p>
                 {% else %}
-                <p class="text-sm text-gray-500">В локальной схеме этого subjectID нет характеристик для редактирования.</p>
+                    <p class="text-sm text-gray-500">В локальном справочнике этой категории нет характеристик для редактирования.</p>
                 {% endif %}
 
                 {% if unknown_characteristics %}
@@ -562,7 +563,6 @@
                         {% for field in unknown_characteristics %}
                         <div class="rounded border border-gray-200 bg-white p-3 text-sm">
                             <span class="font-medium text-gray-800">{{ field.name }}</span>
-                            {% if field.id %}<span class="ml-1 text-xs text-gray-400">#{{ field.id }}</span>{% endif %}
                             <p class="mt-1 break-words text-gray-500">{{ field.current_text or 'Пусто' }}</p>
                         </div>
                         {% endfor %}
@@ -580,7 +580,7 @@
                     <svg class="w-5 h-5 mr-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path>
                     </svg>
-                    Размеры и SKU
+                    Размеры и штрихкоды
                     <span class="ml-2 text-xs font-normal text-gray-400">(только просмотр)</span>
                 </h2>
                 <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
@@ -595,7 +595,7 @@
                             <tr class="text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 <th class="px-4 py-3 text-left bg-gray-50 rounded-l-lg">Размер</th>
                                 <th class="px-4 py-3 text-left bg-gray-50">Баркод</th>
-                                <th class="px-4 py-3 text-left bg-gray-50 rounded-r-lg">SKU</th>
+                                <th class="px-4 py-3 text-left bg-gray-50 rounded-r-lg">ID размера Wildberries</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-100">
@@ -648,7 +648,7 @@
             </div>
         </div>
 
-        <!-- Предупреждение о WB API -->
+        <!-- Предупреждение о Wildberries API -->
         <div class="bg-amber-50 rounded-xl border border-yellow-200 p-5">
             <div class="flex items-start">
                 <div class="flex-shrink-0">

@@ -238,6 +238,7 @@ class WBBulkReviewReplayTest(unittest.TestCase):
 
     def _review_submission(
         self, *, return_to='/products?page=1', workspace_source_ids=None,
+        product_ids=None,
     ):
         from models import Product
         from services.product_selection import (
@@ -251,15 +252,22 @@ class WBBulkReviewReplayTest(unittest.TestCase):
         )
 
         with self.app.app_context():
-            product = Product.query.filter_by(
-                id=self.product_id, seller_id=self.seller_id,
-            ).one()
+            exact_product_ids = product_ids or [self.product_id]
+            by_id = {
+                int(product.id): product
+                for product in Product.query.filter(
+                    Product.id.in_(exact_product_ids),
+                    Product.seller_id == self.seller_id,
+                ).all()
+            }
+            products = [by_id[int(product_id)] for product_id in exact_product_ids]
+            product = products[0]
             state = parse_product_list_state({}, strict=True)
             selection_token = issue_product_selection_token(
                 secret_key=self.app.config['SECRET_KEY'],
                 user_id=self.user_id,
                 seller_id=self.seller_id,
-                product_ids=[self.product_id],
+                product_ids=exact_product_ids,
                 state=state,
                 return_to=return_to,
                 wb_account_id='synthetic-wb-account',
@@ -273,9 +281,9 @@ class WBBulkReviewReplayTest(unittest.TestCase):
                 wb_account_id='synthetic-wb-account',
             )
             preview = build_bulk_characteristic_preview(
-                [product],
+                products,
                 operation='update_characteristic',
-                subject_id=5880,
+                subject_id=product.subject_id,
                 change_input=[{'char_id': '101', 'value': ['new']}],
             )
             self.assertEqual(preview['changed_count'], 1)
@@ -960,13 +968,44 @@ class WBBulkReviewReplayTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         self.assertIn('Synthetic WB seller · WB account synthetic-wb-account', html)
-        self.assertIn('subjectID 5880', html)
-        self.assertIn('Предпросмотр рассчитан по локальному снимку и справочнику. Он не отправляет данные в WB.', html)
+        self.assertIn('Маркетплейс: Wildberries', html)
+        self.assertIn('Категория: Synthetic exact subject', html)
+        self.assertNotIn('subjectID 5880', html)
+        self.assertIn('Предпросмотр рассчитан по локальным данным и справочнику Wildberries. Он не отправляет изменения в Wildberries.', html)
         self.assertIn('Выбрано', html)
-        self.assertIn('Подходит по subjectID', html)
+        self.assertIn('Подходит для операции', html)
+        self.assertIn('Для этой категории подходят 1 из 1 выбранных карточек.', html)
         self.assertIn('Изменится', html)
         self.assertIn('old', html)
         self.assertIn('new', html)
+
+    def test_mixed_category_preview_states_exact_eligible_scope_in_plain_language(self):
+        from models import Product
+
+        with self.app.app_context():
+            sibling = Product.query.filter_by(
+                id=self.sibling_product_id, seller_id=self.seller_id,
+            ).one()
+            sibling.subject_id = 5070
+            sibling.object_name = 'Synthetic other category'
+            self.db.session.commit()
+
+        submission = self._review_submission(
+            product_ids=[self.product_id, self.sibling_product_id],
+        )
+        submission.pop('preview_token')
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('mixed-category preview must remain local'),
+        ):
+            response = self._client().post('/products/bulk-edit', data=submission)
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('Для этой категории подходят 1 из 2 выбранных карточек.', html)
+        self.assertIn('Карточка относится к другой категории Wildberries', html)
+        self.assertIn('Пропущено', html)
+        self.assertNotIn('subjectID 5880', html)
 
     def test_characteristic_apply_sends_only_reviewed_product_field_pairs(self):
         from models import BulkEditHistory, Product
