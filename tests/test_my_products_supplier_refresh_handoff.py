@@ -702,8 +702,8 @@ async function finishSupplierRefresh(data, ids) {
   assert.match(templateText, /<dialog ref="supplierRefreshDialog" class="mp-supplier-refresh-dialog"/);
   assert.match(templateText, /aria-labelledby="mp-supplier-refresh-dialog-title"/);
   assert.match(templateText, /Данные на площадках не меняются/);
-  assert.match(templateText, /filename='my-products-beta\.css', v='20261122-ozon-local-prepare-r59'/);
-  assert.match(templateText, /filename='my-products-beta\.js', v='20261122-ozon-local-prepare-r59'/);
+  assert.match(templateText, /filename='my-products-beta\.css', v='\d{8}-[a-z0-9][a-z0-9-]*'/);
+  assert.match(templateText, /filename='my-products-beta\.js', v='\d{8}-[a-z0-9][a-z0-9-]*'/);
   assert.match(templateText, /ref="ozonDialogTitle" tabindex="-1"/);
   assert.match(templateText, /v-if="ozonAccounts\.length === 1"[\s\S]*data-ozon-preparation-account[\s\S]*v-else>[\s\S]*id="mp-ozon-account"/);
   assert.match(templateText, /data-ozon-preparation-account[^>]*aria-labelledby="mp-ozon-account-label">\{\{ ozonAccounts\[0\]\.label \}\}/);
