@@ -128,6 +128,7 @@
 
     var MAX_BULK_SELECTION = 200;
     var MAX_OZON_PRICE_HANDOFF = 100;
+    var MAX_WORKSPACE_UPDATE_TOKEN_LENGTH = 32 * 1024;
     var SUPPLIER_REFRESH_PREVIEW_TIMEOUT_MS = 12000;
     var WORKSPACE_RETURN_SCOPE_KEYS = [
         'activeTab', 'search', 'supplier', 'has_photos', 'stock', 'sort', 'visibleCount',
@@ -247,6 +248,30 @@
         }
     }
 
+    function storeOzonWorkspaceUpdateReturn(app, accountId, listingIds, selectionIds, scope) {
+        if (!scope || !Number.isSafeInteger(accountId) || accountId <= 0 ||
+            !Array.isArray(listingIds) || !Array.isArray(selectionIds) ||
+            listingIds.length !== selectionIds.length || !listingIds.length ||
+            listingIds.length > MAX_BULK_SELECTION) return null;
+        var helpers = window.SellerHubCommonContent || {};
+        if (typeof helpers.storeWorkspaceReturn !== 'function') return null;
+        try {
+            var nonce = helpers.storeWorkspaceReturn({
+                owner: boot.workspaceOwner,
+                ozonUpdateTarget: {
+                    accountId: accountId,
+                    listingIds: listingIds.slice(),
+                },
+                selectionIds: selectionIds.slice(),
+                scope: scope,
+                batch: app.importBatchMode ? app.importBatch : null,
+            });
+            return workspaceReturnHash(nonce) ? nonce : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
     function bindOzonPreparationWorkspaceReturn(pending, jobUid) {
         var hash = workspaceReturnHash(pending && pending.workspace_return_nonce);
         var helpers = window.SellerHubCommonContent || {};
@@ -346,12 +371,14 @@
             pagination.has_next === false;
     }
 
-    function exactOzonPriceAccountChoices(items, selectionIds, accounts) {
+    function exactOzonListingAccountChoices(items, selectionIds, accounts, maximum) {
+        var maxSelection = Number.isSafeInteger(maximum) && maximum > 0
+            ? maximum : MAX_OZON_PRICE_HANDOFF;
         if (!Array.isArray(selectionIds) || !selectionIds.length ||
-            selectionIds.length > MAX_OZON_PRICE_HANDOFF) {
+            selectionIds.length > maxSelection) {
             return {
                 choices: [],
-                reason: Array.isArray(selectionIds) && selectionIds.length > MAX_OZON_PRICE_HANDOFF
+                reason: Array.isArray(selectionIds) && selectionIds.length > maxSelection
                     ? 'limit' : 'selection',
             };
         }
@@ -436,6 +463,45 @@
             choices: choices,
             reason: choices.length ? null : 'no_common_account',
         };
+    }
+
+    function exactOzonPriceAccountChoices(items, selectionIds, accounts) {
+        return exactOzonListingAccountChoices(
+            items, selectionIds, accounts, MAX_OZON_PRICE_HANDOFF,
+        );
+    }
+
+    function exactOzonWorkspaceUpdateAccountChoices(items, selectionIds, accounts) {
+        return exactOzonListingAccountChoices(
+            items, selectionIds, accounts, MAX_BULK_SELECTION,
+        );
+    }
+
+    function validOzonWorkspaceUpdateHandoffUrl(value, accountId) {
+        if (typeof value !== 'string' || !value || value.length > 32 * 1024 ||
+            value.charAt(0) !== '/' || value.indexOf('//') === 0 ||
+            /[\u0000-\u001f\u007f]/.test(value)) return '';
+        try {
+            var target = new URL(value, window.location.origin);
+            if (target.origin !== window.location.origin || target.username || target.password ||
+                target.pathname !== '/marketplaces/listings/') return '';
+            var keys = Array.from(target.searchParams.keys()).sort();
+            if (keys.length !== 3 || keys[0] !== 'account_id' ||
+                keys[1] !== 'marketplace' || keys[2] !== 'workspace_update') return '';
+            var accountValues = target.searchParams.getAll('account_id');
+            var marketplaceValues = target.searchParams.getAll('marketplace');
+            var tokenValues = target.searchParams.getAll('workspace_update');
+            if (accountValues.length !== 1 || marketplaceValues.length !== 1 ||
+                tokenValues.length !== 1 || accountValues[0] !== String(accountId) ||
+                marketplaceValues[0] !== 'ozon' || tokenValues[0] !== '1' ||
+                target.search !== '?marketplace=ozon&account_id=' + accountId + '&workspace_update=1') return '';
+            var fragment = target.hash.match(/^#workspace-update=([A-Za-z0-9_.-]+)$/);
+            if (!fragment || fragment[1].length > MAX_WORKSPACE_UPDATE_TOKEN_LENGTH ||
+                value !== target.pathname + target.search + target.hash) return '';
+            return target.pathname + target.search + target.hash;
+        } catch (_) {
+            return '';
+        }
     }
 
     function labelProduct(item) {
@@ -894,6 +960,10 @@
                 ozonPriceAccountId: '',
                 ozonPriceHandoffReview: null,
                 ozonPriceDialogError: '',
+                ozonAccountChooserKind: '',
+                ozonWorkspaceUpdateReview: null,
+                ozonWorkspaceUpdateBusy: false,
+                ozonWorkspaceUpdateDialogError: '',
                 imgFailed: {},
                 tabs: TABS,
 
@@ -987,6 +1057,30 @@
                 var workspaceCurrent = !this.loading && !this.loadingMore && !this.selectAllLoading &&
                     this.itemsScope === this.feedScopeKey() &&
                     (this.searchInput || '').trim().slice(0, 200) === this.filters.search;
+                var ozonUpdateResult = exactOzonWorkspaceUpdateAccountChoices(
+                    chosen, this.selected, this.ozonAccounts,
+                );
+                var ozonUpdateHint = !chosen.length
+                    ? 'выберите товары с уже связанной карточкой Ozon'
+                    : !underLimit
+                        ? 'за один раз можно выбрать не больше 200 товаров'
+                        : !workspaceCurrent
+                            ? 'дождитесь загрузки списка и повторите действие'
+                            : ozonUpdateResult.reason === 'no_accounts'
+                                ? 'подключите активный магазин Ozon'
+                                : ozonUpdateResult.reason === 'accounts'
+                                    ? 'не удалось проверить магазины Ozon; обновите страницу'
+                                    : ozonUpdateResult.reason === 'selection'
+                                        ? 'список изменился или загружен не полностью; обновите его'
+                                        : !ozonUpdateResult.choices.length
+                                            ? 'не у всех товаров есть точная доступная карточка в одном магазине Ozon'
+                                            : this.ozonWorkspaceUpdateBusy
+                                                ? 'проверяем точный состав выбранных карточек…'
+                                                : ozonUpdateResult.choices.length > 1
+                                                    ? 'выберите магазин, где связаны все карточки'
+                                                    : 'сначала проверим выбранные карточки; применение подтвердите отдельно';
+                var ozonUpdateDisabled = !chosen.length || !underLimit || !workspaceCurrent ||
+                    !ozonUpdateResult.choices.length || this.ozonWorkspaceUpdateBusy;
                 return [{
                     title: 'Основные действия',
                     items: [
@@ -1080,6 +1174,12 @@
                                     ? 'за одно сравнение можно выбрать не больше 100 товаров'
                                     : 'откроется сравнение для одного магазина, где есть все выбранные карточки',
                             disabled: !chosen.length || chosen.length > MAX_OZON_PRICE_HANDOFF,
+                        } : null,
+                        this.ozonEnabled ? {
+                            key: 'ozon_workspace_update',
+                            label: 'Изменить карточки Ozon',
+                            hint: ozonUpdateHint,
+                            disabled: ozonUpdateDisabled,
                         } : null,
                     ].filter(Boolean),
                 }];
@@ -1183,6 +1283,14 @@
                         !sameOrderedIds(next, this._wbEditHandoff.selectionIds)) {
                         this.invalidateWbEditHandoff();
                     }
+                    if (this._ozonWorkspaceUpdateHandoff &&
+                        !sameOrderedIds(next, this._ozonWorkspaceUpdateHandoff.selectionIds)) {
+                        this.invalidateOzonWorkspaceUpdate();
+                    }
+                    if (this.ozonWorkspaceUpdateReview &&
+                        !sameOrderedIds(next, this.ozonWorkspaceUpdateReview.sourceIds)) {
+                        this.cancelOzonWorkspaceUpdateReview({ restoreFocus: false });
+                    }
                     if (this._selectAllAbort &&
                         !sameOrderedIds(next, this._selectAllSelectionSnapshot)) {
                         this.cancelFilteredSelect();
@@ -1215,6 +1323,7 @@
         },
         beforeUnmount: function () {
             this.invalidateWbEditHandoff();
+            this.invalidateOzonWorkspaceUpdate();
             this.stopJobTracking();
             if (this._abort) this._abort.abort();
             if (this._loadMoreAbort) this._loadMoreAbort.abort();
@@ -1232,6 +1341,14 @@
                 if (handoff.abort) handoff.abort.abort();
                 if (handoff.returnNonce) this.consumeWorkspaceReturn(handoff.returnNonce);
                 this.wbEditBusy = false;
+            },
+            invalidateOzonWorkspaceUpdate: function (expectedHandoff) {
+                var handoff = this._ozonWorkspaceUpdateHandoff;
+                if (!handoff || (expectedHandoff && handoff !== expectedHandoff)) return;
+                this._ozonWorkspaceUpdateHandoff = null;
+                if (handoff.abort) handoff.abort.abort();
+                if (handoff.returnNonce) this.consumeWorkspaceReturn(handoff.returnNonce);
+                this.ozonWorkspaceUpdateBusy = false;
             },
             selectUpdatedSupplierBatch: function () {
                 var result = this.supplierRefreshResult;
@@ -1332,6 +1449,23 @@
                     orderedWbProductIds(items, selectionIds),
                     capsule.wbEditTarget.productIds,
                 );
+            },
+            workspaceReturnOzonUpdateMatches: function (items, selectionIds) {
+                var capsule = workspaceReturnCapsule;
+                if (!capsule || capsule.v !== 6) return true;
+                var target = capsule.ozonUpdateTarget;
+                if (!target || !sameOrderedIds(selectionIds, capsule.selectionIds)) return false;
+                var result = exactOzonWorkspaceUpdateAccountChoices(
+                    items, selectionIds, this.ozonAccounts,
+                );
+                var choice = result.choices.find(function (row) {
+                    return row.account_id === target.accountId;
+                });
+                return !!choice && sameOrderedIds(choice.listing_ids, target.listingIds);
+            },
+            workspaceReturnSelectionMatches: function (items, selectionIds) {
+                return this.workspaceReturnWbEditMatches(items, selectionIds) &&
+                    this.workspaceReturnOzonUpdateMatches(items, selectionIds);
             },
             buildWorkspaceReturnScope: function () {
                 if (this.loading || this.itemsScope !== this.feedScopeKey() ||
@@ -1563,6 +1697,7 @@
             load: function () {
                 var self = this;
                 this.invalidateWbEditHandoff();
+                this.invalidateOzonWorkspaceUpdate();
                 this.cancelSupplierRefreshReview({ restoreFocus: false });
                 var workspaceReturn = this.workspaceReturnPending ? workspaceReturnCapsule : null;
                 if (workspaceReturn && !this.workspaceReturnScopeMatches(workspaceReturn.scope)) {
@@ -1631,7 +1766,7 @@
                                 self.itemsScope = scope;
                                 if (batchIds && workspaceReturn.selectionIds.every(function (id) {
                                     return batchIds.indexOf(id) !== -1;
-                                }) && self.workspaceReturnWbEditMatches(
+                                }) && self.workspaceReturnSelectionMatches(
                                     data.items, workspaceReturn.selectionIds,
                                 )) {
                                     self.selected = workspaceReturn.selectionIds.slice();
@@ -1660,7 +1795,7 @@
                             });
                             if (workspaceReturn.selectionIds.every(function (id) {
                                 return returnedPage.ids.indexOf(id) !== -1;
-                            }) && self.workspaceReturnWbEditMatches(
+                            }) && self.workspaceReturnSelectionMatches(
                                 data.items, workspaceReturn.selectionIds,
                             )) {
                                 self.selected = workspaceReturn.selectionIds.slice();
@@ -1945,15 +2080,206 @@
             resolveOzonPriceAccountChoices: function (items, selectionIds) {
                 return exactOzonPriceAccountChoices(items, selectionIds, this.ozonAccounts);
             },
+            resolveOzonWorkspaceUpdateAccountChoices: function (items, selectionIds) {
+                return exactOzonWorkspaceUpdateAccountChoices(
+                    items, selectionIds, this.ozonAccounts,
+                );
+            },
             setOzonPriceHandoffError: function (message) {
                 this.ozonPriceError = message;
                 this.$nextTick(function () {
                     this.$refs.ozonPriceError?.focus();
                 });
             },
+            openOzonWorkspaceUpdate: function (items, selectionIds) {
+                this.error = '';
+                this.ozonWorkspaceUpdateDialogError = '';
+                if (this.ozonWorkspaceUpdateBusy) return false;
+                if (!sameOrderedIds(this.selected, selectionIds) ||
+                    selectionIds.length > MAX_BULK_SELECTION) {
+                    this.error = 'Выбор изменился или превышает 200 товаров. Отметьте товары заново.';
+                    return false;
+                }
+                if (this.loading || this.loadingMore || this.selectAllLoading ||
+                    this.itemsScope !== this.feedScopeKey() ||
+                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) {
+                    this.error = 'Список обновляется. Дождитесь загрузки и отметьте товары заново.';
+                    return false;
+                }
+                var result = this.resolveOzonWorkspaceUpdateAccountChoices(items, selectionIds);
+                if (!result.choices.length) {
+                    this.error = result.reason === 'no_accounts'
+                        ? 'Подключите активный магазин Ozon, затем повторите действие.'
+                        : result.reason === 'accounts'
+                            ? 'Не удалось проверить магазины Ozon. Обновите страницу и повторите действие.'
+                            : result.reason === 'selection'
+                                ? 'Список изменился или загружен не полностью. Обновите его и отметьте товары снова.'
+                                : 'Не найден один доступный магазин Ozon с точной связанной карточкой для каждого товара. Выбор не сокращён.';
+                    return false;
+                }
+                var returnScope = this.buildWorkspaceReturnScope();
+                if (!returnScope) {
+                    this.error = 'Не удалось сохранить условия списка. Дождитесь загрузки и повторите действие.';
+                    return false;
+                }
+                var review = {
+                    sourceIds: selectionIds.slice(),
+                    choices: result.choices.map(function (choice) {
+                        return {
+                            account_id: choice.account_id,
+                            account_label: choice.account_label,
+                            listing_ids: choice.listing_ids.slice(),
+                        };
+                    }),
+                    scopeKey: this.feedScopeKey(),
+                    feedRevision: this._feedRevision || 0,
+                    returnScope: returnScope,
+                };
+                this.ozonWorkspaceUpdateReview = review;
+                this.ozonAccountChooserKind = 'workspace_update';
+                if (review.choices.length === 1) {
+                    return this.submitOzonWorkspaceUpdate(review.choices[0].account_id, review);
+                }
+                this._ozonPriceTrigger = document.activeElement;
+                this.ozonPriceAccountId = '';
+                this.$nextTick(function () {
+                    this.$refs.ozonPriceAccountDialog.showModal();
+                    this.$refs.ozonPriceAccount.focus();
+                });
+                return true;
+            },
+            cancelOzonWorkspaceUpdateReview: function (options) {
+                options = options || {};
+                var dialog = this.$refs.ozonPriceAccountDialog;
+                var wasUpdateChooser = this.ozonAccountChooserKind === 'workspace_update';
+                if (wasUpdateChooser && dialog && dialog.open) dialog.close();
+                this.ozonWorkspaceUpdateReview = null;
+                this.ozonWorkspaceUpdateDialogError = '';
+                if (wasUpdateChooser) {
+                    this.ozonAccountChooserKind = '';
+                    this.ozonPriceAccountId = '';
+                    if (options.restoreFocus !== false) this._ozonPriceTrigger?.focus();
+                }
+            },
+            ozonWorkspaceUpdateReviewIsCurrent: function (review, accountId, expectedListingIds) {
+                if (!review || (this._feedRevision || 0) !== review.feedRevision ||
+                    this.loading || this.loadingMore || this.selectAllLoading ||
+                    this.feedScopeKey() !== review.scopeKey || this.itemsScope !== review.scopeKey ||
+                    !sameOrderedIds(this.selected, review.sourceIds) ||
+                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search ||
+                    JSON.stringify(this.buildWorkspaceReturnScope()) !== JSON.stringify(review.returnScope)) {
+                    return false;
+                }
+                var result = this.resolveOzonWorkspaceUpdateAccountChoices(
+                    this.selectedItems, review.sourceIds,
+                );
+                var freshChoice = result.choices.find(function (choice) {
+                    return choice.account_id === accountId;
+                });
+                var reviewedChoice = review.choices.find(function (choice) {
+                    return choice.account_id === accountId;
+                });
+                return !!freshChoice && !!reviewedChoice &&
+                    sameOrderedIds(freshChoice.listing_ids, reviewedChoice.listing_ids) &&
+                    (!expectedListingIds || sameOrderedIds(freshChoice.listing_ids, expectedListingIds));
+            },
+            submitOzonWorkspaceUpdate: function (accountId, review) {
+                review = review || this.ozonWorkspaceUpdateReview;
+                if (!this.ozonWorkspaceUpdateReviewIsCurrent(review, accountId)) {
+                    this.cancelOzonWorkspaceUpdateReview({ restoreFocus: false });
+                    this.error = 'Выбор или связанные карточки Ozon изменились после проверки. Обновите список и повторите действие.';
+                    return false;
+                }
+                var choice = review.choices.find(function (candidate) {
+                    return candidate.account_id === accountId;
+                });
+                if (!choice || this.ozonWorkspaceUpdateBusy) return false;
+                var sourceIds = review.sourceIds.slice();
+                var listingIds = choice.listing_ids.slice();
+                var returnNonce = storeOzonWorkspaceUpdateReturn(
+                    this, accountId, listingIds, sourceIds, review.returnScope,
+                );
+                var returnTo = wbWorkspaceReturnUrl(this, returnNonce);
+                if (!returnTo || !this.urls.ozonWorkspaceUpdateHandoff) {
+                    if (returnNonce) this.consumeWorkspaceReturn(returnNonce);
+                    this.cancelOzonWorkspaceUpdateReview({ restoreFocus: false });
+                    this.error = 'Не удалось подготовить безопасный переход. Обновите страницу и повторите действие.';
+                    return false;
+                }
+
+                this.cancelOzonWorkspaceUpdateReview({ restoreFocus: false });
+                var handoff = {
+                    selectionIds: sourceIds,
+                    listingIds: listingIds,
+                    accountId: accountId,
+                    scopeKey: review.scopeKey,
+                    returnScope: review.returnScope,
+                    feedRevision: review.feedRevision,
+                    returnNonce: returnNonce,
+                    abort: new AbortController(),
+                };
+                this._ozonWorkspaceUpdateHandoff = handoff;
+                this.ozonWorkspaceUpdateBusy = true;
+                this.error = '';
+                var request;
+                try {
+                    request = this.$api.post(this.urls.ozonWorkspaceUpdateHandoff, {
+                        account_id: accountId,
+                        source_ids: sourceIds.slice(),
+                        listing_ids: listingIds.slice(),
+                        return_to: returnTo,
+                    }, { signal: handoff.abort.signal });
+                } catch (err) {
+                    request = Promise.reject(err);
+                }
+                var self = this;
+                return Promise.resolve(request).then(function (data) {
+                    if (!self.ozonWorkspaceUpdateReviewIsCurrent(
+                        review, handoff.accountId, handoff.listingIds,
+                    ) || self._ozonWorkspaceUpdateHandoff !== handoff ||
+                        handoff.abort.signal.aborted) {
+                        self.invalidateOzonWorkspaceUpdate(handoff);
+                        return false;
+                    }
+                    var safeUrl = data && data.success === true
+                        ? validOzonWorkspaceUpdateHandoffUrl(data.url, handoff.accountId)
+                        : '';
+                    if (!safeUrl) {
+                        self.error = data && data.code === 'selection_changed'
+                            ? 'Связь с карточкой Ozon изменилась. Обновите список и отметьте товары заново.'
+                            : 'Не удалось проверить точный выбор для редактора Ozon. Повторите действие со свежим списком.';
+                        return false;
+                    }
+                    self._ozonWorkspaceUpdateHandoff = null;
+                    self.ozonWorkspaceUpdateBusy = false;
+                    window.location.assign(safeUrl);
+                    return true;
+                }).catch(function (err) {
+                    if (!self.ozonWorkspaceUpdateReviewIsCurrent(
+                        review, handoff.accountId, handoff.listingIds,
+                    ) || self._ozonWorkspaceUpdateHandoff !== handoff ||
+                        handoff.abort.signal.aborted) {
+                        self.invalidateOzonWorkspaceUpdate(handoff);
+                        return false;
+                    }
+                    self.error = err && err.status === 409
+                        ? 'Состав выбора или связь с Ozon изменилась. Обновите список и отметьте товары заново.'
+                        : err && err.status === 403
+                            ? 'У этого аккаунта нет доступа к выбранным карточкам Ozon.'
+                            : 'Не удалось проверить точный выбор Ozon. Повторите действие со свежим списком.';
+                    return false;
+                }).finally(function () {
+                    if (self._ozonWorkspaceUpdateHandoff === handoff) {
+                        self._ozonWorkspaceUpdateHandoff = null;
+                        self.ozonWorkspaceUpdateBusy = false;
+                        if (handoff.returnNonce) self.consumeWorkspaceReturn(handoff.returnNonce);
+                    }
+                });
+            },
             openOzonPriceHandoff: function (items, selectionIds) {
                 this.ozonPriceError = '';
                 this.ozonPriceDialogError = '';
+                this.ozonAccountChooserKind = 'price';
                 if (!sameIds(this.selected, selectionIds)) {
                     this.setOzonPriceHandoffError(
                         'Выбор товаров изменился. Отметьте товары заново и повторите действие.'
@@ -2000,11 +2326,29 @@
                 var dialog = this.$refs.ozonPriceAccountDialog;
                 if (dialog && dialog.open) dialog.close();
                 this.ozonPriceHandoffReview = null;
+                this.ozonWorkspaceUpdateReview = null;
                 this.ozonPriceAccountId = '';
                 this.ozonPriceDialogError = '';
+                this.ozonWorkspaceUpdateDialogError = '';
+                this.ozonAccountChooserKind = '';
                 this._ozonPriceTrigger?.focus();
             },
             continueOzonPriceHandoff: function () {
+                if (this.ozonAccountChooserKind === 'workspace_update') {
+                    var updateReview = this.ozonWorkspaceUpdateReview;
+                    var updateAccountId = Number(this.ozonPriceAccountId);
+                    if (!updateReview || !Number.isSafeInteger(updateAccountId) || updateAccountId <= 0 ||
+                        !updateReview.choices.some(function (choice) {
+                            return choice.account_id === updateAccountId;
+                        })) {
+                        this.ozonWorkspaceUpdateDialogError = 'Выберите магазин из списка.';
+                        this.$nextTick(function () {
+                            this.$refs.ozonPriceAccount.focus();
+                        });
+                        return;
+                    }
+                    return this.submitOzonWorkspaceUpdate(updateAccountId, updateReview);
+                }
                 var review = this.ozonPriceHandoffReview;
                 var accountId = Number(this.ozonPriceAccountId);
                 if (!review || !Number.isSafeInteger(accountId) || accountId <= 0 ||
@@ -2191,6 +2535,14 @@
                     }, selectionIds, returnScope);
                     window.location.assign(this.urls.wbPriceChange + '?product_ids=' +
                         encodeURIComponent(priceIds.join(',')) + workspaceReturnHash(returnNonce));
+                    return;
+                }
+                if (action.key === 'ozon_workspace_update') {
+                    if (!selectionIds.length || selectionIds.length > MAX_BULK_SELECTION) {
+                        this.error = 'Для изменения карточек Ozon выберите от 1 до 200 товаров.';
+                        return;
+                    }
+                    this.openOzonWorkspaceUpdate(chosen, selectionIds);
                     return;
                 }
                 if (action.key === 'ozon_prices') {
