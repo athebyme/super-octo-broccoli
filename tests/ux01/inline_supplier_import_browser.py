@@ -604,7 +604,12 @@ def check_wb_create_selection_continuity(
         assert state['wb_worker_errors'] == []
         assert state['wb_worker_product_ids'] == [selected]
         assert state['wb_posts'][-1]['status'] == 409 and len(state['wb_posts']) == 3
-        assert page.locator('[data-wb-create-receipt]').count() == 0
+        expect(page.locator('[data-wb-create-receipt]')).to_have_attribute(
+            'data-wb-create-state', 'terminal_result',
+        )
+        assert page.locator(
+            '[data-wb-create-reconcile], [data-wb-create-retry], [data-wb-create-verify-feed]',
+        ).count() == 0
         assert page.evaluate("document.querySelector('#my-products-app')._vnode.component.proxy.selected") == selected
 
         signed_refreshes = state['wb_feed_reads'][feed_reads_before:]
