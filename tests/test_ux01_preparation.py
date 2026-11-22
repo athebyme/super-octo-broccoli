@@ -52,6 +52,7 @@ class PreparationJourneyRenderingTest(unittest.TestCase):
         )
         self.assertIn("Сейчас: Черновик Ozon", html)
         self.assertIn("<strong>Дальше:</strong> Сохраните локально", html)
+        self.assertIn("<strong>Маркетплейс:</strong> Ozon", html)
         self.assertIn("Магазин:</strong> Ozon CI 0", html)
         self.assertIn("черновик №7 · внутренний товар №5", html)
         self.assertRegex(html, r'<details class="preparation-journey-path">')

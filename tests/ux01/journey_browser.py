@@ -636,7 +636,7 @@ def journey_assertions(
     details_text = section.locator(".preparation-journey-details").inner_text()
     assert f"Сейчас: {current}" in details_text, (name, details_text)
     assert "Дальше:" in details_text, (name, details_text)
-    assert "Канал:" in details_text and "Ozon" in details_text, (name, details_text)
+    assert "Маркетплейс:" in details_text and "Ozon" in details_text, (name, details_text)
     assert "Магазин:" in details_text and "Объект:" in details_text, (name, details_text)
     if account_id is not None:
         assert OZON_ACCOUNT_LABEL in details_text, (name, details_text, OZON_ACCOUNT_LABEL)

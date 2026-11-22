@@ -88,11 +88,11 @@
 
     <div class="mcat-channels">
         <div class="mcat-strip-row">
-            <nav class="sh-channel-bar" aria-label="Каналы продаж">
+            <nav class="sh-channel-bar" aria-label="Маркетплейсы">
                 <button type="button" class="sh-channel-tab"
                         :class="{'sh-channel-tab--active': channelKey === 'all'}"
                         :aria-pressed="channelKey === 'all'"
-                        @click="setChannel('all')">Все каналы
+                        @click="setChannel('all')">Все маркетплейсы
                     <span class="mcat-tab-n" v-if="channelCounts.all !== undefined">{{ channelCounts.all }}</span>
                 </button>
                 <button type="button" class="sh-channel-tab"
@@ -200,12 +200,12 @@
                             :class="{'sh-segmented-item--active': mode === 'products'}"
                             :aria-pressed="mode === 'products'"
                             @click="setMode('products')"
-                            title="Один товар — одна карточка, каналы внутри">Товары</button>
+                            title="Группировать карточки WB и Ozon по товару Seller Hub">Товары</button>
                     <button type="button" class="sh-segmented-item"
                             :class="{'sh-segmented-item--active': mode === 'listings'}"
                             :aria-pressed="mode === 'listings'"
                             @click="setMode('listings')"
-                            title="Каждая карточка площадки отдельно">По площадкам</button>
+                            title="Показывать каждую карточку WB и Ozon отдельно">По маркетплейсам</button>
                 </div>
                 <div class="sh-segmented mcat-view" role="group" aria-label="Вид списка">
                     <button type="button" class="sh-segmented-item"
@@ -258,7 +258,7 @@
         </template>
         <div v-else class="mcat-update-summary mcat-update-switch-summary">
             <strong>Подготовка обновлений · {{ accountLabel(Number(filters.account_id)) }}</strong>
-            <span>Для точного выбора карточек магазина откройте «По площадкам».</span>
+            <span>Чтобы выбрать отдельные карточки магазина, откройте «По маркетплейсам».</span>
             <button type="button" class="sh-btn sh-btn--primary mcat-update-switch"
                     data-listing-update-switch-to-listings
                     @click="setMode('listings')">Перейти к карточкам Ozon</button>
@@ -378,7 +378,7 @@
             <thead>
                 <tr>
                     <th>Товар</th>
-                    <th>Канал</th>
+                    <th>Маркетплейс</th>
                     <th>Статус</th>
                     <th>Связь</th>
                     <th class="mcat-th-num">Цены</th>
@@ -586,7 +586,7 @@
             </header>
 
             <div class="mcat-drawer-members" v-if="activeGroup && activeGroup.listings.length > 1">
-                <span v-if="activeGroup._hidden" class="mcat-member-more" :title="'Всего каналов: ' + activeGroup.listing_count">+{{ activeGroup._hidden }} ещё</span>
+                <span v-if="activeGroup._hidden" class="mcat-member-more" :title="'Карточек WB и Ozon: ' + activeGroup.listing_count">+{{ activeGroup._hidden }} ещё</span>
                 <button v-for="(l, mi) in activeGroup.listings" :key="l.id" type="button"
                         class="mcat-member-chip"
                         :class="{'is-active': current && current.id === l.id}"
@@ -677,7 +677,7 @@
                         <svg class="mlink-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
                     </a>
                     <p v-else-if="current.link_status !== 'linked'" class="mcat-muted">
-                        Внутренняя карточка не привязана — объединить каналы товара можно на странице карточки.
+                        Карточки WB и Ozon не связаны с товаром Seller Hub. Свяжите их на странице товара.
                     </p>
                 </section>
 

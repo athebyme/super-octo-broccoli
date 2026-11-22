@@ -21,7 +21,7 @@ from services.marketplace_nav import register_marketplace_nav
 # иначе channel_bar молча не рендерится в шаблонах с обычным импортом.
 TEMPLATE = (
     '{% from "macros/components.html" import channel_bar %}'
-    "{{ channel_bar(active=active, wb_href='/wb-page', "
+    "{{ channel_bar(active=active, wb_href='/wb-page', all_href='/all-page', "
     "ozon_href='/ozon-page', account_id=account_id) }}"
 )
 
@@ -102,6 +102,8 @@ class MarketplaceNavTest(unittest.TestCase):
     def test_renders_via_plain_import_with_account_tabs(self):
         html = self._render(active="wb")
         self.assertIn("sh-channel-bar", html)
+        self.assertIn('aria-label="Маркетплейсы"', html)
+        self.assertIn("Все маркетплейсы", html)
         self.assertIn("Wildberries", html)
         self.assertIn(f"/ozon-page?account_id={self.account_id}", html)
         self.assertNotIn("Выключенный", html)

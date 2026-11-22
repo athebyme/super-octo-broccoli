@@ -38,7 +38,7 @@
             <a class="listing-workspace-mode is-active" :href="overviewUrl" aria-current="page">Обзор</a>
             <a class="listing-workspace-mode" :href="managementUrl">Управление</a>
         </nav>
-        <nav v-if="members.length > 1" class="sh-channel-bar listing-workspace-members" aria-label="Каналы товара">
+        <nav v-if="members.length > 1" class="sh-channel-bar listing-workspace-members" aria-label="Карточки товара на маркетплейсах">
             <button v-for="m in members" :key="m.id" type="button" class="sh-channel-tab"
                     :class="{'sh-channel-tab--active': m.id === listingId}"
                     :aria-pressed="m.id === listingId"

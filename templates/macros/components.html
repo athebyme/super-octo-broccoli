@@ -364,13 +364,13 @@
      wb_href / all_href — ссылки WB-страницы и объединённого вида (опциональны).
      ozon_href — базовый URL Ozon-страницы концепта БЕЗ account_id (макрос сам
      добавит ?account_id=N на каждый активный кабинет). ─── #}
-{% macro channel_bar(active='wb', wb_href=None, ozon_href=None, all_href=None, account_id=None, wb_label='Wildberries', all_label='Все каналы', connect_href=None, carry=None, class='') %}
+{% macro channel_bar(active='wb', wb_href=None, ozon_href=None, all_href=None, account_id=None, wb_label='Wildberries', all_label='Все маркетплейсы', connect_href=None, carry=None, class='') %}
 {# carry: имена query-параметров через запятую (например 'period'), которые
    sh-ui.js переносит из текущего URL в ссылку таба при клике — фильтры вроде
    периода не сбрасываются при переключении кабинета. #}
 {% set nav = mp_nav() if mp_nav is defined else none %}
 {% if nav and nav.ozon_enabled %}
-<nav class="sh-channel-bar{% if class %} {{ class }}{% endif %}"{% if carry %} data-carry="{{ carry }}"{% endif %} aria-label="Каналы продаж">
+<nav class="sh-channel-bar{% if class %} {{ class }}{% endif %}"{% if carry %} data-carry="{{ carry }}"{% endif %} aria-label="Маркетплейсы">
     {% if all_href %}
     <a href="{{ all_href }}" class="sh-channel-tab{% if active == 'all' %} sh-channel-tab--active{% endif %}"{% if active == 'all' %} aria-current="page"{% endif %}>{{ all_label }}</a>
     {% endif %}

@@ -56,7 +56,7 @@
 {% macro render_pricing_channel_nav() %}
 {% set channel_nav = mp_nav() if config.get('MARKETPLACE_OZON_ENABLED', false) and mp_nav is defined else none %}
 {% if channel_nav and channel_nav.ozon_enabled %}
-<nav class="sh-channel-bar pricing-channel-nav mb-5" aria-label="Каналы цен">
+<nav class="sh-channel-bar pricing-channel-nav mb-5" aria-label="Цены на маркетплейсах">
     <span class="sh-channel-tab sh-channel-tab--active" aria-current="page">
         <span class="sh-mp-dot sh-mp-dot--wb" aria-hidden="true"></span>Wildberries
     </span>
