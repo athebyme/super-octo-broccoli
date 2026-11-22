@@ -27,6 +27,8 @@
     var syncTimer, cooldownWakeTimer, syncController, syncRevision = 0, syncStopped = false;
     var syncRequests = new Set();
     var LISTING_UPDATE_MAX = 200;
+    var LISTING_UPDATE_PREVIEW_TIMEOUT_MS = 15000;
+    var LISTING_UPDATE_APPLY_TIMEOUT_MS = 45000;
     var LISTING_UPDATE_STORAGE_KEY = 'mcat-ozon-update-selection-v1';
     function activeJob(job) { return !!job && ['pending', 'running'].includes(job.status); }
     function saved(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
@@ -422,6 +424,7 @@
             if (this._facetAbort) this._facetAbort.abort();
             if (this._detailAbort) this._detailAbort.abort();
             if (this._listingUpdateAbort) this._listingUpdateAbort.abort();
+            this.clearListingUpdateTimeout();
             syncRequests.forEach(controller => controller.abort());
             document.removeEventListener('visibilitychange', this._onVisibility);
             window.removeEventListener('keydown', this._onKey);
@@ -430,6 +433,14 @@
         },
 
         methods: {
+            clearListingUpdateTimeout: function (expectedTimeout) {
+                var timeout = this._listingUpdateTimeout;
+                if (timeout === null || timeout === undefined ||
+                    (arguments.length && timeout !== expectedTimeout)) return false;
+                clearTimeout(timeout);
+                this._listingUpdateTimeout = null;
+                return true;
+            },
             listingUpdateScopeKey: function () {
                 if (!this.listingUpdateScopeEligible) return '';
                 return JSON.stringify({
@@ -483,6 +494,7 @@
                     this._listingUpdateAbort.abort();
                     this._listingUpdateAbort = null;
                     this._listingUpdateRevision = (this._listingUpdateRevision || 0) + 1;
+                    this.clearListingUpdateTimeout();
                 }
                 try { sessionStorage.removeItem(LISTING_UPDATE_STORAGE_KEY); } catch (_) {}
                 this.listingUpdate.selectedIds = [];
@@ -504,6 +516,7 @@
                     this._listingUpdateAbort.abort();
                     this._listingUpdateAbort = null;
                     this._listingUpdateRevision = (this._listingUpdateRevision || 0) + 1;
+                    this.clearListingUpdateTimeout();
                 }
                 this.listingUpdate.phase = 'idle';
                 this.listingUpdate.preview = null;
@@ -607,6 +620,7 @@
                     this._listingUpdateAbort.abort();
                     this._listingUpdateAbort = null;
                     this._listingUpdateRevision = (this._listingUpdateRevision || 0) + 1;
+                    this.clearListingUpdateTimeout();
                     this.listingUpdate.phase = 'idle';
                     this.listingUpdate.preview = null;
                     this._listingUpdateSnapshot = null;
@@ -654,7 +668,14 @@
                     return false;
                 }
                 if (this._listingUpdateAbort) this._listingUpdateAbort.abort();
+                this.clearListingUpdateTimeout();
                 var controller = new AbortController();
+                var timedOut = false;
+                var timeout = setTimeout(function () {
+                    timedOut = true;
+                    controller.abort();
+                }, LISTING_UPDATE_PREVIEW_TIMEOUT_MS);
+                this._listingUpdateTimeout = timeout;
                 var revision = (this._listingUpdateRevision || 0) + 1;
                 this._listingUpdateRevision = revision;
                 this._listingUpdateAbort = controller;
@@ -689,6 +710,9 @@
                         signal: controller.signal,
                     });
                     var data = await response.json();
+                    if (timedOut) {
+                        throw new Error('Проверка точного списка заняла слишком много времени. Выбор сохранён; перечитайте список перед подтверждением.');
+                    }
                     if (!response.ok || !data || data.success !== true ||
                         !validListingUpdatePreview(data.preview, snapshot)) {
                         throw new Error('Не удалось подтвердить точный список Ozon. Проверьте список ещё раз.');
@@ -706,6 +730,14 @@
                     });
                     return true;
                 } catch (error) {
+                    if (timedOut) {
+                        if (this._listingUpdateRevision === revision) {
+                            this.listingUpdate.phase = 'read_failed';
+                            this.listingUpdate.preview = null;
+                            this.listingUpdate.error = 'Проверка точного списка заняла слишком много времени. Выбор сохранён; перечитайте список перед подтверждением.';
+                        }
+                        return false;
+                    }
                     if (error && error.name === 'AbortError') return false;
                     if (this._listingUpdateRevision === revision) {
                         this.listingUpdate.phase = 'read_failed';
@@ -716,6 +748,7 @@
                     }
                     return false;
                 } finally {
+                    this.clearListingUpdateTimeout(timeout);
                     if (this._listingUpdateAbort === controller) this._listingUpdateAbort = null;
                 }
             },
@@ -796,6 +829,13 @@
                     return false;
                 }
                 var controller = new AbortController();
+                this.clearListingUpdateTimeout();
+                var timedOut = false;
+                var timeout = setTimeout(function () {
+                    timedOut = true;
+                    controller.abort();
+                }, LISTING_UPDATE_APPLY_TIMEOUT_MS);
+                this._listingUpdateTimeout = timeout;
                 var revision = (this._listingUpdateRevision || 0) + 1;
                 this._listingUpdateRevision = revision;
                 this._listingUpdateAbort = controller;
@@ -814,6 +854,9 @@
                         signal: controller.signal,
                     });
                     var data = await response.json();
+                    if (timedOut) {
+                        throw new Error('Ответ на локальное сохранение не пришёл за 45 секунд. Результат неизвестен; проверьте выбранный список заново.');
+                    }
                     if (!response.ok || !data || data.success !== true ||
                         !validListingUpdateReport(data.report, snapshot)) {
                         throw new Error('Сервер не подтвердил итог для выбранных карточек. Перечитайте список перед новым подтверждением.');
@@ -835,12 +878,15 @@
                 } catch (error) {
                     if (this._listingUpdateRevision === revision) {
                         this.listingUpdate.phase = 'apply_uncertain';
-                        this.listingUpdate.error = error && typeof error.message === 'string'
+                        this.listingUpdate.error = timedOut
+                            ? 'Ответ на локальное сохранение не пришёл за 45 секунд. Результат неизвестен; проверьте выбранный список заново.'
+                            : error && typeof error.message === 'string'
                             ? error.message.slice(0, 300)
                             : 'Не удалось подтвердить результат. Перечитайте выбранный список перед новым подтверждением.';
                     }
                     return false;
                 } finally {
+                    this.clearListingUpdateTimeout(timeout);
                     if (this._listingUpdateAbort === controller) this._listingUpdateAbort = null;
                 }
             },

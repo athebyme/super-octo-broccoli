@@ -415,3 +415,84 @@ assert.equal(await page.readListingUpdatePreview(),true);assert.equal(reads,2);
 assert.equal(page.listingUpdate.confirmLocal,false,'a fresh preview requires a new explicit confirmation');
 })().catch(e=>{console.error(e);process.exitCode=1});
 ''')
+
+
+def test_ozon_listing_update_preview_and_apply_timeouts_are_bounded_and_recoverable():
+    run_node(SETUP + r'''
+(async()=>{
+global.location=new URL('https://seller.test/marketplaces/listings/');
+page.mode='listings';page.filters={marketplace:'ozon',account_id:2,status:'',link_status:'',include_unavailable:false,search:''};
+page.urls={...page.urls,base:'/marketplaces/listings/',previewUpdateDrafts:'/preview',applyUpdateDrafts:'/apply',
+    repairDraftSelection:'/marketplaces/ozon/uploads/selection/repair'};
+page.catalogReturnUrl='/marketplaces/listings/?marketplace=ozon&account_id=2';
+page.perPage=60;page.requestedPage=1;page.loadedStartPage=1;page.loading=false;page.loadingMore=false;
+page.listingUpdate.selectedIds=[101];page.listingUpdate.selectionScopeKey=page.listingUpdateScopeKey();
+const dialog={open:true,close(){this.open=false}};page.$refs={listingUpdateDialog:dialog};
+const timers=new Map();let nextTimer=1;
+global.setTimeout=(callback,ms)=>{const id=nextTimer++;timers.set(id,{callback,ms});return id};
+global.clearTimeout=id=>{timers.delete(id)};
+const fireTimer=ms=>{
+    const entry=Array.from(timers.entries()).find(([,timer])=>timer.ms===ms);
+    assert.ok(entry,'expected a '+ms+'ms deadline');timers.delete(entry[0]);entry[1].callback();
+};
+const abortError=()=>{const error=new Error('aborted');error.name='AbortError';return error};
+const pendingUntilAbort=signal=>new Promise((resolve,reject)=>{
+    if(signal.aborted){reject(abortError());return}
+    signal.addEventListener('abort',()=>reject(abortError()),{once:true});
+});
+const validPreview=(token)=>({success:true,preview:{account_id:2,account_label:'Магазин 2',listing_ids:[101],
+    rows:[{listing_id:101,title:'Товар 101',offer_id:'offer-101',status:'ready'}],token}});
+let mode='preview_fetch',reads=0,applies=0;
+global.fetch=async(url,options)=>{
+    if(url==='/preview'){
+        reads++;
+        if(mode==='preview_fetch')return pendingUntilAbort(options.signal);
+        if(mode==='preview_body')return {ok:true,json:()=>pendingUntilAbort(options.signal)};
+        return {ok:true,json:async()=>validPreview('preview-'+reads)};
+    }
+    if(url==='/apply'){
+        applies++;
+        if(mode==='apply_body')return {ok:true,json:()=>pendingUntilAbort(options.signal)};
+        if(mode==='apply_fetch')return pendingUntilAbort(options.signal);
+        throw Error('unexpected apply response mode');
+    }
+    throw Error('unexpected URL '+url);
+};
+
+let pending=page.readListingUpdatePreview();
+assert.equal(page.listingUpdate.phase,'previewing');assert.equal(timers.size,1);
+assert.equal(Array.from(timers.values())[0].ms,15000);fireTimer(15000);
+assert.equal(await pending,false);assert.equal(page.listingUpdate.phase,'read_failed');
+assert.match(page.listingUpdate.error,/слишком много времени/);assert.deepEqual(page.listingUpdate.selectedIds,[101]);
+assert.equal(page.listingUpdateCanPreview,true);assert.equal(timers.size,0);
+
+mode='preview_body';pending=page.readListingUpdatePreview();
+assert.equal(timers.size,1);assert.equal(Array.from(timers.values())[0].ms,15000);fireTimer(15000);
+assert.equal(await pending,false);assert.equal(page.listingUpdate.phase,'read_failed');
+assert.match(page.listingUpdate.error,/слишком много времени/);assert.equal(timers.size,0);
+
+mode='preview_ok';assert.equal(await page.readListingUpdatePreview(),true);
+assert.equal(page.listingUpdate.phase,'review');assert.equal(timers.size,0);
+page.listingUpdate.confirmLocal=true;mode='apply_body';pending=page.applyListingUpdatePreview();
+assert.equal(page.listingUpdate.phase,'applying');assert.equal(timers.size,1);
+assert.equal(Array.from(timers.values())[0].ms,45000);assert.equal(page.cancelListingUpdateDialog(),false);
+fireTimer(45000);assert.equal(await pending,false);assert.equal(page.listingUpdate.phase,'apply_uncertain');
+assert.match(page.listingUpdate.error,/45 секунд.*Результат неизвестен/);assert.equal(timers.size,0);
+assert.equal(page.listingUpdateCanPreview,true);assert.equal(applies,1);
+assert.equal(page.cancelListingUpdateDialog(),true,'the timed out confirmation can now be closed');
+
+dialog.open=true;mode='preview_ok';assert.equal(await page.readListingUpdatePreview(),true);
+assert.equal(page.listingUpdate.phase,'review');assert.equal(page.listingUpdate.confirmLocal,false);
+assert.equal(applies,1,'a fresh read does not automatically repeat the uncertain apply');assert.equal(timers.size,0);
+page.listingUpdate.confirmLocal=true;mode='apply_fetch';pending=page.applyListingUpdatePreview();
+assert.equal(page.listingUpdate.phase,'applying');assert.equal(timers.size,1);fireTimer(45000);
+assert.equal(await pending,false);assert.equal(page.listingUpdate.phase,'apply_uncertain');
+assert.equal(applies,2);assert.equal(timers.size,0);
+
+dialog.open=true;mode='preview_fetch';pending=page.readListingUpdatePreview();
+assert.equal(timers.size,1);assert.equal(page.cancelListingUpdateDialog(),true);
+assert.equal(timers.size,0);assert.equal(page.listingUpdate.phase,'idle');
+assert.equal(await pending,false);assert.equal(page.listingUpdate.phase,'idle','a manual cancel stays silent');
+assert.deepEqual(page.listingUpdate.selectedIds,[101]);assert.equal(timers.size,0);
+})().catch(e=>{console.error(e);process.exitCode=1});
+''')
