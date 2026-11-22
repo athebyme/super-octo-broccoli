@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-22T18:39:40.479174+00:00",
+  "generated_at": "2026-11-22T18:52:28.725915+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -1589,7 +1589,7 @@
     },
     {
       "path": "scripts/check_ux01.py",
-      "sha256": "da2ea08077ddf21ee223f3105ba8267866653ea9fdab44833dc85594c0485aa0"
+      "sha256": "8671fefdc7ad54f5783be9b4cf5f1392a7c47108d21d0211f943a625eac47d1f"
     },
     {
       "path": "scripts/deploy_safety.py",
@@ -2837,7 +2837,7 @@
     },
     {
       "path": "static/seller-workspace.css",
-      "sha256": "e4da1770ce03e4d0fbe289388008d25d94a6cd85955167585459183b41ab9769"
+      "sha256": "d9ecad93e0291e79e813e2c7eedf1f67eceeb26ac84b4d602f802ba33b6a1706"
     },
     {
       "path": "static/sh-ui.css",
@@ -4437,7 +4437,7 @@
     },
     {
       "path": "tests/test_marketplace_readiness.py",
-      "sha256": "317c68898bc69a86fbf9ff30c9828271876ee6bc611eda395dec332a26a08ad4"
+      "sha256": "97eafffebcf7ffdedcb5a75ca8fd8c635bfa32b086bbadcaaba0e11fcac254a8"
     },
     {
       "path": "tests/test_marketplace_reference_accounts.py",
@@ -5113,7 +5113,7 @@
     },
     {
       "path": "tests/test_ux01_runner.py",
-      "sha256": "a5f2d115d35109be2b11705c5d56c46ea0227f001d6b1f43d46241ff47c2fe20"
+      "sha256": "451129e1dcf44e63f08c05395cac4d28b9f324684ad8f6956f171d93043fb9c8"
     },
     {
       "path": "tests/test_ux01_settings_quality.py",
@@ -5288,5 +5288,5 @@
       "sha256": "eda9eca993b4da3f7ffec258bb8a99e4488977766069bcba63512c2c08c9ad30"
     }
   ],
-  "aggregate_sha256": "655ad5e05595aad4e5effceb313063e7a263c4718261807b2d68132c3b58b93b"
+  "aggregate_sha256": "edc42c6aa6ce16f474f80f3f0f2feb714aed9744fbfde681569bd9ff1bd805c1"
 }
