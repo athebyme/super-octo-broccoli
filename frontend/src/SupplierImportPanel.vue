@@ -453,6 +453,7 @@ export default {
       try {
         await this.postImport(pending);
       } catch (error) {
+        this.status = '';
         this.error = error.name === 'AbortError'
           ? 'Ответ не пришёл вовремя. Сначала прочитайте результат; импорт не повторяется автоматически.'
           : error.message || 'Ответ не подтверждён. Сначала прочитайте результат.';
@@ -507,6 +508,7 @@ export default {
         if (!response.ok || data.success !== true) throw this.requestError(response.status, data);
         this.acceptKnownResult(data, pending);
       } catch (error) {
+        this.status = '';
         this.error = error.name === 'AbortError'
           ? 'Чтение заняло слишком много времени. Повторите только чтение.'
           : error.message || 'Не удалось прочитать сохранённый итог.';
@@ -530,6 +532,7 @@ export default {
       this.status = 'Повторяем только прежний запрос с тем же ключом…';
       try { await this.postImport(pending); }
       catch (error) {
+        this.status = '';
         this.error = error.name === 'AbortError'
           ? 'Ответ снова не пришёл. Прочитайте результат; новая попытка не запускается автоматически.'
           : error.message || 'Повтор не подтверждён. Прочитайте результат.';
@@ -577,19 +580,23 @@ export default {
         Не удалось безопасно прочитать сохранённый запрос. Новый импорт заблокирован; проверьте список товаров и повторно откройте эту страницу.
       </div>
 
-      <div v-if="pending" class="mp-import-message mp-import-message--pending" role="status" aria-live="polite" data-supplier-import-pending>
+      <div v-if="pending" class="mp-import-message mp-import-message--pending" role="status" aria-live="polite"
+           data-supplier-import-pending :data-supplier-import-state="submitting ? 'sending' : (readingPending ? 'checking' : 'unknown')">
         <div>
-          <strong>Итог импорта пока неизвестен.</strong>
-          <p>{{ pending.product_ids.length }} товаров · поставщик {{ pending.supplier_id }}. Сначала прочитайте результат по сохранённому ключу.</p>
-          <p v-if="status">{{ status }}</p>
+          <strong v-if="submitting">Импортируем выбранные товары…</strong>
+          <strong v-else-if="readingPending">Проверяем сохранённый итог…</strong>
+          <strong v-else>Итог импорта пока неизвестен.</strong>
+          <p v-if="submitting">{{ pending.product_ids.length }} товаров · запрос отправляется. Дождитесь подтверждения.</p>
+          <p v-else>{{ pending.product_ids.length }} товаров · поставщик {{ pending.supplier_id }}. Сначала прочитайте результат по сохранённому ключу.</p>
+          <p v-if="status && !submitting">{{ status }}</p>
           <p v-if="error" class="mp-import-error-text">{{ error }}</p>
         </div>
         <div class="mp-import-message-actions">
-          <button type="button" class="sh-btn sh-btn--secondary" data-supplier-import-reconcile :disabled="readingPending || submitting || sessionEnded" @click="readPending">
+          <button v-if="!submitting" type="button" class="sh-btn sh-btn--secondary" data-supplier-import-reconcile :disabled="readingPending || sessionEnded" @click="readPending">
             {{ readingPending ? 'Читаем…' : 'Проверить результат' }}
           </button>
-          <button v-if="retryAllowed" type="button" class="sh-btn sh-btn--primary" data-supplier-import-retry :disabled="readingPending || submitting || sessionEnded" @click="retrySameImport">
-            {{ submitting ? 'Принимаем…' : 'Повторить тот же импорт' }}
+          <button v-if="retryAllowed && !submitting" type="button" class="sh-btn sh-btn--primary" data-supplier-import-retry :disabled="readingPending || sessionEnded" @click="retrySameImport">
+            Повторить тот же импорт
           </button>
         </div>
       </div>
@@ -700,12 +707,14 @@ export default {
       </form>
     </section>
 
-    <div v-else-if="pending || storageProblem" class="mp-import-pending-compact" role="status">
+    <div v-else-if="pending || storageProblem" class="mp-import-pending-compact" role="status"
+         :data-supplier-import-pending="pending ? '' : null"
+         :data-supplier-import-state="storageProblem ? 'blocked' : (submitting ? 'sending' : (readingPending ? 'checking' : 'unknown'))">
       <div>
-        <strong>{{ storageProblem ? 'Новый импорт заблокирован' : 'Результат импорта не подтверждён' }}</strong>
-        <span>{{ storageProblem ? 'Сохранённый запрос нельзя прочитать.' : 'Проверьте сохранённый итог перед новым действием.' }}</span>
+        <strong>{{ storageProblem ? 'Новый импорт заблокирован' : (submitting ? 'Импортируем выбранные товары…' : (readingPending ? 'Проверяем сохранённый итог…' : 'Результат импорта не подтверждён')) }}</strong>
+        <span>{{ storageProblem ? 'Сохранённый запрос нельзя прочитать.' : (submitting ? 'Запрос отправляется. Дождитесь подтверждения.' : (readingPending ? 'Новая запись не отправляется.' : 'Проверьте сохранённый итог перед новым действием.')) }}</span>
       </div>
-      <button v-if="pending" type="button" class="sh-btn sh-btn--secondary" data-supplier-import-reconcile :disabled="readingPending || sessionEnded" @click="readPending">
+      <button v-if="pending && !submitting" type="button" class="sh-btn sh-btn--secondary" data-supplier-import-reconcile :disabled="readingPending || sessionEnded" @click="readPending">
         {{ readingPending ? 'Читаем…' : 'Проверить результат' }}
       </button>
       <button type="button" class="mp-import-open" data-supplier-import-pending-open @click="$emit('open')">Открыть импорт</button>
