@@ -9,13 +9,15 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 from tests.ux01 import journey_browser as fixture
-from tests.ux01.bulk_workspace_browser import MAIN_TITLE, seed_bulk_selection
-from models import ImportedProduct, MarketplaceListing, SellerMarketplaceAccount, db
+from tests.ux01.bulk_workspace_browser import MAIN_TITLE, selected_browser_state, seed_bulk_selection
+from models import ImportedProduct, MarketplaceListing, SellerMarketplaceAccount, SupplierProduct, db
 
 
 target = Path(os.getenv("CATALOG_QA_ARTIFACTS", "/artifacts/catalog-layout"))
 target.mkdir(parents=True, exist_ok=True)
 AMBIGUOUS_WB_TITLE = "Связь WB только по nmID"
+SUPPLIER_REFRESH_PREVIEW = "/api/my-products/supplier-refresh-preview"
+SUPPLIER_REFRESH_APPLY = "/my-products/refresh-from-supplier"
 scope = seed_bulk_selection()
 with fixture.app.app_context():
     main_row = db.session.get(ImportedProduct, scope["local_id"])
@@ -49,7 +51,62 @@ with fixture.app.app_context():
         listing.linked_at = datetime.utcnow()
     db.session.commit()
 
+
+def supplier_business_snapshot():
+    with fixture.app.app_context():
+        target_row = db.session.get(ImportedProduct, scope["local_id"])
+        supplier_row = db.session.get(SupplierProduct, scope["refresh_source_id"])
+        return {
+            "target": (
+                target_row.title,
+                target_row.supplier_price,
+                target_row.supplier_quantity,
+                target_row.supplier_content_revision,
+            ),
+            "supplier": (
+                supplier_row.title,
+                supplier_row.supplier_price,
+                supplier_row.supplier_quantity,
+                supplier_row.content_revision,
+            ),
+        }
+
+
+supplier_before_preview = supplier_business_snapshot()
+
 report = {"status": "running", "layouts": [], "javascript_errors": []}
+supplier_preview_requests = []
+supplier_preview_receipts = []
+supplier_apply_requests = []
+
+
+def browser_bridge(route):
+    request = route.request
+    path = urlsplit(request.url).path
+    if path == SUPPLIER_REFRESH_PREVIEW:
+        assert request.method == "POST", request.method
+        payload = request.post_data_json
+        assert payload == {"product_ids": [scope["local_id"]]}, payload
+        supplier_preview_requests.append(payload)
+        response = route.fetch(max_redirects=0)
+        assert response.status == 200, response.status
+        data = response.json()
+        supplier_preview_receipts.append({
+            "success": data.get("success"),
+            "requested": data.get("requested"),
+            "eligible": data.get("eligible"),
+            "changed": data.get("changed"),
+            "skipped": data.get("skipped"),
+            "product_ids": [item.get("product_id") for item in data.get("items", [])],
+        })
+        route.fulfill(response=response)
+        return
+    if path == SUPPLIER_REFRESH_APPLY and request.method == "POST":
+        supplier_apply_requests.append(path)
+        raise AssertionError("The catalog entry must stop at the read-only supplier preview")
+    fixture.bridge(route)
+
+
 with sync_playwright() as playwright:
     browser = playwright.chromium.launch(executable_path=fixture.CHROMIUM, args=["--no-sandbox", "--disable-dev-shm-usage"])
     for width in (320, 390, 1024, 1440):
@@ -58,7 +115,7 @@ with sync_playwright() as playwright:
                                           is_mobile=width <= 390, has_touch=width <= 390)
             context.add_cookies([fixture.synthetic_login_cookie()])
             context.add_init_script(f"localStorage.setItem('sh-theme', '{theme}');")
-            context.route("**/*", fixture.bridge)
+            context.route("**/*", browser_bridge)
             page = context.new_page()
             page.on("pageerror", lambda err: report["javascript_errors"].append(str(err)))
             fixture.wait_document(page, "catalog_grid", "/my-products/beta")
@@ -164,15 +221,44 @@ with sync_playwright() as playwright:
                 assert page.evaluate("window.__supplierEntryDocumentMarker") == "same-document"
 
             checkbox = row.get_by_role("checkbox")
+            row_top_before_selection = row.bounding_box()["y"]
             checkbox.check()
             if width == 320 and theme == "light":
                 updates_entry = page.locator("[data-supplier-updates-entry]")
-                expect(updates_entry).to_be_disabled()
-                expect(page.locator("[data-supplier-updates-selection-note]")).to_contain_text(
-                    "переход к обновлениям очистил бы выбор"
-                )
+                expect(updates_entry).to_be_enabled()
+                assert updates_entry.get_attribute("aria-pressed") is None
+                assert updates_entry.get_attribute("aria-label").startswith("Обновить выбранные товары, 1 ")
+                expect(updates_entry.locator(".mp-supplier-updates-count")).to_have_count(0)
+                expect(updates_entry.locator(".mp-head-action-label--compact")).to_have_text("Обновить")
                 expect(checkbox).to_be_checked()
                 assert page.evaluate("document.documentElement.scrollWidth === document.documentElement.clientWidth")
+                assert abs(row.bounding_box()["y"] - row_top_before_selection) <= 1
+
+                preview_count = len(supplier_preview_requests)
+                with page.expect_response(
+                    lambda response: urlsplit(response.url).path == SUPPLIER_REFRESH_PREVIEW and
+                    response.request.method == "POST"
+                ) as preview_response:
+                    updates_entry.click()
+                assert preview_response.value.status == 200
+                assert len(supplier_preview_requests) == preview_count + 1
+                assert supplier_preview_requests[-1] == {"product_ids": [scope["local_id"]]}
+                assert supplier_preview_receipts[-1]["success"] is True
+                assert supplier_preview_receipts[-1]["requested"] == 1
+                assert supplier_preview_receipts[-1]["product_ids"] == [scope["local_id"]]
+
+                dialog = page.get_by_role("dialog", name="Проверка обновления из поставщика")
+                expect(dialog).to_be_visible()
+                expect(dialog.locator(".mp-supplier-refresh-counts")).to_be_visible()
+                expect(dialog.get_by_role("button", name="Вернуться", exact=True)).to_be_visible()
+                expect(dialog.get_by_role("button", name="Обновить", exact=True)).to_be_enabled()
+                assert selected_browser_state(page)["selected"] == [scope["local_id"]]
+                assert not supplier_apply_requests
+                assert supplier_business_snapshot() == supplier_before_preview
+                dialog.get_by_role("button", name="Вернуться", exact=True).click()
+                expect(dialog).not_to_be_visible()
+                assert selected_browser_state(page)["selected"] == [scope["local_id"]]
+                assert not supplier_apply_requests
             expect(page.locator(".mp-bulkbar")).to_be_visible()
             for group in ("cards", "prices", "create", "refresh"):
                 expect(page.locator(f'[data-bulk-action-group="{group}"]')).to_be_visible()
@@ -194,5 +280,8 @@ assert not report["javascript_errors"]
 assert not fixture.REPORT["unexpected_http"], fixture.REPORT["unexpected_http"]
 assert not fixture.REPORT["unexpected_external_requests"], fixture.REPORT["unexpected_external_requests"]
 assert fixture.REPORT["provider_attempts"] == 0 and not fixture.REPORT["writes"]
+assert supplier_preview_requests == [{"product_ids": [scope["local_id"]]}]
+assert len(supplier_preview_receipts) == 1 and not supplier_apply_requests
+assert supplier_business_snapshot() == supplier_before_preview
 report["status"] = "passed"
 (target / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")

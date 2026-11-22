@@ -155,27 +155,17 @@
                 <span class="mp-head-action-label--full">Импортировать товары</span>
                 <span class="mp-head-action-label--compact" aria-hidden="true">Импорт</span>
             </a>
-            <button type="button" class="sh-btn sh-btn--secondary mp-supplier-updates-entry"
+            <button type="button" class="sh-btn mp-supplier-updates-entry"
+                    :class="selected.length ? 'sh-btn--primary' : 'sh-btn--secondary'"
                     data-supplier-updates-entry
                     :aria-label="supplierUpdatesEntryAriaLabel"
-                    :aria-pressed="activeTab === 'updates'"
-                    :aria-describedby="selected.length ? 'mp-supplier-updates-selection-note' : (workspaceReturnPending ? 'mp-supplier-updates-return-note' : null)"
-                    :disabled="selected.length > 0 || workspaceReturnPending"
-                    @click="toggleSupplierUpdates">
-                <span class="mp-head-action-label--full">Обновления поставщика</span>
-                <span class="mp-head-action-label--compact" aria-hidden="true">Обновления</span>
-                <span v-if="facets.supplier_updates !== undefined" class="mp-supplier-updates-count">{{ $fmt.int(facets.supplier_updates) }}</span>
+                    :aria-pressed="selected.length ? null : activeTab === 'updates'"
+                    :disabled="supplierUpdatesEntryDisabled"
+                    @click="activateSupplierUpdatesEntry($event)">
+                <span class="mp-head-action-label--full">{{ selected.length ? 'Обновить выбранные' : 'Обновления поставщика' }}</span>
+                <span class="mp-head-action-label--compact" aria-hidden="true">{{ selected.length ? 'Обновить' : 'Обновления' }}</span>
+                <span v-if="!selected.length && facets.supplier_updates !== undefined" class="mp-supplier-updates-count">{{ $fmt.int(facets.supplier_updates) }}</span>
             </button>
-            <p v-if="selected.length" id="mp-supplier-updates-selection-note"
-               class="mp-supplier-updates-selection-note" data-supplier-updates-selection-note
-               role="status" aria-live="polite">
-                Сначала снимите выбранные товары: переход к обновлениям очистил бы выбор.
-            </p>
-            <p v-else-if="workspaceReturnPending" id="mp-supplier-updates-return-note"
-               class="mp-supplier-updates-selection-note" data-supplier-updates-return-note
-               role="status" aria-live="polite">
-                Сначала восстановим точный выбранный список.
-            </p>
         </div>
     </header>
 

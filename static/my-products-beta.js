@@ -1258,10 +1258,32 @@
                 return this.tabs.filter(function (tab) { return tab.key !== 'updates'; });
             },
             supplierUpdatesEntryAriaLabel: function () {
+                if (this.selected.length) {
+                    var selectedCount = this.selected.length;
+                    return 'Обновить выбранные товары, ' + selectedCount + ' ' + this.$fmt.plural(
+                        selectedCount, 'товар', 'товара', 'товаров',
+                    ) + ' из каталога поставщика';
+                }
                 var count = this.facets.supplier_updates;
                 return Number.isSafeInteger(count) && count >= 0
                     ? 'Обновления поставщика, ' + count + ' ' + this.$fmt.plural(count, 'товар', 'товара', 'товаров')
                     : 'Обновления поставщика';
+            },
+            supplierRefreshSelectionAction: function () {
+                var group = (this.bulkIntentGroupsForDisplay || []).find(function (entry) {
+                    return entry.key === 'refresh';
+                });
+                return group ? group.actions.find(function (action) {
+                    return action.key === 'refresh_supplier';
+                }) || null : null;
+            },
+            supplierUpdatesEntryDisabled: function () {
+                if (this.workspaceReturnPending || this.loading || this.loadingMore || this.selectAllLoading ||
+                    this.itemsScope !== this.feedScopeKey() ||
+                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) return true;
+                if (!this.selected.length) return false;
+                var action = this.supplierRefreshSelectionAction;
+                return !action || action.disabled || this.selectedItems.length !== this.selected.length;
             },
             allSelected: function () {
                 var chosen = this.selected;
@@ -3020,6 +3042,14 @@
                 if (this.importBatchMode || this.supplierRefreshBatchMode ||
                     this.selected.length || this.workspaceReturnPending) return false;
                 this.setTab(this.activeTab === 'updates' ? '' : 'updates');
+                return true;
+            },
+            activateSupplierUpdatesEntry: function (event) {
+                if (this.supplierUpdatesEntryDisabled) return false;
+                if (!this.selected.length) return this.toggleSupplierUpdates();
+                var action = this.supplierRefreshSelectionAction;
+                if (!action || action.disabled) return false;
+                this.runBulkIntentAction(action, event);
                 return true;
             },
             resetFilters: function () {
