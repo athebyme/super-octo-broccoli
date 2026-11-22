@@ -264,6 +264,14 @@ with sync_playwright() as playwright:
                 expect(page.locator(f'[data-bulk-action-group="{group}"]')).to_be_visible()
             checkbox.uncheck()
             if width == 320 and theme == "light":
+                with page.expect_response(lambda response: feed_response(response, False)) as reset_stock_response:
+                    stock_filter.select_option("")
+                assert reset_stock_response.value.status == 200
+                reset_query = parse_qs(urlsplit(reset_stock_response.value.url).query)
+                assert "stock" not in reset_query, reset_query
+                expect(stock_filter).to_have_value("")
+                unfiltered_ambiguous_row = page.locator(".mp-row").filter(has_text=AMBIGUOUS_WB_TITLE)
+                expect(unfiltered_ambiguous_row).to_have_count(1)
                 search = page.get_by_placeholder("Название, бренд или артикул")
                 search.fill(AMBIGUOUS_WB_TITLE)
                 ambiguous_row = page.locator(".mp-row").filter(has_text=AMBIGUOUS_WB_TITLE)
