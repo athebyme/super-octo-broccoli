@@ -1979,18 +1979,90 @@ def run():
         assert fixture.REPORT["provider_attempts"] == 0
         checks.append("ordinary_wb_enrichment_opens_owned_review_and_keeps_photo_only_default")
 
-        supplier_path = fixture.PAGE_PATHS["supplier_products"] + "&show_imported=1"
+        supplier_path = fixture.PAGE_PATHS["supplier_products"] + "&show_imported=1&intent=import"
         fixture.wait_document(page, "supplier_bulk", supplier_path)
+        import_query = parse_qs(urlsplit(page.url).query, keep_blank_values=True)
+        assert import_query == {
+            "stock_status": ["all"], "show_imported": ["1"], "intent": ["import"],
+        }, import_query
+        assert page.get_by_label("Найти товар").input_value() == ""
+        assert page.get_by_label("Наличие").input_value() == "all"
+        assert page.get_by_role("link", name="Импорт", exact=True).get_attribute("aria-current") == "page"
+        checks.append("supplier_intent_switch_preserves_mode_search_stock")
+        assert page.locator("#select-all-updates").count() == 0
         page.locator("#select-all-import").check()
+        import_selection = page.evaluate("""() => ({
+            importIds: new FormData(document.querySelector('#supplier-import-form')).getAll('product_ids'),
+            importUpdates: new FormData(document.querySelector('#supplier-import-form')).getAll('update_product_ids'),
+            updateIds: new FormData(document.querySelector('#supplier-update-form')).getAll('update_product_ids'),
+            updateImports: new FormData(document.querySelector('#supplier-update-form')).getAll('product_ids'),
+        })""")
+        assert import_selection == {
+            "importIds": [str(fixture_ids["import_id"])], "importUpdates": [],
+            "updateIds": [], "updateImports": [],
+        }, import_selection
+
+        updates_link = page.get_by_role("link", name="Обновления", exact=True)
+        updates_target = urlsplit(updates_link.get_attribute("href") or "")
+        assert updates_target.path == urlsplit(supplier_path).path
+        assert parse_qs(updates_target.query, keep_blank_values=True) == {
+            "page": ["1"], "intent": ["updates"], "show_imported": ["1"],
+            "updates_only": ["1"], "stock_status": ["all"],
+        }, updates_target.query
+        with page.expect_navigation(wait_until="domcontentloaded") as updates_navigation:
+            updates_link.click()
+        assert updates_navigation.value and updates_navigation.value.status == 200
+        updates_query = parse_qs(urlsplit(page.url).query, keep_blank_values=True)
+        assert updates_query == {
+            "page": ["1"], "intent": ["updates"], "show_imported": ["1"],
+            "updates_only": ["1"], "stock_status": ["all"],
+        }, updates_query
+        assert page.get_by_label("Найти товар").input_value() == ""
+        assert page.get_by_label("Наличие").input_value() == "all"
+        assert page.get_by_role("link", name="Обновления", exact=True).get_attribute("aria-current") == "page"
+        assert page.locator("#select-all-import").count() == 0
         page.locator("#select-all-updates").check()
+        update_selection = page.evaluate("""() => ({
+            importIds: new FormData(document.querySelector('#supplier-import-form')).getAll('product_ids'),
+            importUpdates: new FormData(document.querySelector('#supplier-import-form')).getAll('update_product_ids'),
+            updateIds: new FormData(document.querySelector('#supplier-update-form')).getAll('update_product_ids'),
+            updateImports: new FormData(document.querySelector('#supplier-update-form')).getAll('product_ids'),
+        })""")
+        assert update_selection == {
+            "importIds": [], "importUpdates": [],
+            "updateIds": [str(fixture_ids["refresh_source_id"])], "updateImports": [],
+        }, update_selection
+
+        import_link = page.get_by_role("link", name="Импорт", exact=True)
+        import_target = urlsplit(import_link.get_attribute("href") or "")
+        assert parse_qs(import_target.query, keep_blank_values=True) == {
+            "page": ["1"], "intent": ["import"], "show_imported": ["1"],
+            "stock_status": ["all"],
+        }, import_target.query
+        with page.expect_navigation(wait_until="domcontentloaded") as import_navigation:
+            import_link.click()
+        assert import_navigation.value and import_navigation.value.status == 200
+        assert parse_qs(urlsplit(page.url).query, keep_blank_values=True) == {
+            "page": ["1"], "intent": ["import"], "show_imported": ["1"],
+            "stock_status": ["all"],
+        }
+        assert page.get_by_label("Найти товар").input_value() == ""
+        assert page.get_by_label("Наличие").input_value() == "all"
+        assert page.get_by_role("link", name="Импорт", exact=True).get_attribute("aria-current") == "page"
+        assert page.locator("#select-all-updates").count() == 0
+        page.locator("#select-all-import").check()
         submitted = page.evaluate("""() => ({
             importIds: new FormData(document.querySelector('#supplier-import-form')).getAll('product_ids'),
             importUpdates: new FormData(document.querySelector('#supplier-import-form')).getAll('update_product_ids'),
             updateIds: new FormData(document.querySelector('#supplier-update-form')).getAll('update_product_ids'),
             updateImports: new FormData(document.querySelector('#supplier-update-form')).getAll('product_ids'),
         })""")
-        assert submitted == {"importIds": [str(fixture_ids["import_id"])], "importUpdates": [],
-                             "updateIds": [str(fixture_ids["refresh_source_id"])], "updateImports": []}, submitted
+        assert submitted == {
+            "importIds": [str(fixture_ids["import_id"])], "importUpdates": [],
+            "updateIds": [], "updateImports": [],
+        }, submitted
+        assert import_selection["importIds"] == submitted["importIds"]
+        assert update_selection["updateIds"] == [str(fixture_ids["refresh_source_id"])]
         checks.append("supplier_import_and_refresh_forms_carry_independent_exact_scope")
 
         def is_supplier_import_batch_feed(response):
