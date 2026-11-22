@@ -641,6 +641,8 @@
 
 .sc-products-page nav a { min-height: 44px; }
 
+.sc-card-primary:focus-visible,
+.sc-card-secondary:focus-visible,
 .sc-index-heading a:focus-visible,
 .sc-products-page a:focus-visible,
 .sc-products-page button:focus-visible,
