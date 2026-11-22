@@ -47,6 +47,7 @@ report = {
     "reviewed_queue": {},
     "reviewed_result_recovery": {},
     "saved_draft_selection": {},
+    "mixed_type_selection": {},
     "scope": "synthetic_ozon_bulk_ready_review_browser",
     "multi_page_review": "not_run; 4-row journey exercises the real API; 200-row paging contract stays in its Node test",
 }
@@ -87,6 +88,7 @@ from models import (
     MarketplaceOperation,
     MarketplaceProductDraft,
     MarketplaceProductType,
+    MarketplaceTaxonomyCategory,
     OzonBulkUploadItem,
     OzonBulkUploadRun,
     SellerMarketplaceAccount,
@@ -1511,6 +1513,478 @@ def run_selected_draft_journey(page):
     passed("saved_draft_selection_edits_exact_scope_and_reviews_current_versions_without_queueing")
 
 
+def _seed_mixed_type_selection():
+    """Create a small-per-card, wide-union schema for the native editor."""
+    type_count = 22
+    fields_per_type = 5
+    target_attribute_id = "99990001"
+    target_attribute_name = "R49 целевое десятичное поле"
+    unselected_attribute_id = "99990002"
+    unselected_attribute_name = "R49 поле только вне набора"
+    with app.app_context():
+        now = datetime.utcnow()
+        category = MarketplaceTaxonomyCategory.query.filter_by(
+            marketplace_id=marketplace_id,
+            external_category_id="100",
+        ).one()
+        draft_ids = []
+        titles = {}
+        target_ids = set()
+        unselected_id = None
+        unselected_title = "R49 mixed · неподходящий тип вне выбора"
+
+        def add_type(index, *, include_target=False, unselected=False):
+            nonlocal unselected_id
+            product_type = MarketplaceProductType(
+                marketplace_id=marketplace_id,
+                category_id=category.id,
+                external_type_id=str(710000 + index),
+                name=f"R49 смешанный тип {index:02d}",
+                is_available=True,
+                is_enabled=True,
+                is_seller_selectable=True,
+                attributes_synced_at=now,
+                attributes_sync_status="success",
+                attributes_schema_hash=f"r49-mixed-schema-{index:02d}",
+            )
+            db.session.add(product_type)
+            db.session.flush()
+            definitions = [MarketplaceAttributeDefinition(
+                marketplace_id=marketplace_id,
+                product_type_id=product_type.id,
+                external_attribute_id="4191",
+                name="Аннотация",
+                data_type="String",
+                is_required=False,
+                max_value_count=1,
+                is_available=True,
+                is_enabled=True,
+                last_seen_at=now,
+            )]
+            for field_index in range(fields_per_type):
+                external_id = str(600000 + index * 10 + field_index)
+                definitions.append(MarketplaceAttributeDefinition(
+                    marketplace_id=marketplace_id,
+                    product_type_id=product_type.id,
+                    external_attribute_id=external_id,
+                    name=f"R49 поле {index:02d}-{field_index:02d}",
+                    data_type="String",
+                    is_required=True,
+                    max_value_count=1,
+                    is_available=True,
+                    is_enabled=True,
+                    last_seen_at=now,
+                ))
+            if include_target:
+                definitions.append(MarketplaceAttributeDefinition(
+                    marketplace_id=marketplace_id,
+                    product_type_id=product_type.id,
+                    external_attribute_id=target_attribute_id,
+                    name=target_attribute_name,
+                    data_type="Decimal",
+                    is_required=True,
+                    max_value_count=1,
+                    is_available=True,
+                    is_enabled=True,
+                    last_seen_at=now,
+                ))
+            if unselected:
+                definitions.append(MarketplaceAttributeDefinition(
+                    marketplace_id=marketplace_id,
+                    product_type_id=product_type.id,
+                    external_attribute_id=unselected_attribute_id,
+                    name=unselected_attribute_name,
+                    data_type="String",
+                    is_required=True,
+                    max_value_count=1,
+                    is_available=True,
+                    is_enabled=True,
+                    last_seen_at=now,
+                ))
+            db.session.add_all(definitions)
+            product_type.attributes_count = len(definitions)
+            product_type.required_attributes_count = sum(
+                1 for definition in definitions if definition.is_required
+            )
+            source = _make_source(
+                seller_id=fixture["seller_id"],
+                external_id=f"r49-mixed-source-{index:02d}",
+                vendor_code=f"R49-MIXED-{index:02d}",
+                title=(
+                    unselected_title
+                    if unselected
+                    else f"R49 mixed · выбранный товар {index:02d}"
+                ),
+                description=f"Синтетическое описание R49 {index:02d}.",
+                category=category.name,
+                barcode=f"460000009{index:04d}",
+            )
+            db.session.add(source)
+            db.session.flush()
+            draft = MarketplaceDraftService.create_draft(
+                seller_id=fixture["seller_id"],
+                account_id=account_id,
+                imported_product_id=source.id,
+                product_type_id=product_type.id,
+                source_link_preflight=False,
+                observed_mapping_preflight=False,
+            )
+            if unselected:
+                unselected_id = draft.id
+            else:
+                draft_ids.append(draft.id)
+                titles[draft.id] = source.title
+                if include_target:
+                    target_ids.add(draft.id)
+
+        for index in range(type_count):
+            add_type(index, include_target=index in {0, 1})
+        add_type(type_count, unselected=True)
+        db.session.commit()
+        assert len(draft_ids) == type_count
+        assert len(target_ids) == 2
+        return {
+            "draft_ids": draft_ids,
+            "titles": titles,
+            "target_attribute_id": target_attribute_id,
+            "target_attribute_name": target_attribute_name,
+            "target_draft_ids": sorted(target_ids),
+            "unselected_attribute_id": unselected_attribute_id,
+            "unselected_attribute_name": unselected_attribute_name,
+            "unselected_draft_id": unselected_id,
+            "unselected_title": unselected_title,
+            "type_count": type_count,
+            "fields_per_type": fields_per_type,
+        }
+
+
+def _mixed_draft_snapshots(draft_ids):
+    with app.app_context():
+        return {
+            draft.id: {
+                "version": draft.version,
+                "attributes": json.loads(draft.attributes_json or "[]"),
+                "content": json.loads(draft.content_json or "{}"),
+                "commercial": json.loads(draft.commercial_json or "{}"),
+                "dimensions": json.loads(draft.dimensions_json or "{}"),
+            }
+            for draft in MarketplaceProductDraft.query.filter(
+                MarketplaceProductDraft.id.in_(draft_ids),
+            ).all()
+        }
+
+
+def run_mixed_type_selection_journey(page):
+    """Open and locally save a >100-field union from ordinary Ozon drafts."""
+    fixture_rows = _seed_mixed_type_selection()
+    draft_ids = fixture_rows["draft_ids"]
+    titles = fixture_rows["titles"]
+    selected_ids = list(draft_ids)
+    target_ids = set(fixture_rows["target_draft_ids"])
+    other_selected_ids = set(selected_ids) - target_ids
+    outside_id = fixture_rows["unselected_draft_id"]
+    target_field = fixture_rows["target_attribute_id"]
+    target_name = fixture_rows["target_attribute_name"]
+    outside_field_name = fixture_rows["unselected_attribute_name"]
+    outside_title = fixture_rows["unselected_title"]
+    new_value = "47.25"
+
+    with app.app_context():
+        baseline_counts = _business_counts()
+        initial = _mixed_draft_snapshots([*selected_ids, outside_id])
+        assert set(initial) == set(selected_ids) | {outside_id}
+        assert all(
+            not any(
+                item.get("attribute_id") == target_field
+                for item in initial[draft_id]["attributes"]
+            )
+            for draft_id in selected_ids
+        )
+        writes_before = len(business_write_events)
+    provider_attempts_before = report["provider_attempts"]
+    provider_dispatch_calls_before = report["provider_dispatch_calls"]
+    state["selection_draft_ids"] = selected_ids
+    state["mixed_selection_draft_ids"] = selected_ids
+
+    page.set_viewport_size({"width": 320, "height": 900})
+    page.evaluate("document.documentElement.dataset.theme = 'light'")
+    page.goto(
+        f"{base}/marketplaces/drafts/?account_id={account_id}&per_page=100"
+    )
+    workspace = page.locator("#ozon-drafts-list:not([v-cloak])")
+    workspace.wait_for()
+    for draft_id in [*selected_ids, outside_id]:
+        page.get_by_role(
+            "checkbox",
+            name=f"Выбрать для изменения {titles.get(draft_id, outside_title)}",
+            exact=True,
+        ).wait_for()
+
+    mode = page.locator("[data-draft-selection-mode]")
+    mode.focus()
+    mode.press("Enter")
+    summary = page.locator("[data-draft-selection-summary]")
+    summary.wait_for()
+    clear = summary.get_by_role("button", name="Снять выбор", exact=True)
+    if clear.is_enabled():
+        clear.click()
+    for draft_id in selected_ids:
+        checkbox = page.get_by_role(
+            "checkbox",
+            name=f"Выбрать для изменения {titles[draft_id]}",
+            exact=True,
+        )
+        checkbox.focus()
+        page.keyboard.press("Space")
+    assert f"Для изменения выбрано {len(selected_ids)}" in summary.inner_text()
+    assert page.evaluate(
+        "document.documentElement.scrollWidth <= innerWidth + 1"
+    )
+    start = page.locator("[data-draft-selection-start]")
+    start.scroll_into_view_if_needed()
+    start_bounds = start.bounding_box()
+    assert start_bounds and start_bounds["height"] >= 44
+    assert 0 <= start_bounds["x"] and start_bounds["x"] + start_bounds["width"] <= 321
+    start.focus()
+    start.press("Enter")
+    page.wait_for_url("**/marketplaces/ozon/uploads/selection/repair?*")
+    selection_query = parse_qs(urlsplit(page.url).query)
+    assert selection_query["account_id"] == [str(account_id)]
+    assert selection_query["draft_ids"] == [",".join(map(str, selected_ids))]
+    assert selection_query["return_per_page"] == ["100"]
+
+    editor = page.locator(
+        '#ozon-bulk-repair[data-editor-mode="draft_selection"]:not([v-cloak])'
+    )
+    editor.wait_for()
+    assert page.evaluate(
+        "document.documentElement.scrollWidth <= innerWidth + 1"
+    )
+    editor_model = page.evaluate(
+        "() => JSON.parse(document.querySelector('#orb-bootstrap').textContent).editor"
+    )
+    assert editor_model["mode"] == "draft_selection"
+    assert editor_model["review_draft_ids"] == selected_ids
+    rows = [row for group in editor_model["groups"] for row in group["rows"]]
+    assert {row["draft_id"] for row in rows} == set(selected_ids)
+    editable_ids = {
+        field["external_id"]
+        for row in rows
+        for field in row["attributes"]
+        if field["editable"]
+    }
+    assert len(editable_ids) >= 105, len(editable_ids)
+    assert target_field in editable_ids
+    assert fixture_rows["unselected_attribute_id"] not in editable_ids
+    assert max(sum(field["editable"] for field in row["attributes"]) for row in rows) <= 6
+    assert all(
+        any(
+            field["external_id"] == target_field
+            and field["data_type"] == "Decimal"
+            and field["editable"]
+            for field in row["attributes"]
+        )
+        for row in rows
+        if row["draft_id"] in target_ids
+    )
+    assert not any(row["draft_id"] == outside_id for row in rows)
+
+    editor.locator(".orb-toolbar").get_by_role(
+        "button", name="Заполнить поле", exact=True,
+    ).click()
+    dialog = page.get_by_role("dialog")
+    dialog.wait_for(state="visible")
+    search = dialog.locator("#orb-bulk-field-query")
+    bulk_field = dialog.locator("#orb-bulk-field")
+    window = dialog.locator("[data-bulk-field-window]")
+    window.wait_for()
+    assert int(window.get_attribute("data-total")) >= 105
+    assert int(window.get_attribute("data-shown")) == 40
+    attribute_options = bulk_field.locator(
+        'optgroup[label="Характеристики среди выбранных карточек"] option'
+    )
+    assert attribute_options.count() == 40
+    assert bulk_field.locator(f'option[value="attribute:{target_field}"]').count() == 0
+    assert bulk_field.locator(
+        'optgroup[label="Основные поля"] option'
+    ).count() >= 6
+    assert f"Выбрано {len(selected_ids)}" in editor.locator(
+        ".orb-toolbar",
+    ).inner_text()
+
+    search_bounds = search.bounding_box()
+    field_bounds = bulk_field.bounding_box()
+    assert search_bounds and field_bounds
+    for bounds in (search_bounds, field_bounds):
+        assert bounds["x"] >= 0 and bounds["x"] + bounds["width"] <= 321
+    page.screenshot(
+        path=str(OUT / "ozon-mixed-type-bulk-fields-mobile.png"),
+        animations="disabled",
+    )
+
+    search.focus()
+    search.fill(outside_field_name)
+    assert int(window.get_attribute("data-total")) >= 105
+    assert int(window.get_attribute("data-shown")) == 0
+    assert bulk_field.locator(
+        'optgroup[label="Характеристики среди выбранных карточек"] option'
+    ).count() == 0
+    assert f"Выбрано {len(selected_ids)}" in editor.locator(
+        ".orb-toolbar",
+    ).inner_text()
+
+    search.fill(target_name)
+    assert int(window.get_attribute("data-shown")) == 1
+    target_option = bulk_field.locator(f'option[value="attribute:{target_field}"]')
+    assert target_option.count() == 1
+    assert target_name in target_option.inner_text()
+    bulk_field.focus()
+    bulk_field.press("End")
+    bulk_field.press("Enter")
+    assert bulk_field.input_value() == f"attribute:{target_field}"
+    assert f"Выбрано {len(selected_ids)}" in editor.locator(
+        ".orb-toolbar",
+    ).inner_text()
+
+    typed_value = dialog.get_by_label(target_name, exact=True)
+    assert typed_value.get_attribute("inputmode") == "decimal"
+    typed_value.fill(new_value)
+    dialog.get_by_role("button", name="Посмотреть изменения", exact=True).click()
+    assert dialog.locator(".orb-review-list > li").count() == len(target_ids)
+    planned_titles = {
+        item.locator("strong").first.inner_text()
+        for item in dialog.locator(".orb-review-list > li").all()
+    }
+    assert planned_titles == {titles[draft_id] for draft_id in target_ids}
+    preview_summary = dialog.locator("[data-bulk-preview-summary]").inner_text()
+    assert "Будет заполнено" in preview_summary
+    assert str(len(target_ids)) in preview_summary
+    assert "Пропущено" in preview_summary
+    assert str(len(other_selected_ids)) in preview_summary
+    assert str(len(selected_ids)) in preview_summary
+    skipped_rows = dialog.locator(".orb-skipped li")
+    assert skipped_rows.count() == len(other_selected_ids)
+    skipped_titles = {row.locator("strong").inner_text() for row in skipped_rows.all()}
+    assert skipped_titles == {titles[draft_id] for draft_id in other_selected_ids}
+    assert outside_title not in dialog.inner_text()
+    assert f"Выбрано {len(selected_ids)}" in editor.locator(
+        ".orb-toolbar",
+    ).inner_text()
+
+    dialog.get_by_role("button", name="Заполнить в форме", exact=True).click()
+    assert f"Выбрано {len(selected_ids)}" in editor.locator(
+        ".orb-toolbar",
+    ).inner_text()
+    editor.locator(".orb-toolbar").get_by_role(
+        "button", name="Проверить изменения", exact=True,
+    ).click()
+    save_dialog = page.get_by_role("dialog")
+    save_dialog.wait_for(state="visible")
+    assert save_dialog.locator(".orb-review-list > li").count() == len(selected_ids)
+    assert save_dialog.locator(".orb-review-field").count() == len(target_ids)
+    save_copy = save_dialog.inner_text()
+    assert "Будут сохранены в Seller Hub" in save_copy
+    assert str(len(selected_ids)) in save_copy
+
+    before_ops = baseline_counts["operations"]
+    before_jobs_runs = (baseline_counts["runs"], baseline_counts["items"])
+    save_posts_marker = report["post_counts"].get(
+        "/marketplaces/ozon/uploads/selection/repair/apply", 0,
+    )
+    save_dialog.locator("[data-draft-selection-save]").click()
+    receipt = editor.locator(".orb-receipt[data-draft-selection-receipt]")
+    receipt.wait_for()
+    receipt.locator("strong").filter(
+        has_text=f"Обработано черновиков: {len(selected_ids)}",
+    ).wait_for()
+    assert state["selection_repair_post"]["draft_ids"] == selected_ids
+    assert state["selection_repair_post"]["csrf"] is True
+    assert report["post_counts"][
+        "/marketplaces/ozon/uploads/selection/repair/apply"
+    ] == save_posts_marker + 1
+
+    after = _mixed_draft_snapshots([*selected_ids, outside_id])
+    assert set(after) == set(initial)
+    affected = set()
+    unchanged = set()
+    for draft_id in selected_ids:
+        old = initial[draft_id]
+        new = after[draft_id]
+        old_non_target = [
+            item for item in old["attributes"]
+            if item.get("attribute_id") != target_field
+        ]
+        new_non_target = [
+            item for item in new["attributes"]
+            if item.get("attribute_id") != target_field
+        ]
+        assert new_non_target == old_non_target
+        target_attributes = [
+            item for item in new["attributes"]
+            if item.get("attribute_id") == target_field
+        ]
+        assert new["content"] == old["content"]
+        assert new["commercial"] == old["commercial"]
+        assert new["dimensions"] == old["dimensions"]
+        if draft_id in target_ids:
+            assert len(target_attributes) == 1
+            assert target_attributes[0]["complex_id"] == "0"
+            assert target_attributes[0]["values"] == [{"value": new_value}]
+            affected.add(draft_id)
+        else:
+            assert target_attributes == []
+            assert new["attributes"] == old["attributes"]
+            unchanged.add(draft_id)
+    assert affected == target_ids
+    assert unchanged == other_selected_ids
+    assert after[outside_id] == initial[outside_id]
+    counts_after = _business_counts()
+    assert counts_after["operations"] == before_ops
+    assert (counts_after["runs"], counts_after["items"]) == before_jobs_runs
+    assert report["provider_attempts"] == provider_attempts_before
+    assert report["provider_dispatch_calls"] == provider_dispatch_calls_before
+    assert report["provider_attempts"] == 0
+    assert report["provider_dispatch_calls"] == 0
+    assert len(business_write_events) > writes_before
+    report["mixed_type_selection"] = {
+        "draft_rows": len(selected_ids),
+        "distinct_editable_attribute_ids": len(editable_ids),
+        "max_editable_fields_per_card": max(
+            sum(field["editable"] for field in row["attributes"])
+            for row in rows
+        ),
+        "affected_rows": len(affected),
+        "unchanged_rows": len(unchanged),
+        "planned_draft_ids": sorted(target_ids),
+        "skipped_draft_ids": sorted(other_selected_ids),
+        "unselected_draft_id": outside_id,
+        "unselected_row_unchanged": after[outside_id] == initial[outside_id],
+        "field_filter_preserved_exact_membership": True,
+        "local_save_posts": 1,
+        "explicit_local_save": True,
+        "public_operations": counts_after["operations"] - before_ops,
+        "no_public_operations": counts_after["operations"] == before_ops,
+        "new_runs_or_items": [
+            counts_after["runs"] - before_jobs_runs[0],
+            counts_after["items"] - before_jobs_runs[1],
+        ],
+        "provider_attempts": report["provider_attempts"],
+        "new_provider_attempts": report["provider_attempts"] - provider_attempts_before,
+        "provider_dispatch_calls": report["provider_dispatch_calls"],
+        "new_provider_dispatch_calls": (
+            report["provider_dispatch_calls"] - provider_dispatch_calls_before
+        ),
+        "mobile_viewport": {
+            "width": 320,
+            "height": 900,
+            "no_horizontal_overflow": True,
+        },
+        "keyboard_open_and_field_choice": True,
+        "mobile_screenshot": "ozon-mixed-type-bulk-fields-mobile.png",
+    }
+    passed("mixed_type_bulk_editor_opens_and_saves_exact_applicable_rows")
+
+
 def run_browser_journey():
     with app.app_context():
         account_rows = SellerMarketplaceAccount.query.filter_by(
@@ -2016,6 +2490,7 @@ def run_browser_journey():
         passed("explicit_reviewed_queue_creates_exactly_one_create_and_one_update_without_provider_dispatch")
         run_recovery_browser_journey(page, browser, context)
         run_selected_draft_journey(page)
+        run_mixed_type_selection_journey(page)
         browser.close()
 
 
