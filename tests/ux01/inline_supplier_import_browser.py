@@ -370,6 +370,11 @@ def check_wb_create_selection_continuity(
     release = threading.Event()
     importer_returned = threading.Event()
     original_batch_import = WBProductImporter.batch_import_products_to_wb
+    state['wb_worker_started_event'] = started
+    state['wb_worker_release_event'] = release
+    state['wb_worker_returned_event'] = importer_returned
+    state['wb_importer_class'] = WBProductImporter
+    state['wb_importer_original'] = original_batch_import
 
     def deterministic_blocked_wb_import(self, imported_products, progress_callback=None):
         product_ids = [product.id for product in imported_products]
@@ -612,7 +617,6 @@ def check_wb_create_selection_continuity(
         }
     finally:
         release.set()
-        WBProductImporter.batch_import_products_to_wb = original_batch_import
 
 
 def run():
@@ -777,6 +781,20 @@ def run():
         }, ensure_ascii=False), flush=True)
         raise
     finally:
+        release_event = state.get('wb_worker_release_event')
+        started_event = state.get('wb_worker_started_event')
+        returned_event = state.get('wb_worker_returned_event')
+        if release_event:
+            release_event.set()
+        if any(entry['status'] == 202 for entry in state['wb_posts']):
+            if started_event:
+                started_event.wait(20)
+            if returned_event:
+                returned_event.wait(20)
+        importer_class = state.get('wb_importer_class')
+        original_importer = state.get('wb_importer_original')
+        if importer_class is not None and original_importer is not None:
+            importer_class.batch_import_products_to_wb = original_importer
         fixture.server.shutdown()
         fixture.TEMP.cleanup()
 
