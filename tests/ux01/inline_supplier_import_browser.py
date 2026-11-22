@@ -3,6 +3,8 @@ from email.parser import BytesParser
 import json
 from pathlib import Path
 import re
+import secrets
+import threading
 from urllib.parse import parse_qs, urlsplit
 
 from playwright.sync_api import expect, sync_playwright
@@ -17,7 +19,14 @@ artifacts.mkdir(parents=True, exist_ok=True)
 post_path = '/supplier-catalog/import'
 receipt_path = '/supplier-catalog/import/result'
 prepare_path = '/marketplaces/ozon/uploads/'
-state = {'mode': 'normal', 'catalog': [], 'posts': [], 'receipts': [], 'prepares': [], 'errors': []}
+wb_create_path = '/my-products/push-to-wb-bulk'
+wb_create_result_path = '/my-products/push-to-wb-bulk/result'
+feed_path = '/api/my-products'
+state = {
+    'mode': 'normal', 'catalog': [], 'posts': [], 'receipts': [], 'prepares': [], 'errors': [],
+    'wb_mode': 'normal', 'wb_posts': [], 'wb_reads': [], 'wb_feed_reads': [],
+    'wb_worker_product_ids': [], 'wb_worker_errors': [],
+}
 
 
 def multipart(request):
@@ -38,6 +47,80 @@ def bridge(route):
     request = route.request
     parsed = urlsplit(request.url)
     if parsed.netloc == urlsplit(fixture.BASE).netloc:
+        if request.method == 'POST' and parsed.path == wb_create_path:
+            assert not parsed.query
+            assert request.headers.get('accept') == 'application/json'
+            assert 'application/json' in (request.headers.get('content-type') or '')
+            assert request.headers.get('x-csrftoken')
+            posted = request.post_data_json
+            assert set(posted) == {'product_ids', 'request_key'}
+            assert isinstance(posted['product_ids'], list) and posted['product_ids']
+            assert all(type(value) is int and value > 0 for value in posted['product_ids'])
+            assert len(set(posted['product_ids'])) == len(posted['product_ids'])
+            assert re.fullmatch(r'[0-9a-f]{32}', posted['request_key'])
+            attempted = {
+                'key': posted['request_key'], 'ids': posted['product_ids'][:],
+                'status': None, 'code': None, 'transport_lost': False,
+            }
+            state['wb_posts'].append(attempted)
+            mode, state['wb_mode'] = state['wb_mode'], 'normal'
+            if mode == 'drop_before':
+                attempted['transport_lost'] = True
+                route.abort('failed')
+                return
+            response = route.fetch(max_redirects=0)
+            attempted['status'] = response.status
+            try:
+                payload = response.json()
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                attempted['code'] = payload.get('code')
+                attempted['receipt'] = {
+                    key: payload.get(key) for key in (
+                        'success', 'job_uid', 'total', 'product_ids', 'status',
+                        'replayed', 'worker_exited', 'accepted',
+                    ) if key in payload
+                }
+            route.fulfill(response=response)
+            return
+        if request.method == 'GET' and parsed.path == wb_create_result_path:
+            assert not parsed.query
+            key = request.headers.get('x-wb-create-key')
+            assert key and re.fullmatch(r'[0-9a-f]{32}', key)
+            response = route.fetch(max_redirects=0)
+            try:
+                payload = response.json()
+            except Exception:
+                payload = None
+            state['wb_reads'].append({
+                'key': key, 'status': response.status,
+                'receipt': {
+                    field: payload.get(field) for field in (
+                        'success', 'code', 'job_uid', 'total', 'product_ids',
+                        'status', 'replayed', 'worker_exited', 'cancel_requested',
+                    ) if isinstance(payload, dict) and field in payload
+                },
+            })
+            route.fulfill(response=response)
+            return
+        if request.method == 'GET' and parsed.path == feed_path:
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            response = route.fetch(max_redirects=0)
+            try:
+                payload = response.json()
+            except Exception:
+                payload = None
+            state['wb_feed_reads'].append({
+                'query_keys': tuple(sorted(query)),
+                'batch_tokens': tuple(query.get('import_batch', [])),
+                'status': response.status,
+                'ids': [row.get('id') for row in payload.get('items', [])]
+                    if isinstance(payload, dict) and isinstance(payload.get('items'), list) else [],
+                'batch_count': payload.get('import_batch_count') if isinstance(payload, dict) else None,
+            })
+            route.fulfill(response=response)
+            return
         if request.method == 'POST' and parsed.path == post_path:
             assert request.headers.get('accept') == 'application/json'
             fields = multipart(request)
@@ -276,6 +359,262 @@ def check_inline_ozon_preparation(page, selected, navigations, *, account_id, ac
     return prepare['location']
 
 
+def check_wb_create_selection_continuity(
+    page, selected, navigations, *, first_account_id, first_account_label,
+    second_account_id, second_account_label,
+):
+    """Exercise keyed WB recovery, overlap denial, and exact Ozon handoff on one signed batch."""
+    from services.wb_product_importer import WBProductImporter
+
+    started = threading.Event()
+    release = threading.Event()
+    importer_returned = threading.Event()
+    original_batch_import = WBProductImporter.batch_import_products_to_wb
+
+    def deterministic_blocked_wb_import(self, imported_products, progress_callback=None):
+        product_ids = [product.id for product in imported_products]
+        state['wb_worker_product_ids'].append(product_ids)
+        started.set()
+        try:
+            if not release.wait(20):
+                state['wb_worker_errors'].append('worker_release_timeout')
+                raise RuntimeError('synthetic WB worker release timed out')
+            outcomes = [{
+                'product_id': product.id,
+                'title': (product.title or '')[:50],
+                'status': 'success',
+                'error': None,
+                'nm_id': 760001 + index,
+                'warnings': [],
+            } for index, product in enumerate(imported_products)]
+            if progress_callback:
+                progress_callback('done', {'items': outcomes})
+            return outcomes
+        finally:
+            importer_returned.set()
+
+    WBProductImporter.batch_import_products_to_wb = deterministic_blocked_wb_import
+    feed_reads_before = len(state['wb_feed_reads'])
+    try:
+        assert page.evaluate("document.querySelector('#my-products-app')._vnode.component.proxy.selected") == selected
+        assert page.evaluate("window.supplierProofDocument === 'first'") and not navigations
+
+        wb_action = page.locator('[data-supplier-import-next-action="push_wb"]')
+        assert wb_action.count() == 1 and wb_action.is_enabled()
+        wb_action.click()
+        confirmation = page.get_by_role('alertdialog')
+        confirmation.wait_for(state='visible')
+        create = confirmation.get_by_role('button', name='Создать карточки', exact=True)
+        assert create.is_enabled() and str(len(selected)) in confirmation.inner_text()
+        state['wb_mode'] = 'drop_before'
+        with page.expect_request_failed(
+            lambda request: urlsplit(request.url).path == wb_create_path
+            and request.method == 'POST',
+        ) as lost:
+            create.click()
+        assert urlsplit(lost.value.url).path == wb_create_path
+        confirmation.wait_for(state='hidden')
+
+        retry = page.locator('[data-wb-create-retry]')
+        retry.wait_for(state='visible')
+        receipt = page.locator('[data-wb-create-receipt]')
+        expect(receipt).to_have_attribute('data-wb-create-state', 'unknown')
+        assert len(state['wb_posts']) == 1 and state['wb_posts'][0]['transport_lost']
+        assert state['wb_posts'][0]['ids'] == selected
+        absent_reads = [entry for entry in state['wb_reads'] if entry['status'] == 404]
+        assert absent_reads and absent_reads[-1]['receipt'].get('code') == 'wb_create_receipt_not_found'
+        assert absent_reads[-1]['key'] == state['wb_posts'][0]['key']
+        assert len(state['wb_posts']) == 1, 'the lost response must recover by GET before explicit retry'
+        assert page.evaluate("document.querySelector('#my-products-app')._vnode.component.proxy.selected") == selected
+
+        with page.expect_response(
+            lambda response: urlsplit(response.url).path == wb_create_path
+            and response.request.method == 'POST',
+        ) as retried:
+            retry.click()
+        retry_response = retried.value
+        assert retry_response.status == 202
+        accepted = retry_response.json()
+        assert set(accepted) == {
+            'success', 'job_uid', 'total', 'product_ids', 'status', 'replayed',
+            'worker_exited', 'cancel_requested',
+        }
+        assert accepted['success'] is True and accepted['replayed'] is False
+        assert accepted['product_ids'] == selected and accepted['total'] == len(selected)
+        assert accepted['status'] in {'pending', 'running'} and accepted['worker_exited'] is False
+        assert re.fullmatch(r'bulk_wb_[0-9a-f]{56}', accepted['job_uid'])
+        assert state['wb_posts'][1]['key'] == state['wb_posts'][0]['key']
+        assert state['wb_posts'][1]['ids'] == state['wb_posts'][0]['ids'] == selected
+        assert state['wb_posts'][1]['status'] == 202
+        assert started.wait(10), 'the synthetic WB worker must be held inside the real background route'
+
+        receipt.wait_for(state='visible')
+        expect(receipt).to_have_attribute('data-wb-create-state', 'accepted')
+        with page.expect_response(
+            lambda response: urlsplit(response.url).path == wb_create_result_path
+            and response.request.method == 'GET',
+        ) as active_read:
+            page.locator('[data-wb-create-reconcile]').click()
+        active = active_read.value
+        assert active.status == 200
+        active_payload = active.json()
+        assert active_payload['success'] is True and active_payload['replayed'] is True
+        assert active_payload['product_ids'] == selected and active_payload['total'] == len(selected)
+        assert active_payload['status'] == 'running' and active_payload['worker_exited'] is False
+        assert active_payload['cancel_requested'] is False
+        assert not urlsplit(active.url).query
+        assert state['wb_reads'][-1]['key'] == state['wb_posts'][0]['key']
+
+        wb_button = page.locator('[data-supplier-import-next-action="push_wb"]')
+        ozon_button = page.locator('[data-supplier-import-next-action="ozon"]')
+        assert wb_button.count() == 0, 'the unresolved WB set must not offer another WB action'
+        assert ozon_button.count() == 1 and ozon_button.is_enabled(), (
+            'local Ozon preparation must remain available for the exact unresolved WB selection',
+        )
+
+        overlap_key = secrets.token_hex(16)
+        overlap = page.evaluate("""async ({ ids, key, csrf }) => {
+            const response = await fetch('/my-products/push-to-wb-bulk', {
+                method: 'POST', credentials: 'same-origin', cache: 'no-store',
+                headers: {
+                    'Content-Type': 'application/json', Accept: 'application/json',
+                    'X-CSRFToken': csrf,
+                },
+                body: JSON.stringify({ product_ids: ids, request_key: key }),
+            });
+            return { status: response.status, payload: await response.json() };
+        }""", {
+            'ids': selected,
+            'key': overlap_key,
+            'csrf': page.locator('meta[name="csrf-token"]').get_attribute('content'),
+        })
+        assert overlap['status'] == 409
+        assert overlap['payload'].get('success') is False
+        assert overlap['payload'].get('accepted') is False
+        assert overlap['payload'].get('code') == 'wb_create_overlap'
+        assert len(state['wb_posts']) == 3 and state['wb_posts'][2]['status'] == 409
+        assert state['wb_posts'][2]['code'] == 'wb_create_overlap'
+        assert state['wb_posts'][2]['key'] != state['wb_posts'][0]['key']
+        assert state['wb_worker_product_ids'] == [selected]
+        assert page.evaluate("document.querySelector('#my-products-app')._vnode.component.proxy.selected") == selected
+        assert not navigations and page.evaluate("window.supplierProofDocument === 'first'")
+        screenshot_name = 'wb-create-selection-continuity-light-1440.png'
+        page.screenshot(path=artifacts / screenshot_name)
+
+        first = check_inline_ozon_preparation(
+            page, selected, navigations, account_id=first_account_id,
+            account_label=first_account_label, choose_account=True,
+        )
+        assert receipt.is_visible() and receipt.get_attribute('data-wb-create-state') == 'accepted'
+        assert page.evaluate("document.querySelector('#my-products-app')._vnode.component.proxy.selected") == selected
+
+        release.set()
+        assert importer_returned.wait(10), 'the synthetic WB importer should return after release'
+        page.wait_for_function("""() => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy && (proxy.wbCreatePending === null ||
+                (proxy.wbCreatePending.state === 'unknown' &&
+                    !proxy.wbCreateBusy && !proxy.wbCreateReading));
+        }""", timeout=15000)
+        terminal_payload = None
+        terminal_read_attempts = 0
+        for _ in range(4):
+            pending = page.evaluate(
+                "document.querySelector('#my-products-app')._vnode.component.proxy.wbCreatePending !== null",
+            )
+            if not pending:
+                break
+            reconcile = page.locator('[data-wb-create-reconcile]')
+            expect(reconcile).to_be_enabled()
+            with page.expect_response(
+                lambda response: urlsplit(response.url).path == wb_create_result_path
+                and response.request.method == 'GET',
+            ) as final_read:
+                reconcile.click()
+            terminal_read_attempts += 1
+            payload = final_read.value.json()
+            if (
+                final_read.value.status == 200
+                and payload.get('worker_exited') is True
+                and payload.get('status') in {'completed', 'failed', 'cancelled'}
+            ):
+                terminal_payload = payload
+                break
+            assert final_read.value.status == 200
+            assert payload.get('product_ids') == selected
+            assert payload.get('worker_exited') is False
+        if terminal_payload is None:
+            observed_terminal = [
+                entry['receipt'] for entry in state['wb_reads']
+                if entry['status'] == 200
+                and entry['receipt'].get('worker_exited') is True
+                and entry['receipt'].get('status') in {'completed', 'failed', 'cancelled'}
+            ]
+            assert observed_terminal
+            terminal_payload = observed_terminal[-1]
+        assert terminal_payload is not None, 'terminal status must come from a typed receipt GET'
+        page.wait_for_function("""expected => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy && proxy.wbCreatePending === null &&
+                proxy.importBatchSelectionVerified &&
+                proxy.selected.length === expected.length &&
+                proxy.selected.every((id, index) => id === expected[index]);
+        }""", arg=selected, timeout=15000)
+
+        terminal_reads = [
+            entry for entry in state['wb_reads']
+            if entry['status'] == 200
+            and entry['receipt'].get('worker_exited') is True
+            and entry['receipt'].get('status') in {'completed', 'failed', 'cancelled'}
+        ]
+        assert terminal_reads and terminal_reads[-1]['key'] == state['wb_posts'][0]['key']
+        terminal = terminal_reads[-1]['receipt']
+        assert terminal['product_ids'] == selected and terminal['total'] == len(selected)
+        assert terminal['status'] == 'completed' and terminal['worker_exited'] is True
+        assert terminal['replayed'] is True and terminal['cancel_requested'] is False
+        assert terminal_payload['job_uid'] == terminal['job_uid']
+        assert state['wb_worker_errors'] == []
+        assert state['wb_worker_product_ids'] == [selected]
+        assert state['wb_posts'][-1]['status'] == 409 and len(state['wb_posts']) == 3
+        assert page.locator('[data-wb-create-receipt]').count() == 0
+        assert page.evaluate("document.querySelector('#my-products-app')._vnode.component.proxy.selected") == selected
+
+        signed_refreshes = state['wb_feed_reads'][feed_reads_before:]
+        assert signed_refreshes, 'verified terminal WB receipt must refresh the exact signed feed'
+        assert all(read['query_keys'] == ('import_batch',) for read in signed_refreshes)
+        assert all(read['status'] == 200 for read in signed_refreshes)
+        assert signed_refreshes[-1]['ids'] == selected
+        assert signed_refreshes[-1]['batch_count'] == len(selected)
+        second = check_inline_ozon_preparation(
+            page, selected, navigations, account_id=second_account_id,
+            account_label=second_account_label, choose_account=True,
+        )
+        assert first != second
+        assert len(state['wb_posts']) == 3 and state['wb_worker_product_ids'] == [selected]
+        assert not navigations and page.evaluate("window.supplierProofDocument === 'first'")
+        return {
+            'selected_count': len(selected),
+            'exact_signed_ids_preserved': True,
+            'lost_post_recovered_by_typed_get_before_retry': True,
+            'typed_absence_get_count_before_retry': len(absent_reads),
+            'explicit_same_key_retry_count': 1,
+            'overlap_rejected_without_new_worker': True,
+            'ozon_available_while_wb_unresolved': True,
+            'two_ozon_accounts_used_same_selection': True,
+            'terminal_receipt_requires_worker_exit': True,
+            'terminal_receipt_get_count': len(terminal_reads),
+            'explicit_terminal_read_count': terminal_read_attempts,
+            'terminal_refresh_restored_exact_signed_feed': True,
+            'screenshot': screenshot_name,
+            'wb_keyed_post_count_including_overlap': len(state['wb_posts']),
+            'wb_worker_invocation_count': len(state['wb_worker_product_ids']),
+            'wb_terminal_status': terminal['status'],
+        }
+    finally:
+        release.set()
+        WBProductImporter.batch_import_products_to_wb = original_batch_import
+
+
 def run():
     identity = supplier.seed_supplier_products()
     with fixture.app.app_context():
@@ -349,11 +688,14 @@ def run():
             assert rec.value.status == 200
             selected = confirm_exact_result(page, [row_id], navigations)
             assert len(state['posts']) == 2 and state['receipts'][-1]['key'] == state['posts'][-1]['key']
-            first = check_inline_ozon_preparation(page, selected, navigations, account_id=fixture.FIXTURE['account_id'],
-                account_label=fixture.OZON_ACCOUNT_LABEL, choose_account=True)
-            second = check_inline_ozon_preparation(page, selected, navigations, account_id=second_shop_id,
-                account_label=second_shop_label, choose_account=True)
-            assert first != second and len(state['prepares']) == 3
+            wb_continuity = check_wb_create_selection_continuity(
+                page, selected, navigations,
+                first_account_id=fixture.FIXTURE['account_id'],
+                first_account_label=fixture.OZON_ACCOUNT_LABEL,
+                second_account_id=second_shop_id,
+                second_account_label=second_shop_label,
+            )
+            assert len(state['prepares']) == 3
             page.screenshot(path=artifacts / 'ozon-second-shop-same-selection-light-1440.png')
             context.close()
 
@@ -403,6 +745,7 @@ def run():
             'next_create_actions': channel_actions, 'local_commits': 3,
             'exact_inline_ozon_preparation': True,
             'same_selection_submitted_to_two_explicit_ozon_shops': True,
+            'wb_create_selection_continuity': wb_continuity,
             'explicit_supplier_source_only_when_multiple': True,
             'one_initial_catalog_fetch': True,
             'inflight_filter_change_clears_selection_before_resubmission': True,
@@ -417,6 +760,17 @@ def run():
             'import_posts': [entry['status'] for entry in state['posts']],
             'import_receipt_reads': [entry['status'] for entry in state['receipts']],
             'ozon_preparations': len(state['prepares']),
+            'wb_create_posts': [
+                {'status': entry['status'], 'code': entry['code'], 'ids': entry['ids'],
+                 'transport_lost': entry['transport_lost']}
+                for entry in state['wb_posts']
+            ],
+            'wb_receipt_reads': [
+                {'status': entry['status'], 'receipt': entry['receipt']}
+                for entry in state['wb_reads']
+            ],
+            'wb_worker_product_ids': state['wb_worker_product_ids'],
+            'wb_worker_errors': state['wb_worker_errors'],
             'page_errors': state['errors'],
             'unexpected_http': fixture.REPORT['unexpected_http'],
             'unexpected_external_requests': fixture.REPORT['unexpected_external_requests'],
