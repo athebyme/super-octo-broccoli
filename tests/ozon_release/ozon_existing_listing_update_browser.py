@@ -11,6 +11,7 @@ from pathlib import Path
 import socket
 import tempfile
 import threading
+import traceback
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from cryptography.fernet import Fernet
@@ -25,8 +26,10 @@ ASSETS = Path(__file__).with_name("assets")
 REPORT = {
     "status": "running", "checks": [], "contexts": [], "local_saves": [],
     "provider_attempts": 0, "unexpected": [], "js_errors": [], "layouts": [],
-    "bulk_update": {}, "workspace_update": {},
+    "bulk_update": {}, "workspace_update": {}, "signed_import_review_return": {},
+    "publication_attempts_blocked": 0, "failure": None, "stage": "startup",
 }
+ACTIVE_PAGE = None
 TEMP = tempfile.TemporaryDirectory(prefix="ozon-existing-update-browser-")
 os.environ.update(
     DATABASE_URL="sqlite:///" + str(Path(TEMP.name) / "app.sqlite"),
@@ -48,9 +51,13 @@ socket.create_connection = forbid_network
 
 from models import (
     BackgroundJob, ImportedProduct, MarketplaceListing, MarketplaceListingLinkEvent,
-    MarketplaceOperation, MarketplaceProductDraft, db,
+    MarketplaceOperation, MarketplaceProductDraft, MarketplaceProductType,
+    Seller, SellerMarketplaceAccount, db,
 )
+from routes.suppliers import _issue_supplier_import_batch_token
 from seller_platform import app
+from services.ozon_bulk_repair import decode_compact_draft_ids, encode_compact_draft_ids
+from services.ozon_review_navigation import OzonReviewNavigation
 from tests.ozon_release.seed import PHOTO, PASSWORD, USERNAME, seed
 
 
@@ -58,6 +65,7 @@ app.config.update(
     TESTING=True, WTF_CSRF_ENABLED=True, SESSION_COOKIE_SECURE=False,
     MARKETPLACE_OZON_ENABLED=True, MARKETPLACE_OZON_PUBLICATION_ENABLED=False,
     MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED=False,
+    MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED=False,
 )
 fixture = seed(app)
 listing_ids = fixture["listing_ids"][:2]
@@ -65,25 +73,71 @@ bulk_ready_id = fixture["listing_ids"][2]
 bulk_unlinked_id = fixture["listing_ids"][3]
 bulk_listing_ids = {listing_ids[0], bulk_ready_id, bulk_unlinked_id}
 workspace_listing_ids = fixture["listing_ids"][4:6]
+signed_workspace_listing_ids = fixture["listing_ids"][6:28]
+signed_workspace_selected_count = 21
 bulk_catalog = "/marketplaces/listings/?" + urlencode({
     "marketplace": "ozon", "account_id": fixture["account_id"],
     "status": "active", "per_page": 2, "search": "R47 набор",
 })
 source_ids = {}
 with app.app_context():
+    signed_workspace_user_id = db.session.get(Seller, fixture["seller_id"]).user_id
+    ozon_account = db.session.get(SellerMarketplaceAccount, fixture["account_id"])
+    ozon_account.settings_json = json.dumps({"default_vat": "0.22"})
     for listing_id in bulk_listing_ids:
         listing = db.session.get(MarketplaceListing, listing_id)
         listing.title = f"R47 набор · {listing.offer_id}"
     for index, listing_id in enumerate(workspace_listing_ids):
         listing = db.session.get(MarketplaceListing, listing_id)
         listing.title = f"R56 workspace item {index}"
-    for listing_id in [*listing_ids, bulk_ready_id, *workspace_listing_ids]:
+    for index, listing_id in enumerate(signed_workspace_listing_ids):
         listing = db.session.get(MarketplaceListing, listing_id)
+        listing.title = f"R57 signed import item {index:02d}"
+    for listing_id in [
+        *listing_ids, bulk_ready_id, *workspace_listing_ids,
+        *signed_workspace_listing_ids,
+    ]:
+        listing = db.session.get(MarketplaceListing, listing_id)
+        is_signed_workspace_source = listing_id in signed_workspace_listing_ids
+        original_data = None
+        source_description = None
+        source_category = None
+        if is_signed_workspace_source:
+            product_type = db.session.get(
+                MarketplaceProductType, listing.product_type_id,
+            )
+            source_description = (
+                f"Синтетическое описание {listing.offer_id} для проверки возврата."
+            )
+            source_category = product_type.category.name
+            package_dimensions = {
+                "Ширина упаковки, мм": 200,
+                "Высота упаковки, мм": 30,
+                "Длина упаковки, мм": 300,
+                "Вес упаковки, г": 250,
+            }
+            # Make the final selected source the one actionable issue on page 2.
+            if listing_id == signed_workspace_listing_ids[signed_workspace_selected_count - 1]:
+                package_dimensions.pop("Вес упаковки, г")
+            original_data = json.dumps({
+                "title": listing.title,
+                "description": source_description,
+                "category": source_category,
+                "vendor_code": listing.offer_id,
+                "barcodes": ["4600000000001"],
+                "photo_urls": [PHOTO],
+                "dimensions": package_dimensions,
+            }, ensure_ascii=False)
         source = ImportedProduct(
             seller_id=fixture["seller_id"], source_type="synthetic",
             external_id=f"source-for-{listing_id}",
             external_vendor_code=listing.offer_id, title=listing.title,
-            photo_urls=json.dumps([PHOTO]),
+            description=source_description,
+            category=source_category,
+            photo_urls="[]" if is_signed_workspace_source else json.dumps([PHOTO]),
+            original_data=original_data,
+            calculated_price=1000.0 if is_signed_workspace_source else None,
+            calculated_price_before_discount=1200.0 if is_signed_workspace_source else None,
         )
         db.session.add(source)
         db.session.flush()
@@ -95,10 +149,15 @@ with app.app_context():
         listing.linked_at = listing.last_seen_at = datetime.utcnow()
         listing.link_evidence_json = "{}"
         listing.attributes_json = listing.complex_attributes_json = "[]"
-        listing.dimensions_json = json.dumps({
+        listing_dimensions = {
             "width": 20, "height": 3, "depth": 30, "weight": 250,
             "dimension_unit": "CENTIMETERS", "weight_unit": "GRAMS",
-        })
+        }
+        if listing_id == signed_workspace_listing_ids[signed_workspace_selected_count - 1]:
+            # Existing-update baseline must also lack weight; otherwise the
+            # live-card fallback would fill the source omission in review.
+            listing_dimensions.pop("weight")
+        listing.dimensions_json = json.dumps(listing_dimensions)
         listing.barcodes_json = json.dumps(["4600000000001"])
         listing.price_summary_json = json.dumps({
             "currency": "RUB", "available": True,
@@ -117,11 +176,23 @@ with app.app_context():
     db.session.flush()
     workspace_unselected_source_id = workspace_unselected_source.id
     db.session.commit()
+    signed_workspace_source_ids = [
+        source_ids[listing_id] for listing_id in signed_workspace_listing_ids
+    ]
+    signed_import_batch = _issue_supplier_import_batch_token(
+        user_id=signed_workspace_user_id,
+        seller_id=fixture["seller_id"],
+        imported_product_ids=signed_workspace_source_ids,
+    )
+    assert signed_import_batch
     initial_draft_count = MarketplaceProductDraft.query.count()
     original_links = {
         listing.id: (listing.imported_product_id, listing.link_version)
         for listing in MarketplaceListing.query.filter(
-            MarketplaceListing.id.in_([*listing_ids, bulk_ready_id, bulk_unlinked_id, *workspace_listing_ids]),
+            MarketplaceListing.id.in_([
+                *listing_ids, bulk_ready_id, bulk_unlinked_id,
+                *workspace_listing_ids, *signed_workspace_listing_ids,
+            ]),
         )
     }
 
@@ -146,6 +217,16 @@ workspace_state = {
     "unselected_source_id": workspace_unselected_source_id,
     "report": None, "catalog_reads": [],
 }
+signed_workspace_state = {
+    "active": False, "handoff": 0, "preview": 0, "apply": 0,
+    "token": None, "confirm_token": None, "return_to": None,
+    "listing_ids": signed_workspace_listing_ids[:signed_workspace_selected_count],
+    "source_ids": signed_workspace_source_ids[:signed_workspace_selected_count],
+    "import_batch": signed_import_batch,
+    "feed_reads": [], "review_api_reads": [], "report": None,
+    "catalog_reads": [],
+}
+active_workspace_state = workspace_state
 bulk_preview_path = "/marketplaces/listings/update-drafts/preview"
 bulk_apply_path = "/marketplaces/listings/update-drafts/apply"
 workspace_handoff_path = "/marketplaces/listings/update-drafts/workspace-handoff"
@@ -172,12 +253,95 @@ def decode_workspace_return(fragment):
     return _decode_unpadded_base64url(match.group(1)).decode("utf-8")
 
 
+def encode_workspace_return(value):
+    encoded = base64.urlsafe_b64encode(value.encode("utf-8")).rstrip(b"=").decode("ascii")
+    return "workspace-return=" + encoded
+
+
+def review_bootstrap(page):
+    return page.evaluate(
+        "() => JSON.parse(document.querySelector('#our-bootstrap').textContent).review"
+    )
+
+
+def read_review_api(page, *, page_number, compact_selection):
+    query = urlencode({
+        "account_id": fixture["account_id"],
+        "workspace_selection": compact_selection,
+        "page": page_number,
+    })
+    return page.evaluate("""async url => {
+        const response = await fetch(url, {
+            credentials: 'same-origin', cache: 'no-store',
+            headers: {Accept: 'application/json'}
+        });
+        return {
+            status: response.status,
+            cacheControl: response.headers.get('cache-control') || '',
+            body: await response.json(),
+        };
+    }""", "/marketplaces/ozon/uploads/api/review?" + query)
+
+
+def safe_location(page):
+    if page is None:
+        return None
+    try:
+        parsed = urlsplit(page.url)
+        return {
+            "path": parsed.path,
+            "query_keys": sorted(parse_qs(parsed.query, keep_blank_values=True)),
+            "fragment_present": bool(parsed.fragment),
+        }
+    except Exception:
+        return {"path": "unavailable", "query_keys": [], "fragment_present": False}
+
+
+def safe_failure_message(exc):
+    message = str(exc)
+    secrets_to_remove = [
+        signed_import_batch,
+        workspace_state.get("token"),
+        workspace_state.get("confirm_token"),
+        workspace_state.get("return_to"),
+        signed_workspace_state.get("token"),
+        signed_workspace_state.get("confirm_token"),
+        signed_workspace_state.get("return_to"),
+    ]
+    for secret in secrets_to_remove:
+        if isinstance(secret, str) and secret:
+            message = message.replace(secret, "[redacted]")
+    message = re.sub(
+        r"(?i)(import_batch=)[^&#\s]+", r"\1[redacted]", message,
+    )
+    message = re.sub(
+        r"(?i)(workspace-return=)[A-Za-z0-9_-]+", r"\1[redacted]", message,
+    )
+    message = re.sub(
+        r"(?i)(workspace-update=)[A-Za-z0-9_.-]+", r"\1[redacted]", message,
+    )
+    message = re.sub(
+        r"(?i)(review_return=)[A-Za-z0-9_.-]+", r"\1[redacted]", message,
+    )
+    return message[:500]
+
+
 def bridge(route):
     request = route.request
     url = urlsplit(request.url)
     if url.hostname == "127.0.0.1" and url.port == server.server_port:
         method = request.method
         path = url.path
+        state = active_workspace_state
+        if method == "POST" and path in {
+            "/marketplaces/ozon/uploads/",
+            "/marketplaces/ozon/uploads/review/publish",
+            "/marketplaces/ozon/uploads/publish",
+        }:
+            REPORT["publication_attempts_blocked"] += 1
+            REPORT["unexpected"].append((method, path, "publication is forbidden"))
+            route.abort()
+            return
         if method not in ("GET", "HEAD") and (method, path) not in {
             ("POST", "/login"), ("POST", "/marketplaces/drafts/"),
             ("POST", bulk_preview_path), ("POST", bulk_apply_path),
@@ -191,22 +355,47 @@ def bridge(route):
             tokens = query.get("workspace_update", [])
             if tokens:
                 assert tokens == ["1"]
-                workspace_state["active"] = True
-        if method == "GET" and workspace_state["active"] and path in {
+                state["active"] = True
+        if method == "GET" and state["active"] and path in {
             "/marketplaces/listings/api", "/marketplaces/listings/groups",
             "/marketplaces/listings/facets",
         }:
-            workspace_state["catalog_reads"].append(path)
+            state["catalog_reads"].append(path)
         response = route.fetch(max_redirects=0)
+        if method == "GET" and path == "/api/my-products":
+            query = parse_qs(url.query)
+            if state.get("import_batch") and query.get("import_batch") == [state["import_batch"]]:
+                state["feed_reads"].append({
+                    "status": response.status,
+                    "no_store": "no-store" in response.headers.get("cache-control", ""),
+                    "query_keys": sorted(query),
+                })
+        if method == "GET" and path in {
+            "/marketplaces/ozon/uploads/review",
+            "/marketplaces/ozon/uploads/api/review",
+        }:
+            query = parse_qs(url.query)
+            state.setdefault("review_api_reads", []).append({
+                "path": path,
+                "status": response.status,
+                "page": query.get("page", ["1"])[0],
+                "compact_selection": bool(query.get("workspace_selection")),
+                "legacy_draft_ids": "draft_ids" in query,
+            })
         if method == "POST" and path == workspace_handoff_path:
             body = json.loads(request.post_data or "{}")
             assert request.headers.get("x-csrftoken")
             assert set(body) == {"account_id", "source_ids", "listing_ids", "return_to"}
             assert body["account_id"] == fixture["account_id"]
-            assert body["source_ids"] == workspace_state["source_ids"]
-            assert body["listing_ids"] == workspace_state["listing_ids"]
+            assert body["source_ids"] == state["source_ids"]
+            assert body["listing_ids"] == state["listing_ids"]
             return_url = urlsplit(body["return_to"])
-            assert return_url.path == "/my-products/beta" and not return_url.query
+            assert return_url.path == "/my-products/beta"
+            return_query = parse_qs(return_url.query, keep_blank_values=True)
+            if state.get("import_batch"):
+                assert return_query == {"import_batch": [state["import_batch"]]}
+            else:
+                assert not return_query
             assert return_url.fragment.startswith("workspace-return=")
             assert len(return_url.fragment.split("=", 1)[1]) == 32
             assert response.status == 200 and "no-store" in response.headers.get("cache-control", "")
@@ -221,15 +410,15 @@ def bridge(route):
             assert len(handoff.path + "?" + handoff.query) < 256
             token_match = re.fullmatch(r"workspace-update=([A-Za-z0-9_.-]{1,32768})", handoff.fragment)
             assert token_match
-            workspace_state["token"] = token_match.group(1)
-            workspace_state["return_to"] = body["return_to"]
-            workspace_state["handoff_url"] = outcome["url"]
-            workspace_state["handoff"] += 1
-        elif method == "POST" and path == bulk_preview_path and workspace_state["active"]:
+            state["token"] = token_match.group(1)
+            state["return_to"] = body["return_to"]
+            state["handoff_url"] = outcome["url"]
+            state["handoff"] += 1
+        elif method == "POST" and path == bulk_preview_path and state["active"]:
             body = json.loads(request.post_data or "{}")
             assert request.headers.get("x-csrftoken")
             assert set(body) == {"workspace_update"}
-            assert body["workspace_update"] == workspace_state["token"]
+            assert body["workspace_update"] == state["token"]
             assert response.status == 200 and "no-store" in response.headers.get("cache-control", "")
             result = response.json()
             assert result["success"] is True
@@ -237,17 +426,17 @@ def bridge(route):
             assert set(metadata) == {"account_id", "account_label", "listing_ids", "return_to"}
             assert metadata["account_id"] == fixture["account_id"]
             assert metadata["account_label"] == "Ozon CI 0"
-            assert metadata["listing_ids"] == workspace_state["listing_ids"]
-            assert metadata["return_to"] == workspace_state["return_to"]
+            assert metadata["listing_ids"] == state["listing_ids"]
+            assert metadata["return_to"] == state["return_to"]
             preview = result["preview"]
-            assert preview["listing_ids"] == workspace_state["listing_ids"]
+            assert preview["listing_ids"] == state["listing_ids"]
             assert preview["account_id"] == fixture["account_id"]
             assert preview["account_label"] == "Ozon CI 0"
             assert {row["listing_id"]: row["status"] for row in preview["rows"]} == {
-                listing_id: "ready" for listing_id in workspace_state["listing_ids"]
+                listing_id: "ready" for listing_id in state["listing_ids"]
             }
-            workspace_state["preview"] += 1
-            workspace_state["confirm_token"] = preview["token"]
+            state["preview"] += 1
+            state["confirm_token"] = preview["token"]
         elif method == "POST" and path == bulk_preview_path:
             body = json.loads(request.post_data or "{}")
             assert request.headers.get("x-csrftoken")
@@ -269,19 +458,19 @@ def bridge(route):
             }
             bulk_state["preview"] += 1
             bulk_state["token"] = preview["token"]
-        elif method == "POST" and path == bulk_apply_path and workspace_state["active"]:
+        elif method == "POST" and path == bulk_apply_path and state["active"]:
             body = json.loads(request.post_data or "{}")
             assert request.headers.get("x-csrftoken")
             assert set(body) == {"token", "confirm_local"}
-            assert body["token"] == workspace_state["confirm_token"]
+            assert body["token"] == state["confirm_token"]
             assert body["confirm_local"] is True
             assert response.status in (200, 201) and "no-store" in response.headers.get("cache-control", "")
             result = response.json()
             assert result["success"] is True
             report = result["report"]
-            assert report["listing_ids"] == workspace_state["listing_ids"]
+            assert report["listing_ids"] == state["listing_ids"]
             assert report["account_id"] == fixture["account_id"]
-            assert [row["status"] for row in report["rows"]] == ["created"] * len(workspace_state["listing_ids"])
+            assert [row["status"] for row in report["rows"]] == ["created"] * len(state["listing_ids"])
             editor_url = urlsplit(report["editor_url"])
             assert editor_url.path == "/marketplaces/ozon/uploads/selection/repair"
             editor_query = parse_qs(editor_url.query)
@@ -289,9 +478,9 @@ def bridge(route):
             assert editor_query["workspace_return"] == ["1"]
             draft_ids = [row["draft_id"] for row in report["rows"]]
             assert decode_workspace_selection(editor_query["workspace_selection"][0]) == draft_ids
-            assert decode_workspace_return(editor_url.fragment) == workspace_state["return_to"]
-            workspace_state["apply"] += 1
-            workspace_state["report"] = report
+            assert decode_workspace_return(editor_url.fragment) == state["return_to"]
+            state["apply"] += 1
+            state["report"] = report
         elif method == "POST" and path == bulk_apply_path:
             body = json.loads(request.post_data or "{}")
             assert request.headers.get("x-csrftoken")
@@ -690,13 +879,434 @@ def exercise_workspace_update(page):
     REPORT["checks"].append("my_products_exact_ozon_set_scoped_update_and_filtered_selection_return")
 
 
+def exercise_signed_import_review_return(page):
+    """Preserve a signed My Products origin through paged review and issue edit."""
+    global active_workspace_state
+    active_workspace_state = signed_workspace_state
+    state = signed_workspace_state
+    state.update({
+        "active": False, "handoff": 0, "preview": 0, "apply": 0,
+        "token": None, "confirm_token": None, "return_to": None,
+        "report": None, "catalog_reads": [], "feed_reads": [],
+        "review_api_reads": [],
+    })
+    REPORT["stage"] = "signed_import_batch_open"
+    before = batch_snapshots()
+    unexpected_before = len(REPORT["unexpected"])
+    provider_before = REPORT["provider_attempts"]
+    publication_before = REPORT["publication_attempts_blocked"]
+    source_href = "/my-products/beta?" + urlencode({"import_batch": signed_import_batch})
+    source_titles = [
+        f"R57 signed import item {index:02d}"
+        for index in range(len(signed_workspace_listing_ids))
+    ]
+
+    page.set_viewport_size({"width": 1280, "height": 900})
+    with page.expect_response(lambda response: (
+        response.request.method == "GET"
+        and urlsplit(response.url).path == "/api/my-products"
+        and parse_qs(urlsplit(response.url).query).get("import_batch") == [signed_import_batch]
+    )) as initial_feed_info:
+        page.goto(base + source_href)
+    initial_feed = initial_feed_info.value
+    assert initial_feed.status == 200
+    assert "no-store" in initial_feed.headers.get("cache-control", "")
+    initial_feed_doc = initial_feed.json()
+    assert initial_feed_doc["success"] is True
+    assert initial_feed_doc["import_batch_count"] == 22
+    assert [item["id"] for item in initial_feed_doc["items"]] == signed_workspace_source_ids
+    assert [item["title"] for item in initial_feed_doc["items"]] == source_titles
+    workspace = page.locator("#my-products-app:not([v-cloak])")
+    workspace.wait_for()
+    rows = workspace.locator("article.mp-row")
+    assert rows.count() == 22
+    for title in source_titles[:signed_workspace_selected_count]:
+        workspace.get_by_role("checkbox", name="Выбрать " + title, exact=True).check()
+    unselected_title = source_titles[signed_workspace_selected_count]
+    unselected = workspace.get_by_role(
+        "checkbox", name="Выбрать " + unselected_title, exact=True,
+    )
+    assert not unselected.is_checked()
+    selected_ids = workspace.locator(
+        "article.mp-row input[type=checkbox]:checked"
+    ).evaluate_all("nodes => nodes.map(node => Number(node.value))")
+    assert selected_ids == signed_workspace_source_ids[:signed_workspace_selected_count]
+
+    REPORT["stage"] = "signed_import_batch_existing_update_handoff"
+    workspace.get_by_role("button", name="Что сделать", exact=True).click()
+    action = workspace.get_by_role(
+        "menuitem", name=re.compile(r"^Изменить карточки Ozon(?:$|\s)"),
+    )
+    assert action.count() == 1 and action.is_enabled()
+    action.click()
+    page.wait_for_url(lambda value: urlsplit(value).path == "/marketplaces/listings/")
+    shell = page.locator("#marketplace-catalog-app:not([v-cloak])")
+    shell.wait_for()
+    preview_dialog = page.locator("dialog.mcat-update-dialog[open]")
+    preview_dialog.wait_for()
+    assert state["handoff"] == 1 and state["preview"] == 1
+    assert state["return_to"].startswith(source_href + "#workspace-return=")
+    assert len(state["listing_ids"]) == 21 and len(state["source_ids"]) == 21
+    assert preview_dialog.locator("[data-listing-update-confirm]").is_disabled()
+    preview_dialog.get_by_role("checkbox").check()
+    confirm = preview_dialog.locator("[data-listing-update-confirm]")
+    assert confirm.is_enabled()
+    confirm.click()
+    editor_link = preview_dialog.locator("[data-listing-update-editor]")
+    editor_link.wait_for()
+    assert state["apply"] == 1
+    assert [row["status"] for row in state["report"]["rows"]] == ["created"] * 21
+    draft_ids = [row["draft_id"] for row in state["report"]["rows"]]
+    after_prepare = batch_snapshots()
+    assert after_prepare["drafts"].keys() - before["drafts"].keys() == set(draft_ids)
+    assert {key: after_prepare[key] for key in before if key != "drafts"} == {
+        key: before[key] for key in before if key != "drafts"
+    }
+    editor_url = urlsplit(editor_link.get_attribute("href"))
+    editor_query = parse_qs(editor_url.query)
+    compact_selection = encode_compact_draft_ids(draft_ids)
+    assert editor_url.path == "/marketplaces/ozon/uploads/selection/repair"
+    assert editor_query.get("account_id") == [str(fixture["account_id"])]
+    assert editor_query.get("workspace_selection") == [compact_selection]
+    assert not editor_query.get("draft_ids")
+    assert editor_query.get("workspace_return") == ["1"]
+    assert decode_workspace_return(editor_url.fragment) == state["return_to"]
+    editor_link.click()
+    repair_editor = page.locator(
+        "#ozon-bulk-repair[data-editor-mode=\"draft_selection\"]:not([v-cloak])"
+    )
+    repair_editor.wait_for()
+    repair_review_link = repair_editor.locator("[data-draft-selection-review]")
+    repair_review_link.wait_for()
+    repair_review_href = urlsplit(repair_review_link.get_attribute("href"))
+    repair_review_query = parse_qs(repair_review_href.query)
+    assert repair_review_href.path == "/marketplaces/ozon/uploads/review"
+    assert repair_review_query.get("account_id") == [str(fixture["account_id"])]
+    assert repair_review_query.get("workspace_selection") == [compact_selection]
+    assert not repair_review_query.get("draft_ids")
+    assert decode_workspace_return(repair_review_href.fragment) == state["return_to"]
+
+    REPORT["stage"] = "signed_import_review_page_one"
+    with page.expect_response(lambda response: (
+        response.request.method == "GET"
+        and response.request.resource_type == "document"
+        and urlsplit(response.url).path == "/marketplaces/ozon/uploads/review"
+    )) as review_page_one_info:
+        repair_review_link.click()
+    review_page_one_response = review_page_one_info.value
+    assert review_page_one_response.status == 200
+    review_root = page.locator("#ozon-upload-review:not([v-cloak])")
+    review_root.wait_for()
+    review_one = review_bootstrap(page)
+    assert review_one["account_id"] == fixture["account_id"]
+    assert review_one["draft_ids"] == draft_ids
+    assert review_one["workspace_selection"] == compact_selection
+    assert decode_compact_draft_ids(review_one["workspace_selection"]) == draft_ids
+    assert review_one["workspace_owner"] == f"{signed_workspace_user_id}:{fixture['seller_id']}"
+    assert review_one["pagination"] == {
+        "page": 1, "per_page": 20, "pages": 2, "total": 21,
+    }
+    assert [row["draft_id"] for row in review_one["items"]] == draft_ids[:20]
+    assert all(row["selectable"] for row in review_one["items"])
+    assert review_one["publication_enabled"] is False
+    review_return_link = page.locator("a[data-review-workspace-return]")
+    assert review_return_link.count() == 1
+    page.wait_for_function(
+        "expected => document.querySelector('a[data-review-workspace-return]')?.getAttribute('href') === expected",
+        arg=state["return_to"],
+    )
+    return_label = review_return_link.locator("[data-review-workspace-return-label]")
+    assert return_label.inner_text().strip() == "К выбранным товарам"
+
+    review_api_one = read_review_api(
+        page, page_number=1, compact_selection=compact_selection,
+    )
+    assert review_api_one["status"] == 200
+    assert "no-store" in review_api_one["cacheControl"]
+    api_one = review_api_one["body"]["review"]
+    assert api_one["draft_ids"] == draft_ids
+    assert api_one["workspace_selection"] == compact_selection
+    assert api_one["pagination"] == review_one["pagination"]
+    assert [row["draft_id"] for row in api_one["items"]] == draft_ids[:20]
+    assert "workspace_owner" not in api_one
+
+    page_one_parts = urlsplit(page.url)
+    assert decode_workspace_return(page_one_parts.fragment) == state["return_to"]
+    next_page = review_root.locator(".our-pagination a").filter(
+        has_text="Следующие 20",
+    )
+    next_href = urlsplit(next_page.get_attribute("href"))
+    next_query = parse_qs(next_href.query)
+    assert next_href.path == "/marketplaces/ozon/uploads/review"
+    assert next_query == {
+        "account_id": [str(fixture["account_id"])],
+        "workspace_selection": [compact_selection],
+        "page": ["2"],
+    }
+    assert decode_workspace_return(next_href.fragment) == state["return_to"]
+    page.set_viewport_size({"width": 390, "height": 850})
+    page.screenshot(path=OUT / "workspace-review-page-1-390.png", animations="disabled")
+
+    REPORT["stage"] = "signed_import_review_page_two"
+    with page.expect_response(lambda response: (
+        response.request.method == "GET"
+        and response.request.resource_type == "document"
+        and urlsplit(response.url).path == "/marketplaces/ozon/uploads/review"
+        and parse_qs(urlsplit(response.url).query).get("page") == ["2"]
+    )) as review_page_two_info:
+        next_page.click()
+    review_page_two_response = review_page_two_info.value
+    assert review_page_two_response.status == 200
+    review_two = review_bootstrap(page)
+    assert review_two["account_id"] == fixture["account_id"]
+    assert review_two["draft_ids"] == draft_ids
+    assert review_two["workspace_selection"] == compact_selection
+    assert review_two["workspace_owner"] == f"{signed_workspace_user_id}:{fixture['seller_id']}"
+    assert review_two["pagination"] == {
+        "page": 2, "per_page": 20, "pages": 2, "total": 21,
+    }
+    assert [row["draft_id"] for row in review_two["items"]] == draft_ids[20:]
+    assert decode_workspace_return(urlsplit(page.url).fragment) == state["return_to"]
+    review_api_two = read_review_api(
+        page, page_number=2, compact_selection=compact_selection,
+    )
+    assert review_api_two["status"] == 200
+    api_two = review_api_two["body"]["review"]
+    assert api_two["draft_ids"] == draft_ids
+    assert api_two["workspace_selection"] == compact_selection
+    assert api_two["pagination"] == review_two["pagination"]
+    assert [row["draft_id"] for row in api_two["items"]] == draft_ids[20:]
+    assert "workspace_owner" not in api_two
+
+    issue_row = review_two["items"][0]
+    assert issue_row["draft_id"] == draft_ids[20]
+    assert issue_row["selectable"] is False
+    weight_issues = [
+        issue for issue in issue_row["errors"]
+        if issue.get("code") == "physical_fact_required"
+        and issue.get("field") == "dimensions.weight"
+    ]
+    assert len(weight_issues) == 1
+    issue_link = None
+    issue_href = None
+    for candidate in review_root.locator("a[data-review-issue-link]").all():
+        candidate_href = candidate.get_attribute("href")
+        candidate_query = parse_qs(urlsplit(candidate_href).query)
+        if candidate_query.get("focus_field") == ["dimensions.weight"]:
+            issue_link, issue_href = candidate, candidate_href
+            break
+    assert issue_link is not None and issue_href
+    issue_parts = urlsplit(issue_href)
+    issue_query = parse_qs(issue_parts.query)
+    assert issue_parts.path == f"/marketplaces/drafts/{issue_row['draft_id']}"
+    assert issue_query.get("focus_code") == ["physical_fact_required"]
+    assert issue_query.get("focus_field") == ["dimensions.weight"]
+    review_return_token = issue_query.get("review_return", [None])[0]
+    assert review_return_token and len(review_return_token) <= 8192
+    with app.app_context():
+        loaded_return = OzonReviewNavigation._load_payload(
+            review_return_token,
+            user_id=signed_workspace_user_id,
+            seller_id=fixture["seller_id"],
+        )
+    assert loaded_return is not None
+    return_payload, return_ids = loaded_return
+    assert return_payload["v"] == 2
+    assert return_payload["account_id"] == fixture["account_id"]
+    assert return_payload["page"] == 2
+    assert return_payload["workspace_selection"] == compact_selection
+    assert decode_compact_draft_ids(return_payload["workspace_selection"]) == draft_ids
+    assert return_ids == draft_ids
+
+    REPORT["stage"] = "signed_import_issue_detail_read_return"
+    before_issue_navigation = batch_snapshots()
+    with page.expect_response(lambda response: (
+        response.request.method == "GET"
+        and response.request.resource_type == "document"
+        and urlsplit(response.url).path == f"/marketplaces/drafts/{issue_row['draft_id']}"
+    )) as issue_detail_info:
+        issue_link.click()
+    assert issue_detail_info.value.status == 200
+    editor = page.locator("#ozon-draft-editor:not([v-cloak])")
+    editor.wait_for()
+    editor_boot = page.evaluate(
+        "() => JSON.parse(document.querySelector('#ode-bootstrap').textContent)"
+    )
+    assert editor_boot["draftId"] == issue_row["draft_id"]
+    assert editor_boot["reviewNavigation"]["focus"] == {
+        "code": "physical_fact_required", "field": "dimensions.weight",
+    }
+    detail_return_href = editor_boot["reviewNavigation"]["url"]
+    detail_return = urlsplit(detail_return_href)
+    detail_return_query = parse_qs(detail_return.query)
+    assert detail_return.path == "/marketplaces/ozon/uploads/review"
+    assert detail_return_query == {
+        "account_id": [str(fixture["account_id"])],
+        "workspace_selection": [compact_selection],
+        "page": ["2"],
+    }
+    detail_return_link = page.locator("a[data-review-return]")
+    detail_return_link.wait_for()
+    assert detail_return_link.get_attribute("href") == detail_return_href
+    page.screenshot(path=OUT / "workspace-review-issue-detail-390.png", animations="disabled")
+    assert batch_snapshots() == before_issue_navigation
+
+    with page.expect_response(lambda response: (
+        response.request.method == "GET"
+        and response.request.resource_type == "document"
+        and urlsplit(response.url).path == "/marketplaces/ozon/uploads/review"
+        and parse_qs(urlsplit(response.url).query).get("page") == ["2"]
+    )) as returned_review_info:
+        detail_return_link.click()
+    assert returned_review_info.value.status == 200
+    returned_review = review_bootstrap(page)
+    assert returned_review["account_id"] == fixture["account_id"]
+    assert returned_review["draft_ids"] == draft_ids
+    assert returned_review["workspace_selection"] == compact_selection
+    assert returned_review["workspace_owner"] == f"{signed_workspace_user_id}:{fixture['seller_id']}"
+    assert returned_review["pagination"]["page"] == 2
+    assert [row["draft_id"] for row in returned_review["items"]] == draft_ids[20:]
+    page.wait_for_function(
+        "expected => document.querySelector('a[data-review-workspace-return]')?.getAttribute('href') === expected",
+        arg=state["return_to"],
+    )
+    review_return_link = page.locator("a[data-review-workspace-return]")
+    return_label = review_return_link.locator("[data-review-workspace-return-label]")
+    assert return_label.inner_text().strip() == "К выбранным товарам"
+    previous_page = page.locator(".our-pagination a").filter(has_text="Предыдущие 20")
+    previous_href = urlsplit(previous_page.get_attribute("href"))
+    assert parse_qs(previous_href.query) == {
+        "account_id": [str(fixture["account_id"])],
+        "workspace_selection": [compact_selection],
+        "page": ["1"],
+    }
+    assert decode_workspace_return(previous_href.fragment) == state["return_to"]
+    assert batch_snapshots() == after_prepare
+    page.screenshot(path=OUT / "workspace-review-return-page-2-390.png", animations="disabled")
+
+    REPORT["stage"] = "signed_import_batch_selection_restore"
+    page.set_viewport_size({"width": 320, "height": 850})
+    with page.expect_response(lambda response: (
+        response.request.method == "GET"
+        and response.request.resource_type == "document"
+        and urlsplit(response.url).path == "/my-products/beta"
+        and parse_qs(urlsplit(response.url).query).get("import_batch") == [signed_import_batch]
+    )) as workspace_return_info:
+        with page.expect_response(lambda response: (
+            response.request.method == "GET"
+            and urlsplit(response.url).path == "/api/my-products"
+            and parse_qs(urlsplit(response.url).query).get("import_batch") == [signed_import_batch]
+        )) as restored_feed_info:
+            review_return_link.click()
+    assert workspace_return_info.value.status == 200
+    restored_feed = restored_feed_info.value
+    assert restored_feed.status == 200
+    assert "no-store" in restored_feed.headers.get("cache-control", "")
+    restored_feed_doc = restored_feed.json()
+    assert restored_feed_doc["success"] is True
+    assert restored_feed_doc["import_batch_count"] == 22
+    assert [item["id"] for item in restored_feed_doc["items"]] == signed_workspace_source_ids
+    rows = workspace.locator("article.mp-row")
+    page.wait_for_function("""expected => {
+        const rows = Array.from(document.querySelectorAll('#my-products-app article.mp-row'));
+        if (rows.length !== expected.count) return false;
+        const ids = rows.map(row => Number(row.querySelector('.mp-check input')?.value));
+        const selected = rows.map(row => !!row.querySelector('.mp-check input')?.checked);
+        return ids.every((id, index) => id === expected.ids[index]) &&
+            selected.every((value, index) => value === (index < expected.selected));
+    }""", arg={
+        "ids": signed_workspace_source_ids,
+        "count": 22,
+        "selected": signed_workspace_selected_count,
+    })
+    assert rows.count() == 22
+    assert [
+        int(node.get_attribute("value"))
+        for node in rows.locator("input[type=checkbox]:checked").all()
+    ] == signed_workspace_source_ids[:signed_workspace_selected_count]
+    assert not workspace.get_by_role(
+        "checkbox", name="Выбрать " + unselected_title, exact=True,
+    ).is_checked()
+    restored_url = urlsplit(page.url)
+    assert restored_url.path == "/my-products/beta"
+    assert parse_qs(restored_url.query) == {"import_batch": [signed_import_batch]}
+    assert re.fullmatch(r"workspace-return=[a-f0-9]{32}", restored_url.fragment)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+    assert batch_snapshots() == after_prepare
+    assert state["handoff"] == 1 and state["preview"] == 1 and state["apply"] == 1
+    assert state["catalog_reads"] == []
+    assert state["feed_reads"] and all(
+        row["status"] == 200 and row["no_store"]
+        and row["query_keys"] == ["import_batch"]
+        for row in state["feed_reads"]
+    )
+    assert REPORT["provider_attempts"] == provider_before
+    assert REPORT["publication_attempts_blocked"] == publication_before
+    assert len(REPORT["unexpected"]) == unexpected_before
+    page.screenshot(path=OUT / "workspace-signed-import-restored-320.png", animations="disabled")
+
+    REPORT["signed_import_review_return"] = {
+        "scope": "synthetic_signed_supplier_import_batch_existing_update",
+        "origin_batch_count": 22,
+        "origin_selected_count": signed_workspace_selected_count,
+        "origin_unselected_count": 1,
+        "origin_token_bytes": len(signed_import_batch.encode("utf-8")),
+        "selected_source_count": len(state["source_ids"]),
+        "selected_listing_count": len(state["listing_ids"]),
+        "draft_count": len(draft_ids),
+        "draft_ids_in_compact_selection": decode_compact_draft_ids(compact_selection),
+        "review": {
+            "account_id": fixture["account_id"],
+            "workspace_owner_html": f"{signed_workspace_user_id}:{fixture['seller_id']}",
+            "workspace_owner_api_absent": True,
+            "page_count": 2,
+            "page_one_rows": len(review_one["items"]),
+            "page_two_rows": len(review_two["items"]),
+            "compact_scope_canonical_in_html_and_api": True,
+            "page_two_issue_draft_id": issue_row["draft_id"],
+            "page_two_issue": {
+                "code": "physical_fact_required",
+                "field": "dimensions.weight",
+            },
+            "signed_issue_return_version": return_payload["v"],
+            "signed_issue_return_page": return_payload["page"],
+            "returned_review_page": returned_review["pagination"]["page"],
+            "safe_fragment_survived_pagination_and_issue_return": True,
+            "primary_return_label": return_label.inner_text().strip(),
+        },
+        "workspace_return": {
+            "same_tab": True,
+            "signed_batch_query_preserved": True,
+            "feed_rows_preserved_in_order": True,
+            "selected_source_ids_restored": signed_workspace_source_ids[:signed_workspace_selected_count],
+            "unselected_source_id_stayed_unselected": signed_workspace_source_ids[-1],
+            "business_state_unchanged_after_local_prepare": True,
+            "provider_attempts": REPORT["provider_attempts"],
+            "publication_attempts_blocked": REPORT["publication_attempts_blocked"],
+        },
+        "feed_reads": state["feed_reads"],
+        "review_requests": state["review_api_reads"],
+        "screenshots": [
+            "workspace-review-page-1-390.png",
+            "workspace-review-issue-detail-390.png",
+            "workspace-review-return-page-2-390.png",
+            "workspace-signed-import-restored-320.png",
+        ],
+    }
+    REPORT["checks"].append(
+        "signed_import_batch_existing_update_compact_review_page2_issue_return_and_selection_restore"
+    )
+
+
 def test_browser():
+    global ACTIVE_PAGE
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             executable_path=os.environ.get("CHROMIUM_BIN", "/usr/bin/chromium"),
             headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
         page = browser.new_page(viewport={"width": 1440, "height": 900}, service_workers="block")
+        ACTIVE_PAGE = page
         page.context.route("**/*", bridge)
         page.on("pageerror", lambda exc: REPORT["js_errors"].append(str(exc)))
         page.goto(base + "/login")
@@ -762,13 +1372,14 @@ def test_browser():
         REPORT["checks"].append("lost_response_read_recovery_opens_same_draft_without_resending")
         exercise_catalog_batch(page)
         exercise_workspace_update(page)
+        exercise_signed_import_review_return(page)
         browser.close()
 
 
 try:
     test_browser()
     with app.app_context():
-        assert MarketplaceProductDraft.query.count() == initial_draft_count + 5
+        assert MarketplaceProductDraft.query.count() == initial_draft_count + 5 + 21
         for listing_id, draft_id in REPORT["local_saves"]:
             draft = db.session.get(MarketplaceProductDraft, draft_id)
             assert draft.seller_id == fixture["seller_id"]
@@ -785,8 +1396,31 @@ try:
     assert not any(REPORT[key] for key in ("provider_attempts", "unexpected", "js_errors")), REPORT
     REPORT["checks"].append("exact_seller_account_and_links_preserved_without_publication")
     REPORT["status"] = "passed"
-except Exception:
+except Exception as exc:
     REPORT["status"] = "failed"
+    frames = traceback.extract_tb(exc.__traceback__)
+    failure_frame = frames[-1] if frames else None
+    REPORT["failure"] = {
+        "exception_type": type(exc).__name__,
+        "message": safe_failure_message(exc),
+        "stage": REPORT.get("stage"),
+        "location": safe_location(ACTIVE_PAGE),
+        "frame": (
+            {
+                "file": Path(failure_frame.filename).name,
+                "line": failure_frame.lineno,
+                "function": failure_frame.name,
+            }
+            if failure_frame else None
+        ),
+    }
+    if ACTIVE_PAGE is not None:
+        try:
+            failure_screenshot = OUT / "failure-browser.png"
+            ACTIVE_PAGE.screenshot(path=failure_screenshot, animations="disabled")
+            REPORT["failure"]["screenshot"] = failure_screenshot.name
+        except Exception:
+            pass
     raise
 finally:
     server.shutdown()
