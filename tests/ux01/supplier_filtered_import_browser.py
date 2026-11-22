@@ -1758,9 +1758,9 @@ def run():
             "items => items.filter(item => item.checked).map(item => item.value)",
         ) == []
         ordinary_count = page.locator("#update-selection-count")
-        assert " ".join(ordinary_count.inner_text().split()) == (
-            "0 выбрано из 55 с обновлениями"
-        )
+        assert ordinary_count.locator("span").all_inner_texts() == [
+            "0 выбрано", f"из {len(ordinary_visible_ids)} с обновлениями",
+        ]
         ordinary_count_geometry = ordinary_count.evaluate("""element => {
             const parts = Array.from(element.children).map(child => child.getBoundingClientRect());
             const style = getComputedStyle(element);
