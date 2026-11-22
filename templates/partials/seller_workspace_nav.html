@@ -52,7 +52,7 @@
 
     <section class="sidebar-section seller-workspace-group seller-workspace-products" data-workspace-group="products">
     <p x-show="sidebarOpen" x-cloak class="seller-workspace-products-heading">Товары</p>
-    <a href="{{ url_for('seller_my_products_beta') }}" class="sidebar-link seller-workspace-primary-link{% if products_primary_active %} active{% endif %}" title="Товары — Мои товары"{% if products_primary_active %} aria-current="page"{% endif %}>
+    <a href="{{ url_for('seller_my_products_beta') }}" class="sidebar-link seller-workspace-primary-link{% if products_primary_active %} active{% endif %}" aria-label="Мои товары" title="Товары — Мои товары"{% if products_primary_active %} aria-current="page"{% endif %}>
         {{ icon('package', size=18, stroke=1.7) }}
         <span x-show="sidebarOpen" x-cloak>Мои товары</span>
     </a>

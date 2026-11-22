@@ -23,6 +23,7 @@ from cryptography.fernet import Fernet
 from playwright.sync_api import sync_playwright
 from sqlalchemy import event
 from werkzeug.serving import make_server
+from tests.ux01.bulk_action_controls import invoke_workspace_action
 
 
 OUT = Path(os.environ.get("OZON_BROWSER_ARTIFACTS", "/artifacts"))
@@ -2741,13 +2742,18 @@ def run_browser_journey():
         report["source_prepare"]["business_writes_before_prepare"] = len(business_write_events)
         report["checks"].append("beta_page_exact_selection_is_read_only_before_local_prepare")
 
-        page.get_by_role("button", name="Что сделать", exact=False).click()
-        page.get_by_role("menuitem", name="Подготовить для Ozon", exact=False).click()
+        source_action_navigations = []
+        page.on("framenavigated", lambda frame: (
+            source_action_navigations.append(frame.url)
+            if frame == page.main_frame else None
+        ))
+        invoke_workspace_action(page, "ozon")
         dialog = page.get_by_role("dialog")
         account_select = dialog.locator("#mp-ozon-account")
         account_select.select_option(str(account_id))
         assert account_select.input_value() == str(account_id)
         dialog.locator(".mp-ozon-confirm input").check()
+        assert not source_action_navigations, source_action_navigations
 
         with page.expect_response(lambda response: (
             response.request.method == "POST"

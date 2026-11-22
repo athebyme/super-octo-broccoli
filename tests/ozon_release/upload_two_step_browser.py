@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 import requests
 from playwright.sync_api import sync_playwright
 from werkzeug.serving import make_server
+from tests.ux01.bulk_action_controls import invoke_workspace_action
 
 OUT = Path(os.environ.get('OZON_BROWSER_ARTIFACTS', '/artifacts'))
 OUT.mkdir(parents=True, exist_ok=True)
@@ -330,10 +331,13 @@ try:
             page.locator('#my-products-app:not([v-cloak])').wait_for()
             source_row = page.locator('.mp-row').filter(has_text='Тестовый товар для подготовки').first
             source_row.get_by_role('checkbox').check()
-            page.get_by_role('button',name='Что сделать').click()
-            page.get_by_role('menuitem',name='Подготовить для Ozon',exact=False).click()
+            source_action_navigations=[]
+            page.on('framenavigated',lambda frame: source_action_navigations.append(frame.url)
+                    if frame==page.main_frame else None)
+            invoke_workspace_action(page,'ozon')
             source_dialog = page.get_by_role('dialog')
             source_dialog.wait_for()
+            assert not source_action_navigations, source_action_navigations
             local_prep_copy = source_dialog.get_by_text(
                 'Подготовим локальные черновики для выбранного магазина Ozon. '
                 'Отправку подтвердите отдельно после проверки карточек.',

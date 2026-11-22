@@ -1315,6 +1315,81 @@ def main() -> None:
                 extra_page.on("console", record_console_error)
                 extra_page.on("response", record_http_error)
 
+                if VARIANT == "worktree":
+                    goto_extra(extra_page, dashboard_path)
+                    primary_link = extra_page.locator(".seller-workspace-primary-link")
+                    assert primary_link.count() == 1
+                    primary_href = primary_link.get_attribute("href") or ""
+                    assert urlsplit(primary_href).path == "/my-products/beta"
+                    assert primary_link.get_attribute("aria-label") == "Мои товары"
+
+                    # The primary action remains a named, working one-click
+                    # destination when the sidebar shows icons only.
+                    extra_page.evaluate(
+                        "Alpine.$data(document.body).sidebarOpen = false",
+                    )
+                    extra_page.wait_for_function(
+                        "Alpine.$data(document.body).sidebarOpen === false",
+                    )
+                    primary_link.wait_for(state="visible")
+                    assert extra_page.get_by_role(
+                        "link", name="Мои товары", exact=True,
+                    ).count() == 1
+                    with extra_page.expect_navigation(
+                        wait_until="domcontentloaded",
+                    ) as primary_navigation:
+                        primary_link.click()
+                    primary_response = primary_navigation.value
+                    assert primary_response and primary_response.status == 200
+                    assert primary_response.request.method == "GET"
+                    extra_page.wait_for_url(base + "/my-products/beta")
+                    primary_link = extra_page.locator(".seller-workspace-primary-link")
+                    assert "active" in (primary_link.get_attribute("class") or "").split()
+                    assert primary_link.get_attribute("aria-current") == "page"
+                    assert extra_page.locator(
+                        "#seller-workspace-toggle-products",
+                    ).get_attribute("aria-expanded") == "false"
+
+                    # Secondary product links stay under their own control and
+                    # become active on the destination that they actually open.
+                    products_toggle = extra_page.locator(
+                        "#seller-workspace-toggle-products",
+                    )
+                    products_toggle.click()
+                    extra_page.wait_for_function(
+                        "document.querySelector('#seller-workspace-toggle-products')?.getAttribute('aria-expanded') === 'true'",
+                    )
+                    wb_cards_link = extra_page.locator(
+                        '.seller-workspace-sublink[href="/products"]',
+                    )
+                    assert wb_cards_link.count() == 1
+                    assert wb_cards_link.inner_text().strip() == "Карточки WB"
+                    with extra_page.expect_navigation(
+                        wait_until="domcontentloaded",
+                    ) as wb_cards_navigation:
+                        wb_cards_link.click()
+                    wb_cards_response = wb_cards_navigation.value
+                    assert wb_cards_response and wb_cards_response.status == 200
+                    assert wb_cards_response.request.method == "GET"
+                    extra_page.wait_for_url(base + "/products")
+                    assert extra_page.locator(
+                        '.seller-workspace-sublink[href="/products"]',
+                    ).get_attribute("aria-current") == "page"
+                    assert "active" in (extra_page.locator(
+                        '.seller-workspace-sublink[href="/products"]',
+                    ).get_attribute("class") or "").split()
+                    assert extra_page.locator(
+                        ".seller-workspace-groups",
+                    ).get_attribute("data-active-group") == "products"
+                    REPORT["interactions"].append({
+                        "check": "primary_products_link_and_secondary_wb_active_routes",
+                        "status": "passed",
+                        "primary_path": "/my-products/beta",
+                        "primary_collapsed_accessible_name": "Мои товары",
+                        "secondary_path": "/products",
+                        "secondary_label": "Карточки WB",
+                    })
+
                 # Activate the legacy merge route through real sidebar tab
                 # order and Enter, rather than assigning its href directly.
                 merge_path = "/products/merge"

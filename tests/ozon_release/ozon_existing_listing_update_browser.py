@@ -18,6 +18,7 @@ from cryptography.fernet import Fernet
 from playwright.sync_api import sync_playwright
 import requests
 from werkzeug.serving import make_server
+from tests.ux01.bulk_action_controls import invoke_workspace_action
 
 
 OUT = Path(os.environ.get("OZON_BROWSER_ARTIFACTS", "/artifacts"))
@@ -858,14 +859,15 @@ def exercise_workspace_update(page):
     expected_titles = ["R56 workspace item 0", "R56 workspace item 1"]
     for title in expected_titles:
         workspace.get_by_role("checkbox", name="Выбрать " + title, exact=True).check()
-    chosen = workspace.get_by_role("button", name="Что сделать", exact=True)
-    chosen.click()
-    workspace_update_action = workspace.get_by_role(
-        "menuitem", name=re.compile(r"^Изменить карточки Ozon(?:$|\s)"),
-    )
-    assert workspace_update_action.count() == 1
-    assert workspace_update_action.is_enabled()
-    workspace_update_action.click()
+    with page.expect_response(lambda response: (
+        response.request.method == "POST"
+        and urlsplit(response.url).path == workspace_handoff_path
+    )) as workspace_handoff_response:
+        with page.expect_navigation(wait_until="domcontentloaded") as workspace_navigation:
+            invoke_workspace_action(page, "ozon_workspace_update")
+    assert workspace_handoff_response.value.status == 200
+    assert workspace_navigation.value and workspace_navigation.value.status == 200
+    assert workspace_navigation.value.request.method == "GET"
 
     page.wait_for_url(lambda value: urlsplit(value).path == "/marketplaces/listings/")
     handoff_url = urlsplit(page.url)
@@ -1070,12 +1072,15 @@ def exercise_signed_import_review_return(page):
     assert selected_ids == signed_workspace_source_ids[:signed_workspace_selected_count]
 
     REPORT["stage"] = "signed_import_batch_existing_update_handoff"
-    workspace.get_by_role("button", name="Что сделать", exact=True).click()
-    action = workspace.get_by_role(
-        "menuitem", name=re.compile(r"^Изменить карточки Ozon(?:$|\s)"),
-    )
-    assert action.count() == 1 and action.is_enabled()
-    action.click()
+    with page.expect_response(lambda response: (
+        response.request.method == "POST"
+        and urlsplit(response.url).path == workspace_handoff_path
+    )) as signed_handoff_response:
+        with page.expect_navigation(wait_until="domcontentloaded") as signed_workspace_navigation:
+            invoke_workspace_action(page, "ozon_workspace_update")
+    assert signed_handoff_response.value.status == 200
+    assert signed_workspace_navigation.value and signed_workspace_navigation.value.status == 200
+    assert signed_workspace_navigation.value.request.method == "GET"
     page.wait_for_url(lambda value: urlsplit(value).path == "/marketplaces/listings/")
     shell = page.locator("#marketplace-catalog-app:not([v-cloak])")
     shell.wait_for()

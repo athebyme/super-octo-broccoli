@@ -17,6 +17,7 @@ from cryptography.fernet import Fernet
 import requests
 from playwright.sync_api import sync_playwright
 from werkzeug.serving import make_server
+from tests.ux01.bulk_action_controls import invoke_workspace_action
 
 OUT = Path(os.environ.get("OZON_BROWSER_ARTIFACTS", "/artifacts"))
 OUT.mkdir(parents=True, exist_ok=True)
@@ -703,7 +704,6 @@ try:
         source_row = page.locator(".mp-row").filter(has_text="Тестовый товар для подготовки")
         source_row.wait_for(state="visible")
         source_row.get_by_role("checkbox", name="Выбрать Тестовый товар для подготовки").check()
-        page.get_by_role("button", name="Что сделать", exact=True).click()
         authorized_navigations = []
 
         def capture_authorized_navigation(frame):
@@ -715,7 +715,11 @@ try:
                 authorized_navigations.append(frame.url)
 
         page.on("framenavigated", capture_authorized_navigation)
-        page.get_by_role("menuitem", name="Изменить цены Ozon", exact=False).click()
+        with page.expect_navigation(wait_until="domcontentloaded") as source_handoff_navigation:
+            invoke_workspace_action(page, "ozon_prices")
+        source_handoff_response = source_handoff_navigation.value
+        assert source_handoff_response and source_handoff_response.status == 200
+        assert source_handoff_response.request.method == "GET"
         page.wait_for_function("""() => {
             const dialog = document.querySelector('.oc-bulk-dialog');
             return dialog && dialog.open;
@@ -940,7 +944,6 @@ try:
         saved_source_row = page.locator(".mp-row").filter(has_text=source_title)
         saved_source_row.wait_for(state="visible")
         saved_source_row.get_by_role("checkbox", name="Выбрать Тестовый товар для подготовки").check()
-        page.get_by_role("button", name="Что сделать", exact=True).click()
         saved_authorized_navigations = []
 
         def capture_saved_authorized_navigation(frame):
@@ -953,7 +956,11 @@ try:
                 saved_authorized_navigations.append(frame.url)
 
         page.on("framenavigated", capture_saved_authorized_navigation)
-        page.get_by_role("menuitem", name="Изменить цены Ozon", exact=False).click()
+        with page.expect_navigation(wait_until="domcontentloaded") as saved_handoff_navigation:
+            invoke_workspace_action(page, "ozon_prices")
+        saved_handoff_response = saved_handoff_navigation.value
+        assert saved_handoff_response and saved_handoff_response.status == 200
+        assert saved_handoff_response.request.method == "GET"
         page.wait_for_function("""() => {
             const dialog = document.querySelector('.oc-bulk-dialog');
             return dialog && dialog.open;
@@ -1098,7 +1105,6 @@ try:
             ".mp-list article.mp-row input[type=checkbox]:checked"
         ).evaluate_all("boxes => boxes.map(box => Number(box.value))")
         assert selected_multi_ids == multi_source_ids
-        page.get_by_role("button", name="Что сделать", exact=True).click()
         multi_authorized_navigations = []
 
         def capture_multi_authorized_navigation(frame):
@@ -1111,7 +1117,11 @@ try:
                 multi_authorized_navigations.append(frame.url)
 
         page.on("framenavigated", capture_multi_authorized_navigation)
-        page.get_by_role("menuitem", name="Изменить цены Ozon", exact=False).click()
+        with page.expect_navigation(wait_until="domcontentloaded") as multi_handoff_navigation:
+            invoke_workspace_action(page, "ozon_prices")
+        multi_handoff_response = multi_handoff_navigation.value
+        assert multi_handoff_response and multi_handoff_response.status == 200
+        assert multi_handoff_response.request.method == "GET"
         page.wait_for_function("""() => {
             const dialog = document.querySelector('.oc-bulk-dialog');
             return dialog && dialog.open;
