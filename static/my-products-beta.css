@@ -352,14 +352,16 @@
 .mp-ozon-dialog::backdrop { background:#171a1dcc; }
 .mp-ozon-dialog-head { display:flex; justify-content:space-between; align-items:start; gap:12px; }
 .mp-ozon-dialog h2 { margin:0; font-size:24px; line-height:1.2; }
+.mp-ozon-dialog--prepare h2:focus { outline:2px solid var(--focus-outline); outline-offset:4px; border-radius:2px; }
 .mp-ozon-dialog p { margin:15px 0; color:var(--text-secondary); font-size:13px; line-height:1.55; }
 .mp-ozon-eyebrow { margin:0 0 5px !important; color:var(--accent-text) !important; font-size:11px !important; font-weight:700; letter-spacing:.1em; text-transform:uppercase; }
 .mp-ozon-close { width:32px; height:32px; flex:0 0 32px; border:1px solid var(--border); border-radius:5px; background:var(--bg-card); color:var(--text); font-size:21px; }
 .mp-ozon-label { display:block; margin:20px 0 7px; font-size:12px; font-weight:600; }
 .mp-ozon-dialog .sh-input { width:100%; }
-.mp-ozon-confirm { display:flex; align-items:start; gap:9px; margin:18px 0; font-size:12px; line-height:1.45; }
-.mp-ozon-confirm input { width:18px; height:18px; flex:0 0 18px; margin:0; accent-color:var(--accent); }
+.mp-ozon-dialog--prepare .mp-ozon-account-value { display:flex; align-items:center; min-height:44px; width:100%; padding:9px 12px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--bg-hover); color:var(--text); font-size:14px; overflow-wrap:anywhere; }
 .mp-ozon-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:9px; }
+.mp-ozon-dialog--prepare .mp-ozon-actions { margin-top:18px; }
+.mp-ozon-dialog--prepare .sh-btn { min-height:44px; }
 
 /* Local supplier preview: the summary and decision stay visible while rows scroll. */
 .mp-supplier-refresh-dialog {

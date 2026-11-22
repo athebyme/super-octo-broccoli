@@ -446,7 +446,6 @@ function harness({batch = null, storeNonce = nonce, bindResult = null} = {}) {
     app.selected = selectionIds.slice();
     app.ozonIds = productIds.slice();
     app.ozonAccountId = '11';
-    app.ozonConfirmed = true;
     app.ozonAccounts = [{id: 11, label: 'Shop A'}];
     app.ozonEnabled = true;
     app.ozonBusy = '';
@@ -455,7 +454,14 @@ function harness({batch = null, storeNonce = nonce, bindResult = null} = {}) {
     app.ozonSessionEnded = false;
     app.loading = false;
     app.itemsScope = app.feedScopeKey();
-    app.$refs = {ozonDialog: {close() {}}};
+    app.ozonSelectionAtOpen = selectionIds.slice();
+    app.ozonSelectionScopeAtOpen = app.feedScopeKey();
+    app.$refs = {
+      ozonDialog: {open: true, showModal() { this.open = true; }, close() { this.open = false; }},
+      ozonDialogTitle: {focus() {}},
+      ozonAccount: {focus() {}},
+      ozonError: {focused: false, focus() { this.focused = true; }},
+    };
     app.$nextTick = callback => callback.call(app);
     let scopeBuilds = 0;
     const originalBuildScope = app.buildWorkspaceReturnScope;
@@ -507,6 +513,26 @@ function harness({batch = null, storeNonce = nonce, bindResult = null} = {}) {
     '/marketplaces/ozon/bulk-uploads/' + jobUid,
   ]);
 
+  // Preparation cannot be called by a stale handler after the native dialog
+  // closed or after the reviewed workspace selection changed.
+  const closedDialog = harness();
+  const closedSetup = closedDialog.makeApp([601, 602]);
+  closedSetup.app.$refs.ozonDialog.open = false;
+  await closedSetup.app.prepareOzon();
+  assert.deepEqual(closedDialog.requests, []);
+  assert.deepEqual(closedDialog.stored, []);
+
+  const changedSelection = harness();
+  const changedSetup = changedSelection.makeApp([701, 702]);
+  changedSetup.app.selected = [701];
+  await changedSetup.app.prepareOzon();
+  assert.deepEqual(changedSelection.requests, []);
+  assert.deepEqual(changedSelection.stored, []);
+  assert.deepEqual(changedSelection.assigned, []);
+  assert.equal(changedSetup.app.$refs.ozonDialog.open, false);
+  assert.match(changedSetup.app.ozonError, /выбор изменился/i);
+  assert.equal(changedSetup.app.$refs.ozonError.focused, true);
+
   // A lost response leaves the same local pending key and recovers with GET;
   // no second prepare POST is sent before the capsule is bound.
   const recovered = harness();
@@ -515,6 +541,10 @@ function harness({batch = null, storeNonce = nonce, bindResult = null} = {}) {
   }}));
   const recoveredSetup = recovered.makeApp([701, 702, 703]);
   await recoveredSetup.app.prepareOzon();
+  assert.equal(recoveredSetup.app.$refs.ozonDialog.open, false,
+    'a lost POST response closes the dialog before recovery is shown');
+  assert.equal(recoveredSetup.app.$refs.ozonError.focused, true,
+    'a lost POST response focuses the safe recovery message');
   assert.ok(recoveredSetup.app.ozonPending.workspace_return_nonce);
   await recoveredSetup.app.readOzonPending();
   assert.deepEqual(recovered.requests.map(call => call.method), ['POST', 'GET']);
@@ -620,7 +650,7 @@ class MyProductsOzonPriceHandoffTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
         template = (ROOT / 'templates' / 'my_products_beta.html').read_text()
-        self.assertIn("v='20261122-bulk-intent-rail-r58'", template)
+        self.assertIn("v='20261122-ozon-local-prepare-r59'", template)
         self.assertIn('data-bulk-action-group', template)
         self.assertIn('data-bulk-direct-action', template)
         self.assertIn('data-bulk-action-key', template)

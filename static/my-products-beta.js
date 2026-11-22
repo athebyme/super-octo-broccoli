@@ -949,7 +949,8 @@
                 activeBulkActionGroup: '',
                 ozonIds: [],
                 ozonAccountId: '',
-                ozonConfirmed: false,
+                ozonSelectionAtOpen: null,
+                ozonSelectionScopeAtOpen: '',
                 ozonBusy: '',
                 ozonError: '',
                 ozonReturnFocus: null,
@@ -1368,7 +1369,10 @@
                 },
             },
             ozonError: function (value) {
-                if (value) this.$nextTick(function () { this.$refs.ozonError?.focus(); });
+                if (value) this.$nextTick(function () {
+                    if (this.$refs.ozonDialog?.open) return;
+                    this.$refs.ozonError?.focus();
+                });
             },
         },
 
@@ -1416,8 +1420,10 @@
                 var headMore = this.$refs.headMore;
                 if (headMore) headMore.open = false;
                 if (group.actions.length === 1) {
+                    var returnFocus = group.actions[0].key === 'ozon'
+                        ? event && event.currentTarget : null;
                     this.closeBulkActionPanel(false);
-                    this.startAction(group.actions[0]);
+                    this.startAction(group.actions[0], returnFocus);
                     return;
                 }
                 if (this.activeBulkActionGroup === group.key) {
@@ -1428,8 +1434,10 @@
                 this._bulkActionTrigger = event && event.currentTarget;
             },
             runBulkIntentAction: function (action) {
+                var returnFocus = action && action.key === 'ozon'
+                    ? this._bulkActionTrigger : null;
                 this.closeBulkActionPanel(false);
-                this.startAction(action);
+                this.startAction(action, returnFocus);
             },
             onMoreActionsToggle: function (event) {
                 if (event && event.currentTarget && event.currentTarget.open) {
@@ -2533,7 +2541,7 @@
             },
 
             /* ---------- массовые действия ---------- */
-            startAction: function (action) {
+            startAction: function (action, returnFocus) {
                 if (this.loading || this.itemsScope !== this.feedScopeKey() ||
                     (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) {
                     this.error = 'Список обновляется. Дождитесь загрузки и выберите товары снова.';
@@ -2618,7 +2626,7 @@
                         this.ozonError = 'Выберите от 1 до 200 товаров для одной подготовки.';
                         return;
                     }
-                    this.openOzonPreparation(selectionIds);
+                    this.openOzonPreparation(selectionIds, returnFocus);
                     return;
                 }
                 if (action.key === 'common_content') {
@@ -3287,19 +3295,27 @@
                 this.ozonIds = productIds.slice();
                 this.ozonAccountId = this.ozonAccounts.length === 1
                     ? String(this.ozonAccounts[0].id) : '';
-                this.ozonConfirmed = false;
+                this.ozonSelectionAtOpen = Array.isArray(this.selected)
+                    ? this.selected.slice() : null;
+                this.ozonSelectionScopeAtOpen = this.feedScopeKey();
                 this.ozonError = '';
-                this.ozonReturnFocus = returnFocus || null;
+                this.ozonReturnFocus = returnFocus || document.activeElement || null;
                 this.$nextTick(function () {
                     this.$refs.ozonDialog.showModal();
-                    this.$refs.ozonAccount.focus();
+                    if (this.ozonAccounts.length === 1) {
+                        this.$refs.ozonDialogTitle?.focus({ preventScroll: true });
+                    } else {
+                        this.$refs.ozonAccount?.focus({ preventScroll: true });
+                    }
                 });
                 return true;
             },
             closeOzonDialog: function () {
-                if (this.ozonBusy) return;
-                this.$refs.ozonDialog.close();
-                this.ozonConfirmed = false;
+                var dialog = this.$refs.ozonDialog;
+                if (this.ozonBusy || !dialog || !dialog.open) return;
+                dialog.close();
+                this.ozonSelectionAtOpen = null;
+                this.ozonSelectionScopeAtOpen = '';
                 if (this.ozonReturnFocus && this.ozonReturnFocus.isConnected &&
                     typeof this.ozonReturnFocus.focus === 'function') {
                     this.ozonReturnFocus.focus();
@@ -3312,9 +3328,19 @@
                 this.ozonError = 'Повреждённая запись снята после проверки истории. Выберите товары заново перед подготовкой.';
             },
             prepareOzon: async function () {
+                var dialog = this.$refs.ozonDialog;
+                if (!dialog || dialog.open !== true) return;
+                if (!Array.isArray(this.ozonSelectionAtOpen) ||
+                    !sameOrderedIds(this.selected, this.ozonSelectionAtOpen) ||
+                    this.feedScopeKey() !== this.ozonSelectionScopeAtOpen) {
+                    this.closeOzonDialog();
+                    this.ozonError = 'Список или выбор изменился. Отметьте товары заново перед подготовкой.';
+                    this.$nextTick(function () { this.$refs.ozonError?.focus(); });
+                    return;
+                }
                 var accountId = Number(this.ozonAccountId);
                 if (this.ozonBusy || this.ozonPending || this.ozonStorageProblem || this.ozonSessionEnded ||
-                    !this.ozonConfirmed || !Number.isSafeInteger(accountId) ||
+                    !Number.isSafeInteger(accountId) ||
                     !this.ozonAccounts.some(function (row) { return row.id === accountId; }) ||
                     !this.ozonIds.length || this.ozonIds.length > 200) return;
                 var csrf = document.querySelector('meta[name="csrf-token"]')?.content;
@@ -3391,7 +3417,10 @@
                             : error.message;
                 } finally {
                     clearTimeout(timer); this.ozonBusy = '';
-                    this.$refs.ozonDialog.close();
+                    this.closeOzonDialog();
+                    if (this.ozonError) this.$nextTick(function () {
+                        this.$refs.ozonError?.focus();
+                    });
                 }
             },
             readOzonPending: async function () {

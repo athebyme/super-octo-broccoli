@@ -132,6 +132,10 @@ function makeApp() {
   const app = Object.assign(component.data(), component.methods);
   const refs = {
     account: {focused: false, focus() { this.focused = true; }},
+    dialogTitle: {
+      focused: false, focusOptions: null,
+      focus(options) { this.focused = true; this.focusOptions = options || null; },
+    },
     error: {focused: false, focus() { this.focused = true; }},
     result: {
       focused: false,
@@ -162,6 +166,7 @@ function makeApp() {
   };
   app.$refs = {
     ozonAccount: refs.account,
+    ozonDialogTitle: refs.dialogTitle,
     ozonError: refs.error,
     supplierRefreshResult: refs.result,
     supplierRefreshResume: refs.resume,
@@ -594,9 +599,10 @@ async function finishSupplierRefresh(data, ids) {
   assert.equal(disconnected.app.checkRefreshedWbCharacteristics(), false,
     'WB handoff is unavailable without a connected cabinet');
   assert.equal(app.ozonAccountId, String(account.id));
-  assert.equal(app.ozonConfirmed, false);
   assert.equal(refs.dialog.open, true);
-  assert.equal(refs.account.focused, true);
+  assert.equal(refs.dialogTitle.focused, true);
+  sameJson(refs.dialogTitle.focusOptions, {preventScroll: true});
+  assert.equal(refs.account.focused, false);
   assert.equal(trigger.focused, false);
   app.closeOzonDialog();
   assert.equal(refs.dialog.open, false);
@@ -641,6 +647,45 @@ async function finishSupplierRefresh(data, ids) {
   sameJson(ordinary.app.ozonIds, selection);
   sameJson(ordinary.app.selected, selection);
   assert.equal(ordinary.refs.dialog.open, true, 'the ordinary Ozon action still uses the shared dialog helper');
+  assert.equal(ordinary.refs.dialogTitle.focused, true, 'single-account preparation focuses its heading');
+
+  const directIntent = makeApp();
+  directIntent.app.items = [{id: 101}];
+  directIntent.app.selected = [101];
+  const directTrigger = {isConnected: true, focused: false, focus() { this.focused = true; }};
+  const fetchCountBeforeDirect = fetchCalls.length;
+  assert.equal(directIntent.app.activateBulkIntent(
+    {key: 'create', actions: [{key: 'ozon'}]}, {currentTarget: directTrigger},
+  ), undefined);
+  assert.equal(directIntent.refs.dialog.open, true);
+  assert.equal(directIntent.refs.dialogTitle.focused, true);
+  assert.equal(fetchCalls.length, fetchCountBeforeDirect, 'opening the direct dialog never starts preparation');
+  directIntent.app.closeOzonDialog();
+  assert.equal(directTrigger.focused, true, 'direct intent cancellation returns focus to its launcher');
+  assert.equal(fetchCalls.length, fetchCountBeforeDirect, 'direct cancellation never starts preparation');
+
+  const multipleAccounts = makeApp();
+  multipleAccounts.app.ozonAccounts = [account, {id: 56, label: 'Shop West'}];
+  multipleAccounts.app.items = [{id: 101}];
+  multipleAccounts.app.selected = [101];
+  const multipleTrigger = {isConnected: true, focused: false, focus() { this.focused = true; }};
+  const fetchCountBeforeMultiple = fetchCalls.length;
+  multipleAccounts.app.activateBulkIntent(
+    {key: 'create', actions: [{key: 'push_wb'}, {key: 'ozon'}]},
+    {currentTarget: multipleTrigger},
+  );
+  assert.equal(multipleAccounts.app.activeBulkActionGroup, 'create');
+  multipleAccounts.app.runBulkIntentAction({key: 'ozon'});
+  assert.equal(multipleAccounts.refs.dialog.open, true);
+  assert.equal(multipleAccounts.app.ozonAccountId, '', 'multiple accounts require an explicit choice');
+  assert.equal(multipleAccounts.refs.account.focused, true, 'multiple-account preparation focuses the chooser');
+  assert.equal(multipleAccounts.refs.dialogTitle.focused, false);
+  multipleAccounts.app.ozonAccountId = String(account.id);
+  assert.equal(fetchCalls.length, fetchCountBeforeMultiple, 'choosing an account never starts preparation');
+  multipleAccounts.app.closeOzonDialog();
+  assert.equal(multipleAccounts.refs.dialog.open, false);
+  assert.equal(multipleTrigger.focused, true, 'cancel returns focus to the caller');
+  assert.equal(fetchCalls.length, fetchCountBeforeMultiple, 'cancel never starts preparation');
 
   const templateText = fs.readFileSync(require('node:path').join(
     require('node:path').dirname(process.argv[1]), '..', 'templates', 'my_products_beta.html',
@@ -657,11 +702,21 @@ async function finishSupplierRefresh(data, ids) {
   assert.match(templateText, /<dialog ref="supplierRefreshDialog" class="mp-supplier-refresh-dialog"/);
   assert.match(templateText, /aria-labelledby="mp-supplier-refresh-dialog-title"/);
   assert.match(templateText, /Данные на площадках не меняются/);
-  assert.match(templateText, /filename='my-products-beta\.css', v='20261122-bulk-intent-mobile-rail-r58'/);
-  assert.match(templateText, /filename='my-products-beta\.js', v='20261122-bulk-intent-rail-r58'/);
+  assert.match(templateText, /filename='my-products-beta\.css', v='20261122-ozon-local-prepare-r59'/);
+  assert.match(templateText, /filename='my-products-beta\.js', v='20261122-ozon-local-prepare-r59'/);
+  assert.match(templateText, /ref="ozonDialogTitle" tabindex="-1"/);
+  assert.match(templateText, /v-if="ozonAccounts\.length === 1"[\s\S]*data-ozon-preparation-account[\s\S]*v-else>[\s\S]*id="mp-ozon-account"/);
+  assert.match(templateText, /data-ozon-preparation-account[^>]*aria-labelledby="mp-ozon-account-label">\{\{ ozonAccounts\[0\]\.label \}\}/);
+  assert.match(templateText, /id="mp-ozon-account"/);
+  assert.doesNotMatch(templateText, /ozonConfirmed|mp-ozon-confirm/);
+  assert.match(templateText, /<dialog[^>]*aria-describedby="mp-ozon-dialog-help"/);
+  assert.match(templateText, /Черновики сохранятся в Seller Hub\. Отправка на Ozon требует отдельного подтверждения\./);
+  assert.match(templateText, /Подготовить черновики/);
   assert.match(templateText, /filename='common-product-content\.js', v='20261122-ozon-update-return-r56'/);
   assert.match(commonTemplateText, /filename='common-product-content\.js', v='20261121-common-content-workspace-return-r36'/);
   assert.match(stylesheetText, /\.mp-refresh-result\s*\{[^}]*scroll-margin-top:\s*72px/s);
+  assert.match(stylesheetText, /\.mp-ozon-dialog--prepare \.mp-ozon-account-value\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+  assert.match(stylesheetText, /\.mp-ozon-dialog--prepare \.sh-btn\s*\{[^}]*min-height:\s*44px/s);
 
   const receiptKey = 'supplier-refresh-resume-v1';
   const previousReceipt = 'v1.previous.receipt';
