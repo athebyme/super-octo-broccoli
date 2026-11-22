@@ -46,6 +46,7 @@ report = {
     "review": {},
     "reviewed_queue": {},
     "reviewed_result_recovery": {},
+    "saved_draft_selection": {},
     "scope": "synthetic_ozon_bulk_ready_review_browser",
     "multi_page_review": "not_run; 4-row journey exercises the real API; 200-row paging contract stays in its Node test",
 }
@@ -799,6 +800,10 @@ def bridge(route):
             elif query.get("parent_prepare_job_uid") == [state.get("recovery_source_job_uid")]:
                 assert ids == state["recovery_source_draft_ids"], (ids, state["recovery_source_draft_ids"])
                 state.setdefault("recovery_source_review_api_pages", []).append(page)
+            elif state.get("selection_draft_ids") and not query.get("parent_prepare_job_uid"):
+                assert set(ids) == set(state["selection_draft_ids"]), query
+                assert len(ids) == len(state["selection_draft_ids"]), query
+                state["selection_review_read"] = True
             else:
                 assert query.get("parent_prepare_job_uid") == [state["source_job_uid"]], query
                 assert ids == state["draft_ids"], (ids, state["draft_ids"])
@@ -824,8 +829,17 @@ def bridge(route):
         if request.method == "POST" and path.endswith("/repair/apply"):
             form = parse_qs(request.post_data or "", keep_blank_values=True)
             selected_ids = [int(value) for value in form.get("selected_draft_id", [])]
-            assert selected_ids == state["repair_row_ids"], selected_ids
-            state["source_prepare_repair_post"] = {
+            selection_mode = path == "/marketplaces/ozon/uploads/selection/repair/apply"
+            expected = state["selection_draft_ids"] if selection_mode else state["repair_row_ids"]
+            if selection_mode:
+                assert sorted(selected_ids) == sorted(expected), selected_ids
+                query = parse_qs(url.query)
+                assert query["account_id"] == [str(account_id)], query
+                assert query["draft_ids"] == [",".join(map(str, expected))], query
+            else:
+                assert selected_ids == expected, selected_ids
+            receipt_key = "selection_repair_post" if selection_mode else "source_prepare_repair_post"
+            state[receipt_key] = {
                 "draft_ids": selected_ids,
                 "csrf": bool(request.headers.get("x-csrftoken")),
             }
@@ -1284,6 +1298,184 @@ def run_recovery_browser_journey(page, browser, context):
         "result_summary_before_workflow_guide": True,
     })
     passed("reviewed_result_recovery_returns_exact_current_rows_read_only_and_queues_only_confirmed_subset")
+
+
+def _selected_draft_snapshots():
+    with app.app_context():
+        drafts = {
+            draft.id: (draft.version, draft.content_json)
+            for draft in MarketplaceProductDraft.query.order_by(MarketplaceProductDraft.id)
+        }
+        items = {
+            item.id: (item.draft_id, item.prepared_version, item.phase, item.error_code)
+            for item in OzonBulkUploadItem.query.order_by(OzonBulkUploadItem.id)
+        }
+        return drafts, items
+
+
+def run_selected_draft_journey(page):
+    """Save one description to a standalone draft and an earlier prepared draft."""
+    standalone_title = "BR Selection · отдельный черновик"
+    description = "Локальное описание двух выбранных черновиков Ozon."
+    with app.app_context():
+        product_type = MarketplaceProductType.query.filter_by(
+            marketplace_id=marketplace_id, external_type_id="1000",
+        ).one()
+        source = _make_source(
+            seller_id=fixture["seller_id"], external_id="br-standalone-draft-source",
+            vendor_code="BR-STANDALONE-DRAFT", title=standalone_title,
+            description="Исходное описание отдельной карточки.", category=product_type.category.name,
+        )
+        db.session.add(source)
+        db.session.flush()
+        standalone = MarketplaceDraftService.create_draft(
+            seller_id=fixture["seller_id"], account_id=account_id,
+            imported_product_id=source.id, product_type_id=product_type.id,
+        )
+        standalone = MarketplaceDraftService.validate_draft(
+            seller_id=fixture["seller_id"], draft_id=standalone.id,
+            expected_version=standalone.version,
+        )
+        assert standalone.status == "ready", standalone.validation_result_json
+        standalone_id = standalone.id
+        prepared = MarketplaceProductDraft.query.filter_by(
+            seller_id=fixture["seller_id"], account_id=account_id,
+            imported_product_id=source_ids["excluded"],
+        ).one()
+        prepared_id = prepared.id
+        prepared_title = source_titles["excluded"]
+        assert prepared.status == "ready"
+        assert OzonBulkUploadItem.query.filter_by(draft_id=prepared_id).count() == 1
+        assert OzonBulkUploadItem.query.filter_by(draft_id=standalone_id).count() == 0
+
+    baseline_drafts, baseline_items = _selected_draft_snapshots()
+    baseline_counts = _business_counts()
+    posts_before = dict(report["post_counts"])
+    writes_before = len(business_write_events)
+    page_path = "/marketplaces/drafts/"
+    page.set_viewport_size({"width": 1440, "height": 980})
+    page.goto(f"{base}{page_path}?account_id={account_id}&per_page=1&status=ready")
+    list_rows = page.locator("#ozon-drafts-list:not([v-cloak]) .odl-row")
+    list_rows.first.wait_for()
+    page.locator("[data-draft-selection-mode]").press("Enter")
+    picked = []
+    expected_titles = {standalone_title: standalone_id, prepared_title: prepared_id}
+    pagination = page.get_by_role("navigation", name="Страницы черновиков")
+    for _ in range(baseline_counts["drafts"]):
+        row = list_rows.first
+        title = row.locator("h3").inner_text()
+        if title in expected_titles:
+            row.locator("[data-draft-selection-check]").check()
+            picked.append(expected_titles[title])
+        if len(picked) == 2:
+            break
+        pagination.get_by_role("link", name="Дальше →", exact=True).click()
+        list_rows.first.wait_for()
+        assert list_rows.count() == 1
+        assert "per_page=1" in page.url
+
+    assert set(picked) == {standalone_id, prepared_id}, picked
+    state["selection_draft_ids"] = picked
+    origin_query = parse_qs(urlsplit(page.url).query)
+    assert int(origin_query["page"][0]) > 1
+    start = page.locator("[data-draft-selection-start]")
+    assert "(2)" in start.inner_text()
+    page.screenshot(path=str(OUT / "ozon-saved-draft-selection-list.png"), animations="disabled")
+    start.click()
+    editor = page.locator("[data-draft-selection-editor]:not([v-cloak])")
+    editor.wait_for()
+    editor_path = urlsplit(page.url)
+    assert editor_path.path == "/marketplaces/ozon/uploads/selection/repair"
+    query = parse_qs(editor_path.query)
+    assert query["draft_ids"] == [",".join(map(str, picked))]
+    assert query["account_id"] == [str(account_id)]
+    assert query["return_page"] == origin_query["page"]
+    assert query["return_per_page"] == ["1"]
+    assert query["return_status"] == ["ready"]
+    assert {int(row.get_attribute("data-draft")) for row in editor.locator(".orb-row").all()} == set(picked)
+
+    for draft_id in picked:
+        editor.locator(f'.orb-row[data-draft="{draft_id}"] input[type=checkbox]').first.check()
+    editor.get_by_role("button", name="Заполнить поле", exact=True).click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("Поле", exact=True).select_option("description")
+    dialog.get_by_label("Новое значение", exact=True).fill(description)
+    dialog.get_by_role("button", name="Посмотреть изменения", exact=True).click()
+    assert dialog.get_by_text(description, exact=True).count() == 2
+    dialog.get_by_role("button", name="Заполнить в форме", exact=True).click()
+
+    editor.locator("footer [data-draft-selection-save]").click()
+    assert dialog.get_by_text(description, exact=True).count() == 2
+    dialog.get_by_role("button", name="Вернуться к форме", exact=True).click()
+    assert report["post_counts"] == posts_before
+    assert len(business_write_events) == writes_before
+    assert _selected_draft_snapshots() == (baseline_drafts, baseline_items)
+    passed("saved_draft_selection_preserved_across_pages_and_preview_remains_local")
+
+    editor.locator("footer [data-draft-selection-save]").click()
+    dialog.locator("[data-draft-selection-save]").click()
+    receipt = editor.get_by_role("region", name="Результат сохранения")
+    receipt.wait_for()
+    path = "/marketplaces/ozon/uploads/selection/repair/apply"
+    assert report["post_counts"] == {**posts_before, path: 1}
+    assert set(state["selection_repair_post"]["draft_ids"]) == set(picked)
+    assert state["selection_repair_post"]["csrf"] is True
+    drafts_after, items_after = _selected_draft_snapshots()
+    assert set(drafts_after) == set(baseline_drafts)
+    assert _business_counts() == baseline_counts
+    assert items_after == baseline_items
+    assert {key for key, value in drafts_after.items() if value != baseline_drafts[key]} == set(picked)
+    for draft_id in picked:
+        version, content = drafts_after[draft_id]
+        assert version > baseline_drafts[draft_id][0]
+        assert json.loads(content)["description"] == description
+
+    review_link = receipt.get_by_role("link", name="Проверить перед отправкой")
+    review_query = parse_qs(urlsplit(review_link.get_attribute("href")).query)
+    assert not review_query.get("parent_prepare_job_uid")
+    assert set(map(int, review_query["draft_ids"][0].split(","))) == set(picked)
+    assert review_query["account_id"] == [str(account_id)]
+    list_return = editor.locator(f'a[href^="{page_path}?"]').first
+    return_query = parse_qs(urlsplit(list_return.get_attribute("href")).query)
+    assert return_query == origin_query
+
+    layouts = []
+    for theme in ("light", "dark"):
+        page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+        for width in (320, 390):
+            page.set_viewport_size({"width": width, "height": 860})
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+            review_link.scroll_into_view_if_needed()
+            bounds = review_link.bounding_box()
+            assert bounds and bounds["x"] >= 0 and bounds["x"] + bounds["width"] <= width + 1
+            layouts.append({"width": width, "theme": theme})
+        page.screenshot(path=str(OUT / f"ozon-saved-draft-edit-{theme}-mobile.png"), animations="disabled")
+    page.set_viewport_size({"width": 1440, "height": 980})
+    with page.expect_response(lambda response: urlsplit(response.url).path == "/marketplaces/ozon/uploads/api/review") as pending_review:
+        review_link.click()
+    assert pending_review.value.status == 200
+    reviewed = pending_review.value.json()["review"]
+    assert {row["draft_id"]: row["version"] for row in reviewed["items"]} == {
+        draft_id: drafts_after[draft_id][0] for draft_id in picked
+    }
+    assert state["selection_review_read"] is True
+    page.go_back()
+    editor.wait_for()
+    list_return.click()
+    list_rows.first.wait_for()
+    assert urlsplit(page.url).path == page_path
+    assert parse_qs(urlsplit(page.url).query) == origin_query
+    assert "(2)" in page.locator("[data-draft-selection-start]").inner_text()
+    assert report["post_counts"] == {**posts_before, path: 1}
+    assert _selected_draft_snapshots() == (drafts_after, items_after)
+    assert _business_counts() == baseline_counts
+    report["saved_draft_selection"] = {
+        "pages_kept": True, "selected_count": len(picked), "saved_count": len(picked),
+        "origin_run_count": 1, "standalone_draft_count": 1, "confirm_posts": 1,
+        "journal_unchanged": True, "exact_fresh_review_read": True, "published": 0,
+        "layouts": layouts,
+    }
+    passed("saved_draft_selection_edits_exact_scope_and_reviews_current_versions_without_queueing")
 
 
 def run_browser_journey():
@@ -1746,6 +1938,7 @@ def run_browser_journey():
         assert not report["js_errors"]
         passed("explicit_reviewed_queue_creates_exactly_one_create_and_one_update_without_provider_dispatch")
         run_recovery_browser_journey(page, browser, context)
+        run_selected_draft_journey(page)
         browser.close()
 
 
