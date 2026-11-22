@@ -350,13 +350,13 @@ try:
             assert preparation_account.count() == 1 and preparation_account.is_visible()
             assert 'Ozon CI 0' in preparation_account.inner_text()
             local_prep_copy = source_dialog.get_by_text(
-                'Подготовим локальные черновики для выбранного магазина Ozon. '
-                'Отправку подтвердите отдельно после проверки карточек.',
+                'Черновики сохранятся в Seller Hub. '
+                'Отправка на Ozon требует отдельного подтверждения.',
                 exact=True,
             )
             assert local_prep_copy.count() == 1 and local_prep_copy.is_visible()
             assert source_dialog.get_by_text(
-                'Отправку подтвердите отдельно после проверки карточек.', exact=False,
+                'Отправка на Ozon требует отдельного подтверждения.', exact=False,
             ).count() == 1
             prepare_button = source_dialog.get_by_role(
                 'button', name='Подготовить черновики', exact=True,
