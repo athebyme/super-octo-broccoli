@@ -2,6 +2,8 @@
 from pathlib import Path
 import subprocess
 
+from flask import Flask
+
 
 def test_bulk_review_and_uncertain_save_contracts():
     source=Path(__file__).parents[1]/'static/ozon-bulk-repair-vue.js'
@@ -201,7 +203,14 @@ const response=data=>({status:200,ok:true,redirected:false,json:async()=>({...da
     assert "'Обработано черновиков: '" in template
     assert 'Изменено: {{ report.updated }}' in template
     assert template.count('v-if="!draftSelection" class="orb-check"') == 2
-    assert "urls.catalog_return_label || 'К каталогу Ozon'" in template
+    assert 'v-text="urls.catalog_return_label || \'К каталогу Ozon\'"' in template
+
+
+def test_ozon_bulk_repair_template_compiles_with_flask_loader():
+    template_dir=Path(__file__).parents[1]/'templates'
+    app=Flask(__name__,template_folder=str(template_dir))
+    compiled=app.jinja_env.get_template('ozon_bulk_repair.html')
+    assert compiled is not None
 
 
 def test_mixed_bulk_field_picker_filters_selected_schema_and_unavailable_rows():

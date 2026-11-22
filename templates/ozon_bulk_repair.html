@@ -30,7 +30,7 @@
         <a class="orb-back" {% if editor.mode == 'draft_selection' %}data-draft-selection-return{% endif %}
            :href="urls.result">{{ icon('arrow-left', size=16) }} {{ 'К черновикам' if editor.mode == 'draft_selection' else 'К результатам подготовки' if editor.mode == 'source_prepare' else 'К результатам загрузки' }}</a>
         <a v-if="draftSelection && urls.catalog_return" class="orb-back" data-existing-update-catalog-return
-           :href="urls.catalog_return">{{ icon('arrow-left', size=16) }} {{ urls.catalog_return_label || 'К каталогу Ozon' }}</a>
+           :href="urls.catalog_return">{{ icon('arrow-left', size=16) }} <span v-text="urls.catalog_return_label || 'К каталогу Ozon'"></span></a>
         <h1>{{ 'Черновики партии' if editor.mode == 'source_prepare' else 'Изменение черновиков' if editor.mode == 'draft_selection' else 'Исправление карточек' }}</h1>
         <p>{{ editor.account_label or 'Магазин Ozon' }}. {% if editor.mode == 'source_prepare' %}Локальные изменения сохраняются в Seller Hub; перед отправкой проверьте актуальные версии.{% elif editor.mode == 'draft_selection' %}Изменения сохраняются только в Seller Hub. Перед отправкой карточек Ozon потребуется отдельная проверка.{% else %}Подготовьте нужные значения и сохраните черновики.{% endif %}</p>
         <button type="button" class="orb-link" :disabled="busy || sessionExpired" @click="reload({manual:true})">Прочитать текущее состояние</button>
