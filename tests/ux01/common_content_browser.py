@@ -967,7 +967,7 @@ def layout_case(page, path: str, width: int, theme: str, state: str, catalog_pat
         width: innerWidth,
         scrollWidth: document.documentElement.scrollWidth,
         theme: document.documentElement.dataset.theme,
-        titleVisible: !!document.querySelector('h1')?.textContent.includes('Общий контент товара'),
+        titleVisible: !!document.querySelector('h1')?.textContent.includes('Данные товара'),
         effectNoticeVisible: !!document.querySelector('.cpc-effect-note')
             && getComputedStyle(document.querySelector('.cpc-effect-note')).display !== 'none',
         selectedProductCount: document.querySelectorAll('#common-content-product-list li').length,
@@ -1778,7 +1778,7 @@ def _run_bulk_50_case(page) -> None:
     # concurrent manual description edit with its version/audit metadata.
     _edit_bulk_titles(page, product_ids)
     page.get_by_role("button", name="Проверить изменения").click()
-    preview_heading = page.get_by_role("heading", name="Проверьте изменения общего товара")
+    preview_heading = page.get_by_role("heading", name="Проверьте изменения товара")
     preview_heading.wait_for(state="attached")
     assert page.locator("#common-content-preview .cpc-diff-product").count() == 50
     assert REPORT["preview_item_counts"][-1] == 50, REPORT["preview_item_counts"][-5:]
@@ -1807,10 +1807,10 @@ def _run_bulk_50_case(page) -> None:
     apply_path = "/api/my-products/common-content/apply"
     EXPECTED_CONFLICTS[apply_path][0] += 1
     page.locator('input[data-action="acknowledge-preview"]').check()
-    page.get_by_role("button", name="Сохранить общий товар").click()
+    page.get_by_role("button", name="Сохранить данные товара").click()
     error = page.locator("#common-content-error")
     error.wait_for(state="visible")
-    assert "Предыдущий diff отменён" in error.inner_text()
+    assert "Предыдущая проверка отменена" in error.inner_text()
     assert page.locator("#common-content-preview").is_hidden()
     assert page.locator("#common-content-editor").evaluate("el => !el.inert")
     with app.app_context():
@@ -1852,12 +1852,12 @@ def _run_bulk_50_case(page) -> None:
     }, recovery_preview_observation
     REPORT["bulk_50"]["recovery_preview_product_ids_match"] = True
     REPORT["bulk_50"]["recovery_preview_items"] = REPORT["preview_item_counts"][-1]
-    save_button = page.get_by_role("button", name="Сохранить общий товар")
+    save_button = page.get_by_role("button", name="Сохранить данные товара")
     assert not save_button.is_enabled()
     page.locator('input[data-action="acknowledge-preview"]').check()
     assert save_button.is_enabled()
     save_button.click()
-    page.get_by_text("Общий товар сохранён", exact=False).wait_for(timeout=30000)
+    page.get_by_text("Данные товара сохранены", exact=False).wait_for(timeout=30000)
     page.wait_for_function("""() => {
         const root = document.querySelector('#common-content-editor');
         return root && root.getAttribute('aria-busy') === 'false' && !root.inert;
@@ -2895,7 +2895,7 @@ def run():
         classic = page.goto(BASE + classic_path, wait_until="domcontentloaded")
         assert classic and classic.status == 200
         row = page.locator(f'tr[data-product-id="{product_ids[0]}"]')
-        single_link = row.get_by_role("link", name="Общий контент")
+        single_link = row.get_by_role("link", name="Данные товара")
         single_link.wait_for()
         single_link.click()
         page.wait_for_url(lambda value: _common_editor_url_matches(
@@ -2988,7 +2988,7 @@ def run():
         page.reload(wait_until="domcontentloaded")
         page.locator("#common-content-fields").wait_for()
 
-        page.get_by_text("Сохранится только общий товар в Seller Hub", exact=False).wait_for()
+        page.get_by_text("Сохраняются только данные товара в Seller Hub", exact=False).wait_for()
         source_line = page.locator(".cpc-source-line").inner_text()
         assert "локальный источник" in source_line and "synthetic" not in source_line
         assert "needs_category" not in page.locator(".cpc-recipient-section").inner_text()
@@ -3063,14 +3063,14 @@ def run():
         recipient = page.locator('.cpc-recipient input[type="checkbox"]').first
         recipient.check()
         page.get_by_role("button", name="Проверить изменения").click()
-        page.get_by_role("heading", name="Проверьте изменения общего товара").wait_for()
-        page.get_by_text("Карточки каналов останутся как сейчас", exact=False).wait_for()
+        page.get_by_role("heading", name="Проверьте изменения товара").wait_for()
+        page.get_by_text("Карточки WB и Ozon останутся без изменений", exact=False).wait_for()
         preview_card_link = page.locator("#common-content-preview .cpc-preview").get_by_role(
             "link", name="Открыть карточку отдельно", exact=True,
         )
         assert preview_card_link.count() == 1
         preview_card_link.wait_for()
-        assert not page.get_by_role("button", name="Сохранить общий товар").is_enabled()
+        assert not page.get_by_role("button", name="Сохранить данные товара").is_enabled()
         REPORT["checks"].append("review_diff_is_explicit_and_apply_requires_acknowledgement")
 
         cancel_preview = page.get_by_role("button", name="Вернуться к полям")
@@ -3104,7 +3104,7 @@ def run():
             document.querySelector('[data-action="choose-product"][data-product-id="' + secondId + '"]').click();
         }""", product_ids[1])
         release_delayed_fetch(page, preview_key)
-        page.get_by_role("heading", name="Проверьте изменения общего товара").wait_for()
+        page.get_by_role("heading", name="Проверьте изменения товара").wait_for()
         assert page.locator('#common-content-product-list button[aria-current="true"]').get_attribute("data-product-id") == str(product_ids[0])
         photo_diff = page.locator('.cpc-diff-row').filter(has_text="Фотографии")
         before_order = photo_diff.locator('.cpc-diff-value').nth(0).locator('span').last.inner_text()
@@ -3116,7 +3116,7 @@ def run():
         apply_key = "POST /api/my-products/common-content/apply"
         read_key = "GET /api/my-products/" + str(product_ids[0]) + "/common-content"
         delay_fetches(page, [apply_key, read_key])
-        page.get_by_role("button", name="Сохранить общий товар").click()
+        page.get_by_role("button", name="Сохранить данные товара").click()
         wait_for_delayed_fetch(page, apply_key)
         assert page.locator("#common-content-editor").evaluate("el => el.inert")
         page.evaluate(
@@ -3130,7 +3130,7 @@ def run():
             product_ids[1],
         )
         release_delayed_fetch(page, read_key)
-        page.get_by_text("Общий товар сохранён", exact=False).wait_for(timeout=10000)
+        page.get_by_text("Данные товара сохранены", exact=False).wait_for(timeout=10000)
         assert page.locator('#common-content-product-list button[aria-current="true"]').get_attribute("data-product-id") == str(product_ids[0])
         REPORT["checks"].append("signed_preview_apply_and_common_only_success_notice")
         REPORT["checks"].append("delayed_apply_and_readback_keep_captured_product_context")
@@ -3225,7 +3225,7 @@ def run():
         second_title = page.get_by_role("textbox", name="Общее название товара")
         second_title.fill(FIXTURE["second_title"] + " — проверка конфликта сохранения")
         page.get_by_role("button", name="Проверить изменения").click()
-        page.get_by_role("heading", name="Проверьте изменения общего товара").wait_for()
+        page.get_by_role("heading", name="Проверьте изменения товара").wait_for()
         with app.app_context():
             changed = db.session.get(ImportedProduct, product_ids[1])
             changed.content_edit_version += 1
@@ -3233,12 +3233,12 @@ def run():
         apply_conflict_path = "/api/my-products/common-content/apply"
         EXPECTED_CONFLICTS[apply_conflict_path][0] += 1
         page.locator('input[data-action="acknowledge-preview"]').check()
-        page.get_by_role("button", name="Сохранить общий товар").click()
+        page.get_by_role("button", name="Сохранить данные товара").click()
         error.wait_for(state="visible")
-        assert "Предыдущий diff отменён" in error.inner_text()
+        assert "Предыдущая проверка отменена" in error.inner_text()
         assert page.locator("#common-content-preview").is_hidden()
         assert page.get_by_role("button", name="Проверить изменения").is_disabled()
-        assert page.get_by_role("button", name="Сохранить общий товар").count() == 0
+        assert page.get_by_role("button", name="Сохранить данные товара").count() == 0
         with app.app_context():
             unchanged = db.session.get(ImportedProduct, product_ids[1])
             assert unchanged.title == FIXTURE["second_title"]
@@ -3272,14 +3272,14 @@ def run():
             "textbox", name="Общее описание товара", exact=True,
         )
         recipient_heading = fields.get_by_role(
-            "heading", name="Контексты каналов для сравнения", exact=True,
+            "heading", name="Карточки WB и Ozon для сравнения", exact=True,
         )
         scope_note = page.locator(".cpc-effect-note")
         scope_note_text = scope_note.inner_text().strip() if scope_note.count() == 1 else ""
         required_scope_copy = (
-            "Сохранится только общий товар в Seller Hub.",
-            "Черновики и опубликованные карточки на площадках останутся без изменений.",
-            "Чтобы применить новые данные к каналу, отдельно проверьте его карточку и подтвердите действие там.",
+            "Сохраняются только данные товара в Seller Hub.",
+            "Черновики и опубликованные карточки WB и Ozon не меняются.",
+            "Чтобы обновить карточку, откройте соответствующий маркетплейс, проверьте изменения и подтвердите их отдельно.",
         )
         label_evidence = {
             "field_headings": actual_field_headings,

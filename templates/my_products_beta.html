@@ -392,7 +392,7 @@
                 <a class="sh-quiet-link" data-common-content-row-link
                    :href="urls.commonContent + '?product_id=' + encodeURIComponent(item.id)"
                    @click="openCommonContentRow($event, item)"
-                   :aria-label="'Изменить общий контент товара ' + (item.title || item.vendor_code)">Общий контент</a>
+                   :aria-label="'Изменить данные товара ' + (item.title || item.vendor_code)">Данные товара</a>
                 <div class="mp-flags">
                     <sh-badge v-if="item.has_supplier_update" label="Есть обновление у поставщика" tone="info"></sh-badge>
                     <sh-badge v-if="!item.photo_count" label="Нет фото" tone="warn"></sh-badge>
@@ -400,7 +400,7 @@
                 </div>
             </div>
 
-            <!-- Каналы: где карточка уже живёт -->
+            <!-- Связанные карточки товара на маркетплейсах -->
             <div class="mp-channels">
                 <span v-if="item.wb" class="mp-chan mp-chan--wb" :title="wbTitle(item)">
                     <i class="mp-dot mp-dot--wb"></i>WB
@@ -516,7 +516,7 @@
                         @click="activateBulkIntent(group, $event)">
                     <span class="mp-bulk-intent-name">{{ group.label }}</span>
                     <span v-if="group.actions.length === 1" class="mp-bulk-intent-detail">
-                        {{ group.actions[0].key === 'common_content' ? 'Общий контент' : ['wb_edit', 'wb_prices', 'push_wb'].includes(group.actions[0].key) ? 'WB' : group.actions[0].key === 'refresh_supplier' ? 'Поставщик' : 'Ozon' }}
+                        {{ group.actions[0].key === 'common_content' ? 'Данные товара' : ['wb_edit', 'wb_prices', 'push_wb'].includes(group.actions[0].key) ? 'WB' : group.actions[0].key === 'refresh_supplier' ? 'Поставщик' : 'Ozon' }}
                     </span>
                     <svg v-if="group.actions.length !== 1" viewBox="0 0 24 24" fill="none"
                          stroke="currentColor" stroke-width="2" aria-hidden="true" class="mp-bulk-intent-caret">
@@ -551,7 +551,7 @@
         <div class="mp-supplier-refresh-dialog-head">
             <h2 id="mp-supplier-refresh-dialog-title">Проверка обновления из поставщика</h2>
         </div>
-        <p class="mp-supplier-refresh-local-note">Изменения останутся в Seller Hub. Данные на площадках не меняются.</p>
+        <p class="mp-supplier-refresh-local-note">Изменения останутся в Seller Hub. Данные на площадках не меняются: карточки WB и Ozon останутся прежними.</p>
         <dl v-if="supplierRefreshReview" class="mp-supplier-refresh-counts" aria-label="Состав проверки">
             <div><dt>Выбрано</dt><dd>{{ supplierRefreshReview.requested }}</dd></div>
             <div><dt>Можно обновить</dt><dd>{{ supplierRefreshReview.eligible === null ? '—' : supplierRefreshReview.eligible }}</dd></div>

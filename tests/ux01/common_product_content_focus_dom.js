@@ -529,7 +529,7 @@ async function previewReturnDoesNotReuseToken() {
     dispatchClick(find(readbackFailureApp.previewNode, 'apply'));
     await drain();
     assert.ok(!readbackFailureApp.statusNode.hidden);
-    assert.match(readbackFailureApp.statusNode.textContent, /обновить отображение не удалось/);
+    assert.match(readbackFailureApp.statusNode.textContent, /обновить экран не удалось/);
     assertFocused(readbackFailureApp, find(readbackFailureApp.fieldsNode, 'toggle-mode'), 'saved state after readback failure');
 
     const externalApp = makeApp();

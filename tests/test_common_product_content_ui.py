@@ -78,8 +78,10 @@ def test_page_renders_empty_and_selected_states_with_safe_bootstrap(api):
     assert "Сначала выберите товары" in empty.get_data(as_text=True)
     assert selected.status_code == 200
     html = selected.get_data(as_text=True)
-    assert "Сохранится только общий товар в Seller Hub" in html
-    assert "Черновики и опубликованные карточки на площадках останутся без изменений" in html
+    assert "Данные товара" in html
+    assert "Сохраняются только данные товара в Seller Hub" in html
+    assert "Черновики и опубликованные карточки WB и Ozon не меняются" in html
+    assert "общему товару" not in html
     assert "common-product-content.css" in html
     assert "common-product-content.js" in html
     assert "<pre" not in html

@@ -1381,15 +1381,15 @@
                                 ? 'за один запуск можно выбрать не больше 200 товаров'
                                 : withUpdates
                                     ? withUpdates + ' с новыми данными; изменения останутся в Seller Hub'
-                                    : 'обновит только ваши данные в Seller Hub, карточки площадок не меняются',
+                                    : 'обновит данные только в Seller Hub; карточки WB и Ozon не меняются',
                             disabled: !underLimit,
                         },
                         {
                             key: 'common_content',
-                            label: 'Изменить общий контент',
+                            label: 'Изменить данные товара',
                             hint: chosen.length > 50
                                 ? 'за один раз можно открыть не больше 50 товаров'
-                                : 'изменит данные в Seller Hub; карточки площадок не обновятся',
+                                : 'изменит данные товара в Seller Hub; карточки WB и Ozon не обновятся',
                             disabled: !chosen.length || chosen.length > 50,
                         },
                         {
@@ -1454,15 +1454,15 @@
                     {
                         key: 'cards', label: 'Карточки', keys: ['common_content', 'wb_edit', 'ozon_workspace_update'],
                         labels: {
-                            common_content: 'Общий контент',
+                            common_content: 'Данные товара',
                             wb_edit: 'Карточки WB',
                             ozon_workspace_update: 'Карточки Ozon',
                         },
                         emptyHint: this.selected.length > MAX_BULK_SELECTION
                             ? 'За один раз можно выбрать не больше 200 товаров.'
                             : this.selected.length > 50
-                                ? 'Общий редактор принимает до 50 товаров; для WB и Ozon нужны точные связанные карточки.'
-                                : 'Выберите до 50 товаров для общего контента или товары с доступными карточками WB/Ozon.',
+                            ? 'Для изменения данных товара выберите не больше 50 товаров; для WB и Ozon нужны точные связанные карточки.'
+                                : 'Выберите до 50 товаров для изменения данных Seller Hub или товары со связанными карточками WB/Ozon.',
                     },
                     {
                         key: 'prices', label: 'Цены', keys: ['wb_prices', 'ozon_prices'],
@@ -1609,7 +1609,7 @@
                         key: 'delete',
                         label: 'Удалить из «Моих товаров»',
                         hint: published
-                            ? published + ' ' + this.$fmt.plural(published, 'карточка WB останется', 'карточки WB останутся', 'карточек WB останутся') + ' на площадке'
+                            ? published + ' ' + this.$fmt.plural(published, 'карточка WB останется', 'карточки WB останутся', 'карточек WB останутся') + ' в Wildberries'
                             : 'товары снова станут доступны для импорта',
                         danger: true,
                         disabled: !underLimit,
@@ -2222,7 +2222,7 @@
                         this.urls.commonContent, editorIds, helpers
                     );
                 } catch (_) {
-                    this.error = 'Не удалось открыть общий контент. Обновите страницу и повторите действие.';
+                    this.error = 'Не удалось открыть данные товара. Обновите страницу и повторите действие.';
                     return false;
                 }
                 var nonce = null;
@@ -2248,7 +2248,7 @@
                     if (typeof nonce === 'string' && /^[a-f0-9]{32}$/.test(nonce)) {
                         this.consumeWorkspaceReturn(nonce);
                     }
-                    this.error = 'Не удалось открыть общий контент. Обновите страницу и повторите действие.';
+                    this.error = 'Не удалось открыть данные товара. Обновите страницу и повторите действие.';
                     return false;
                 }
             },
@@ -3084,7 +3084,7 @@
                             + this.$fmt.plural(chosen.length, 'карточку', 'карточки', 'карточек')
                             + ' данными из каталога поставщика.',
                         details: [
-                            'Изменятся только данные в Seller Hub; карточки на площадках не меняются.',
+                            'Изменятся только данные товара в Seller Hub; карточки WB и Ozon не меняются.',
                             'Товары без связи с каталогом поставщика будут отмечены отдельно.',
                         ],
                         label: 'Обновить',

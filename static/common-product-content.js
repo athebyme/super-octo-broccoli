@@ -1341,13 +1341,13 @@
             item.disabled = draft.mode === 'inherit' || (!available && !selected);
             item.setAttribute('aria-pressed', selected ? 'true' : 'false');
             item.setAttribute('aria-disabled', item.disabled ? 'true' : 'false');
-            item.setAttribute('aria-label', photoName(option.url, record) + ', ' + (selected ? 'выбрано' : 'не выбрано') + ', источник: ' + (option.source || 'общий товар'));
+            item.setAttribute('aria-label', photoName(option.url, record) + ', ' + (selected ? 'выбрано' : 'не выбрано') + ', источник: ' + (option.source || 'данные товара Seller Hub'));
 
             var image = node('span', 'cpc-photo-preview');
             image.appendChild(node('span', '', helpers.photoPreviewFallbackLabel(selected, !!option.preview_url)));
             item.appendChild(image);
             item.appendChild(node('span', 'cpc-photo-name', photoName(option.url, record)));
-            item.appendChild(node('span', 'cpc-photo-source', option.source || 'общий товар'));
+            item.appendChild(node('span', 'cpc-photo-source', option.source || 'данные товара Seller Hub'));
             if (!available && !selected) item.appendChild(node('span', 'cpc-photo-source', 'Недоступно для выбора'));
             card.dataset.photoPreviewCard = 'true';
             card.appendChild(item);
@@ -1385,7 +1385,7 @@
         if (!currentPhotos.length) order.appendChild(node('span', 'cpc-field-hint', 'Выберите фото из списка выше.'));
         currentPhotos.forEach(function (url, index) {
             var row = node('div', 'cpc-photo-order-row');
-            row.appendChild(node('span', 'cpc-photo-order-name', photoName(url, record) + ' · ' + (findPhoto(record, url).source || 'общий товар')));
+            row.appendChild(node('span', 'cpc-photo-order-name', photoName(url, record) + ' · ' + (findPhoto(record, url).source || 'данные товара Seller Hub')));
             var actions = node('span', 'cpc-photo-order-actions');
             var up = button('↑', 'move-photo', 'cpc-photo-move');
             up.dataset.photoUrl = url;
@@ -1471,11 +1471,11 @@
 
     function renderRecipients(record) {
         var section = node('section', 'cpc-recipient-section');
-        section.appendChild(node('h3', '', 'Контексты каналов для сравнения'));
+        section.appendChild(node('h3', '', 'Карточки WB и Ozon для сравнения'));
         section.appendChild(node('p', '', 'Выберите карточки, чтобы увидеть различия до и после. Это только просмотр: сохранение не меняет эти карточки и не запускает отправку.'));
         var rows = Array.isArray(record.state.recipients) ? record.state.recipients : [];
         var list = node('div', 'cpc-recipient-list');
-        if (!rows.length) list.appendChild(node('p', 'cpc-field-hint', 'Связанных карточек каналов не найдено.'));
+        if (!rows.length) list.appendChild(node('p', 'cpc-field-hint', 'У товара нет связанных карточек WB или Ozon.'));
         rows.forEach(function (recipient) {
             var ref = recipient.ref || {};
             var key = recipientKey(ref);
@@ -1486,9 +1486,9 @@
             checkbox.dataset.recipientKey = key;
             checkbox.dataset.recipientKind = ref.kind || '';
             checkbox.dataset.recipientId = String(ref.id || '');
-            checkbox.setAttribute('aria-label', 'Сравнить с ' + (recipient.channel_label || recipient.channel || 'каналом') + ', ' + (recipient.account_label || 'кабинетом'));
+            checkbox.setAttribute('aria-label', 'Сравнить карточку ' + (recipient.channel_label || recipient.channel || 'маркетплейса') + ', ' + (recipient.account_label || 'магазин не указан'));
             var copy = node('span');
-            var title = node('strong', '', (recipient.channel_label || recipient.channel || 'Канал') + ' · ' + (recipient.account_label || 'без кабинета'));
+            var title = node('strong', '', (recipient.channel_label || recipient.channel || 'Маркетплейс') + ' · ' + (recipient.account_label || 'магазин не указан'));
             copy.appendChild(title);
             copy.appendChild(node('small', '', 'Состояние: ' + recipientStatusLabel(recipient.status) + ' · версия ' + (recipient.version || '—')));
             if (typeof recipient.href === 'string' && recipient.href.charAt(0) === '/') {
@@ -1504,7 +1504,7 @@
         });
         section.appendChild(list);
         if (record.state.recipients_truncated) {
-            section.appendChild(node('p', 'cpc-recipient-truncated', 'Показаны только первые контексты. Список ограничен для безопасного просмотра.'));
+            section.appendChild(node('p', 'cpc-recipient-truncated', 'Для безопасного просмотра показаны не все карточки.'));
         }
         return section;
     }
@@ -1535,7 +1535,7 @@
         var heading = node('header', 'cpc-product-heading');
         var name = node('div');
         name.appendChild(node('h2', '', record.state.title || 'Без названия'));
-        name.appendChild(node('p', '', 'Артикул ' + (record.state.external_id || 'не указан') + ' · версия общего товара ' + record.state.content_edit_version));
+        name.appendChild(node('p', '', 'Артикул ' + (record.state.external_id || 'не указан') + ' · версия данных товара ' + record.state.content_edit_version));
         heading.appendChild(name);
         heading.appendChild(node('p', 'cpc-source-line', sourceLabel(record.state.source || {})));
         fieldsNode.appendChild(heading);
@@ -1579,9 +1579,9 @@
         previewNode.hidden = false;
         var wrap = node('section', 'cpc-preview');
         wrap.setAttribute('aria-labelledby', 'cpc-preview-title');
-        wrap.appendChild(node('h3', '', 'Проверьте изменения общего товара'));
+        wrap.appendChild(node('h3', '', 'Проверьте изменения товара'));
         wrap.lastChild.id = 'cpc-preview-title';
-        wrap.appendChild(node('p', 'cpc-preview-intro', 'После подтверждения изменятся только сведения в Seller Hub. Черновики и карточки каналов останутся как сейчас.'));
+        wrap.appendChild(node('p', 'cpc-preview-intro', 'После подтверждения сохранятся только данные товара в Seller Hub. Карточки WB и Ozon останутся без изменений.'));
         (state.preview.items || []).forEach(function (item) {
             var record = state.byId.get(item.product_id);
             var card = node('section', 'cpc-diff-product');
@@ -1600,9 +1600,9 @@
             });
             (item.recipients || []).forEach(function (recipient) {
                 var diff = node('div', 'cpc-diff-recipient');
-                diff.appendChild(node('strong', '', (recipient.channel_label || recipient.channel || 'Канал') + ' · ' + (recipient.account_label || 'без кабинета')));
+                diff.appendChild(node('strong', '', (recipient.channel_label || recipient.channel || 'Маркетплейс') + ' · ' + (recipient.account_label || 'магазин не указан')));
                 (recipient.diff || []).forEach(function (entry) {
-                    diff.appendChild(node('p', '', (labels[entry.field] || entry.field) + ': ' + (entry.message || (entry.matches ? 'значение совпадает' : 'значение в карточке канала не меняется'))));
+                    diff.appendChild(node('p', '', (labels[entry.field] || entry.field) + ': ' + (entry.message || (entry.matches ? 'значение совпадает' : 'значение карточки не меняется'))));
                 });
                 diff.appendChild(node('p', '', recipient.notice || 'Карточка останется без изменений.'));
                 if (typeof recipient.href === 'string' && recipient.href.charAt(0) === '/') {
@@ -1622,11 +1622,11 @@
         acknowledge.checked = state.acknowledged;
         acknowledge.dataset.action = 'acknowledge-preview';
         label.appendChild(acknowledge);
-        label.appendChild(node('span', '', 'Я проверил diff. Сохранится общий товар в Seller Hub; карточки площадок не обновятся.'));
+        label.appendChild(node('span', '', 'Я проверил изменения. Сохранятся только данные товара в Seller Hub; карточки WB и Ozon не изменятся.'));
         wrap.appendChild(label);
         var actions = node('div', 'cpc-preview-actions');
         actions.appendChild(button('Вернуться к полям', 'back-to-fields', 'sh-btn sh-btn--secondary'));
-        var apply = button(state.busy ? 'Сохраняем…' : 'Сохранить общий товар', 'apply', 'sh-btn sh-btn--primary');
+        var apply = button(state.busy ? 'Сохраняем…' : 'Сохранить данные товара', 'apply', 'sh-btn sh-btn--primary');
         apply.disabled = !state.acknowledged || state.busy || !state.previewToken;
         actions.appendChild(apply);
         wrap.appendChild(actions);
@@ -1665,7 +1665,7 @@
         });
         if (!items.length) throw new Error('Сначала измените поле или верните переопределение к источнику.');
         if (items.length > 50) throw new Error('За один просмотр можно изменить не больше 50 товаров. Разделите выбор.');
-        if (totalRecipients > 100) throw new Error('Для сравнения выбрано больше 100 каналов. Снимите часть отметок и проверьте изменения снова.');
+        if (totalRecipients > 100) throw new Error('Для сравнения выбрано больше 100 карточек WB и Ozon. Снимите часть отметок и проверьте изменения снова.');
         return items;
     }
 
@@ -1703,7 +1703,7 @@
         var response = result.response;
         var data = result.data;
         if (!response.ok || !data.success) {
-            var error = new Error(data.error || 'Не удалось проверить общий товар. Обновите страницу и повторите проверку.');
+            var error = new Error(data.error || 'Не удалось проверить данные товара. Обновите страницу и повторите проверку.');
             error.status = response.status;
             error.code = data.code || '';
             throw error;
@@ -1728,7 +1728,7 @@
     async function preview() {
         if (state.busy) return;
         if (state.requiresRefresh) {
-            showError('Сначала перечитайте выбранные товары, затем проверьте diff заново.');
+            showError('Сначала перечитайте выбранные товары, затем снова проверьте изменения.');
             return;
         }
         clearError();
@@ -1750,7 +1750,7 @@
             if (error && (error.status === 409 || error.code === 'common_content_conflict')) {
                 state.requiresRefresh = true;
                 discardPreview();
-                failureMessage = 'Данные товара или карточки канала изменились. Предыдущая проверка отменена. Перечитайте выбранные товары и проверьте diff заново.';
+                failureMessage = 'Данные товара или карточка WB/Ozon изменились. Предыдущая проверка отменена. Перечитайте товары и снова проверьте изменения.';
             } else {
                 failureMessage = (error && error.message) || 'Не удалось проверить изменения. Обновите страницу и повторите проверку.';
             }
@@ -1778,7 +1778,7 @@
         try {
             var response = await postJson(bootstrap.applyUrl, { preview_token: previewToken });
             if (response.save_effect !== 'common_only' || !Array.isArray(response.applied)) {
-                throw new Error('Сервер не подтвердил сохранение общего товара. Проверьте данные перед повтором.');
+                throw new Error('Сервер не подтвердил сохранение данных товара. Проверьте состояние перед повтором.');
             }
             var changedIds = response.applied.map(function (row) { return row.product_id; });
             if (changedIds.length) expectedDisplayedProductId = changedIds[0];
@@ -1810,7 +1810,7 @@
             state.currentId = changedIds[0] || state.currentId;
             discardPreview();
             renderCurrent();
-            showStatus(response.notice || 'Общий товар сохранён. Карточки каналов не изменены.');
+            showStatus(response.notice || 'Данные товара сохранены. Карточки WB и Ozon не изменились.');
             try {
                 var refreshed = await Promise.all(changedIds.map(function (productId) {
                     return getProduct(productId).then(function (product) { return [productId, product]; });
@@ -1826,15 +1826,15 @@
                 renderCurrent();
             } catch (_) {
                 state.requiresRefresh = true;
-                showStatus('Общий товар сохранён, но обновить отображение не удалось. Перезагрузите страницу перед следующей правкой. Карточки каналов не изменены.');
+                showStatus('Данные товара сохранены, но обновить экран не удалось. Перезагрузите страницу перед следующей правкой. Карточки WB и Ozon не изменились.');
             }
         } catch (error) {
             discardPreview();
             state.requiresRefresh = true;
             if (error && error.status === 409) {
-                failureMessage = 'Товар или карточка канала изменились. Предыдущий diff отменён. Обновите данные товара и проверьте изменения заново.';
+                failureMessage = 'Данные товара или карточка WB/Ozon изменились. Предыдущая проверка отменена. Обновите товар и снова проверьте изменения.';
             } else {
-                failureMessage = 'Ответ о сохранении не удалось подтвердить. Не повторяйте действие: перечитайте общий товар и проверьте его текущее состояние.';
+                failureMessage = 'Ответ о сохранении не удалось подтвердить. Не повторяйте действие: перечитайте данные товара и проверьте его текущее состояние.';
             }
         } finally {
             setBusy(false);
@@ -1902,7 +1902,7 @@
         state.records = state.records.map(function (row) { return row.state.product_id === state.currentId ? fresh : row; });
         discardPreview();
         renderCurrent();
-        showStatus('Правки отменены. На странице площадки ничего не менялось.');
+        showStatus('Правки отменены. Карточки WB и Ozon не изменялись.');
         focusFirstModeControl();
     }
 
@@ -1934,7 +1934,7 @@
             state.requiresRefresh = false;
             discardPreview();
             renderCurrent();
-            showStatus('Данные выбранных товаров перечитаны. Проверьте источник и версии перед новым diff.');
+            showStatus('Данные выбранных товаров перечитаны. Проверьте источник и версию перед следующей правкой.');
             refreshSucceeded = true;
         } catch (error) {
             showError(error && error.message);
@@ -2122,7 +2122,7 @@
             if (total > 100) {
                 record.recipientKeys.delete(target.dataset.recipientKey);
                 target.checked = false;
-                showError('Для сравнения выберите не больше 100 каналов на весь просмотр.');
+                showError('Для сравнения выберите не больше 100 карточек WB и Ozon.');
             } else {
                 discardPreview();
                 clearError();

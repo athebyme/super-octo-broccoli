@@ -1803,9 +1803,9 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
         self.assertEqual(created.status_code, 201)
         self.assertEqual(rendered.status_code, 200)
         html = rendered.get_data(as_text=True)
-        self.assertIn("Ozon → общая карточка", html)
-        self.assertIn("Применить к master", html)
-        self.assertIn("Категории, характеристики, ID справочников", html)
+        self.assertIn("Сверить данные Ozon с товаром Seller Hub", html)
+        self.assertIn("Применить к данным товара", html)
+        self.assertIn("Категории, характеристики, цены, остатки и фотографии останутся отдельными", html)
         self.assertNotIn("synthetic-key", html)
 
     def test_feature_disable_blocks_new_apply_but_keeps_reject_and_rollback(self):
