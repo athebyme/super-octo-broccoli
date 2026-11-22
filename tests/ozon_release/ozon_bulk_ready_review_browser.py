@@ -301,6 +301,7 @@ photo_svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="80" height="100"><r
 state = {
     "source_job_uid": None,
     "source_item_ids": [],
+    "source_prepare_expected_ids": [],
     "source_prepare_post": None,
     "source_prepare_repair_post": None,
     "source_worker_stats": None,
@@ -871,7 +872,7 @@ def bridge(route):
             }, set(body)
             assert body["account_id"] == account_id
             assert body["confirm_prepare"] is True
-            assert set(body["imported_product_ids"]) == set(source_ids.values())
+            assert set(body["imported_product_ids"]) == set(state["source_prepare_expected_ids"])
             assert len(body["imported_product_ids"]) == 4
             assert re.fullmatch(r"[A-Za-z0-9_-]{24,128}", body["request_key"])
             state["source_prepare_post"] = {
@@ -2680,14 +2681,34 @@ def run_review_editor_navigation_journey(page):
 
 def run_browser_journey():
     with app.app_context():
+        additional_account = SellerMarketplaceAccount(
+            seller_id=fixture["seller_id"],
+            marketplace_id=marketplace_id,
+            external_account_id="100003",
+            label="Ozon CI additional",
+            is_active=True,
+            is_default=False,
+            connection_status="connected",
+        )
+        additional_account.set_credentials({
+            "client_id": "100003",
+            "api_key": "synthetic-key-not-valid-at-provider",
+        })
+        db.session.add(additional_account)
+        db.session.flush()
+        additional_account_id = additional_account.id
+        db.session.commit()
         account_rows = SellerMarketplaceAccount.query.filter_by(
             seller_id=fixture["seller_id"], marketplace_id=marketplace_id,
             is_active=True,
         ).all()
-        assert [row.id for row in account_rows] == [account_id]
+        assert {row.id for row in account_rows} == {account_id, additional_account_id}
+        assert len(account_rows) == 2
+        owner_account = db.session.get(SellerMarketplaceAccount, account_id)
+        assert owner_account is not None
         origin_product_ids = [*source_ids.values(), fixture["source_id"]]
         origin_batch = _issue_supplier_import_batch_token(
-            user_id=account_rows[0].seller.user.id,
+            user_id=owner_account.seller.user.id,
             seller_id=fixture["seller_id"], imported_product_ids=origin_product_ids,
         )
         assert origin_batch
@@ -2740,6 +2761,7 @@ def run_browser_journey():
         assert _business_counts() == baseline_counts
         report["source_prepare"]["page_selection_ids"] = selected_ids
         report["source_prepare"]["business_writes_before_prepare"] = len(business_write_events)
+        state["source_prepare_expected_ids"] = selected_ids
         report["checks"].append("beta_page_exact_selection_is_read_only_before_local_prepare")
 
         source_action_navigations = []
@@ -2747,26 +2769,73 @@ def run_browser_journey():
             source_action_navigations.append(frame.url)
             if frame == page.main_frame else None
         ))
+        source_prepare_path = "/marketplaces/ozon/uploads/"
+        source_prepare_posts_before = report["post_counts"].get(source_prepare_path, 0)
         invoke_workspace_action(page, "ozon")
         dialog = page.get_by_role("dialog")
         account_select = dialog.locator("#mp-ozon-account")
+        dialog.locator("#mp-ozon-dialog-title").wait_for(state="visible")
+        assert dialog.locator("#mp-ozon-dialog-title").inner_text().startswith("Подготовить 4 ")
+        assert account_select.input_value() == ""
+        assert account_select.evaluate("node => document.activeElement === node")
+        prepare_button = dialog.get_by_role("button", name="Подготовить черновики", exact=True)
+        assert prepare_button.is_disabled()
+        assert report["post_counts"].get(source_prepare_path, 0) == source_prepare_posts_before
+        assert state["source_prepare_post"] is None
+        assert not source_action_navigations, source_action_navigations
+
+        # Selecting a destination is a local choice. Escape closes without a
+        # write; the same selected source set must still be available to reopen.
+        page.keyboard.press("Escape")
+        dialog.wait_for(state="hidden")
+        assert report["post_counts"].get(source_prepare_path, 0) == source_prepare_posts_before
+        assert state["source_prepare_post"] is None
+        assert page.locator(
+            ".mp-list article.mp-row input[type=checkbox]:checked"
+        ).evaluate_all("nodes => nodes.map(node => Number(node.value))") == selected_ids
+        assert not source_action_navigations, source_action_navigations
+
+        invoke_workspace_action(page, "ozon")
+        dialog = page.get_by_role("dialog")
+        dialog.locator("#mp-ozon-dialog-title").wait_for(state="visible")
+        account_select = dialog.locator("#mp-ozon-account")
+        assert account_select.input_value() == ""
+        assert account_select.evaluate("node => document.activeElement === node")
+        prepare_button = dialog.get_by_role("button", name="Подготовить черновики", exact=True)
+        assert prepare_button.is_disabled()
+        assert report["post_counts"].get(source_prepare_path, 0) == source_prepare_posts_before
         account_select.select_option(str(account_id))
         assert account_select.input_value() == str(account_id)
-        dialog.locator(".mp-ozon-confirm input").check()
+        assert prepare_button.is_enabled()
+        assert report["post_counts"].get(source_prepare_path, 0) == source_prepare_posts_before
+        assert state["source_prepare_post"] is None
         assert not source_action_navigations, source_action_navigations
 
         with page.expect_response(lambda response: (
             response.request.method == "POST"
-            and urlsplit(response.url).path == "/marketplaces/ozon/uploads/"
+            and urlsplit(response.url).path == source_prepare_path
         )) as source_response_info:
-            dialog.get_by_role("button", name="Подготовить черновики", exact=False).click()
+            prepare_button.click()
         source_response = source_response_info.value
         assert source_response.status == 202
         assert state["source_prepare_post"] is not None
+        assert state["source_prepare_post"]["account_id"] == account_id
+        assert state["source_prepare_post"]["source_ids"] == selected_ids
+        assert report["post_counts"].get(source_prepare_path, 0) == source_prepare_posts_before + 1
         assert state["source_worker_stats"]["prepared"] == 4
         assert state["source_worker_stats"]["needs_input"] == 0
         assert state["source_worker_stats"]["processed_items"] == 4
         assert state["source_job_uid"]
+        report["source_prepare"]["multi_account_confirmation"] = {
+            "active_accounts": len(account_rows),
+            "select_initially_focused": True,
+            "cta_disabled_until_account_chosen": True,
+            "no_posts_on_open_escape_or_account_choice": True,
+            "chosen_account_id": account_id,
+            "selected_source_ids": selected_ids,
+            "explicit_cta_posts": 1,
+        }
+        report["checks"].append("source_prepare_multi_account_choice_posts_exact_scope_once")
         job_path = f"/marketplaces/ozon/uploads/{state['source_job_uid']}"
         page.wait_for_url(f"**{job_path}")
         assert not urlsplit(page.url).fragment

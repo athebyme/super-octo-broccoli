@@ -331,6 +331,11 @@ try:
             page.locator('#my-products-app:not([v-cloak])').wait_for()
             source_row = page.locator('.mp-row').filter(has_text='Тестовый товар для подготовки').first
             source_row.get_by_role('checkbox').check()
+            selected_source_ids = page.locator(
+                '.mp-row input[type=checkbox]:checked',
+            ).evaluate_all('nodes => nodes.map(node => Number(node.value))')
+            assert selected_source_ids == [fixture['source_id']], selected_source_ids
+            source_prepare_posts_before = dict(report['posts'])
             source_action_navigations=[]
             page.on('framenavigated',lambda frame: source_action_navigations.append(frame.url)
                     if frame==page.main_frame else None)
@@ -338,6 +343,12 @@ try:
             source_dialog = page.get_by_role('dialog')
             source_dialog.wait_for()
             assert not source_action_navigations, source_action_navigations
+            source_dialog.locator('#mp-ozon-dialog-title').wait_for(state='visible')
+            assert source_dialog.locator('#mp-ozon-account').count() == 0
+            assert source_dialog.get_by_role('checkbox').count() == 0
+            preparation_account = source_dialog.locator('[data-ozon-preparation-account]')
+            assert preparation_account.count() == 1 and preparation_account.is_visible()
+            assert 'Ozon CI 0' in preparation_account.inner_text()
             local_prep_copy = source_dialog.get_by_text(
                 'Подготовим локальные черновики для выбранного магазина Ozon. '
                 'Отправку подтвердите отдельно после проверки карточек.',
@@ -347,11 +358,38 @@ try:
             assert source_dialog.get_by_text(
                 'Отправку подтвердите отдельно после проверки карточек.', exact=False,
             ).count() == 1
-            assert source_dialog.get_by_role('combobox',name='Магазин Ozon').input_value() == str(account_id)
+            prepare_button = source_dialog.get_by_role(
+                'button', name='Подготовить черновики', exact=True,
+            )
+            assert prepare_button.is_enabled()
+            assert report['posts'] == source_prepare_posts_before
             beta_layout(page,'prepare-confirmation')
-            source_dialog.get_by_role('checkbox').check()
+            page.keyboard.press('Escape')
+            source_dialog.wait_for(state='hidden')
+            assert report['posts'] == source_prepare_posts_before
+            assert not source_action_navigations, source_action_navigations
+            assert page.locator(
+                '.mp-row input[type=checkbox]:checked',
+            ).evaluate_all('nodes => nodes.map(node => Number(node.value))') == selected_source_ids
+            passed('sole_account_prepare_open_and_escape_are_read_only')
+
+            invoke_workspace_action(page,'ozon')
+            source_dialog = page.get_by_role('dialog')
+            source_dialog.wait_for()
+            source_dialog.locator('#mp-ozon-dialog-title').wait_for(state='visible')
+            assert source_dialog.locator('#mp-ozon-account').count() == 0
+            assert source_dialog.get_by_role('checkbox').count() == 0
+            preparation_account = source_dialog.locator('[data-ozon-preparation-account]')
+            assert preparation_account.count() == 1 and preparation_account.is_visible()
+            assert 'Ozon CI 0' in preparation_account.inner_text()
+            prepare_button = source_dialog.get_by_role(
+                'button', name='Подготовить черновики', exact=True,
+            )
+            assert prepare_button.is_enabled()
+            assert report['posts'] == source_prepare_posts_before
+            source_prepare_body_start = len(state['post_bodies'])
             state['drop_before_post'] = True
-            source_dialog.get_by_role('button',name='Подготовить черновики').click()
+            prepare_button.click()
             page.get_by_text('Результат локальной подготовки пока неизвестен.').wait_for()
             page.get_by_role('button',name='Проверить результат').click()
             page.get_by_role('button',name='Повторить тот же запрос').wait_for()
@@ -359,7 +397,13 @@ try:
             page.wait_for_url('**/marketplaces/ozon/uploads/ozon-upload-*')
             assert job_uid not in page.url
             assert report['posts'].get('/marketplaces/ozon/uploads/') == 2
-            assert state['post_bodies'][-1] == state['post_bodies'][-2]
+            source_prepare_bodies = state['post_bodies'][source_prepare_body_start:]
+            assert len(source_prepare_bodies) == 2
+            assert source_prepare_bodies[-1] == source_prepare_bodies[-2]
+            for body in source_prepare_bodies:
+                assert body['account_id'] == account_id
+                assert body['imported_product_ids'] == selected_source_ids
+                assert body['confirm_prepare'] is True
             with app.app_context():
                 assert MarketplaceOperation.query.count() == 0
             passed('beta_local_prepare_404_manual_same_key_recovery_without_provider_write')
