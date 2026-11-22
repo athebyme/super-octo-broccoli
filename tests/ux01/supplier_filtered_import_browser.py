@@ -732,6 +732,14 @@ def run():
         )
         assert response and response.status == 200
         page.wait_for_load_state("networkidle")
+        feed_disclosure = page.locator(".sc-feed-disclosure")
+        feed_summary = feed_disclosure.locator(":scope > summary")
+        assert not feed_disclosure.evaluate("element => element.open")
+        feed_summary.focus()
+        page.keyboard.press("Enter")
+        assert feed_disclosure.evaluate("element => element.open"), (
+            "keyboard activation should expand supplier freshness details",
+        )
         page_freshness = page.locator(".sc-feed-freshness--page")
         assert page_freshness.is_visible()
         assert page_freshness.locator("time").count() == 2
@@ -769,8 +777,11 @@ def run():
             path=REPORT_PATH.parent / freshness_screenshot,
             animations="disabled",
         )
+        page.keyboard.press("Enter")
+        assert not feed_disclosure.evaluate("element => element.open")
+        assert not page_freshness.is_visible()
         checks.append(
-            "supplier_feed_freshness_separates_catalog_price_and_all_update_opens_review_before_write",
+            "supplier_feed_freshness_details_open_and_close_by_keyboard_without_writes",
         )
         cards = page.locator(".sc-product-grid > .sc-product-tile")
         assert cards.count() == 50, cards.count()
