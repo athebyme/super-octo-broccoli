@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 
 {% set import_batch_context = import_batch|default(none) %}
-{% block title %}{{ 'Товары из импорта' if import_batch_context is not none else 'Мои товары' }} · beta — Seller Hub{% endblock %}
+{% set import_batch_kind_context = batch_kind|default('import' if import_batch_context is not none else none) %}
+{% block title %}{{ 'Обновлённые товары' if import_batch_kind_context == 'supplier_refresh_result' else 'Товары из импорта' if import_batch_context is not none else 'Мои товары' }} · beta — Seller Hub{% endblock %}
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
@@ -13,6 +14,7 @@
     'ozonAccounts': ozon_accounts,
     'suppliers': suppliers_payload,
     'importBatch': import_batch|default(none),
+    'batchKind': import_batch_kind_context,
     'supplierRefreshBatch': supplier_refresh_batch|default(none),
     'supplierRefreshBatchInvalid': supplier_refresh_batch_invalid|default(false),
     'supplierRefreshReturnUrl': supplier_refresh_return_url|default(url_for('seller_my_products')),
@@ -47,9 +49,10 @@
 {% raw %}
     <header class="shk-head">
         <div>
-            <h1 class="shk-head-title">{{ supplierRefreshBatchMode ? 'Обновление из каталога' : (importBatchMode ? 'Товары из импорта' : 'Мои товары') }}</h1>
+            <h1 class="shk-head-title">{{ supplierRefreshBatchMode ? 'Обновление из каталога' : (supplierRefreshResultBatchMode ? 'Обновлённые товары' : (importBatchMode ? 'Товары из импорта' : 'Мои товары')) }}</h1>
             <p class="shk-head-sub" v-if="supplierRefreshBatchMode">Выбор из классического списка будет проверен заново. Вы сможете посмотреть изменения перед применением.</p>
-            <p class="shk-head-sub" v-if="importBatchMode">Выберите товары из этой подборки для массовых действий.</p>
+            <p class="shk-head-sub" v-if="supplierRefreshResultBatchMode">В списке только товары, обновлённые из каталога поставщика. Итог обновления остаётся на этой странице.</p>
+            <p class="shk-head-sub" v-if="importBatchMode && !supplierRefreshResultBatchMode">Выберите товары из этой подборки для массовых действий.</p>
             <p class="shk-head-sub" v-if="!importBatchMode && !supplierRefreshBatchMode">Выберите товары для массовых действий.</p>
         </div>
         <div v-if="supplierRefreshBatchMode" class="mp-batch-head-actions">
@@ -110,8 +113,15 @@
             </div>
         </details>
         <div v-if="(ozonEnabled && ozonAccounts.length && supplierRefreshOzonIds.length) ||
-                    supplierRefreshWbProductIds.length"
+                    supplierRefreshWbProductIds.length || supplierRefreshCanSelectUpdated"
              class="mp-refresh-result-actions">
+            <button v-if="supplierRefreshCanSelectUpdated" type="button"
+                    class="sh-btn sh-btn--secondary mp-refresh-result-updated-batch"
+                    data-supplier-refresh-updated-select
+                    :disabled="loading || loadingMore || selectAllLoading"
+                    @click="selectUpdatedSupplierBatch()">
+                Выбрать обновлённые товары ({{ $fmt.int(supplierRefreshResult.updated) }})
+            </button>
             <button v-if="ozonEnabled && ozonAccounts.length && supplierRefreshOzonIds.length"
                     type="button" class="sh-btn sh-btn--secondary mp-refresh-result-ozon"
                     :disabled="ozonPreparationDisabled"
@@ -207,8 +217,8 @@
             <label class="mp-selectall">
                 <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected"
                        @change="toggleAll"
-                       :aria-label="importBatchMode ? 'Выбрать товары из импорта' : (supplierRefreshBatchMode ? 'Выбрать товары для обновления' : (allSelected ? 'Снять выбор всех загруженных товаров' : 'Выбрать все загруженные товары'))">
-                <span>{{ importBatchMode ? 'Выбрать товары из импорта' : (supplierRefreshBatchMode ? 'Выбрать товары для обновления' : (allSelected ? 'Снять выбор' : 'Выбрать загруженные')) }}</span>
+                       :aria-label="supplierRefreshResultBatchMode ? (allSelected ? 'Снять выбор обновлённых товаров' : 'Выбрать обновлённые товары') : (importBatchMode ? 'Выбрать товары из импорта' : (supplierRefreshBatchMode ? 'Выбрать товары для обновления' : (allSelected ? 'Снять выбор всех загруженных товаров' : 'Выбрать все загруженные товары')))">
+                <span>{{ supplierRefreshResultBatchMode ? (allSelected ? 'Снять выбор' : 'Выбрать обновлённые') : (importBatchMode ? 'Выбрать товары из импорта' : (supplierRefreshBatchMode ? 'Выбрать товары для обновления' : (allSelected ? 'Снять выбор' : 'Выбрать загруженные'))) }}</span>
             </label>
             <button v-if="canSelectAllFiltered" type="button" class="mp-select-filtered"
                     :disabled="selectAllLoading" @click="selectAllFiltered">
@@ -458,5 +468,5 @@
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261121-price-result-return-r41') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-supplier-catalog-review-r44') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-supplier-refreshed-bulk-r46') }}"></script>
 {% endblock %}

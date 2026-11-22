@@ -352,6 +352,105 @@ class MyProductsOzonPriceHandoffTest(unittest.TestCase):
         self.assertIsNotNone(script_asset, 'My Products script must use a versioned static URL')
         self.assertRegex(script_asset.group(1), r'^\d{8}-[a-z0-9][a-z0-9-]*$')
 
+    def test_supplier_result_selects_only_exact_updated_batch_and_keeps_return_scope(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node.js is required for the isolated UI logic check')
+        script = r"""
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const plain=value=>JSON.parse(JSON.stringify(value));
+const assigned=[],returns=[],calls=[],returnNonce='0123456789abcdef0123456789abcdef';
+const location={origin:'https://seller.test',href:'https://seller.test/my-products/beta',pathname:'/my-products/beta',search:'',hash:'',assign(value){assigned.push(value);}};
+let historyTarget='',feedData;
+let component;
+const session=new Map();
+const context={window:{location,history:{state:null,replaceState(_state,_title,url){historyTarget=url;}},
+ SellerHubCommonContent:{storeWorkspaceReturn(payload){returns.push(payload);return returnNonce;}},
+ shVue:{bootstrapData(){return {workspaceOwner:'7:9',wbConnected:true,ozonEnabled:false,ozonAccounts:[],
+   urls:{feed:'/api/my-products',workspace:'/my-products/beta',wbPriceChange:'/prices/change'}};},mount(_selector,options){component=options;}}},
+ document:{activeElement:{focus(){}}},sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value),removeItem:key=>session.delete(key)},
+ URL,URLSearchParams,AbortController,setTimeout,clearTimeout,setInterval,clearInterval,console};
+vm.createContext(context);vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),context);
+const ids=Array.from({length:75},(_,index)=>500+index);
+const rows=ids.map(id=>({id,wb:{product_id:id+10000},import_status:'imported'}));
+const result={kind:'partial',updated:ids.length,updatedBatch:'signed-updated-result-token',
+ entries:ids.map(productId=>({productId,status:'updated'}))};
+function appFor(feed){
+ feedData=feed;
+ const app=component.data();Object.assign(app,component.methods);
+ for(const [key,getter]of Object.entries(component.computed))Object.defineProperty(app,key,{get(){return getter.call(app);}});
+ app.$api={get(url,params){calls.push({url,params});return Promise.resolve(feedData);}};
+ app.$fmt={plural(){return 'товаров';},int(value){return String(value);},money(){return '';}};
+     app.$nextTick=function(fn){fn.call(app);};app.$refs={};app.loading=false;
+ app.supplierRefreshResult=result;
+ return app;
+}
+const exactFeed={success:true,batch_kind:'supplier_refresh_result',import_batch_count:ids.length,items:rows,
+ pagination:{page:1,per_page:200,total:ids.length,pages:1,has_next:false}};
+async function flush(){await new Promise(resolve=>setImmediate(resolve));}
+(async()=>{
+ const unavailable=appFor(exactFeed);unavailable.supplierRefreshResult={...result,updatedBatch:null};
+ assert.equal(unavailable.supplierRefreshCanSelectUpdated,false,'a missing signed token never opens a broad list');
+ assert.equal(unavailable.selectUpdatedSupplierBatch(),false);assert.equal(calls.length,0);
+ const app=appFor(exactFeed);
+ assert.equal(app.selectUpdatedSupplierBatch(),true);
+ assert.equal(historyTarget,'/my-products/beta?import_batch=signed-updated-result-token#supplier-refresh-result');
+ await flush();
+ assert.deepEqual(plain(app.selected),ids,'one explicit action selects every verified row over the first 50');
+ assert.deepEqual(plain(app.items.map(row=>row.id)),ids);
+ assert.equal(app.itemsScope,JSON.stringify({import_batch:'signed-updated-result-token'}));
+ assert.equal(app.supplierRefreshResult,result,'the mixed result panel remains visible on batch entry');
+ assert.equal(app.loading,false);assert.equal(app.allSelected,true);
+ assert.deepEqual(plain(calls),[{url:'/api/my-products',params:{import_batch:'signed-updated-result-token'}}]);
+ app.selected=[ids[0],ids[2]];
+ app.startAction({key:'wb_prices'});
+ assert.equal(returns.at(-1).batch,'signed-updated-result-token');
+ assert.deepEqual(JSON.parse(JSON.stringify(returns.at(-1).selectionIds)),[ids[0],ids[2]],'return capsule keeps later user deselections');
+ assert.deepEqual(assigned,['/prices/change?product_ids=10500%2C10502#workspace-return='+returnNonce]);
+
+ session.set('supplier-refresh-resume-v1','resume-token');
+ app.urls.supplierRefreshResult='/api/supplier-refresh-result';
+ app.importBatchMode=true;app.supplierRefreshResultBatchMode=true;
+ context.fetch=async()=>({status:200,ok:true,redirected:false,
+   headers:{get(){return 'application/json';}},
+   json:async()=>({success:true,status:'completed',requested:1,updated:1,skipped:0,errors:0,
+     items:[{product_id:ids[0],status:'updated',reason:null}],
+     labels:[{productId:ids[0],label:'Товар обновлённый'}],
+     updated_batch:'signed-resumed-result-token'})});
+ await app.restoreSupplierRefreshResult();
+ assert.equal(app.supplierRefreshResult.updatedBatch,'signed-resumed-result-token',
+   'receipt return restores the updated-only batch token with the mixed result');
+ assert.equal(app.supplierRefreshCanSelectUpdated,true);
+
+ calls.length=0;historyTarget='';
+ const bad=appFor({...exactFeed,batch_kind:'import',items:rows.slice().reverse()});
+ assert.equal(bad.selectUpdatedSupplierBatch(),true);
+ await flush();
+ assert.deepEqual(plain(bad.items),[]);assert.deepEqual(plain(bad.selected),[]);
+ assert.match(bad.error,/полный обновлённый список/);
+ assert.equal(calls.length,1,'invalid result data never falls back to an unscoped feed');
+ calls.length=0;
+ const reordered=appFor({...exactFeed,items:rows.slice().reverse()});
+ assert.equal(reordered.selectUpdatedSupplierBatch(),true);
+ await flush();
+ assert.deepEqual(plain(reordered.items),[]);assert.deepEqual(plain(reordered.selected),[]);
+ assert.match(reordered.error,/не совпал с подтверждёнными обновлёнными карточками/);
+ console.log('supplier result exact batch selection and workspace return: passed');
+})().catch(error=>{console.error(error);process.exitCode=1});
+"""
+        result = subprocess.run(
+            [node, '-e', script, str(ROOT / 'static' / 'my-products-beta.js')],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        template = (ROOT / 'templates' / 'my_products_beta.html').read_text()
+        self.assertIn("'batchKind': import_batch_kind_context", template)
+        self.assertIn('data-supplier-refresh-updated-select', template)
+        self.assertIn("'supplier_refresh_result'", template)
+
 
 if __name__ == '__main__':
     unittest.main()
