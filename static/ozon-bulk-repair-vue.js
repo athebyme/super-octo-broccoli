@@ -15,9 +15,12 @@
     }
     function makeRows(editor) {
         const sourcePrepare = editor.mode === 'source_prepare';
+        const draftSelection = editor.mode === 'draft_selection';
+        const requested = new Set(draftSelection && Array.isArray(editor.review_draft_ids) ? editor.review_draft_ids : []);
         return editor.groups.flatMap(group => group.rows.map(source => {
             const row = {...clone(source),...(sourcePrepare ? {action:'ИСПРАВИТЬ'} : {}),group_id:group.id,group_name:group.source_category,selected:false,
                 expanded:false,save_mapping:false,error:'',server:null,dictionaryCopied:false,baseTypeName:source.product_type_name};
+            if (draftSelection && requested.has(row.draft_id)) row.selected=true;
             row.attributes = row.attributes.map(field => ({...field,values:valuesOf(field)}));
             fixed.forEach(key => { row[key] = asText(row[key]); });
             row.base = snapshot(row);
@@ -68,14 +71,15 @@
         const labels=items.map(item => asText(item?.value));
         return new Set(labels).size<labels.length;
     }
-    function serialize(rows, csrf, sourcePrepare=false) {
+    function serialize(rows, csrf, sourcePrepare=false, draftSelection=false) {
         const form = new URLSearchParams();
         form.append('csrf_token',csrf);
+        if (draftSelection) form.append('confirm_local','1');
         for (const row of rows) {
             const prefix = 'row_'+row.draft_id+'_';
             form.append('selected_draft_id',String(row.draft_id));
             for (const [key,value] of Object.entries({draft_version:row.draft_version,imported_product_id:row.imported_product_id,
-                action:sourcePrepare ? 'ИСПРАВИТЬ' : row.action,product_type_id:row.product_type_id || '',save_mapping:row.save_mapping ? '1':'0'})) form.append(prefix+key,asText(value));
+                action:sourcePrepare || draftSelection ? 'ИСПРАВИТЬ' : row.action,product_type_id:row.product_type_id || '',save_mapping:row.save_mapping ? '1':'0'})) form.append(prefix+key,asText(value));
             fixed.forEach(key => form.append(prefix+key,asText(row[key])));
             const typeChanged = row.product_type_id !== row.base.product_type_id;
             if (row.cleanup_candidates.length && row.schema_cleanup && !typeChanged) form.append(prefix+'schema_cleanup','1');
@@ -136,15 +140,54 @@
             if (expectedSet.size!==expected.length || rowIds.length!==expected.length ||
                 new Set(rowIds).size!==expectedSet.size || rowIds.some(id=>!expectedSet.has(id))) return false;
         }
+        if (config.editor.mode==='draft_selection') {
+        const expectedRows=config.editor.groups.flatMap(group=>group.rows).map(row=>row.draft_id);
+            const expectedBlocked=config.editor.blocked_review_items || [];
+            const expectedIds=[...expectedRows,...expectedBlocked.map(item=>item.draft_id)];
+            const reviewIds=value.review_draft_ids,blocked=value.blocked_review_items,rowIds=rows.map(row=>row.draft_id);
+            if (value.mode!=='draft_selection' || value.scope_key!==config.editor.scope_key ||
+                typeof value.scope_key!=='string' || !/^[0-9a-f]{64}$/.test(value.scope_key) ||
+                !Array.isArray(reviewIds) || reviewIds.length>200 || !reviewIds.every(id=>Number.isSafeInteger(id) && id>0) ||
+                new Set(reviewIds).size!==reviewIds.length || !Array.isArray(blocked) || blocked.length>200 ||
+                !blocked.every(item=>item && Number.isSafeInteger(item.draft_id) && item.draft_id>0 &&
+                    typeof item.title==='string' && typeof item.message==='string')) return false;
+            const expectedSet=new Set(expectedIds),rowSet=new Set(rowIds),reviewSet=new Set(reviewIds),blockedIds=blocked.map(item=>item.draft_id),blockedSet=new Set(blockedIds);
+            if (!expectedIds.length || expectedIds.length>200 || expectedSet.size!==expectedIds.length ||
+                rowSet.size!==rowIds.length || reviewSet.size!==reviewIds.length ||
+                blockedSet.size!==blockedIds.length || reviewSet.size!==rowSet.size ||
+                rowIds.some(id=>!reviewSet.has(id)) ||
+                blockedIds.some(id=>!expectedSet.has(id) || rowSet.has(id)) ||
+                [...rowSet,...blockedSet].some(id=>!expectedSet.has(id)) ||
+                rowSet.size+blockedSet.size!==expectedSet.size) return false;
+        }
         return true;
     }
     function createOptions(config) {
         let alive=true, controller=null, searchController=null, searchTimer=null, searchRevision=0, requestRevision=0, unload=null, pop=null, trigger=null;
         const sourcePrepare=config.editor.mode==='source_prepare';
-        const storageKey='ozon-repair:'+config.editor.account_id+':'+config.editor.job_uid+(sourcePrepare?':source_prepare':'');
+        const draftSelection=config.editor.mode==='draft_selection';
+        const selectionScope=String(config.editor.scope_key || 'invalid').slice(0,512);
+        const storageKey='ozon-repair:'+config.editor.account_id+':' +
+            (draftSelection ? 'draft-selection:'+encodeURIComponent(selectionScope) :
+                config.editor.job_uid+(sourcePrepare?':source_prepare':''));
+        function scopedUrl(base, query, suffix='') {
+            const url=new URL(base,global.location.origin);
+            url.searchParams.set('q',query);
+            const extra=String(suffix || '').replace(/^[?&]+/,'');
+            if(extra){
+                const params=new URLSearchParams(extra);
+                for(const [key,value] of params.entries()){
+                    if(key==='q')continue;
+                    url.searchParams.set(key,value);
+                }
+            }
+            return url.pathname+(url.search ? url.search : '');
+        }
         return {
             components:{'ozon-field':global.ozonDraftEditor.fieldComponent,'ozon-photo':global.ozonDraftEditor.photoComponent},
-            data() { return {rows:makeRows(config.editor),enabled:config.enabled,sourcePrepare,urls:config.urls,reviewable:!!config.editor.review_draft_ids?.length,blockedReviewCount:config.editor.blocked_review_items?.length || 0,busy:false,error:'',notice:'',
+            data() { return {rows:makeRows(config.editor),enabled:config.enabled,sourcePrepare,draftSelection,urls:config.urls,
+                reviewable:!!config.editor.review_draft_ids?.length,blockedReviewItems:config.editor.blocked_review_items || [],
+                blockedReviewCount:config.editor.blocked_review_items?.length || 0,busy:false,error:'',notice:'',
                 report:null,uncertain:false,sessionExpired:false,query:'',group:'',state:'',page:1,pageSize:15,dialog:'',
                 bulkKey:config.editor.bulk_fields[0]?.key || 'description',bulkValue:'',bulkValues:[],bulkMode:'value',bulkSource:null,bulkPlan:null,
                 fields:config.editor.bulk_fields,picker:{kind:'',rowId:null,fieldId:null,query:'',items:[],loading:false,error:'',more:false},
@@ -170,7 +213,7 @@
             methods:{
                 display,dictionaryIdentities,shouldShowDictionaryIdentities,shouldShowDictionaryId,definition,changes,
                 status(row) { return row.server ? 'Конфликт изменений' : row.error || row.repair_error ? 'Не сохранено' :
-                    row.action==='ИСКЛЮЧИТЬ' ? 'Исключена из повтора' : changes(row).length ? 'Есть изменения' :
+                    !this.draftSelection && row.action==='ИСКЛЮЧИТЬ' ? 'Исключена из повтора' : changes(row).length ? 'Есть изменения' :
                     row.status==='needs_input' && this.sourcePrepare ? 'Нужны данные' :
                     row.phase==='prepared' ? 'Подготовлена локально' : row.status==='ready_to_retry' ? 'Проверена локально' : 'Нужно исправить'; },
                 changedType(row) { return row.product_type_id!==row.base.product_type_id; },
@@ -238,12 +281,18 @@
                         for(const row of old.values())if(!fresh.some(r=>r.draft_id===row.draft_id) && changes(row).length) {
                             row.error='Карточка больше недоступна в этом запуске. Скопируйте ввод перед обновлением.';row.unavailable=true;this.rows.push(row);
                         }
-                        this.fields=data.editor.bulk_fields;this.blockedReviewCount=data.editor.blocked_review_items?.length || 0;
+                        this.fields=data.editor.bulk_fields;this.blockedReviewItems=data.editor.blocked_review_items || [];
+                        this.blockedReviewCount=this.blockedReviewItems.length;
                         this.reviewable=!!data.editor.review_draft_ids?.length;
-                        if(this.reviewable && this.urls.review){const reviewUrl=new URL(this.urls.review,global.location.origin);
+                        if(this.reviewable && this.urls.review && this.sourcePrepare){const reviewUrl=new URL(this.urls.review,global.location.origin);
                             reviewUrl.searchParams.set('account_id',String(data.editor.account_id));
                             reviewUrl.searchParams.set('draft_ids',data.editor.review_draft_ids.join(','));
                             reviewUrl.searchParams.set('parent_prepare_job_uid',data.editor.job_uid);
+                            this.urls.review=reviewUrl.pathname+reviewUrl.search;}
+                        if(this.reviewable && this.urls.review && this.draftSelection){const reviewUrl=new URL(this.urls.review,global.location.origin);
+                            reviewUrl.searchParams.set('account_id',String(data.editor.account_id));
+                            reviewUrl.searchParams.set('draft_ids',data.editor.review_draft_ids.join(','));
+                            reviewUrl.searchParams.delete('parent_prepare_job_uid');
                             this.urls.review=reviewUrl.pathname+reviewUrl.search;}
                         this.page=Math.min(this.page,this.pages);
                         this.uncertain=false;this.persist();confirmed=true;
@@ -298,8 +347,11 @@
                     searchTimer=setTimeout(async()=>{
                         searchController=new AbortController();const control=searchController;const timeout=setTimeout(()=>control.abort(),12000);
                         try{
-                            const path=this.picker.kind==='type' ? config.urls.types : config.urls.dictionaries+this.picker.rowId+'/'+this.picker.fieldId;
-                            const data=await this.request(path+'?q='+encodeURIComponent(this.picker.query),{signal:control.signal});
+                            const path=this.picker.kind==='type'
+                                ? scopedUrl(config.urls.types,this.picker.query)
+                                : scopedUrl(config.urls.dictionaries+this.picker.rowId+'/'+this.picker.fieldId,
+                                    this.picker.query,config.urls.dictionary_query);
+                            const data=await this.request(path,{signal:control.signal});
                             if(!alive || revision!==searchRevision)return;
                             if(!Array.isArray(data.items))throw new Error('Не удалось прочитать список значений.');
                             this.picker.items=data.items;this.picker.more=!!data.truncated || this.picker.kind==='type' && data.items.length>=30;
@@ -338,8 +390,8 @@
                 reviewSave() {
                     if(this.locked || !this.selected.length)return;
                     this.error=this.checkRows();if(this.error){this.$nextTick(()=>this.$refs.error?.focus());return;}
-                    if(new TextEncoder().encode(serialize(this.selected,config.csrf,this.sourcePrepare).toString()).length>2*1024*1024){this.error='Данные выбранных карточек больше 2 МБ. Сохраните меньшую группу.';return;}
-                    this.review=this.selected.map(r=>({id:r.draft_id,title:r.title,action:this.sourcePrepare?'ИСПРАВИТЬ':r.action,typeChanged:this.changedType(r),impact:r.type_change_impact,changes:changes(r)}));
+                    if(new TextEncoder().encode(serialize(this.selected,config.csrf,this.sourcePrepare,this.draftSelection).toString()).length>2*1024*1024){this.error='Данные выбранных карточек больше 2 МБ. Сохраните меньшую группу.';return;}
+                    this.review=this.selected.map(r=>({id:r.draft_id,title:r.title,action:this.sourcePrepare || this.draftSelection?'ИСПРАВИТЬ':r.action,typeChanged:this.changedType(r),impact:r.type_change_impact,changes:changes(r)}));
                     this.open('review');
                 },
                 async focusReceipt(expectedFocus) {
@@ -355,18 +407,23 @@
                 async save() {
                     if(this.locked || !this.review.length)return;
                     const ids=this.review.map(r=>r.id),rows=this.rows.filter(r=>ids.includes(r.draft_id));
-                    const sourcePrepare=this.sourcePrepare;
+                    const sourcePrepare=this.sourcePrepare,draftSelection=this.draftSelection;
+                    const focusLocalReceipt=sourcePrepare || draftSelection;
                     let accepted=null,focusAfterClose=null;
                     this.busy=true;this.uncertain=true;this.persist();this.error='';this.report=null;
                     const control=new AbortController(),timeout=setTimeout(()=>control.abort(),45000);
                     try{
-                        const data=await this.request(config.urls.apply,{method:'POST',body:serialize(rows,config.csrf,sourcePrepare),signal:control.signal});
+                        const data=await this.request(config.urls.apply,{method:'POST',body:serialize(rows,config.csrf,sourcePrepare,draftSelection),signal:control.signal});
                         const report=data.report;
+                        if(draftSelection && (data.mode!=='draft_selection' || data.scope_key!==config.editor.scope_key ||
+                            report?.mode!=='draft_selection' || report?.scope_key!==config.editor.scope_key))
+                            throw new Error('Ответ сохранения не совпал с выбранным набором. Сначала сверьте состояние.');
+                        const localOnly=sourcePrepare || draftSelection;
                         if(!report || report.total!==ids.length || !Array.isArray(report.rows) || report.rows.length!==ids.length ||
                             new Set(report.rows.map(r=>r.draft_id)).size!==ids.length || report.rows.some(r=>!ids.includes(r.draft_id) ||
-                            !(sourcePrepare ? ['failed','needs_input','ready_to_retry'] : ['failed','excluded','needs_input','ready_to_retry']).includes(r.status)) ||
-                            sourcePrepare && report.rows.some(r=>r.status==='excluded'))throw new Error('Результат сохранения неполон. Нужна сверка состояния.');
-                        accepted=report;this.report=report;this.notice=sourcePrepare?'':'Сохранение завершено. Готовность каждой карточки показана отдельно.';
+                            !(localOnly ? ['failed','needs_input','ready_to_retry'] : ['failed','excluded','needs_input','ready_to_retry']).includes(r.status)) ||
+                            localOnly && report.rows.some(r=>r.status==='excluded'))throw new Error('Результат сохранения неполон. Нужна сверка состояния.');
+                        accepted=report;this.report=report;this.notice=sourcePrepare || draftSelection ? '' : 'Сохранение завершено. Готовность каждой карточки показана отдельно.';
                     }catch(error){
                         if(alive){this.error=error.name==='AbortError'?'Ответ не получен вовремя. Сначала сверьте состояние.':error.message;
                             if([401,403].includes(error.status)){this.uncertain=false;this.persist();}}
@@ -374,13 +431,13 @@
                         clearTimeout(timeout);
                         if(alive){
                             this.busy=false;
-                            this.close({restoreFocus:!accepted || !sourcePrepare});
-                            if(accepted && sourcePrepare)focusAfterClose=global.document.activeElement;
+                            this.close({restoreFocus:!accepted || !focusLocalReceipt});
+                            if(accepted && focusLocalReceipt)focusAfterClose=global.document.activeElement;
                         }
                     }
                     if(accepted && alive){
                         const confirmed=await this.reload({report:accepted});
-                        if(sourcePrepare && confirmed && !this.uncertain && global.document.activeElement===focusAfterClose)
+                        if(focusLocalReceipt && confirmed && !this.uncertain && global.document.activeElement===focusAfterClose)
                             await this.focusReceipt(focusAfterClose);
                     }
                 },

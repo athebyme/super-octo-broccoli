@@ -12,7 +12,7 @@ const saved=new Map();global.sessionStorage={getItem:key=>saved.get(key)||null,s
 require('./static/ozon-drafts-vue.js');
 const account=id=>({id,label:'Магазин '+id,can_publish:true});
 const row=(id,account_id=1)=>({id,account_id,version:3,status:'ready',validation_status:'valid',validated_at:'2026-07-25T12:00:00',title:'Товар '+id,validation_summary:{publishable:true}});
-const config={enabled:true,publicationEnabled:true,accounts:[account(1),account(2)],rows:[row(1),{...row(2),published_listing_id:42},row(3,2)],filters:{account_id:2},sourceSearch:{items:[]},urls:{sources:'/sources',create:'/create',review:'/review',editorBase:'/editor/',runBase:'/runs/'},csrf:'synthetic'};
+const config={enabled:true,publicationEnabled:true,accounts:[account(1),account(2)],rows:[row(1),{...row(2),published_listing_id:42},row(3,2)],filters:{account_id:2},pagination:{page:1,per_page:50},sourceSearch:{items:[]},urls:{sources:'/sources',create:'/create',review:'/review',editorBase:'/editor/',runBase:'/runs/',repairDraftSelection:'/selection/repair'},csrf:'synthetic'};
 const definition=ozonDraftsVue.createOptions(config);const page=definition.data();
 for(const [key,value]of Object.entries(definition.methods))page[key]=value.bind(page);
 for(const [key,value]of Object.entries(definition.computed))Object.defineProperty(page,key,{get:value.bind(page)});
@@ -66,6 +66,72 @@ let target;global.location={assign:url=>target=url};page.reviewBulk();
 assert.equal(target,'/review?account_id=1&draft_ids=1%2C2');
 assert(!saved.get('ozon-upload-review-v1'),'No publication POST or consent is inferred from list selection');
 page.clearSelection();assert.equal(saved.has('ozon-drafts-selection-v1'),false);
+''')
+
+
+def test_edit_selection_stays_exact_across_pages_filter_changes_and_return():
+    run_node(r'''
+page.setSelectionMode('edit');page.toggleEditDraft(page.rows[0],true);
+assert.deepEqual(page.editSelectedDrafts,[1]);assert.equal(page.editSelectedAccountId,1);
+assert.deepEqual(JSON.parse(saved.get('ozon-drafts-edit-selection-v1')),{account_id:1,draft_ids:[1]});
+const pageTwoOptions=ozonDraftsVue.createOptions({...config,rows:[row(4),row(5,2)],filters:{account_id:1,status:'ready',page:2,per_page:1}});
+const pageTwo=pageTwoOptions.data();
+assert.equal(pageTwo.selectionMode,'edit','page navigation restores edit mode without another click');
+assert.deepEqual(pageTwo.editSelectedDrafts,[1]);assert.equal(pageTwo.editSelectedAccountId,1);
+for(const [key,value]of Object.entries(pageTwoOptions.methods))pageTwo[key]=value.bind(pageTwo);
+for(const [key,value]of Object.entries(pageTwoOptions.computed))Object.defineProperty(pageTwo,key,{get:value.bind(pageTwo)});
+pageTwo.toggleEditDraft(pageTwo.config.rows[0],true);
+pageTwo.toggleEditDraft(pageTwo.config.rows[1],true);
+assert.deepEqual(pageTwo.editSelectedDrafts,[1,4],'a different-account row cannot widen the exact selection');
+global.location={origin:'https://app.test',assign:url=>{global.target=url;}};
+assert.equal(pageTwo.startEditSelection(),true);
+assert.equal(global.target,'/selection/repair?account_id=1&draft_ids=1%2C4&return_page=2&return_per_page=1&return_status=ready&return_account_id=1');
+const returned=ozonDraftsVue.createOptions({...config,filters:{account_id:null,status:null,page:1,per_page:1}}).data();
+assert.equal(returned.selectionMode,'edit','the editor return restores the edit selection mode');
+assert.deepEqual(returned.editSelectedDrafts,[1,4]);assert.equal(returned.editSelectedAccountId,1);
+''')
+    template = (ROOT/'templates/marketplace_drafts.html').read_text()
+    assert 'data-draft-selection-mode' in template
+    assert 'data-draft-selection-start' in template
+    assert 'data-draft-selection-check' in template
+    assert 'data-draft-selection-page' in template
+    assert 'per_page=filters.per_page' in template
+
+
+def test_edit_select_page_requires_one_account_and_never_truncates_at_limit():
+    run_node(r'''
+const bind=options=>{const value=options.data();for(const [key,fn]of Object.entries(options.methods))value[key]=fn.bind(value);
+for(const [key,fn]of Object.entries(options.computed))Object.defineProperty(value,key,{get:fn.bind(value)});return value;};
+saved.delete('ozon-drafts-edit-selection-v1');
+let current=bind(ozonDraftsVue.createOptions({...config,filters:{account_id:1},rows:[row(11),row(12),{...row(13),status:'archived'}]}));
+assert.equal(current.editPageAccountId,1);assert.equal(current.editPageCandidates.length,2);
+assert.equal(current.selectEditPage(),true);assert.deepEqual(current.editSelectedDrafts,[11,12]);
+current=bind(ozonDraftsVue.createOptions({...config,rows:[row(21,1),row(22,2)]}));
+assert.equal(current.editPageAccountId,null,'mixed-account pages hide the page action');
+assert.equal(current.selectEditPage(),false);
+saved.set('ozon-drafts-edit-selection-v1',JSON.stringify({account_id:1,draft_ids:[31]}));
+current=bind(ozonDraftsVue.createOptions({...config,rows:[row(32,2)]}));
+assert.equal(current.selectEditPage(),false);assert.deepEqual(current.editSelectedDrafts,[31]);
+const many=Array.from({length:200},(_,index)=>row(1000+index,1));
+current=bind(ozonDraftsVue.createOptions({...config,rows:many}));
+assert.equal(current.selectEditPage(),false,'the page action does not truncate a selection over 200');
+assert.match(current.editSelectionError,/200/);assert.deepEqual(current.editSelectedDrafts,[31]);
+''')
+
+
+def test_edit_selection_filter_return_omits_empty_status_and_all_account():
+    run_node(r'''
+page.setSelectionMode('edit');page.toggleEditDraft(page.rows[0],true);
+let target;global.location={origin:'https://app.test',assign:url=>{target=url;}};
+page.config.filters={account_id:null,status:null,page:3,per_page:2};
+assert.equal(page.startEditSelection(),true);
+const parsed=new URL(target,'https://app.test');
+assert.equal(parsed.searchParams.get('account_id'),'1');
+assert.equal(parsed.searchParams.get('draft_ids'),'1');
+assert.equal(parsed.searchParams.get('return_page'),'3');
+assert.equal(parsed.searchParams.get('return_per_page'),'2');
+assert.equal(parsed.searchParams.has('return_status'),false);
+assert.equal(parsed.searchParams.has('return_account_id'),false);
 ''')
 
 

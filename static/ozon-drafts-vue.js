@@ -2,6 +2,7 @@
 (function (global) {
     'use strict';
     const selectionKey = 'ozon-drafts-selection-v1';
+    const editSelectionKey = 'ozon-drafts-edit-selection-v1';
     const aiSelectionKey = 'ozon-drafts-ai-selection-v1', aiPendingKey = 'ozon-drafts-ai-pending-v1';
     const aiUid = /^ozon-ai-[0-9a-f]{32}$/;
     const positive = value => Number.isSafeInteger(value) && value > 0;
@@ -43,18 +44,36 @@
             return ids.length === new Set(ids).size ? {account_id:value.account_id,draft_ids:ids} : null;
         } catch (_) { return null; }
     }
+    function restoreEditSelection(accounts) {
+        const value = readStored(editSelectionKey);
+        if (value === null) return null;
+        if (!value || !positive(value.account_id) ||
+            !accounts.some(account => account.id === value.account_id) ||
+            !Array.isArray(value.draft_ids) || value.draft_ids.length < 1 ||
+            value.draft_ids.length > 200 || !value.draft_ids.every(positive) ||
+            new Set(value.draft_ids).size !== value.draft_ids.length) {
+            return {invalid:true};
+        }
+        return {account_id:value.account_id,draft_ids:value.draft_ids.slice()};
+    }
     function createOptions(config) {
         const picker = global.draftSourcePicker(config.urls.sources, config.sourceSearch);
         const methods = {}, state = {};
         for (const [key, value] of Object.entries(picker)) (typeof value === 'function' ? methods : state)[key] = value;
         let outside, alive = true;
         const saved = restoreSelection(config.accounts);
+        const savedEdit = restoreEditSelection(config.accounts);
+        const invalidEditStorage = hasStored(editSelectionKey) && (!savedEdit || savedEdit.invalid);
         const savedAi = restoreAiSelection(config.accounts), pendingAi = readStored(aiPendingKey);
         return {
             data() { return {...state, config, rows:config.rows, accounts:config.accounts, selectedDrafts:saved?.draft_ids || [], selectedAccountId:saved?.account_id || null,
                 createAccountId:config.filters.account_id || (config.accounts.length === 1 ? config.accounts[0].id : ''), offerId:'',
-                actionError:'', actionUncertain:false, busy:'', failedImages:[], selectionMode:'send',
+                actionError:'', actionUncertain:false, busy:'', failedImages:[],
+                selectionMode:savedEdit && !savedEdit.invalid && savedEdit.draft_ids.length || invalidEditStorage ? 'edit' : 'send',
                 aiSelected:savedAi?.rows || [], aiAccountId:savedAi?.account_id || null,
+                editSelectedDrafts:savedEdit && !savedEdit.invalid ? savedEdit.draft_ids : [],
+                editSelectedAccountId:savedEdit && !savedEdit.invalid ? savedEdit.account_id : null,
+                editSelectionError:invalidEditStorage ? 'Сохранённый выбор для изменения недоступен. Отметьте карточки заново.' : '',
                 aiPending:validAiPending(pendingAi,config.accounts) ? pendingAi : null,
                 aiStorageProblem:hasStored(aiPendingKey) && !validAiPending(pendingAi,config.accounts),
                 aiRetrySameKey:false, aiSessionEnded:false, aiBusy:'', aiError:'', aiConfirmed:false,
@@ -62,6 +81,18 @@
         computed: {
                 selectedAccount() { return this.accounts.find(account => account.id === this.selectedAccountId); },
                 bulkReady() { return this.selectedDrafts.length > 0 && this.selectedDrafts.length <= 200 && !!this.selectedAccount; },
+                editSelectedAccount() { return this.accounts.find(account => account.id === this.editSelectedAccountId); },
+                editSelectionReady() { return this.editSelectedDrafts.length > 0 &&
+                    this.editSelectedDrafts.length <= 200 && !!this.editSelectedAccount; },
+                editPageAccountId() {
+                    const accountIds = [...new Set(this.rows.filter(row => this.editEligible(row))
+                        .map(row => row.account_id))];
+                    return accountIds.length === 1 ? accountIds[0] : null;
+                },
+                editPageCandidates() {
+                    return this.editPageAccountId === null ? [] :
+                        this.rows.filter(row => this.editEligible(row) && row.account_id === this.editPageAccountId);
+                },
                 aiSelectedAccount() { return this.accounts.find(account => account.id === this.aiAccountId); },
                 aiReady() { return this.aiSelected.length > 0 && this.aiSelected.length <= 200 &&
                     !!this.aiSelectedAccount && !this.aiPending && !this.aiStorageProblem && !this.aiSessionEnded; },
@@ -102,6 +133,90 @@
                         this.selectedAccountId = row.account_id; this.selectedDrafts.push(row.id);
                     }
                     this.persistSelection();
+                },
+                editEligible(row) {
+                    return !!row && row.status !== 'archived' && positive(row.account_id) &&
+                        this.accounts.some(account => account.id === row.account_id);
+                },
+                editPicked(row) {
+                    return !!row && this.editSelectedDrafts.includes(row.id);
+                },
+                selectEditPage() {
+                    if (this.busy || this.actionUncertain || !this.editPageCandidates.length) return false;
+                    if (this.editSelectedAccountId !== null && this.editSelectedAccountId !== this.editPageAccountId) {
+                        this.editSelectionError = 'Текущий магазин отличается от уже выбранного. Снимите выбор, чтобы начать новый набор.';
+                        return false;
+                    }
+                    const additions = this.editPageCandidates.filter(row => !this.editPicked(row));
+                    if (this.editSelectedDrafts.length + additions.length > 200) {
+                        this.editSelectionError = 'Набор превысит 200 карточек. Снимите часть выбора перед добавлением страницы.';
+                        return false;
+                    }
+                    this.editSelectedAccountId = this.editPageAccountId;
+                    this.editSelectedDrafts.push(...additions.map(row => row.id));
+                    this.editSelectionError = '';
+                    this.persistEditSelection();
+                    return true;
+                },
+                toggleEditDraft(row, checked) {
+                    if (this.busy || this.actionUncertain) return;
+                    if (!checked) {
+                        this.editSelectedDrafts = this.editSelectedDrafts.filter(id => id !== row.id);
+                        if (!this.editSelectedDrafts.length) this.editSelectedAccountId = null;
+                    } else {
+                        if (!this.editEligible(row) ||
+                            (this.editSelectedAccountId !== null && this.editSelectedAccountId !== row.account_id) ||
+                            this.editSelectedDrafts.length >= 200 || this.editSelectedDrafts.includes(row.id)) return;
+                        this.editSelectedAccountId = row.account_id;
+                        this.editSelectedDrafts.push(row.id);
+                    }
+                    this.editSelectionError = '';
+                    this.persistEditSelection();
+                },
+                persistEditSelection() {
+                    if (!this.editSelectedDrafts.length) {
+                        clearStored(editSelectionKey);
+                        return;
+                    }
+                    if (!saveStored(editSelectionKey, {
+                        account_id:this.editSelectedAccountId,
+                        draft_ids:this.editSelectedDrafts,
+                    })) this.editSelectionError = 'Браузер не сохранил выбор для изменения между страницами.';
+                },
+                clearEditSelection() {
+                    if (this.busy) return;
+                    this.editSelectedDrafts = [];
+                    this.editSelectedAccountId = null;
+                    this.editSelectionError = '';
+                    this.persistEditSelection();
+                },
+                startEditSelection() {
+                    if (!this.editSelectionReady || this.busy || this.actionUncertain) return false;
+                    if (typeof config.urls.repairDraftSelection !== 'string' ||
+                        !config.urls.repairDraftSelection) {
+                        this.editSelectionError = 'Не удалось открыть редактор выбранных карточек. Обновите страницу.';
+                        return false;
+                    }
+                    try {
+                        const target = new URL(config.urls.repairDraftSelection, global.location.origin);
+                        if (target.origin !== global.location.origin) throw new Error('foreign editor URL');
+                        const filters = config.filters || {};
+                        const query = new URLSearchParams({
+                            account_id:String(this.editSelectedAccountId),
+                            draft_ids:this.editSelectedDrafts.join(','),
+                            return_page:String(filters.page || config.pagination.page || 1),
+                            return_per_page:String(filters.per_page || config.pagination.per_page || 50),
+                        });
+                        if (typeof filters.status === 'string' && filters.status)
+                            query.set('return_status',filters.status);
+                        if (filters.account_id !== null && filters.account_id !== undefined && String(filters.account_id))
+                            query.set('return_account_id',String(filters.account_id));
+                        global.location.assign(target.pathname + '?' + query.toString());
+                        return true;
+                    } catch (_) {
+                        this.editSelectionError = 'Не удалось проверить ссылку редактора. Обновите страницу.';
+                        return false;
+                    }
                 },
                 persistSelection() {
                     try {
@@ -155,7 +270,7 @@
                     });
                     global.location.assign(config.urls.review + '?' + query);
                 },
-                setSelectionMode(mode) { if (mode === 'send' || mode === 'ai') this.selectionMode = mode; },
+                setSelectionMode(mode) { if (mode === 'send' || mode === 'ai' || mode === 'edit') this.selectionMode = mode; },
                 aiEligible(row) {
                     return config.enabled && this.accounts.some(account => account.id === row.account_id) &&
                         positive(row.version) && row.status !== 'archived';

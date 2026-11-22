@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% from 'macros/icons.html' import icon %}
-{% block title %}Исправление карточек Ozon — Seller Hub{% endblock %}
+{% block title %}{{ 'Изменение черновиков Ozon' if editor.mode == 'draft_selection' else 'Исправление карточек Ozon' }} — Seller Hub{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-editor.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='ozon-bulk-repair-vue.css', v='20261121-source-prepare-r38') }}">
@@ -8,24 +8,29 @@
 {% block content %}
 <script id="orb-bootstrap" type="application/json">{{ {
     'editor': editor, 'enabled': ozon_enabled, 'csrf': csrf_token(),
-    'urls': {
+    'urls': editor_urls if editor.mode == 'draft_selection' and editor_urls is defined else {
         'read': url_for('ozon_bulk_uploads.repair_editor', job_uid=editor.job_uid),
         'apply': url_for('ozon_bulk_uploads.apply_repair_editor', job_uid=editor.job_uid),
         'types': url_for('ozon_bulk_uploads.repair_type_search', job_uid=editor.job_uid),
         'dictionaries': url_for('ozon_bulk_uploads.repair_editor', job_uid=editor.job_uid) + '/dictionaries/',
+        'dictionary_query': '',
         'drafts': url_for('marketplace_drafts.detail', draft_id=123456789).replace('123456789',''),
         'result': url_for('ozon_bulk_uploads.detail', job_uid=editor.job_uid),
-        'review': url_for('ozon_bulk_uploads.review', account_id=editor.account_id, draft_ids=editor.review_draft_ids|join(','), parent_prepare_job_uid=editor.job_uid) if editor.mode == 'source_prepare' else none
+        'review': url_for('ozon_bulk_uploads.review', account_id=editor.account_id, draft_ids=editor.review_draft_ids|join(','), parent_prepare_job_uid=editor.job_uid) if editor.mode == 'source_prepare' else none,
+        'classic': url_for('ozon_bulk_uploads.repair_editor_classic', job_uid=editor.job_uid)
     }
 }|tojson }}</script>
-<p id="orb-fallback" class="orb-fallback" role="status">Загружаем редактор… Если он не открылся, <a href="{{ url_for('ozon_bulk_uploads.repair_editor_classic', job_uid=editor.job_uid) }}">перейдите к простой форме</a>.</p>
+{% set fallback_classic = editor_urls.classic if editor.mode == 'draft_selection' and editor_urls is defined else url_for('ozon_bulk_uploads.repair_editor_classic', job_uid=editor.job_uid) %}
+<p id="orb-fallback" class="orb-fallback" role="status">Загружаем редактор… Если он не открылся, <a href="{{ fallback_classic }}">{{ 'вернитесь к списку черновиков' if editor.mode == 'draft_selection' else 'перейдите к простой форме' }}</a>.</p>
 <div id="ozon-bulk-repair" class="orb" v-cloak x-ignore
      data-editor-mode="{{ editor.mode or 'legacy' }}"
-     {% if editor.mode == 'source_prepare' %}data-source-prepare-editor{% endif %}>
+     {% if editor.mode == 'source_prepare' %}data-source-prepare-editor{% endif %}
+     {% if editor.mode == 'draft_selection' %}data-draft-selection-editor{% endif %}>
     <header class="orb-header">
-        <a class="orb-back" href="{{ url_for('ozon_bulk_uploads.detail', job_uid=editor.job_uid) }}">{{ icon('arrow-left', size=16) }} {{ 'К результатам подготовки' if editor.mode == 'source_prepare' else 'К результатам загрузки' }}</a>
-        <h1>{{ 'Черновики партии' if editor.mode == 'source_prepare' else 'Исправление карточек' }}</h1>
-        <p>{{ editor.account_label or 'Магазин Ozon' }}. {% if editor.mode == 'source_prepare' %}Локальные изменения сохраняются в Seller Hub; перед отправкой проверьте актуальные версии.{% else %}Подготовьте нужные значения и сохраните черновики.{% endif %}</p>
+        <a class="orb-back" {% if editor.mode == 'draft_selection' %}data-draft-selection-return{% endif %}
+           :href="urls.result">{{ icon('arrow-left', size=16) }} {{ 'К черновикам' if editor.mode == 'draft_selection' else 'К результатам подготовки' if editor.mode == 'source_prepare' else 'К результатам загрузки' }}</a>
+        <h1>{{ 'Черновики партии' if editor.mode == 'source_prepare' else 'Изменение черновиков' if editor.mode == 'draft_selection' else 'Исправление карточек' }}</h1>
+        <p>{{ editor.account_label or 'Магазин Ozon' }}. {% if editor.mode == 'source_prepare' %}Локальные изменения сохраняются в Seller Hub; перед отправкой проверьте актуальные версии.{% elif editor.mode == 'draft_selection' %}Изменения сохраняются только в Seller Hub. Перед отправкой карточек Ozon потребуется отдельная проверка.{% else %}Подготовьте нужные значения и сохраните черновики.{% endif %}</p>
         <button type="button" class="orb-link" :disabled="busy || sessionExpired" @click="reload({manual:true})">Прочитать текущее состояние</button>
     </header>
 {% raw %}
@@ -41,21 +46,30 @@
     <section v-if="sourcePrepare && blockedReviewCount" class="orb-banner orb-banner--warning" role="status" data-source-prepare-blocked-count>
         Для изменения временно недоступно: {{ blockedReviewCount }} черновиков уже находятся в проверенной отправке. Дождитесь результата операции Ozon.
     </section>
+    <section v-if="draftSelection && blockedReviewItems.length" class="orb-banner orb-banner--warning" role="status" data-draft-selection-blocked>
+        <strong>Пока недоступно для изменения: {{ blockedReviewItems.length }}</strong>
+        <p>Эти карточки остаются в точном выборе, но сейчас заняты проверенной отправкой или активной операцией.</p>
+        <details><summary>Показать недоступные карточки</summary><ul><li v-for="item in blockedReviewItems" :key="item.draft_id"><strong>{{ item.title }}</strong> — {{ item.message }}</li></ul></details>
+    </section>
     <section v-if="report" ref="receipt" class="orb-receipt" aria-label="Результат сохранения"
-             :tabindex="sourcePrepare ? -1 : null"
-             :data-source-prepare-receipt="sourcePrepare ? '' : null">
-        <strong>{{ sourcePrepare ? 'Обработано черновиков: ' : 'Проверено карточек: ' }}{{ report.total }}</strong>
-        <span>Готовы к повторной проверке отправки: {{ report.ready_to_retry }}</span><span>Нужны данные: {{ report.needs_input }}</span>
-        <span v-if="!sourcePrepare">Исключены из повтора: {{ report.excluded }}</span><span v-if="report.failed">Не удалось сохранить: {{ report.failed }}</span>
+             :tabindex="sourcePrepare || draftSelection ? -1 : null"
+             :data-source-prepare-receipt="sourcePrepare ? '' : null"
+             :data-draft-selection-receipt="draftSelection ? '' : null">
+        <strong>{{ sourcePrepare || draftSelection ? 'Обработано черновиков: ' : 'Проверено карточек: ' }}{{ report.total }}</strong>
+        <span v-if="draftSelection">Изменено: {{ report.updated }}</span>
+        <span>{{ draftSelection ? 'Можно проверить перед отправкой: ' : 'Готовы к повторной проверке отправки: ' }}{{ report.ready_to_retry }}</span><span>Нужны данные: {{ report.needs_input }}</span>
+        <span v-if="!sourcePrepare && !draftSelection">Исключены из повтора: {{ report.excluded }}</span><span v-if="report.failed">Не удалось сохранить: {{ report.failed }}</span>
         <p v-if="sourcePrepare">Сохранено в Seller Hub. Перед отправкой проверьте актуальные версии.</p>
+        <p v-else-if="draftSelection">Изменены только локальные черновики Seller Hub. Отправка в Ozon не выполнялась.</p>
         <p v-else>Сохранение изменяет черновики. Отправка в Ozon подтверждается отдельно на странице результатов.</p>
         <a v-if="sourcePrepare && !uncertain && reviewable && urls.review" data-source-prepare-review :href="urls.review">Проверить перед отправкой</a>
-        <a :href="urls.result">Открыть результаты загрузки</a>
+        <a v-if="draftSelection && !uncertain && reviewable && urls.review" data-draft-selection-review :href="urls.review">Проверить перед отправкой</a>
+        <a :href="urls.result" :data-draft-selection-return="draftSelection ? '' : null">{{ draftSelection ? 'Вернуться к черновикам' : 'Открыть результаты загрузки' }}</a>
     </section>
     <form class="orb-filters" @submit.prevent="setFilters" role="search" aria-label="Поиск карточек для исправления">
         <label class="orb-search"><span>Поиск по названию или артикулу</span><input class="sh-input" type="search" name="q" maxlength="200" autocomplete="off" v-model="query" @input="setFilters" placeholder="Название или артикул…"></label>
         <label><span>Исходная категория</span><select class="sh-input" name="group" v-model="group" @change="setFilters"><option value="">Все категории</option><option v-for="item in groups" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
-        <label><span>Состояние</span><select class="sh-input" name="state" v-model="state" @change="setFilters"><option value="">Все карточки</option><option value="needs_input">Нужны данные</option><option value="ready_to_retry">Проверены локально</option><option v-if="!sourcePrepare" value="excluded">Исключены</option><option value="changed">Есть мои изменения</option><option value="error">Ошибки и конфликты</option></select></label>
+        <label><span>Состояние</span><select class="sh-input" name="state" v-model="state" @change="setFilters"><option value="">Все карточки</option><option value="needs_input">Нужны данные</option><option value="ready_to_retry">Проверены локально</option><option v-if="!sourcePrepare && !draftSelection" value="excluded">Исключены</option><option value="changed">Есть мои изменения</option><option value="error">Ошибки и конфликты</option></select></label>
     </form>
     <div class="orb-list-heading"><label><input type="checkbox" :checked="pageSelected" :disabled="busy || !visible.length" @change="selectPage"> Выбрать страницу</label><button type="button" class="orb-link" :disabled="busy || !filtered.length" @click="selectFiltered">Выбрать все по фильтру ({{ filtered.length }})</button></div>
     <section class="orb-list" aria-label="Карточки для исправления" :aria-busy="busy">
@@ -74,8 +88,8 @@
                     <div class="orb-editor-heading"><div><span class="orb-label">Тип товара Ozon</span><strong>{{ row.product_type_name || 'Ещё не выбран' }}</strong></div><button type="button" class="orb-link" @click="openType([row])">Выбрать тип</button></div>
                     <p v-if="changedType(row)" class="orb-inline-warning">Тип изменён только в форме. Сохраните его, затем заполните требования новой категории. Прежние характеристики будут заменены данными новой схемы.</p>
                     <label class="orb-check"><input type="checkbox" v-model="row.save_mapping" @change="noteChange(row)">Запомнить этот тип для исходной категории «{{ row.group_name }}»</label>
-                    <label v-if="!sourcePrepare" class="orb-action"><span class="orb-label">Действие с карточкой</span><select class="sh-input" v-model="row.action" @change="noteChange(row)"><option value="ИСПРАВИТЬ">Исправить черновик</option><option value="ИСКЛЮЧИТЬ">Исключить из повтора этой загрузки</option></select></label>
-                    <p v-if="!sourcePrepare && row.action==='ИСКЛЮЧИТЬ'" class="orb-help">Товар и черновик сохранятся. Остальные правки этой строки не будут записаны при исключении.</p>
+                    <label v-if="!sourcePrepare && !draftSelection" class="orb-action"><span class="orb-label">Действие с карточкой</span><select class="sh-input" v-model="row.action" @change="noteChange(row)"><option value="ИСПРАВИТЬ">Исправить черновик</option><option value="ИСКЛЮЧИТЬ">Исключить из повтора этой загрузки</option></select></label>
+                    <p v-if="!sourcePrepare && !draftSelection && row.action==='ИСКЛЮЧИТЬ'" class="orb-help">Товар и черновик сохранятся. Остальные правки этой строки не будут записаны при исключении.</p>
                     <template v-else>
                         <div class="orb-fixed-grid">
                             <label><span class="orb-label">Цена продавца, ₽</span><input class="sh-input" type="text" inputmode="decimal" :name="'price-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.price_rub" @input="noteChange(row)"></label>
@@ -109,9 +123,9 @@
         <div v-if="!visible.length" class="orb-empty"><h2>Нет карточек по этим условиям</h2><p>Измените поиск или состояние. Ваши правки других строк остаются в форме.</p><button type="button" class="sh-btn sh-btn--secondary" @click="query='';group='';state='';setFilters()">Сбросить фильтры</button></div>
     </section>
     <nav v-if="pages>1" class="orb-pagination" aria-label="Страницы исправления"><button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page<=1" @click="goPage(page-1)">Назад</button><span>{{ page }} из {{ pages }}</span><button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page>=pages" @click="goPage(page+1)">Далее</button></nav>
-    <footer v-if="selected.length" class="orb-toolbar"><div><strong>Выбрано {{ selected.length }}</strong><button type="button" class="orb-link" :disabled="busy" @click="clearSelection">Снять выбор</button></div><div class="orb-toolbar-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="locked" @click="openType(selected)">Тип товара</button><button type="button" class="sh-btn sh-btn--secondary" :disabled="locked" @click="openBulk">Заполнить поле</button><button type="button" class="sh-btn sh-btn--primary" :data-source-prepare-save="sourcePrepare ? '' : null" :disabled="locked" @click="reviewSave">{{ busy ? 'Проверяем…' : sourcePrepare ? 'Сохранить черновики' : 'Проверить изменения' }}</button></div></footer>
+    <footer v-if="selected.length" class="orb-toolbar"><div><strong>Выбрано {{ selected.length }}</strong><button type="button" class="orb-link" :disabled="busy" @click="clearSelection">Снять выбор</button></div><div class="orb-toolbar-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="locked" @click="openType(selected)">Тип товара</button><button type="button" class="sh-btn sh-btn--secondary" :disabled="locked" @click="openBulk">Заполнить поле</button><button type="button" class="sh-btn sh-btn--primary" :data-source-prepare-save="sourcePrepare ? '' : null" :data-draft-selection-save="draftSelection ? '' : null" :disabled="locked" @click="reviewSave">{{ busy ? 'Проверяем…' : sourcePrepare ? 'Сохранить черновики' : 'Проверить изменения' }}</button></div></footer>
     <dialog ref="modal" class="orb-dialog" aria-labelledby="orb-dialog-title" @cancel.prevent="close">
-        <div class="orb-dialog-head"><h2 id="orb-dialog-title">{{ dialog==='bulk' ? 'Заполнение выбранных карточек' : dialog==='review' ? 'Сохранение черновиков' : dialog==='conflict' ? 'Сравнение изменений' : picker.kind==='type' ? 'Тип товара Ozon' : 'Значения справочника' }}</h2><button type="button" class="orb-close" :disabled="busy" aria-label="Закрыть диалог" @click="close">×</button></div>
+        <div class="orb-dialog-head"><h2 id="orb-dialog-title">{{ dialog==='bulk' ? 'Заполнение выбранных карточек' : dialog==='review' ? (draftSelection ? 'Проверка локальных изменений' : 'Сохранение черновиков') : dialog==='conflict' ? 'Сравнение изменений' : picker.kind==='type' ? 'Тип товара Ozon' : 'Значения справочника' }}</h2><button type="button" class="orb-close" :disabled="busy" aria-label="Закрыть диалог" @click="close">×</button></div>
         <p v-if="error" class="orb-inline-warning" role="alert">{{ error }}</p>
         <template v-if="dialog==='bulk'">
             <template v-if="!bulkPlan">
@@ -152,9 +166,10 @@
         </template>
         <template v-else-if="dialog==='review'">
             <p v-if="sourcePrepare">Будут сохранены в Seller Hub <strong>{{ review.length }}</strong> черновиков. Отправка в Ozon потребует отдельной проверки версий.</p>
+            <p v-else-if="draftSelection">Будут сохранены в Seller Hub <strong>{{ review.length }}</strong> черновиков. Эта проверка и сохранение не отправляют карточки в Ozon.</p>
             <p v-else>Будут сохранены и проверены <strong>{{ review.length }}</strong> карточек. Публикация в Ozon выполняется отдельным действием.</p>
             <ul class="orb-review-list"><li v-for="item in review" :key="item.id"><strong>{{ item.title }}</strong><p v-if="item.action==='ИСКЛЮЧИТЬ'">Исключить только из повторов этой загрузки. Товар и черновик сохранятся; остальные правки строки не записываются.</p><template v-else><p v-if="item.typeChanged" class="orb-inline-warning">Смена типа заменит {{ item.impact.attributes }} характеристик и очистит {{ item.impact.complex_groups }} составных групп.</p><p v-if="!item.changes.length" class="orb-help">Повторная локальная проверка сохранённых значений.</p><div v-for="change in item.changes" :key="change.key" class="orb-review-field"><strong>{{ change.label }}</strong><div class="orb-diff"><span><small>Было</small>{{ change.beforeLabel }}<template v-if="change.showDictionaryIdentities"><small v-for="identity in change.beforeIdentities" :key="identity">{{ identity }}</small></template></span><span><small>Будет</small>{{ change.afterLabel }}<template v-if="change.showDictionaryIdentities"><small v-for="identity in change.afterIdentities" :key="identity">{{ identity }}</small></template></span></div><p v-if="change.after==='' || Array.isArray(change.after) && !change.after.length" class="orb-help">Пустое значение в массовой форме не удаляет сохранённые данные.</p></div></template></li></ul>
-            <div class="orb-dialog-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="busy" @click="close">Вернуться к форме</button><button type="button" class="sh-btn sh-btn--primary" :data-source-prepare-save="sourcePrepare ? '' : null" :disabled="locked" @click="save">{{ sourcePrepare ? 'Сохранить черновики' : 'Сохранить и проверить' }}</button></div>
+            <div class="orb-dialog-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="busy" @click="close">Вернуться к форме</button><button type="button" class="sh-btn sh-btn--primary" :data-source-prepare-save="sourcePrepare ? '' : null" :data-draft-selection-save="draftSelection ? '' : null" :disabled="locked" @click="save">{{ sourcePrepare ? 'Сохранить черновики' : draftSelection ? 'Сохранить локально' : 'Сохранить и проверить' }}</button></div>
         </template>
         <template v-else-if="dialog==='conflict' && conflictRow?.server">
             <p><strong>{{ conflictRow.title }}</strong></p><p>Сравните ваши правки с текущей версией. Поля, которые вы не меняли, при переносе берутся из текущей версии.</p>
@@ -168,5 +183,5 @@
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
 <script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}" defer></script>
 <script src="{{ url_for('static', filename='ozon-draft-editor.js') }}" defer></script>
-<script src="{{ url_for('static', filename='ozon-bulk-repair-vue.js', v='20261121-source-prepare-r38') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-bulk-repair-vue.js', v='20261122-draft-selection-r45') }}" defer></script>
 {% endblock %}
