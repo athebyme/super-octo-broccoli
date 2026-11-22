@@ -722,6 +722,25 @@
 #my-products-app .mp-supplier-fact strong { min-width:0; color:var(--text); font-size:11px; font-weight:620; font-variant-numeric:tabular-nums; white-space:nowrap; }
 #my-products-app .mp-supplier-fact small { color:var(--text-muted); font-size:10px; font-weight:400; }
 #my-products-app .mp-channel-column { display:grid; min-width:0; align-content:center; justify-items:start; gap:4px; }
+#my-products-app .mp-inline-price,
+#my-products-app .mp-inline-price-value {
+    color:var(--text);
+    font-size:12px;
+    font-variant-numeric:tabular-nums;
+    font-weight:620;
+    line-height:1.3;
+}
+#my-products-app .mp-inline-price {
+    max-width:100%;
+    min-height:32px;
+    padding:3px 5px;
+    border-radius:var(--r-sm);
+    background:transparent;
+    text-align:left;
+    cursor:pointer;
+}
+#my-products-app .mp-inline-price:hover { color:var(--accent-text); background:var(--bg-hover); }
+#my-products-app .mp-inline-price:focus-visible { outline:2px solid var(--focus-outline); outline-offset:1px; }
 #my-products-app .mp-chan { max-width:100%; min-width:0; padding:3px 6px; border-radius:5px; font-size:10px; line-height:1.25; }
 #my-products-app .mp-chan--wb { color:var(--mp-wb); background:color-mix(in srgb, var(--mp-wb) 9%, var(--bg-hover)); }
 #my-products-app .mp-chan--ozon { color:var(--mp-ozon); background:color-mix(in srgb, var(--mp-ozon) 9%, var(--bg-hover)); }
@@ -802,6 +821,7 @@
     }
     #my-products-app .mp-channel-column--wb { grid-area:wb; }
     #my-products-app .mp-channel-column--ozon { grid-area:ozon; }
+    #my-products-app .mp-inline-price { min-height:44px; }
     #my-products-app .mp-cell-label { display:block; color:var(--text-muted); font-size:10px; line-height:1.3; }
     #my-products-app .mp-chan { justify-self:start; white-space:normal; flex-wrap:wrap; overflow-wrap:anywhere; }
     #my-products-app .mp-chan-account { overflow-wrap:anywhere; }

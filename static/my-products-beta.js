@@ -9,8 +9,17 @@
     var importBundle = window.SellerHubMyProductsImport || null;
     var importPanelAvailable = !!(importBundle && importBundle.SupplierImportPanel &&
         typeof importBundle.canonicalBatchLocation === 'function');
+    var priceWorkspaceUrls = boot.urls || {};
+    var priceWorkspaceDialogAvailable = !!(importBundle && importBundle.WorkspacePriceDialog &&
+        ['wbPreview', 'wbSave', 'ozonPreview', 'ozonSave'].every(function (key) {
+            return typeof priceWorkspaceUrls[key] === 'string' &&
+                priceWorkspaceUrls[key].charAt(0) === '/';
+        }));
     if (importPanelAvailable) {
         window.shVue.components['mp-supplier-import'] = importBundle.SupplierImportPanel;
+    }
+    if (priceWorkspaceDialogAvailable) {
+        window.shVue.components['workspace-price-dialog'] = importBundle.WorkspacePriceDialog;
     }
     var importBatchQueryRequested = false;
     var locationSearch = window.location && typeof window.location.search === 'string'
@@ -1131,6 +1140,18 @@
                     importResult: (boot.urls || {}).supplierImportResult || '',
                 },
                 importPanelAvailable: importPanelAvailable,
+                priceWorkspaceDialogAvailable: priceWorkspaceDialogAvailable,
+                priceWorkspaceDialogUrls: {
+                    wbPreview: priceWorkspaceUrls.wbPreview || '',
+                    wbSave: priceWorkspaceUrls.wbSave || '',
+                    ozonPreview: priceWorkspaceUrls.ozonPreview || '',
+                    ozonSave: priceWorkspaceUrls.ozonSave || '',
+                },
+                priceWorkspaceDialogOpen: false,
+                priceWorkspaceScope: null,
+                priceWorkspaceReviewHref: '',
+                priceWorkspaceLaunch: null,
+                priceWorkspaceReturnFocus: null,
                 supplierImportOpen: false,
                 supplierImportOutcome: null,
                 supplierImportFallbackUrl: '',
@@ -1876,13 +1897,287 @@
                     });
                 }
             },
+            priceWorkspaceItemsBySelection: function (selectionIds) {
+                if (!Array.isArray(selectionIds) || !selectionIds.length ||
+                    new Set(selectionIds).size !== selectionIds.length) return null;
+                var byId = new Map();
+                for (var index = 0; index < this.items.length; index += 1) {
+                    var item = this.items[index];
+                    if (!item || !Number.isSafeInteger(item.id) || item.id <= 0 || byId.has(item.id)) return null;
+                    byId.set(item.id, item);
+                }
+                var selectedItems = selectionIds.map(function (id) { return byId.get(id); });
+                return selectedItems.some(function (item) { return !item; }) ? null : selectedItems;
+            },
+            priceWorkspaceLaunchIsCurrent: function (launch) {
+                if (!launch || this.loading || this.loadingMore || this.selectAllLoading ||
+                    this._feedRevision !== launch.feedRevision || this.feedScopeKey() !== launch.scopeKey ||
+                    this.itemsScope !== launch.scopeKey ||
+                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) return false;
+                if (launch.source === 'bulk' && (!sameOrderedIds(this.selected, launch.localSelectionIds) ||
+                    JSON.stringify(this.buildWorkspaceReturnScope()) !== JSON.stringify(launch.returnScope))) return false;
+                if (launch.source === 'row' && launch.localSelectionIds.length !== 1) return false;
+                var sourceItems = this.priceWorkspaceItemsBySelection(launch.localSelectionIds);
+                if (!sourceItems) return false;
+                if (launch.marketplace === 'wb') {
+                    return this.wbConnected && this.wbAccountKnown &&
+                        this.wbAccountId === launch.wbAccountId &&
+                        sameOrderedIds(orderedWbProductIds(this.items, launch.localSelectionIds), launch.productIds);
+                }
+                if (launch.marketplace !== 'ozon') return false;
+                var accountResult = this.resolveOzonPriceAccountChoices(sourceItems, launch.localSelectionIds);
+                var freshChoice = accountResult.choices.find(function (choice) {
+                    return choice.account_id === launch.accountId;
+                });
+                return !!freshChoice && sameOrderedIds(freshChoice.listing_ids, launch.productIds);
+            },
+            openPriceWorkspaceDialog: function (marketplace, localSelectionIds, options) {
+                options = options || {};
+                if (!this.priceWorkspaceDialogAvailable) return false;
+                if (this.priceWorkspaceDialogOpen) return false;
+                var source = options.source === 'row' ? 'row' : 'bulk';
+                if (this.loading || this.loadingMore || this.selectAllLoading ||
+                    this.itemsScope !== this.feedScopeKey() ||
+                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search ||
+                    !Array.isArray(localSelectionIds) || !localSelectionIds.length ||
+                    new Set(localSelectionIds).size !== localSelectionIds.length ||
+                    (source === 'bulk' && !sameOrderedIds(this.selected, localSelectionIds)) ||
+                    (source === 'row' && localSelectionIds.length !== 1)) {
+                    this.error = 'Список или выбор изменился. Обновите список и отметьте товары заново.';
+                    return false;
+                }
+                var sourceItems = this.priceWorkspaceItemsBySelection(localSelectionIds);
+                if (!sourceItems) {
+                    this.error = 'Не удалось проверить точный список товаров. Обновите страницу и повторите действие.';
+                    return false;
+                }
+                var productIds = null;
+                var accountId = null;
+                var accountLabel = '';
+                if (marketplace === 'wb') {
+                    productIds = orderedWbProductIds(this.items, localSelectionIds);
+                    if (!productIds || productIds.length > MAX_BULK_SELECTION ||
+                        !this.wbConnected || !this.wbAccountKnown) {
+                        this.error = 'Для изменения цены выберите точные карточки Wildberries и проверьте подключение кабинета.';
+                        return false;
+                    }
+                    accountLabel = 'Wildberries';
+                } else if (marketplace === 'ozon') {
+                    var choice = options.choice;
+                    var choices = this.resolveOzonPriceAccountChoices(sourceItems, localSelectionIds).choices;
+                    var freshChoice = choice && choices.find(function (candidate) {
+                        return candidate.account_id === choice.account_id;
+                    });
+                    if (!freshChoice || !sameOrderedIds(freshChoice.listing_ids, choice.listing_ids)) {
+                        this.error = 'Связанные карточки Ozon изменились. Обновите список и повторите действие.';
+                        return false;
+                    }
+                    productIds = freshChoice.listing_ids.slice();
+                    accountId = freshChoice.account_id;
+                    accountLabel = freshChoice.account_label || ('Магазин № ' + accountId);
+                } else {
+                    return false;
+                }
+                var returnScope = source === 'bulk' ? this.buildWorkspaceReturnScope() : null;
+                var rows = sourceItems.map(function (item, index) {
+                    return {
+                        id: productIds[index],
+                        title: typeof item.title === 'string' ? item.title : '',
+                        article: typeof item.vendor_code === 'string' ? item.vendor_code : '',
+                        photo: typeof item.photo === 'string' ? item.photo : '',
+                    };
+                });
+                var scope = {
+                    marketplace: marketplace,
+                    productIds: productIds.slice(),
+                    accountId: accountId,
+                    rows: rows,
+                    accountLabel: accountLabel,
+                };
+                var launch = {
+                    source: source,
+                    marketplace: marketplace,
+                    localSelectionIds: localSelectionIds.slice(),
+                    productIds: productIds.slice(),
+                    accountId: accountId,
+                    accountLabel: accountLabel,
+                    wbAccountId: this.wbAccountId,
+                    scopeKey: this.feedScopeKey(),
+                    feedRevision: this._feedRevision,
+                    returnScope: returnScope,
+                    priceTarget: {channel: marketplace, ids: productIds.slice(), accountId: accountId},
+                };
+                if (!this.priceWorkspaceLaunchIsCurrent(launch)) {
+                    this.error = 'Состав выбора или связь с маркетплейсом изменилась. Обновите список и повторите действие.';
+                    return false;
+                }
+                this.priceWorkspaceLaunch = launch;
+                this.priceWorkspaceScope = scope;
+                this.priceWorkspaceReviewHref = '';
+                this.priceWorkspaceReturnFocus = options.returnFocus || null;
+                this.priceWorkspaceDialogOpen = true;
+                this.error = '';
+                return true;
+            },
+            closePriceWorkspaceDialog: function () {
+                this.priceWorkspaceDialogOpen = false;
+                this.priceWorkspaceScope = null;
+                this.priceWorkspaceLaunch = null;
+                this.priceWorkspaceReviewHref = '';
+                var trigger = this.priceWorkspaceReturnFocus;
+                this.priceWorkspaceReturnFocus = null;
+                this.$nextTick(function () {
+                    if (trigger && trigger.isConnected) trigger.focus();
+                });
+            },
+            priceWorkspaceReceiptHref: function (launch, receipt) {
+                if (!launch || !receipt || !receipt.destination ||
+                    typeof receipt.destination.href !== 'string') return '';
+                var href = receipt.destination.href;
+                if (!href || href.length > 4096 || /[\u0000-\u001f\u007f]/.test(href)) return '';
+                try {
+                    var target = new URL(href, window.location.origin);
+                    if (target.origin !== window.location.origin || target.username || target.password ||
+                        target.hash || href !== target.pathname + target.search) return '';
+                    if (launch.marketplace === 'wb') {
+                        if (!Number.isSafeInteger(receipt.batchId) || receipt.batchId <= 0) return '';
+                        var suffix = receipt.status === 'pending_review' ? '/confirm' : '';
+                        var expected = '/prices/batch/' + receipt.batchId + suffix;
+                        return receipt.redirect === expected && href === expected ? href : '';
+                    }
+                    if (launch.marketplace === 'ozon' && receipt.marketplace === 'ozon' &&
+                        receipt.accountId === launch.accountId &&
+                        target.pathname === '/marketplaces/commercial/') {
+                        return href;
+                    }
+                } catch (_) {}
+                return '';
+            },
+            handlePriceWorkspaceSaved: function (receipt) {
+                this.priceWorkspaceReviewHref = '';
+                var launch = this.priceWorkspaceLaunch;
+                if (!launch || launch.source !== 'bulk' ||
+                    !this.priceWorkspaceLaunchIsCurrent(launch) || !launch.returnScope) return false;
+                if (!receipt || receipt.marketplace !== launch.marketplace ||
+                    receipt.selectedCount !== launch.productIds.length) return false;
+                var destination = this.priceWorkspaceReceiptHref(launch, receipt);
+                if (!destination) return false;
+                var priceResult = null;
+                if (launch.marketplace === 'wb') {
+                    if (!Number.isSafeInteger(receipt.changedCount) || receipt.changedCount < 0 ||
+                        receipt.changedCount > receipt.selectedCount) return false;
+                    priceResult = {channel: 'wb', batchId: receipt.batchId};
+                } else {
+                    var proposalIds = receipt.proposalIds;
+                    if (!Array.isArray(proposalIds) || !proposalIds.length ||
+                        proposalIds.length > launch.productIds.length ||
+                        receipt.savedCount !== proposalIds.length || receipt.reviewUrl !== destination ||
+                        proposalIds.some(function (id) { return !Number.isSafeInteger(id) || id <= 0; }) ||
+                        new Set(proposalIds).size !== proposalIds.length) return false;
+                    priceResult = {
+                        channel: 'ozon',
+                        accountId: launch.accountId,
+                        proposalIds: proposalIds.slice(),
+                    };
+                }
+                var nonce = storePriceWorkspaceReturn(
+                    this, launch.priceTarget, launch.localSelectionIds, launch.returnScope,
+                );
+                var hash = workspaceReturnHash(nonce);
+                var helpers = window.SellerHubCommonContent || {};
+                if (!nonce || !hash || typeof helpers.bindPriceWorkspaceResult !== 'function') {
+                    if (nonce) this.consumeWorkspaceReturn(nonce);
+                    return false;
+                }
+                var bound = '';
+                try {
+                    bound = helpers.bindPriceWorkspaceResult(hash, {
+                        owner: this.workspaceOwner,
+                        priceTarget: launch.priceTarget,
+                        priceResult: priceResult,
+                    });
+                } catch (_) {}
+                if (bound !== hash) {
+                    this.consumeWorkspaceReturn(nonce);
+                    return false;
+                }
+                this.priceWorkspaceReviewHref = destination + hash;
+                return true;
+            },
+            openLegacyPriceWorkspace: function () {
+                var launch = this.priceWorkspaceLaunch;
+                if (!this.priceWorkspaceLaunchIsCurrent(launch)) {
+                    this.error = 'Состав выбора или связь с маркетплейсом изменились. Обновите список и повторите действие.';
+                    this.closePriceWorkspaceDialog();
+                    return false;
+                }
+                var nonce = null;
+                if (launch.source === 'bulk' && launch.returnScope) {
+                    nonce = storePriceWorkspaceReturn(
+                        this, launch.priceTarget, launch.localSelectionIds, launch.returnScope,
+                    );
+                }
+                var hash = workspaceReturnHash(nonce);
+                try {
+                    var base = launch.marketplace === 'wb' ? this.urls.wbPriceChange : this.urls.ozonCommercial;
+                    if (typeof base !== 'string' || !base) throw new Error('missing URL');
+                    var target = new URL(base, window.location.origin);
+                    if (target.origin !== window.location.origin || target.username || target.password) {
+                        throw new Error('foreign URL');
+                    }
+                    if (launch.marketplace === 'wb') {
+                        if (target.pathname !== '/prices/change') throw new Error('unexpected WB price route');
+                        target.search = '';
+                        target.searchParams.set('product_ids', launch.productIds.join(','));
+                    } else {
+                        if (target.pathname.indexOf('/marketplaces/commercial') !== 0) {
+                            throw new Error('unexpected Ozon price route');
+                        }
+                        target.searchParams.set('account_id', String(launch.accountId));
+                        target.searchParams.set('bulk_listing_ids', launch.productIds.join(','));
+                    }
+                    target.hash = hash.replace(/^#/, '');
+                    window.location.assign(target.pathname + target.search + target.hash);
+                    return true;
+                } catch (_) {
+                    if (nonce) this.consumeWorkspaceReturn(nonce);
+                    this.error = 'Не удалось открыть обычный редактор цен. Повторите действие со свежим выбором.';
+                    return false;
+                }
+            },
+            canOpenRowWbPrice: function (item) {
+                return !!(this.priceWorkspaceDialogAvailable && !this.loading && !this.loadingMore &&
+                    !this.selectAllLoading && this.itemsScope === this.feedScopeKey() &&
+                    this.wbConnected && this.wbAccountKnown && exactWbProductIds([item]));
+            },
+            canOpenRowOzonPrice: function (item) {
+                if (!this.priceWorkspaceDialogAvailable || this.loading || this.loadingMore ||
+                    this.selectAllLoading || this.itemsScope !== this.feedScopeKey() ||
+                    !this.ozonEnabled || !item || !Number.isSafeInteger(item.id)) return false;
+                return this.resolveOzonPriceAccountChoices([item], [item.id]).choices.length > 0;
+            },
+            openRowWbPrice: function (item, event) {
+                if (!this.canOpenRowWbPrice(item)) return false;
+                return this.openPriceWorkspaceDialog('wb', [item.id], {
+                    source: 'row',
+                    returnFocus: event && event.currentTarget,
+                });
+            },
+            openRowOzonPrice: function (item, event) {
+                if (!this.canOpenRowOzonPrice(item)) return false;
+                return this.openOzonPriceHandoff([item], [item.id], {
+                    source: 'row',
+                    returnFocus: event && event.currentTarget,
+                });
+            },
             activateBulkIntent: function (group, event) {
                 var details = this.$refs.moreActions;
                 if (details) details.open = false;
                 var headMore = this.$refs.headMore;
                 if (headMore) headMore.open = false;
                 if (group.actions.length === 1) {
-                    var returnFocus = group.actions[0].key === 'ozon'
+                    var directKey = group.actions[0].key;
+                    var returnFocus = ['ozon', 'wb_prices', 'ozon_prices'].includes(directKey)
                         ? event && event.currentTarget : null;
                     this.closeBulkActionPanel(false);
                     this.startAction(group.actions[0], returnFocus);
@@ -1896,8 +2191,11 @@
                 this._bulkActionTrigger = event && event.currentTarget;
             },
             runBulkIntentAction: function (action, event) {
-                var returnFocus = action && action.key === 'ozon'
-                    ? (event && event.currentTarget) || this._bulkActionTrigger : null;
+                var key = action && action.key;
+                var returnFocus = ['wb_prices', 'ozon_prices'].includes(key)
+                    ? this._bulkActionTrigger || (event && event.currentTarget)
+                    : key === 'ozon'
+                        ? (event && event.currentTarget) || this._bulkActionTrigger : null;
                 this.closeBulkActionPanel(false);
                 this.startAction(action, returnFocus);
             },
@@ -2898,17 +3196,31 @@
                     }
                 });
             },
-            openOzonPriceHandoff: function (items, selectionIds) {
+            openOzonPriceHandoff: function (items, selectionIds, options) {
+                options = options || {};
+                var source = options.source === 'row' ? 'row' : 'bulk';
                 this.ozonPriceError = '';
                 this.ozonPriceDialogError = '';
                 this.ozonAccountChooserKind = 'price';
-                if (!sameIds(this.selected, selectionIds)) {
+                if (!Array.isArray(selectionIds) || !selectionIds.length ||
+                    (source === 'bulk' && !sameOrderedIds(this.selected, selectionIds)) ||
+                    (source === 'row' && selectionIds.length !== 1) ||
+                    this.loading || this.loadingMore || this.selectAllLoading ||
+                    this.itemsScope !== this.feedScopeKey() ||
+                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) {
                     this.setOzonPriceHandoffError(
-                        'Выбор товаров изменился. Отметьте товары заново и повторите действие.'
+                        'Список или выбор изменился. Обновите список и повторите действие.'
                     );
                     return;
                 }
-                var result = this.resolveOzonPriceAccountChoices(items, selectionIds);
+                var sourceItems = this.priceWorkspaceItemsBySelection(selectionIds);
+                if (!sourceItems) {
+                    this.setOzonPriceHandoffError(
+                        'Не удалось проверить точный список товаров. Обновите страницу и повторите действие.'
+                    );
+                    return;
+                }
+                var result = this.resolveOzonPriceAccountChoices(sourceItems, selectionIds);
                 if (!result.choices.length) {
                     var message = result.reason === 'limit'
                         ? 'За одно сравнение Ozon можно выбрать не больше 100 товаров.'
@@ -2924,6 +3236,11 @@
                 }
                 var review = {
                     imported_product_ids: selectionIds.slice(),
+                    source: source,
+                    scopeKey: this.feedScopeKey(),
+                    feedRevision: this._feedRevision,
+                    returnScope: source === 'bulk' ? this.buildWorkspaceReturnScope() : null,
+                    returnFocus: options.returnFocus || document.activeElement,
                     choices: result.choices.map(function (choice) {
                         return {
                             account_id: choice.account_id,
@@ -2937,14 +3254,15 @@
                     this.navigateOzonPriceHandoff(review.choices[0].account_id, review);
                     return;
                 }
-                this._ozonPriceTrigger = document.activeElement;
+                this._ozonPriceTrigger = review.returnFocus;
                 this.ozonPriceAccountId = '';
                 this.$nextTick(function () {
                     this.$refs.ozonPriceAccountDialog.showModal();
                     this.$refs.ozonPriceAccount.focus();
                 });
             },
-            closeOzonPriceHandoff: function () {
+            closeOzonPriceHandoff: function (options) {
+                options = options || {};
                 var dialog = this.$refs.ozonPriceAccountDialog;
                 if (dialog && dialog.open) dialog.close();
                 this.ozonPriceHandoffReview = null;
@@ -2953,7 +3271,7 @@
                 this.ozonPriceDialogError = '';
                 this.ozonWorkspaceUpdateDialogError = '';
                 this.ozonAccountChooserKind = '';
-                this._ozonPriceTrigger?.focus();
+                if (options.restoreFocus !== false) this._ozonPriceTrigger?.focus();
             },
             continueOzonPriceHandoff: function () {
                 if (this.ozonAccountChooserKind === 'workspace_update') {
@@ -2986,17 +3304,31 @@
                 this.navigateOzonPriceHandoff(accountId, review);
             },
             navigateOzonPriceHandoff: function (accountId, review) {
-                if (!review || !sameIds(this.selected, review.imported_product_ids)) {
+                if (!review || this.loading || this.loadingMore || this.selectAllLoading ||
+                    this._feedRevision !== review.feedRevision || this.feedScopeKey() !== review.scopeKey ||
+                    this.itemsScope !== review.scopeKey ||
+                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search ||
+                    (review.source === 'bulk' && !sameOrderedIds(this.selected, review.imported_product_ids)) ||
+                    (review.source === 'row' && review.imported_product_ids.length !== 1) ||
+                    (review.source === 'bulk' &&
+                        JSON.stringify(this.buildWorkspaceReturnScope()) !== JSON.stringify(review.returnScope))) {
                     this.closeOzonPriceHandoff();
                     this.setOzonPriceHandoffError(
                         'Выбор товаров изменился после проверки. Отметьте их заново перед сравнением.'
                     );
                     return false;
                 }
-                var selectedItems = this.selectedItems;
+                var selectedItems = this.priceWorkspaceItemsBySelection(review.imported_product_ids);
+                if (!selectedItems) {
+                    this.closeOzonPriceHandoff();
+                    this.setOzonPriceHandoffError(
+                        'Не удалось проверить точный список товаров. Обновите страницу и повторите действие.'
+                    );
+                    return false;
+                }
                 var latest = this.resolveOzonPriceAccountChoices(
                     selectedItems,
-                    this.selected,
+                    review.imported_product_ids,
                 );
                 var freshChoice = latest.choices.find(function (choice) {
                     return choice.account_id === accountId;
@@ -3005,14 +3337,22 @@
                     return choice.account_id === accountId;
                 });
                 if (!freshChoice || !reviewedChoice ||
-                    !sameIds(freshChoice.listing_ids, reviewedChoice.listing_ids)) {
+                    !sameOrderedIds(freshChoice.listing_ids, reviewedChoice.listing_ids)) {
                     this.closeOzonPriceHandoff();
                     this.setOzonPriceHandoffError(
                         'Связанные карточки изменились после проверки. Обновите список и повторите действие.'
                     );
                     return false;
                 }
-                var returnScope = this.buildWorkspaceReturnScope();
+                if (this.priceWorkspaceDialogAvailable) {
+                    this.closeOzonPriceHandoff({restoreFocus: false});
+                    return this.openPriceWorkspaceDialog('ozon', review.imported_product_ids, {
+                        source: review.source,
+                        returnFocus: review.returnFocus,
+                        choice: freshChoice,
+                    });
+                }
+                var returnScope = review.returnScope;
                 var returnNonce = storePriceWorkspaceReturn(this, {
                     channel: 'ozon',
                     ids: freshChoice.listing_ids.slice(),
@@ -3156,6 +3496,13 @@
                         this.error = 'Для изменения цены выберите до 200 карточек WB и проверьте подключение кабинета.';
                         return;
                     }
+                    if (this.priceWorkspaceDialogAvailable) {
+                        this.openPriceWorkspaceDialog('wb', selectionIds, {
+                            source: 'bulk',
+                            returnFocus: returnFocus,
+                        });
+                        return;
+                    }
                     var returnScope = this.buildWorkspaceReturnScope();
                     var returnNonce = storePriceWorkspaceReturn(this, {
                         channel: 'wb',
@@ -3181,7 +3528,10 @@
                         );
                         return;
                     }
-                    this.openOzonPriceHandoff(chosen, selectionIds);
+                    this.openOzonPriceHandoff(chosen, selectionIds, {
+                        source: 'bulk',
+                        returnFocus: returnFocus,
+                    });
                     return;
                 }
                 var plan = plans[action.key];

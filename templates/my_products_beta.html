@@ -6,8 +6,8 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-catalog-layout-r62') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261122-unified-import-r60c') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-unified-catalog-prices-r63') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261123-inline-prices-r62a') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
     'wbConnected': wb_connected,
@@ -42,6 +42,10 @@
         'supplierImportPost': url_for('supplier_catalog_import'),
         'supplierImportResult': url_for('supplier_catalog_import_result'),
         'wbPriceChange': url_for('prices.prices_change'),
+        'wbPreview': url_for('prices.api_preview_changes'),
+        'wbSave': url_for('prices.create_batch'),
+        'ozonPreview': url_for('marketplace_commercial.preview_bulk_price_proposals'),
+        'ozonSave': url_for('marketplace_commercial.confirm_bulk_price_proposals'),
         'ozonCommercial': url_for('marketplace_commercial.index'),
         'ozonWorkspaceUpdateHandoff': url_for('marketplace_listings.workspace_update_handoff'),
         'ozonPriceProposals': url_for('marketplace_commercial.index', proposal_kind='price', status='pending_review', account_id=ozon_accounts[0].id if ozon_accounts|length == 1 else none),
@@ -427,9 +431,16 @@
             <!-- Связанные карточки и сохранённые наблюдения площадок -->
             <div class="mp-channel-column mp-channel-column--wb" data-workspace-column="wb">
                 <span class="mp-cell-label">Wildberries</span>
+                <button v-if="canOpenRowWbPrice(item)" type="button" class="mp-inline-price"
+                        data-row-price-action="wb" :data-product-id="item.id"
+                        :disabled="priceWorkspaceDialogOpen"
+                        :aria-label="'Изменить цену WB для ' + (item.title || item.vendor_code)"
+                        @click="openRowWbPrice(item, $event)">
+                    {{ item.wb.price == null ? 'Рассчитать цену' : $fmt.money(item.wb.price) }}
+                </button>
+                <strong v-else-if="item.wb && item.wb.price != null" class="mp-inline-price-value">{{ $fmt.money(item.wb.price) }}</strong>
                 <span v-if="item.wb" class="mp-chan mp-chan--wb" :title="wbTitle(item)">
                     <i class="mp-dot mp-dot--wb"></i><span>{{ item.import_status === 'imported_pending_sync' ? 'Ждёт артикул' : (item.wb.nm_id ? 'На площадке' : 'Есть связь') }}</span>
-                    <b v-if="item.wb.price !== null && item.wb.price !== undefined">{{ $fmt.money(item.wb.price) }}</b>
                 </span>
                 <span v-else class="mp-chan mp-chan--off">Не связана</span>
                 <details v-if="item.wb && (item.wb.views_30d !== null || item.wb.orders_30d !== null || item.wb.quality_score !== null)" class="mp-row-facts">
@@ -454,6 +465,11 @@
             <div class="mp-channel-column mp-channel-column--ozon" data-workspace-column="ozon">
                 <span class="mp-cell-label">Ozon</span>
                 <template v-if="ozonEnabled">
+                    <button v-if="canOpenRowOzonPrice(item)" type="button" class="mp-inline-price"
+                            data-row-price-action="ozon" :data-product-id="item.id"
+                            :disabled="priceWorkspaceDialogOpen"
+                            :aria-label="'Изменить цену Ozon для ' + (item.title || item.vendor_code)"
+                            @click="openRowOzonPrice(item, $event)">Проверить цену</button>
                     <span v-for="listing in (item.ozon ? item.ozon.listings : [])" :key="'l' + listing.id"
                           class="mp-chan mp-chan--ozon mp-chan--accounted"
                           :title="listing.account_label || (listing.account_id ? ('Магазин №' + listing.account_id) : 'Карточка Ozon')">
@@ -685,6 +701,16 @@
                     @click="continueOzonPriceHandoff">{{ ozonAccountChooserKind === 'workspace_update' ? 'Проверить карточки' : 'Открыть сравнение' }}</button>
         </div>
     </dialog>
+    <workspace-price-dialog v-if="priceWorkspaceDialogAvailable"
+                            data-price-workspace-dialog
+                            :open="priceWorkspaceDialogOpen"
+                            :scope="priceWorkspaceScope"
+                            :owner="workspaceOwner"
+                            :urls="priceWorkspaceDialogUrls"
+                            :review-href="priceWorkspaceReviewHref"
+                            @close="closePriceWorkspaceDialog"
+                            @saved="handlePriceWorkspaceSaved"
+                            @legacy="openLegacyPriceWorkspace"></workspace-price-dialog>
     </div>
 {% endraw %}
 </div>
@@ -692,6 +718,6 @@
 <script src="{{ url_for('static', filename='vendor/vue-3.5.46.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261122-ozon-update-return-r56') }}"></script>
-<script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261122-unified-import-r60c') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-wb-create-honest-result-r61b') }}"></script>
+<script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261123-inline-prices-r62a') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-inline-prices-r62a') }}"></script>
 {% endblock %}
