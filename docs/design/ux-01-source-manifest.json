@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-22T01:36:12.461159+00:00",
+  "generated_at": "2026-11-22T01:41:57.755167+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -4417,7 +4417,7 @@
     },
     {
       "path": "tests/test_my_products_supplier_refresh_handoff.py",
-      "sha256": "bf2c020b222f48b10fffec128590eef3c28e74f95b04a5c792fbfc14e7876ae4"
+      "sha256": "18c158834e2e62f1720ab57252e5fc2b77c66f159bee6a8eed39214885b71798"
     },
     {
       "path": "tests/test_orchestrator.py",
@@ -5168,5 +5168,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "af31ab9b5ffcec3c80ed4ecf1216ef3152f5cd8887c37f40b369c4b43ae2a77b"
+  "aggregate_sha256": "6da2213c6e512791fc59c1b1a3e3ef82044024706953ac4d028769ef5704656e"
 }
