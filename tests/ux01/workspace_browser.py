@@ -74,6 +74,7 @@ REPORT = {
     "layouts": [],
     "pages": [],
     "interactions": [],
+    "primary_products_navigation": [],
     "browser_api_reads": [],
     "browser_mutations": [],
     "legacy_action_checks": [],
@@ -1350,7 +1351,7 @@ def main() -> None:
                     assert extra_page.locator(
                         "#seller-workspace-toggle-products",
                     ).get_attribute("aria-expanded") == "false"
-                    REPORT["interactions"].append({
+                    REPORT["primary_products_navigation"].append({
                         "check": "primary_products_collapsed_enter_navigation",
                         "status": "passed",
                         "width": 1440,
@@ -1393,7 +1394,7 @@ def main() -> None:
                     assert extra_page.locator(
                         ".seller-workspace-primary-link",
                     ).get_attribute("aria-current") == "page"
-                    REPORT["interactions"].append({
+                    REPORT["primary_products_navigation"].append({
                         "check": "primary_products_mobile_menu_navigation",
                         "status": "passed",
                         "width": 390,
@@ -1434,7 +1435,7 @@ def main() -> None:
                     assert extra_page.locator(
                         ".seller-workspace-groups",
                     ).get_attribute("data-active-group") == "products"
-                    REPORT["interactions"].append({
+                    REPORT["primary_products_navigation"].append({
                         "check": "primary_products_link_and_secondary_wb_active_routes",
                         "status": "passed",
                         "primary_path": "/my-products/beta",
