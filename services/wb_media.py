@@ -48,6 +48,8 @@ _EXTRAPOLATION_STEP = 312
 _PERSIST_KEY = 'wb_basket_vol_map'
 _PROBE_TIMEOUT = 1.5
 _PROBE_SPREAD = (0, 1, -1, 2, -2, 3, -3, 4, -4)
+_MAX_WB_PHOTO_INDEX = 9999
+_MAX_OBSERVED_PHOTO_URL_LENGTH = 512
 
 _vol_cache = {}          # vol(int) -> basket(str), только УСПЕШНЫЕ пробы
 _persist_loaded = False
@@ -70,7 +72,12 @@ def _static_basket(vol: int):
 
 def _valid_observed_wb_photo_url(nm_id: int, value: str) -> str:
     """Return an already-stored exact WB CDN photo URL when it binds to nmID."""
-    if not isinstance(value, str) or not value or value != value.strip():
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > _MAX_OBSERVED_PHOTO_URL_LENGTH
+        or value != value.strip()
+    ):
         return ''
     try:
         parsed = urlsplit(value)
@@ -79,13 +86,14 @@ def _valid_observed_wb_photo_url(nm_id: int, value: str) -> str:
     host = parsed.hostname or ''
     if (
         parsed.scheme != 'https'
-        or not re.fullmatch(r'basket-\d{2,3}\.wbbasket\.ru', host)
+        or not re.fullmatch(r'basket-[0-9]{2,3}\.wbbasket\.ru', host)
         or parsed.netloc.lower() != host
         or parsed.query or parsed.fragment
     ):
         return ''
     match = re.fullmatch(
-        r'/vol(\d+)/part(\d+)/(\d+)/images/(?:big|tm|c\d{1,4}x\d{1,4})/(\d+)\.webp',
+        r'/vol([0-9]{1,20})/part([0-9]{1,20})/([0-9]{1,20})/'
+        r'images/(?:big|tm|c[0-9]{1,4}x[0-9]{1,4})/([0-9]{1,4})\.webp',
         parsed.path,
     )
     if not match:
@@ -96,9 +104,29 @@ def _valid_observed_wb_photo_url(nm_id: int, value: str) -> str:
         or vol != nm_id // 100000
         or part != nm_id // 1000
         or photo_index <= 0
+        or photo_index > _MAX_WB_PHOTO_INDEX
     ):
         return ''
     return value
+
+
+def parse_stored_photo_index(value: object) -> int | None:
+    """Return a bounded, positive WB photo slot from a persisted JSON value."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 0 < value <= _MAX_WB_PHOTO_INDEX else None
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > len(str(_MAX_WB_PHOTO_INDEX))
+        or not value.isascii()
+        or not value.isdecimal()
+    ):
+        return None
+    # The length bound above keeps conversion small and predictable.
+    photo_index = int(value, 10)
+    return photo_index if 0 < photo_index <= _MAX_WB_PHOTO_INDEX else None
 
 
 def wb_photo_url_if_known(
@@ -123,8 +151,9 @@ def wb_photo_url_if_known(
         isinstance(photo_index, bool)
         or not isinstance(photo_index, int)
         or photo_index <= 0
+        or photo_index > _MAX_WB_PHOTO_INDEX
         or not isinstance(size, str)
-        or not re.fullmatch(r'(?:big|tm|c\d{1,4}x\d{1,4})', size)
+        or not re.fullmatch(r'(?:big|tm|c[0-9]{1,4}x[0-9]{1,4})', size)
     ):
         return ''
 
@@ -137,7 +166,7 @@ def wb_photo_url_if_known(
         # read-only and only an in-memory mapping is safe on this path.
         with _cache_lock:
             basket = _vol_cache.get(vol)
-    if not isinstance(basket, str) or not re.fullmatch(r'\d{1,3}', basket):
+    if not isinstance(basket, str) or not re.fullmatch(r'[0-9]{1,3}', basket):
         return ''
     basket_number = int(basket)
     if basket_number <= 0 or basket_number > 999:

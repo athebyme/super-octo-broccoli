@@ -39,6 +39,25 @@ class TestStaticRanges(unittest.TestCase):
 
 
 class TestReadOnlyKnownPhotoLookup(unittest.TestCase):
+    def test_stored_photo_index_parser_is_ascii_and_bounded(self):
+        from services.wb_media import parse_stored_photo_index
+
+        self.assertEqual(parse_stored_photo_index(1), 1)
+        self.assertEqual(parse_stored_photo_index('2'), 2)
+        self.assertEqual(parse_stored_photo_index('0001'), 1)
+        self.assertEqual(parse_stored_photo_index(9999), 9999)
+        for value in (
+            True,
+            0,
+            -1,
+            10000,
+            '10000',
+            '9' * 10000,
+            '２',
+        ):
+            with self.subTest(value_type=type(value).__name__, length=len(str(value))):
+                self.assertIsNone(parse_stored_photo_index(value))
+
     def test_unknown_numeric_volume_returns_empty_without_network_or_persistence(self):
         from services import wb_media
         with (
@@ -52,6 +71,44 @@ class TestReadOnlyKnownPhotoLookup(unittest.TestCase):
                 wb_media.wb_photo_url_if_known(905908816, 2, 'tm'),
                 '',
             )
+        mock_load.assert_not_called()
+        mock_probe.assert_not_called()
+        mock_persist.assert_not_called()
+        mock_head.assert_not_called()
+
+    def test_malformed_long_or_non_ascii_observed_urls_are_ignored_read_only(self):
+        from services import wb_media
+
+        too_long_component = (
+            'https://basket-39.wbbasket.ru/vol' + ('9' * 21)
+            + '/part905908/905908816/images/big/2.webp'
+        )
+        non_ascii_component = (
+            'https://basket-39.wbbasket.ru/vol９０５９/part905908/'
+            '905908816/images/big/2.webp'
+        )
+        too_many_photo_digits = (
+            'https://basket-39.wbbasket.ru/vol9059/part905908/'
+            '905908816/images/big/10000.webp'
+        )
+        giant_url = 'https://basket-39.wbbasket.ru/' + ('x' * 1000)
+        with (
+            patch.object(wb_media, '_load_persisted') as mock_load,
+            patch.object(wb_media, '_probe_vol') as mock_probe,
+            patch.object(wb_media, '_persist') as mock_persist,
+            patch.object(wb_media.requests, 'head') as mock_head,
+        ):
+            for value in (
+                too_long_component,
+                non_ascii_component,
+                too_many_photo_digits,
+                giant_url,
+            ):
+                with self.subTest(url_length=len(value)):
+                    self.assertEqual(
+                        wb_media.wb_photo_url_if_known(905908816, observed_url=value),
+                        '',
+                    )
         mock_load.assert_not_called()
         mock_probe.assert_not_called()
         mock_persist.assert_not_called()

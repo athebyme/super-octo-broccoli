@@ -3441,6 +3441,8 @@ def products_bulk_edit():
         # and must not trigger another catalog/provider read.
         products_by_id = {int(product.id): product for product in products}
         photo_url_builder = wb_photo_url_if_known
+        from services.wb_media import parse_stored_photo_index
+
         review_products = []
         review_products_by_id = {}
         for change in preview.get('diff') or []:
@@ -3477,14 +3479,12 @@ def products_bulk_edit():
                         stored_photos = []
                     if isinstance(stored_photos, list):
                         for photo in stored_photos:
-                            if isinstance(photo, int) and not isinstance(photo, bool) and photo > 0:
+                            photo_index = parse_stored_photo_index(photo)
+                            if photo_index is not None:
                                 try:
-                                    photo_url = photo_url_builder(product.nm_id, photo, 'tm')
-                                except Exception:
-                                    photo_url = ''
-                            elif isinstance(photo, str) and photo.isdecimal() and int(photo) > 0:
-                                try:
-                                    photo_url = photo_url_builder(product.nm_id, int(photo), 'tm')
+                                    photo_url = photo_url_builder(
+                                        product.nm_id, photo_index, 'tm',
+                                    )
                                 except Exception:
                                     photo_url = ''
                             elif isinstance(photo, str):
