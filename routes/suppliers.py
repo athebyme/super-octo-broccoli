@@ -7,7 +7,7 @@ import json
 import re
 import logging
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
@@ -33,6 +33,15 @@ from services.supplier_service import (
 logger = logging.getLogger(__name__)
 
 MAX_BULK_PRODUCTS = 200
+WB_BULK_CREATE_REQUEST_KEY_RE = re.compile(r'^[0-9a-f]{32}$')
+WB_BULK_CREATE_REQUEST_KEY_HEADER = 'X-WB-Create-Key'
+WB_BULK_CREATE_PROGRESS_KEY = '_wb_bulk_create_v1'
+WB_BULK_CREATE_STALE_AFTER = timedelta(minutes=30)
+WB_BULK_CREATE_ACTIVE_QUERY_LIMIT = 200
+WB_BULK_CREATE_MAX_BODY_BYTES = 65536
+WB_BULK_CREATE_TERMINAL_STATUSES = frozenset({
+    'completed', 'failed', 'cancelled',
+})
 SUPPLIER_IMPORT_BATCH_TOKEN_SALT = 'supplier-import-workspace-v1'
 SUPPLIER_IMPORT_BATCH_MAX_AGE_SECONDS = 60 * 60
 SUPPLIER_IMPORT_BATCH_MAX_TOKEN_BYTES = 8 * 1024
@@ -238,6 +247,161 @@ def _bulk_product_ids(raw_ids, limit=MAX_BULK_PRODUCTS):
         normalized.append(value)
         seen.add(value)
     return normalized
+
+
+def _wb_bulk_create_request_identity(*, user_id, seller_id, request_key):
+    """Bind a WB create key to its authenticated owner and seller."""
+    if (
+        not isinstance(request_key, str)
+        or WB_BULK_CREATE_REQUEST_KEY_RE.fullmatch(request_key) is None
+        or type(user_id) is not int or user_id <= 0
+        or type(seller_id) is not int or seller_id <= 0
+    ):
+        raise ValueError('Ключ запуска недействителен')
+    scoped = f'wb-bulk-create-v1|{user_id}|{seller_id}|{request_key}'.encode('ascii')
+    # BackgroundJob.job_uid is capped at 64 characters.  No raw request key
+    # is persisted in the job, URL, or response.
+    return 'bulk_wb_' + hashlib.sha256(scoped).hexdigest()[:56]
+
+
+def _wb_bulk_create_json_body():
+    if not request.is_json:
+        raise ValueError('Ожидается JSON-запрос')
+    if (
+        request.content_length is not None
+        and request.content_length > WB_BULK_CREATE_MAX_BODY_BYTES
+    ):
+        raise ValueError('Запрос превышает допустимый размер')
+    raw = request.stream.read(WB_BULK_CREATE_MAX_BODY_BYTES + 1)
+    if len(raw) > WB_BULK_CREATE_MAX_BODY_BYTES:
+        raise ValueError('Запрос превышает допустимый размер')
+
+    def unique_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('JSON содержит повторяющееся поле')
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(raw, object_pairs_hook=unique_pairs)
+    except (ValueError, UnicodeError, TypeError):
+        raise ValueError('Некорректный JSON запроса') from None
+    if not isinstance(value, dict):
+        raise ValueError('JSON запроса должен быть объектом')
+    return value
+
+
+def _wb_bulk_create_state(progress):
+    if not isinstance(progress, dict):
+        return None
+    state = progress.get(WB_BULK_CREATE_PROGRESS_KEY)
+    if (
+        not isinstance(state, dict)
+        or type(state.get('version')) is not int
+        or state.get('version') != 1
+        or type(state.get('keyed')) is not bool
+        or type(state.get('worker_started')) is not bool
+        or type(state.get('worker_exited')) is not bool
+        or type(state.get('cancel_requested')) is not bool
+    ):
+        return None
+    return state
+
+
+def _wb_bulk_create_progress(progress, state):
+    result = dict(progress) if isinstance(progress, dict) else {}
+    result[WB_BULK_CREATE_PROGRESS_KEY] = dict(state)
+    return result
+
+
+def _wb_bulk_create_document(job, *, expected_product_ids=None, keyed=None,
+                             replayed=False):
+    """Return a typed exact-scope receipt, or None for corrupt receipt state."""
+    if job is None or job.job_type != 'bulk_wb_import':
+        return None
+    progress = job.get_progress()
+    state = _wb_bulk_create_state(progress)
+    if state is None or (keyed is not None and state['keyed'] is not keyed):
+        return None
+    try:
+        product_ids = _bulk_product_ids(progress.get('product_ids'))
+    except (AttributeError, ValueError):
+        return None
+    if (
+        type(job.total) is not int
+        or job.total != len(product_ids)
+        or (expected_product_ids is not None
+            and product_ids != expected_product_ids)
+    ):
+        return None
+
+    raw_status = job.status
+    worker_exited = state['worker_exited']
+    result_counts = None
+    if worker_exited and raw_status in WB_BULK_CREATE_TERMINAL_STATUSES:
+        status = raw_status
+        counts = (job.processed, job.succeeded, job.failed_count)
+        if status != 'cancelled' and (
+            all(type(value) is int and value >= 0 for value in counts)
+            and counts[0] <= len(product_ids)
+            and counts[1] <= counts[0]
+            and counts[2] <= counts[0]
+            and counts[1] + counts[2] <= counts[0]
+        ):
+            result_counts = {
+                'processed': counts[0],
+                'succeeded': counts[1],
+                'failed': counts[2],
+            }
+    else:
+        worker_exited = False
+        status = raw_status if raw_status in ('pending', 'running') else 'unknown'
+        updated_at = job.updated_at
+        stale = (
+            not isinstance(updated_at, datetime)
+            or updated_at < datetime.utcnow() - WB_BULK_CREATE_STALE_AFTER
+        )
+        if state['cancel_requested'] or stale:
+            status = 'unknown'
+
+    return {
+        'success': True,
+        'job_uid': job.job_uid,
+        'total': len(product_ids),
+        'product_ids': product_ids,
+        'status': status,
+        'replayed': bool(replayed),
+        'worker_exited': worker_exited,
+        'cancel_requested': state['cancel_requested'],
+        'result_counts': result_counts,
+    }
+
+
+def _wb_bulk_create_json(payload, status=200):
+    response = jsonify(payload)
+    response.status_code = status
+    response.headers['Cache-Control'] = 'private, no-store'
+    response.headers['Pragma'] = 'no-cache'
+    return response
+
+
+def _wb_bulk_create_error(code, message, status, *, accepted=None):
+    payload = {'success': False, 'code': code, 'error': message}
+    if accepted is not None:
+        payload['accepted'] = accepted
+    return _wb_bulk_create_json(payload, status)
+
+
+def _wb_bulk_create_scope_overlaps(existing_progress, selected_ids):
+    if not isinstance(existing_progress, dict):
+        return True
+    try:
+        existing_ids = _bulk_product_ids(existing_progress.get('product_ids'))
+    except (AttributeError, ValueError):
+        return True
+    return not set(existing_ids).isdisjoint(selected_ids)
 
 
 def _form_bulk_product_ids(raw_ids, limit=MAX_BULK_PRODUCTS):
@@ -5055,47 +5219,235 @@ def register_supplier_routes(app):
         import threading
 
         seller = current_user.seller
-
-        if not seller.has_valid_api_key():
-            return jsonify({'success': False, 'error': 'API ключ WB не настроен'}), 400
-
-        data = request.get_json(silent=True) or {}
+        seller_id = getattr(seller, 'id', None)
+        user_id = getattr(current_user, 'id', None)
+        try:
+            data = _wb_bulk_create_json_body()
+        except ValueError as exc:
+            # Keep the legacy no-key validation response shape.
+            return jsonify({'success': False, 'error': str(exc)}), 400
+        keyed = 'request_key' in data
         try:
             product_ids = _bulk_product_ids(data.get('product_ids'))
         except ValueError as exc:
-            return jsonify({'success': False, 'error': str(exc)}), 400
+            if not keyed:
+                return jsonify({'success': False, 'error': str(exc)}), 400
+            return _wb_bulk_create_error(
+                'wb_create_invalid_scope', str(exc), 400, accepted=False,
+            )
 
-        # Создаём фоновую задачу
-        job_uid = f"bulk_wb_{uuid.uuid4().hex[:12]}"
-        job = BackgroundJob(
-            job_uid=job_uid,
-            seller_id=seller.id,
-            job_type='bulk_wb_import',
-            status='pending',
-            total=len(product_ids),
-            processed=0,
-            succeeded=0,
-            failed_count=0,
-        )
-        job.set_progress({'product_ids': product_ids, 'items': []})
-        db.session.add(job)
-        db.session.commit()
+        if keyed:
+            if request.args or set(data) != {'product_ids', 'request_key'}:
+                return _wb_bulk_create_error(
+                    'wb_create_invalid_request',
+                    'Для запуска передайте только выбранные товары и ключ.',
+                    400, accepted=False,
+                )
+            try:
+                job_uid = _wb_bulk_create_request_identity(
+                    user_id=user_id, seller_id=seller_id,
+                    request_key=data.get('request_key'),
+                )
+            except ValueError as exc:
+                return _wb_bulk_create_error(
+                    'wb_create_request_key_invalid', str(exc), 400,
+                    accepted=False,
+                )
+        else:
+            # Preserve the established no-key POST contract and random UID.
+            job_uid = f"bulk_wb_{uuid.uuid4().hex[:12]}"
+
+        # Authentication may already have opened a read transaction.  Acquire
+        # SQLite's writer lock before rechecking owner, exact IDs, duplicate
+        # keys, and any intersecting active WB create; no provider call occurs
+        # until this transaction has committed.
+        reservation_commit_attempted = False
+        try:
+            SupplierService._begin_supplier_import_transaction()
+            owned_seller = Seller.query.filter_by(
+                id=seller_id, user_id=user_id,
+            ).first()
+            if owned_seller is None:
+                db.session.rollback()
+                return _wb_bulk_create_error(
+                    'wb_create_owner_scope_changed',
+                    'Профиль продавца больше не доступен.', 403,
+                    accepted=False,
+                )
+
+            if keyed:
+                existing = BackgroundJob.query.filter_by(job_uid=job_uid).first()
+                if existing is not None:
+                    if (
+                        existing.seller_id != seller_id
+                        or existing.job_type != 'bulk_wb_import'
+                    ):
+                        db.session.rollback()
+                        return _wb_bulk_create_error(
+                            'wb_create_request_key_conflict',
+                            'Этот ключ уже связан с другим запуском.', 409,
+                        )
+                    receipt = _wb_bulk_create_document(
+                        existing, expected_product_ids=product_ids,
+                        keyed=True, replayed=True,
+                    )
+                    db.session.rollback()
+                    if receipt is not None:
+                        return _wb_bulk_create_json(receipt, 200)
+                    return _wb_bulk_create_error(
+                        'wb_create_request_key_conflict',
+                        'Этот ключ уже связан с другим или недоступным запуском.',
+                        409,
+                    )
+
+            if not owned_seller.has_valid_api_key():
+                db.session.rollback()
+                if keyed:
+                    return _wb_bulk_create_error(
+                        'wb_create_wb_account_unavailable',
+                        'API ключ WB не настроен.', 400, accepted=False,
+                    )
+                return jsonify({
+                    'success': False, 'error': 'API ключ WB не настроен',
+                }), 400
+
+            if keyed:
+                owned_ids = {
+                    row[0] for row in db.session.query(ImportedProduct.id).filter(
+                        ImportedProduct.seller_id == seller_id,
+                        ImportedProduct.id.in_(product_ids),
+                    ).all()
+                }
+                if owned_ids != set(product_ids):
+                    db.session.rollback()
+                    return _wb_bulk_create_error(
+                        'wb_create_scope_mismatch',
+                        'Часть выбранных товаров больше не принадлежит этому продавцу.',
+                        400, accepted=False,
+                    )
+
+            active_jobs = (BackgroundJob.query.filter(
+                BackgroundJob.seller_id == seller_id,
+                BackgroundJob.job_type == 'bulk_wb_import',
+                BackgroundJob.status.in_(('pending', 'running')),
+            ).order_by(BackgroundJob.updated_at.desc(), BackgroundJob.id.desc())
+              .limit(WB_BULK_CREATE_ACTIVE_QUERY_LIMIT + 1).all())
+            managed_cancelled_jobs = (BackgroundJob.query.filter(
+                BackgroundJob.seller_id == seller_id,
+                BackgroundJob.job_type == 'bulk_wb_import',
+                BackgroundJob.status == 'cancelled',
+                BackgroundJob.progress_data.contains(
+                    f'"{WB_BULK_CREATE_PROGRESS_KEY}"'
+                ),
+                BackgroundJob.progress_data.contains('"worker_exited": false'),
+            ).order_by(BackgroundJob.updated_at.desc(), BackgroundJob.id.desc())
+              .limit(WB_BULK_CREATE_ACTIVE_QUERY_LIMIT + 1).all())
+            candidates_by_id = {
+                job.id: job for job in (
+                    active_jobs + managed_cancelled_jobs
+                )
+            }
+            candidates = list(candidates_by_id.values())
+            if any(
+                len(rows) > WB_BULK_CREATE_ACTIVE_QUERY_LIMIT
+                for rows in (active_jobs, managed_cancelled_jobs)
+            ):
+                db.session.rollback()
+                return _wb_bulk_create_error(
+                    'wb_create_overlap',
+                    'Слишком много незавершённых или неизвестных запусков WB. Сначала проверьте их результат.',
+                    409, accepted=False,
+                )
+
+            overlapping = []
+            for active_job in candidates:
+                progress = active_job.get_progress()
+                state = _wb_bulk_create_state(progress)
+                possibly_running = active_job.status in ('pending', 'running')
+                managed_cancelled = (
+                    active_job.status == 'cancelled'
+                    and WB_BULK_CREATE_PROGRESS_KEY in progress
+                    and (state is None or not state['worker_exited'])
+                )
+                if not possibly_running and not managed_cancelled:
+                    continue
+                if _wb_bulk_create_scope_overlaps(progress, product_ids):
+                    overlapping.append(active_job)
+                    break
+            if overlapping:
+                db.session.rollback()
+                return _wb_bulk_create_error(
+                    'wb_create_overlap',
+                    'Выбранные товары уже есть в незавершённом запуске WB. Проверьте его перед повтором.',
+                    409, accepted=False,
+                )
+
+            job = BackgroundJob(
+                job_uid=job_uid,
+                seller_id=seller_id,
+                job_type='bulk_wb_import',
+                status='pending',
+                total=len(product_ids),
+                processed=0,
+                succeeded=0,
+                failed_count=0,
+            )
+            initial_progress = {
+                'product_ids': product_ids,
+                'items': [],
+                WB_BULK_CREATE_PROGRESS_KEY: {
+                    'version': 1,
+                    'keyed': keyed,
+                    'worker_started': False,
+                    'worker_exited': False,
+                    'cancel_requested': False,
+                },
+            }
+            job.set_progress(initial_progress)
+            db.session.add(job)
+            reservation_commit_attempted = True
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception(
+                'WB bulk create reservation failed for seller %s', seller_id,
+            )
+            return _wb_bulk_create_error(
+                'wb_create_reservation_unknown',
+                'Не удалось подтвердить запуск. Проверьте его перед повтором.',
+                503,
+                accepted=None if reservation_commit_attempted else False,
+            )
 
         # Запускаем обработку в фоновом потоке
-        from seller_platform import app as flask_app
-
         def run_bulk_import(app, job_uid, seller_id, product_ids):
             """Батчевый импорт карточек WB — 1 API-вызов на создание, 1 на цены."""
             with app.app_context():
                 validated_count = 0
                 items_progress = []
+                cancelled = [False]
+                terminal_status = [None]
                 try:
                     from services.wb_product_importer import WBProductImporter
                     from services.upload_readiness_validator import validate_product_upload_readiness
 
+                    SupplierService._begin_supplier_import_transaction()
                     job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
                     if not job:
                         return
+                    initial_progress = job.get_progress()
+                    initial_state = _wb_bulk_create_state(initial_progress)
+                    if job.status == 'cancelled':
+                        # Cancellation may win the race before this thread
+                        # starts.  Never resurrect that accepted job as running.
+                        cancelled[0] = True
+                        terminal_status[0] = 'cancelled'
+                        return
+                    if initial_state is not None:
+                        initial_state['worker_started'] = True
+                        job.set_progress(_wb_bulk_create_progress(
+                            initial_progress, initial_state,
+                        ))
                     job.status = 'running'
                     db.session.commit()
 
@@ -5131,8 +5483,6 @@ def register_supplier_routes(app):
                     ordered_products = [id_to_product[pid] for pid in product_ids if pid in id_to_product]
 
                     # Callback для обновления прогресса job
-                    cancelled = [False]
-
                     import time as _progress_time
                     _last_progress_update = [0]
 
@@ -5163,11 +5513,18 @@ def register_supplier_routes(app):
                             j.processed = processed
                             j.succeeded = succeeded
                             j.failed_count = failed
-                            j.set_progress({
+                            progress_update = {
                                 'product_ids': product_ids,
                                 'phase': phase,
                                 'items': batch_items,
-                            })
+                            }
+                            current_state = _wb_bulk_create_state(j.get_progress())
+                            if current_state is not None:
+                                current_state['worker_started'] = True
+                                progress_update = _wb_bulk_create_progress(
+                                    progress_update, current_state,
+                                )
+                            j.set_progress(progress_update)
                             db.session.commit()
                         except Exception as cb_err:
                             if '__cancelled__' in str(cb_err):
@@ -5185,11 +5542,15 @@ def register_supplier_routes(app):
                     except Exception as batch_err:
                         if '__cancelled__' in str(batch_err):
                             # Отмена пользователем — job уже cancelled
+                            cancelled[0] = True
                             batch_results = []
                         else:
                             raise
 
                     items_progress = batch_results
+                    terminal_status[0] = (
+                        'cancelled' if cancelled[0] else 'completed'
+                    )
 
                     # Завершение
                     try:
@@ -5198,8 +5559,11 @@ def register_supplier_routes(app):
                         db.session.rollback()
                         job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
 
-                    if job and job.status != 'cancelled':
-                        job.status = 'completed'
+                    if job:
+                        current_state = _wb_bulk_create_state(job.get_progress())
+                        if current_state is None:
+                            if job.status != 'cancelled':
+                                job.status = 'completed'
 
                     succeeded = sum(1 for it in items_progress if it.get('status') == 'success')
                     failed_cnt = sum(1 for it in items_progress if it.get('status') in ('failed', 'skipped'))
@@ -5221,7 +5585,7 @@ def register_supplier_routes(app):
                         db.session.commit()
 
                     # Уведомление
-                    if job and job.status != 'cancelled':
+                    if job and terminal_status[0] != 'cancelled':
                         if succeeded > 0:
                             cat = 'success' if failed_cnt == 0 else 'warning'
                             n = Notification(
@@ -5245,9 +5609,17 @@ def register_supplier_routes(app):
                     db.session.rollback()
                     try:
                         job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
+                        state = _wb_bulk_create_state(
+                            job.get_progress() if job else None
+                        )
                         if job and job.status not in ('completed', 'cancelled'):
-                            job.status = 'failed'
-                            job.error_message = str(e)[:500]
+                            if state is None:
+                                terminal_status[0] = 'failed'
+                                job.error_message = str(e)[:500]
+                                job.status = 'failed'
+                            elif terminal_status[0] not in WB_BULK_CREATE_TERMINAL_STATUSES:
+                                terminal_status[0] = 'failed'
+                                job.error_message = str(e)[:500]
                             db.session.commit()
                         n = Notification(
                             seller_id=seller_id, category='error',
@@ -5261,7 +5633,39 @@ def register_supplier_routes(app):
                 finally:
                     try:
                         job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
-                        if job and job.status in ('running', 'pending'):
+                        state = _wb_bulk_create_state(
+                            job.get_progress() if job else None
+                        )
+                        if job and state is not None:
+                            terminal = terminal_status[0]
+                            if terminal not in WB_BULK_CREATE_TERMINAL_STATUSES:
+                                if job.status in WB_BULK_CREATE_TERMINAL_STATUSES:
+                                    terminal = job.status
+                                else:
+                                    terminal = 'failed'
+                            state['worker_exited'] = True
+                            state['worker_exited_at'] = datetime.utcnow().isoformat()
+                            job.status = terminal
+                            if terminal == 'failed' and not job.error_message:
+                                job.error_message = 'Процесс завершился без подтверждённого результата'
+                            current_progress = job.get_progress()
+                            job.set_progress(_wb_bulk_create_progress(
+                                current_progress, state,
+                            ))
+                            if not job.get_result():
+                                job.set_result({
+                                    'imported': job.succeeded or 0,
+                                    'failed': job.failed_count or 0,
+                                    'total': job.total or 0,
+                                    'auto_validated': validated_count,
+                                    'errors': [
+                                        f"{it.get('title', '')}: {it.get('error', '')}"
+                                        for it in items_progress
+                                        if it.get('status') != 'success' and it.get('error')
+                                    ],
+                                })
+                            db.session.commit()
+                        elif job and job.status in ('running', 'pending'):
                             job.status = 'failed'
                             job.error_message = (job.error_message or 'Процесс прерван неожиданно')[:500]
                             job.set_result({
@@ -5279,14 +5683,116 @@ def register_supplier_routes(app):
                     except Exception:
                         db.session.rollback()
 
-        t = threading.Thread(
-            target=run_bulk_import,
-            args=(flask_app, job_uid, seller.id, product_ids),
-            daemon=True,
-        )
-        t.start()
+        t = None
+        try:
+            from seller_platform import app as flask_app
+            t = threading.Thread(
+                target=run_bulk_import,
+                args=(flask_app, job_uid, seller_id, product_ids),
+                daemon=True,
+            )
+            t.start()
+        except Exception:
+            # The reservation is already durable, so a start exception never
+            # becomes an accepted:false response.  Only mark worker exit when
+            # no native thread was started; otherwise retain the live guard.
+            current_app.logger.exception(
+                'WB bulk worker start failed for seller %s', seller_id,
+            )
+            db.session.rollback()
+            try:
+                job = BackgroundJob.query.filter_by(
+                    job_uid=job_uid, seller_id=seller_id,
+                    job_type='bulk_wb_import',
+                ).first()
+                state = _wb_bulk_create_state(job.get_progress() if job else None)
+                thread_started = (
+                    t is not None and getattr(t, 'ident', None) is not None
+                )
+                if job and not thread_started:
+                    job.status = 'failed'
+                    job.error_message = 'Не удалось запустить фоновую задачу'
+                    if state is not None:
+                        state['worker_exited'] = True
+                        state['worker_exited_at'] = datetime.utcnow().isoformat()
+                        job.set_progress(_wb_bulk_create_progress(
+                            job.get_progress(), state,
+                        ))
+                    db.session.commit()
+            except Exception:
+                db.session.rollback()
 
-        return jsonify({'success': True, 'job_uid': job_uid})
+        if not keyed:
+            return jsonify({'success': True, 'job_uid': job_uid})
+
+        accepted_job = BackgroundJob.query.filter_by(
+            job_uid=job_uid, seller_id=seller_id,
+            job_type='bulk_wb_import',
+        ).first()
+        document = _wb_bulk_create_document(
+            accepted_job, expected_product_ids=product_ids,
+            keyed=True, replayed=False,
+        )
+        if document is None:
+            # A committed row exists, but its current typed receipt cannot be
+            # confirmed.  Keep the request key live for a read-only recovery.
+            return _wb_bulk_create_error(
+                'wb_create_receipt_unavailable',
+                'Запуск сохранён, но итог пока нельзя подтвердить. Проверьте его по ключу.',
+                503,
+            )
+        return _wb_bulk_create_json(document, 202)
+
+    @app.route('/my-products/push-to-wb-bulk/result', methods=['GET'])
+    @login_required
+    @seller_required
+    def seller_push_to_wb_bulk_result():
+        """Read the committed exact-scope WB create job for one owner key."""
+        seller_id = getattr(current_user.seller, 'id', None)
+        user_id = getattr(current_user, 'id', None)
+        header_values = request.headers.getlist(WB_BULK_CREATE_REQUEST_KEY_HEADER)
+        if request.args or len(header_values) != 1:
+            return _wb_bulk_create_error(
+                'wb_create_request_key_invalid',
+                'Передайте ключ запуска только в заголовке запроса.', 400,
+            )
+        try:
+            job_uid = _wb_bulk_create_request_identity(
+                user_id=user_id, seller_id=seller_id,
+                request_key=header_values[0],
+            )
+        except ValueError as exc:
+            return _wb_bulk_create_error(
+                'wb_create_request_key_invalid', str(exc), 400,
+            )
+
+        if Seller.query.filter_by(id=seller_id, user_id=user_id).first() is None:
+            return _wb_bulk_create_error(
+                'wb_create_owner_scope_changed',
+                'Профиль продавца больше не доступен.', 403,
+            )
+        job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
+        if job is None:
+            return _wb_bulk_create_error(
+                'wb_create_receipt_not_found',
+                'Запуск с таким ключом не найден.', 404,
+            )
+        if job.seller_id != seller_id or job.job_type != 'bulk_wb_import':
+            return _wb_bulk_create_error(
+                'wb_create_receipt_unavailable',
+                'Сохранённый запуск найден, но его точный состав недоступен.',
+                409,
+            )
+        document = _wb_bulk_create_document(
+            job, keyed=True, replayed=True,
+        )
+        if document is None:
+            return _wb_bulk_create_error(
+                'wb_create_receipt_unavailable',
+                'Сохранённый запуск найден, но его точный состав недоступен.',
+                409,
+            )
+        return _wb_bulk_create_json(document, 200)
 
     # -------------------------------------------------------------------
     # Cancel bulk WB import — отмена массового импорта
@@ -5297,15 +5803,48 @@ def register_supplier_routes(app):
     def cancel_bulk_job(job_uid):
         """Отмена фоновой задачи массового импорта."""
         seller = current_user.seller
+        seller_id = getattr(seller, 'id', None)
         job = BackgroundJob.query.filter_by(
-            job_uid=job_uid, seller_id=seller.id
+            job_uid=job_uid, seller_id=seller_id
         ).first_or_404()
+        if job.job_type == 'bulk_wb_import':
+            # Serialize only WB create cancellation with worker start/finality.
+            SupplierService._begin_supplier_import_transaction()
+            job = BackgroundJob.query.filter_by(
+                job_uid=job_uid, seller_id=seller_id
+            ).first_or_404()
+
+        state = _wb_bulk_create_state(job.get_progress())
+        if (
+            job.job_type == 'bulk_wb_import'
+            and state is not None
+            and state['cancel_requested']
+            and not state['worker_exited']
+        ):
+            db.session.rollback()
+            return jsonify({
+                'success': True,
+                'message': 'Отмена уже запрошена',
+                'worker_exited': False,
+            })
 
         if job.status in ('pending', 'running'):
             job.status = 'cancelled'
             job.error_message = 'Отменено пользователем'
+            if job.job_type == 'bulk_wb_import' and state is not None:
+                state['cancel_requested'] = True
+                job.set_progress(_wb_bulk_create_progress(
+                    job.get_progress(), state,
+                ))
             db.session.commit()
-            return jsonify({'success': True, 'message': 'Задача отменена'})
+            response = {'success': True, 'message': 'Задача отменена'}
+            if job.job_type == 'bulk_wb_import' and state is not None:
+                response.update({
+                    'status': 'unknown',
+                    'worker_exited': False,
+                    'cancel_requested': True,
+                })
+            return jsonify(response)
         else:
             return jsonify({'success': False, 'error': f'Задача уже в статусе: {job.status}'}), 400
 

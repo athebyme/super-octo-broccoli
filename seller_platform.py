@@ -7629,6 +7629,54 @@ def api_notifications_clear():
 
 # ============= API: Фоновые задачи =============
 
+WB_BULK_CREATE_PROGRESS_KEY = '_wb_bulk_create_v1'
+
+
+def _wb_bulk_create_managed_state(job):
+    """Return the durable state marker used by the keyed WB create route."""
+    if getattr(job, 'job_type', None) != 'bulk_wb_import':
+        return None
+    try:
+        progress = job.get_progress()
+    except Exception:
+        return None
+    state = progress.get(WB_BULK_CREATE_PROGRESS_KEY) if isinstance(progress, dict) else None
+    if (
+        not isinstance(state, dict)
+        or type(state.get('version')) is not int or state.get('version') != 1
+        or type(state.get('keyed')) is not bool
+        or type(state.get('worker_started')) is not bool
+        or type(state.get('worker_exited')) is not bool
+        or type(state.get('cancel_requested')) is not bool
+    ):
+        return None
+    return state
+
+
+def _wb_bulk_create_is_stale(job, threshold):
+    return not job.updated_at or job.updated_at < threshold
+
+
+def _wb_bulk_create_public_job(job):
+    """Normalize only managed WB jobs; never mistake stale/cancelled status for exit."""
+    document = job.to_dict()
+    state = _wb_bulk_create_managed_state(job)
+    if state is None:
+        return document
+    from datetime import timedelta
+    terminal = job.status in {'completed', 'failed', 'cancelled'}
+    worker_exited = state['worker_exited'] and terminal
+    stale = _wb_bulk_create_is_stale(
+        job, datetime.utcnow() - timedelta(minutes=30),
+    )
+    if not worker_exited and (
+        state['cancel_requested'] or stale or job.status not in {'pending', 'running'}
+    ):
+        document['status'] = 'unknown'
+    document['worker_exited'] = worker_exited
+    document['cancel_requested'] = state['cancel_requested']
+    return document
+
 @app.route('/api/jobs/<job_uid>')
 @login_required
 def api_job_status(job_uid):
@@ -7641,8 +7689,10 @@ def api_job_status(job_uid):
         BackgroundJob.job_type != BackgroundJob.SUPPLIER_IMPORT_RECEIPT_TYPE,
     ).first_or_404()
 
-    # Автоматическая детекция зависших задач: если 'running' более 30 минут — failed
-    if job.job_type not in {'wb_warehouse_stocks', 'ozon_account_sync', 'ozon_quality_recompute', 'ozon_bulk_upload', 'ozon_draft_completion'} and job.status in ('running', 'pending') and job.updated_at:
+    managed_wb_state = _wb_bulk_create_managed_state(job)
+    # Legacy jobs retain stale detection.  A managed WB create is different:
+    # the row is its overlap reservation until the worker commits exit proof.
+    if managed_wb_state is None and job.job_type not in {'wb_warehouse_stocks', 'ozon_account_sync', 'ozon_quality_recompute', 'ozon_bulk_upload', 'ozon_draft_completion'} and job.status in ('running', 'pending') and job.updated_at:
         from datetime import datetime, timedelta
         stale_threshold = datetime.utcnow() - timedelta(minutes=30)
         if job.updated_at < stale_threshold:
@@ -7653,7 +7703,7 @@ def api_job_status(job_uid):
             except Exception:
                 db.session.rollback()
 
-    return jsonify(job.to_dict())
+    return jsonify(_wb_bulk_create_public_job(job))
 
 
 @app.route('/api/jobs/active')
@@ -7673,7 +7723,8 @@ def api_jobs_active():
     stale_threshold = datetime.utcnow() - timedelta(minutes=30)
     active_jobs = []
     for j in jobs:
-        if j.job_type not in {'wb_warehouse_stocks', 'ozon_account_sync', 'ozon_quality_recompute', 'ozon_bulk_upload', 'ozon_draft_completion'} and j.updated_at and j.updated_at < stale_threshold:
+        managed_wb_state = _wb_bulk_create_managed_state(j)
+        if managed_wb_state is None and j.job_type not in {'wb_warehouse_stocks', 'ozon_account_sync', 'ozon_quality_recompute', 'ozon_bulk_upload', 'ozon_draft_completion'} and j.updated_at and j.updated_at < stale_threshold:
             j.status = 'failed'
             j.error_message = 'Задача зависла (нет прогресса более 30 минут)'
         else:
@@ -7683,7 +7734,7 @@ def api_jobs_active():
     except Exception:
         db.session.rollback()
 
-    return jsonify({'jobs': [j.to_dict() for j in active_jobs]})
+    return jsonify({'jobs': [_wb_bulk_create_public_job(j) for j in active_jobs]})
 
 
 @app.route('/api/jobs/recent')
