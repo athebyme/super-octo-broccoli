@@ -7635,8 +7635,10 @@ def api_job_status(job_uid):
     """Статус фоновой задачи. Автоматически помечает зависшие задачи как failed."""
     if not current_user.seller:
         return jsonify({'error': 'forbidden'}), 403
-    job = BackgroundJob.query.filter_by(
-        job_uid=job_uid, seller_id=current_user.seller.id
+    job = BackgroundJob.query.filter(
+        BackgroundJob.job_uid == job_uid,
+        BackgroundJob.seller_id == current_user.seller.id,
+        BackgroundJob.job_type != BackgroundJob.SUPPLIER_IMPORT_RECEIPT_TYPE,
     ).first_or_404()
 
     # Автоматическая детекция зависших задач: если 'running' более 30 минут — failed
@@ -7662,7 +7664,8 @@ def api_jobs_active():
         return jsonify({'jobs': []})
     jobs = BackgroundJob.query.filter(
         BackgroundJob.seller_id == current_user.seller.id,
-        BackgroundJob.status.in_(['pending', 'running'])
+        BackgroundJob.status.in_(['pending', 'running']),
+        BackgroundJob.job_type != BackgroundJob.SUPPLIER_IMPORT_RECEIPT_TYPE,
     ).order_by(BackgroundJob.created_at.desc()).limit(10).all()
 
     # Автоматическая детекция зависших
@@ -7689,8 +7692,9 @@ def api_jobs_recent():
     """Недавние задачи (последние 20)."""
     if not current_user.seller:
         return jsonify({'jobs': []})
-    jobs = BackgroundJob.query.filter_by(
-        seller_id=current_user.seller.id
+    jobs = BackgroundJob.query.filter(
+        BackgroundJob.seller_id == current_user.seller.id,
+        BackgroundJob.job_type != BackgroundJob.SUPPLIER_IMPORT_RECEIPT_TYPE,
     ).order_by(BackgroundJob.created_at.desc()).limit(20).all()
     return jsonify({'jobs': [j.to_dict() for j in jobs]})
 

@@ -71,6 +71,8 @@ data/ssl/
 .playwright-mcp/
 .skills/
 .worktrees/
+frontend/node_modules/
+frontend/.vite/
 
 # Скриншоты рабочих сессий в корне
 /*.png
