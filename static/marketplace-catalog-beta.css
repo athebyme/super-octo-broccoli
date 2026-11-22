@@ -1085,6 +1085,11 @@
     accent-color: var(--accent);
 }
 .mcat-update-toolbar .sh-btn { min-height: 44px; white-space: normal; }
+.mcat-workspace-handoff { align-items: center; }
+.mcat-workspace-actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; gap: 8px; }
+.mcat-workspace-actions .sh-btn { min-height: 44px; }
+.mcat-workspace-dialog-return { display: inline-flex; min-height: 44px; align-items: center; margin-top: 6px; color: var(--accent-strong); font-size: 12px; text-decoration: underline; text-underline-offset: 2px; }
+.mcat-workspace-update-warning { margin: 12px 0; }
 .mcat-update-clear { flex: none; }
 .mcat-update-preview, .mcat-update-switch { flex: 0 1 auto; }
 .mcat-update-inline-error { flex-basis: 100%; margin: 0; color: var(--danger); font-size: 12px; line-height: 1.45; }
@@ -1164,6 +1169,8 @@
     .mcat-update-toolbar { align-items: stretch; gap: 8px; padding: 12px; }
     .mcat-update-summary, .mcat-update-select-loaded, .mcat-update-toolbar .sh-btn { flex-basis: 100%; }
     .mcat-update-toolbar .sh-btn { width: 100%; }
+    .mcat-workspace-handoff { align-items: stretch; }
+    .mcat-workspace-actions { flex-basis: 100%; flex-direction: column; }
     .mcat-update-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: var(--r-md); }
     .mcat-update-dialog-head, .mcat-update-dialog-intro, .mcat-update-review,
     .mcat-update-report, .mcat-update-confirm-box, .mcat-update-progress,

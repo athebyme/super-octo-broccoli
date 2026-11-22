@@ -384,6 +384,53 @@ assert.equal(page.listingUpdate.preview,null);assert.deepEqual(page.listingUpdat
 ''')
 
 
+def test_scoped_workspace_update_uses_signed_preview_without_catalog_or_account_roster():
+    run_node(r'''
+const assert=require('node:assert/strict');global.window=global;
+const token='signed.preview.token',returnTo='/my-products/beta#workspace-return=0123456789abcdef0123456789abcdef';
+const bootstrap={workspaceUpdateMode:true,workspaceUpdateError:'',ozonEnabled:true,accounts:[],
+    filters:{marketplace_code:'ozon',account_id:2},selectionOwner:'7:3',
+    urls:{previewUpdateDrafts:'/marketplaces/listings/update-drafts/preview'}};
+global.location={href:'https://seller.test/marketplaces/listings/?account_id=2&marketplace=ozon&workspace_update=1#workspace-update='+token,
+    origin:'https://seller.test',pathname:'/marketplaces/listings/'};
+let definition;const listeners=new Map();let calls=[];let storageCalls=0;
+global.document={hidden:false,body:{style:{}},
+    getElementById:id=>id==='mcat-bootstrap'?{textContent:JSON.stringify(bootstrap)}:id==='marketplace-catalog-app'?{}:null,
+    querySelector:()=>null,addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:name=>listeners.delete(name)};
+global.addEventListener=(name,fn)=>listeners.set('window:'+name,fn);
+global.removeEventListener=name=>listeners.delete('window:'+name);
+global.localStorage={getItem(){storageCalls++;throw Error('scoped handoff must not read preference storage')},setItem(){storageCalls++;throw Error('scoped handoff must not write preference storage')}};
+global.sessionStorage={getItem(){storageCalls++;throw Error('scoped handoff must not read cached selection')},setItem(){storageCalls++;throw Error('scoped handoff must not write cached selection')},removeItem(){storageCalls++;throw Error('scoped handoff must not clear cached selection')}};
+global.fetch=async(url,options)=>{
+    calls.push({url,options});
+    return {ok:true,status:200,json:async()=>({success:true,
+        workspace_update:{account_id:2,account_label:'Магазин Ozon',listing_ids:[101,102],return_to:returnTo},
+        preview:{token:'confirm.preview.token',account_id:2,account_label:'Магазин Ozon',listing_ids:[101,102],
+            rows:[{listing_id:101,title:'A',offer_id:'A',status:'ready'},{listing_id:102,title:'B',offer_id:'B',status:'ready'}]}})};
+};
+global.Vue={createApp:opts=>{definition=opts;return {mount(){}}}};
+require('./static/marketplace-beta-shared.js');require('./static/marketplace-catalog-beta.js');
+const page=definition.data();Object.entries(definition.methods).forEach(([key,fn])=>page[key]=fn.bind(page));
+Object.entries(definition.computed).forEach(([key,fn])=>Object.defineProperty(page,key,{get:fn.bind(page)}));
+page.$nextTick=fn=>fn();let opened=false,focused=false;
+page.$refs={workspaceUpdateReopen:{focus(){}},listingUpdateDialog:{open:false,showModal(){this.open=true;opened=true},close(){this.open=false}},
+    listingUpdateConfirm:{isConnected:true,focus(){focused=true}}};
+page.onKey=()=>{};page.onPopState=()=>{};
+(async()=>{
+    definition.mounted.call(page);
+    await new Promise(setImmediate);await new Promise(setImmediate);
+    assert.equal(opened,true,'signed handoff opens the shared review dialog automatically');
+    assert.equal(page.workspaceUpdate.accountId,2);assert.deepEqual(page.workspaceUpdate.listingIds,[101,102]);
+    assert.equal(page.workspaceUpdate.accountLabel,'Магазин Ozon');assert.equal(page.accounts.length,0);
+    assert.equal(page.listingUpdateCanPreview,true);assert.equal(page.workspaceUpdateCanOpen,true);assert.equal(focused,true);
+    assert.equal(calls.length,1);assert.equal(calls[0].url,'/marketplaces/listings/update-drafts/preview');
+    assert.equal(calls[0].options.method,'POST');assert.deepEqual(JSON.parse(calls[0].options.body),{workspace_update:token});
+    assert.equal(storageCalls,0);assert.equal(page.items.length,0);assert.deepEqual(page.pagination,{page:1,pages:1,total:0,has_next:false});
+    assert.equal(page.workspaceUpdateReturnUrl,returnTo);
+})().catch(error=>{console.error(error);process.exitCode=1});
+''')
+
+
 def test_ozon_update_uncertain_apply_keeps_scope_and_requires_new_read_before_confirmation():
     run_node(SETUP + r'''
 (async()=>{

@@ -4,7 +4,8 @@
 {% block title %}Каталог маркетплейсов — Seller Hub{% endblock %}
 
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static', filename='marketplace-catalog-beta.css', v='20261122-ozon-update-drafts-r47') }}">
+{% set workspace_update_fallback = url_for('seller_my_products_beta') if workspace_update_mode|default(false) else workspace_update_fallback_url|default(url_for('seller_my_products_beta')) %}
+<link rel="stylesheet" href="{{ url_for('static', filename='marketplace-catalog-beta.css', v='20261122-ozon-workspace-update-r56') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='marketplace-catalog.css') }}">
 
@@ -15,6 +16,8 @@
     'catalogReturnUrl': catalog_return_url,
     'catalogPage': catalog_page,
     'perPage': catalog_per_page,
+    'workspaceUpdateMode': workspace_update_mode|default(false),
+    'workspaceUpdateError': workspace_update_error|default(''),
     'selectionOwner': (current_user.id|string) ~ ':' ~ (current_user.seller.id|string),
     'urls': {
         'api': url_for('marketplace_listings.list_api'),
@@ -34,13 +37,41 @@
     'illustration': url_for('static', filename='images/ozon-shop-start.webp'),
 } | tojson }}</script>
 
-<noscript><div class="sh-alert sh-alert--warning">Для интерактивного каталога нужен JavaScript. <a href="{{ url_for('marketplace_listings.classic', marketplace=initial_filters.marketplace_code, account_id=initial_filters.account_id, search=initial_filters.search, status=initial_filters.normalized_status, link_status=initial_filters.link_status, include_unavailable=1 if initial_filters.include_unavailable else 0, page=initial_filters.page, per_page=initial_filters.per_page) }}">Открыть упрощённый каталог</a></div></noscript>
+<noscript><div class="sh-alert sh-alert--warning">Для интерактивного каталога нужен JavaScript. {% if workspace_update_mode|default(false) %}<a href="{{ workspace_update_fallback }}">К моим товарам</a>{% else %}<a href="{{ url_for('marketplace_listings.classic', marketplace=initial_filters.marketplace_code, account_id=initial_filters.account_id, search=initial_filters.search, status=initial_filters.normalized_status, link_status=initial_filters.link_status, include_unavailable=1 if initial_filters.include_unavailable else 0, page=initial_filters.page, per_page=initial_filters.per_page) }}">Открыть упрощённый каталог</a>{% endif %}</div></noscript>
 <div id="mcat-bootstrap-fallback" class="mcat-bootstrap-fallback" role="status">
     <p>Открываем каталог…</p>
-    <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.classic', marketplace=initial_filters.marketplace_code, account_id=initial_filters.account_id, search=initial_filters.search, status=initial_filters.normalized_status, link_status=initial_filters.link_status, include_unavailable=1 if initial_filters.include_unavailable else 0, page=initial_filters.page, per_page=initial_filters.per_page) }}">Открыть упрощённый каталог</a>
+    {% if workspace_update_mode|default(false) %}<a class="sh-btn sh-btn--secondary" href="{{ workspace_update_fallback }}">К моим товарам</a>{% else %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.classic', marketplace=initial_filters.marketplace_code, account_id=initial_filters.account_id, search=initial_filters.search, status=initial_filters.normalized_status, link_status=initial_filters.link_status, include_unavailable=1 if initial_filters.include_unavailable else 0, page=initial_filters.page, per_page=initial_filters.per_page) }}">Открыть упрощённый каталог</a>{% endif %}
 </div>
 <div id="marketplace-catalog-app" v-cloak>
 {% raw %}
+    <div v-if="workspaceUpdateError && !workspaceUpdateMode" class="sh-alert sh-alert--warning mcat-workspace-update-warning" role="alert">
+        {{ workspaceUpdateError }}
+    </div>
+    <section v-if="workspaceUpdateMode" class="mcat-update-toolbar mcat-workspace-handoff"
+             aria-labelledby="mcat-workspace-update-title" data-workspace-update>
+        <div class="mcat-update-summary">
+            <strong id="mcat-workspace-update-title">Изменение существующих карточек Ozon</strong>
+            <span v-if="workspaceUpdate">{{ workspaceUpdate.accountLabel || 'Магазин Ozon' }} · точный список: {{ workspaceUpdate.listingIds.length }} карточки.</span>
+            <span v-else-if="workspaceUpdateError" role="alert">{{ workspaceUpdateError }}</span>
+            <span v-else>Проверяем подписанный список из «Мои товары».</span>
+        </div>
+        <div v-if="workspaceUpdate" class="mcat-workspace-actions">
+            <a class="sh-btn sh-btn--secondary" data-workspace-return :href="workspaceUpdateReturnUrl">
+                К моим товарам
+            </a>
+        </div>
+        <div v-else-if="workspaceUpdateMode" class="mcat-workspace-actions">
+            <a class="sh-btn sh-btn--secondary" data-workspace-return :href="workspaceUpdateReturnUrl">К моим товарам</a>
+        </div>
+        <button ref="workspaceUpdateReopen" v-if="workspaceUpdateMode" type="button" class="sh-btn sh-btn--primary"
+                data-workspace-update-reopen
+                :disabled="!workspaceUpdateCanOpen || listingUpdate.phase === 'previewing' || listingUpdate.phase === 'applying'"
+                @click="startListingUpdatePreview($event)">
+            {{ workspaceUpdate ? listingUpdatePreviewLabel + ' (' + workspaceUpdate.listingIds.length + ')' : (listingUpdate.phase === 'read_failed' ? 'Проверить ещё раз' : 'Проверить выбранный список') }}
+        </button>
+        <p v-if="listingUpdate.error" class="mcat-update-inline-error" role="alert">{{ listingUpdate.error }}</p>
+    </section>
+    <template v-if="!workspaceUpdateMode">
     <header class="mcat-head">
         <div>
             <h1 class="mcat-title">Каталог маркетплейсов</h1>
@@ -410,12 +441,15 @@
                 @click="loadMore">Показать ещё</button>
     </div>
 
+    </template>
     <dialog ref="listingUpdateDialog" class="mcat-update-dialog" aria-labelledby="mcat-update-title"
             @cancel.prevent="cancelListingUpdateDialog()">
         <header class="mcat-update-dialog-head">
             <div>
-                <p class="mcat-update-eyebrow">Ozon · {{ accountLabel(Number(filters.account_id)) }}</p>
+                <p class="mcat-update-eyebrow">Ozon · {{ workspaceUpdateMode ? accountLabel(workspaceExpectedAccountId) : accountLabel(Number(filters.account_id)) }}</p>
                 <h2 id="mcat-update-title">Подготовка обновлений карточек</h2>
+                <a v-if="workspaceUpdateMode" class="mcat-workspace-dialog-return"
+                   data-workspace-return-dialog :href="workspaceUpdateReturnUrl">К моим товарам</a>
             </div>
             <button type="button" class="sh-icon-btn mcat-update-dialog-close"
                     aria-label="Закрыть окно" :disabled="listingUpdate.phase === 'applying'"
@@ -423,7 +457,9 @@
         </header>
 
         <p v-if="listingUpdate.phase !== 'complete'" class="mcat-update-dialog-intro">
-            Проверяется точный выбранный список. Сохранение создаёт или находит локальные черновики;
+            <template v-if="workspaceUpdateMode">Проверяется точный список из «Мои товары». </template>
+            <template v-else>Проверяется точный выбранный список. </template>
+            Сохранение создаёт или находит локальные черновики;
             публикация на Ozon не выполняется.
         </p>
 
@@ -461,7 +497,7 @@
         </section>
 
         <section v-if="listingUpdate.report" class="mcat-update-report" aria-label="Итог локальной подготовки">
-            <h3 ref="listingUpdateResultHeading" tabindex="-1">Итог для {{ listingUpdate.report.account_label }}</h3>
+            <h3 ref="listingUpdateResultHeading" tabindex="-1">Итог для {{ listingUpdate.report.account_label || 'Ozon' }}</h3>
             <p>Обработано {{ listingUpdate.report.rows.length }} карточек:
                 создано {{ listingUpdateRowCount(listingUpdate.report.rows, 'created') }},
                 уже были в черновиках {{ listingUpdateRowCount(listingUpdate.report.rows, 'existing') }},
@@ -489,7 +525,7 @@
         <div v-if="listingUpdate.phase === 'review' && listingUpdateCanApply" class="mcat-update-confirm-box">
             <label class="mcat-update-confirm-check">
                 <input type="checkbox" v-model="listingUpdate.confirmLocal">
-                <span>Подтверждаю локальную подготовку черновиков для выбранных карточек магазина {{ listingUpdate.preview.account_label }}. Это не публикует изменения на Ozon.</span>
+                <span>Подтверждаю локальную подготовку черновиков для выбранных карточек магазина {{ listingUpdate.preview.account_label || 'Ozon' }}. Это не публикует изменения на Ozon.</span>
             </label>
             <button ref="listingUpdateConfirm" type="button" class="sh-btn sh-btn--primary mcat-update-confirm"
                     data-listing-update-confirm :disabled="!listingUpdate.confirmLocal"
@@ -519,7 +555,7 @@
             <button type="button" class="sh-btn sh-btn--secondary mcat-update-return"
                     :disabled="listingUpdate.phase === 'applying'"
                     @click="cancelListingUpdateDialog()">
-                {{ listingUpdate.phase === 'complete' ? 'Вернуться в каталог' : 'Отмена' }}
+                {{ workspaceUpdateMode ? 'Закрыть список' : (listingUpdate.phase === 'complete' ? 'Вернуться в каталог' : 'Отмена') }}
             </button>
         </footer>
     </dialog>
@@ -666,5 +702,5 @@
 
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}"></script>
-<script src="{{ url_for('static', filename='marketplace-catalog-beta.js', v='20261122-ozon-update-drafts-timeouts-r48') }}"></script>
+<script src="{{ url_for('static', filename='marketplace-catalog-beta.js', v='20261122-ozon-workspace-update-r56') }}"></script>
 {% endblock %}

@@ -40,6 +40,112 @@
             value.every(function (id) { return Number.isSafeInteger(id) && id > 0; }) &&
             new Set(value).size === value.length;
     }
+    function base64UrlBytes(bytes) {
+        var binary = '';
+        for (var index = 0; index < bytes.length; index += 1) {
+            binary += String.fromCharCode(bytes[index]);
+        }
+        return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    }
+    function encodeWorkspaceDraftSelection(ids) {
+        if (!positiveIdList(ids, LISTING_UPDATE_MAX)) return null;
+        var bytes = new Uint8Array(ids.length * 8);
+        var word = 0x100000000;
+        ids.forEach(function (id, index) {
+            var high = Math.floor(id / word);
+            var low = id - high * word;
+            var offset = index * 8;
+            bytes[offset] = Math.floor(high / 0x1000000) & 255;
+            bytes[offset + 1] = Math.floor(high / 0x10000) & 255;
+            bytes[offset + 2] = Math.floor(high / 0x100) & 255;
+            bytes[offset + 3] = high & 255;
+            bytes[offset + 4] = Math.floor(low / 0x1000000) & 255;
+            bytes[offset + 5] = Math.floor(low / 0x10000) & 255;
+            bytes[offset + 6] = Math.floor(low / 0x100) & 255;
+            bytes[offset + 7] = low & 255;
+        });
+        return base64UrlBytes(bytes);
+    }
+    function encodeWorkspaceReturn(value) {
+        if (typeof value !== 'string' || typeof TextEncoder === 'undefined') return null;
+        return base64UrlBytes(new TextEncoder().encode(value));
+    }
+    function normalizeWorkspaceReturn(value) {
+        try {
+            if (typeof value !== 'string' || !value || value.length > 8448 || /[\x00-\x1f\x7f\\]/.test(value)) return null;
+            var target = new URL(value, window.location.origin);
+            if (target.origin !== window.location.origin || target.username || target.password ||
+                target.pathname !== '/my-products/beta' ||
+                (target.hash && !/^#workspace-return=[a-f0-9]{32}$/.test(target.hash))) return null;
+            var params = target.searchParams;
+            if (Array.from(params.keys()).some(function (key) { return key !== 'import_batch'; }) ||
+                params.getAll('import_batch').length > 1 ||
+                (params.has('import_batch') && !validWorkspaceImportBatch(params.get('import_batch')))) return null;
+            return target.pathname + target.search + target.hash;
+        } catch (_) { return null; }
+    }
+    function validWorkspaceImportBatch(value) {
+        if (typeof value !== 'string' || !value || value.length > 8192) return false;
+        var parts = value.split('.');
+        if (parts.length === 4 && parts[0] === '') parts = parts.slice(1);
+        return parts.length === 3 && parts.every(function (part) {
+            return /^[A-Za-z0-9_-]+$/.test(part);
+        });
+    }
+    function workspaceRequestFromLocation(bootRequested) {
+        var request = {requested: bootRequested === true, valid: false, token: '', accountId: null, error: ''};
+        try {
+            var url = new URL(window.location.href);
+            var params = url.searchParams;
+            if (!params.has('workspace_update') && !request.requested) return request;
+            request.requested = true;
+            var allowed = ['account_id', 'marketplace', 'workspace_update'];
+            if (url.pathname !== '/marketplaces/listings/' || url.username || url.password || url.hash === '#') {
+                request.error = 'Не удалось проверить ссылку выбранных товаров. Вернитесь в «Мои товары» и повторите действие.';
+                return request;
+            }
+            if (Array.from(params.keys()).some(function (key) { return !allowed.includes(key); }) ||
+                allowed.some(function (key) { return params.getAll(key).length !== 1; }) ||
+                params.get('marketplace') !== 'ozon' || params.get('workspace_update') !== '1' ||
+                !/^[1-9][0-9]*$/.test(params.get('account_id') || '')) {
+                request.error = 'Ссылка не совпадает с выбранным магазином. Вернитесь в «Мои товары» и повторите действие.';
+                return request;
+            }
+            var accountId = Number(params.get('account_id'));
+            if (!Number.isSafeInteger(accountId) || accountId <= 0) {
+                request.error = 'Не удалось проверить магазин Ozon. Вернитесь в «Мои товары» и повторите действие.';
+                return request;
+            }
+            request.accountId = accountId;
+            var tokenMatch = /^#workspace-update=([A-Za-z0-9_.-]{1,32768})$/.exec(url.hash);
+            if (!tokenMatch) {
+                request.error = 'Подписанный список отсутствует или повреждён. Вернитесь в «Мои товары» и повторите действие.';
+                return request;
+            }
+            request.token = tokenMatch[1];
+            request.valid = true;
+            return request;
+        } catch (_) {
+            request.error = 'Не удалось проверить ссылку выбранных товаров. Вернитесь в «Мои товары» и повторите действие.';
+            return request;
+        }
+    }
+    function normalizeWorkspaceUpdate(value, expectedAccountId) {
+        if (!value || typeof value !== 'object' || Array.isArray(value) ||
+            Object.keys(value).sort().join(',') !== 'account_id,account_label,listing_ids,return_to' ||
+            !Number.isSafeInteger(value.account_id) || value.account_id !== expectedAccountId ||
+            typeof value.account_label !== 'string' || value.account_label.length > 500 ||
+            /[\x00-\x1f\x7f]/.test(value.account_label) ||
+            !positiveIdList(value.listing_ids, LISTING_UPDATE_MAX)) return null;
+        var returnTo = normalizeWorkspaceReturn(value.return_to);
+        if (!returnTo || returnTo !== value.return_to) return null;
+        return {
+            accountId: value.account_id,
+            accountLabel: value.account_label,
+            listingIds: value.listing_ids.slice(),
+            returnTo: returnTo,
+        };
+    }
     function sameOrderedIds(left, right) {
         return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
             left.every(function (id, index) { return id === right[index]; });
@@ -58,7 +164,7 @@
             value.account_label !== snapshot.accountLabel ||
             !positiveIdList(value.listing_ids, LISTING_UPDATE_MAX) ||
             !sameOrderedIds(value.listing_ids, snapshot.listingIds) ||
-            typeof value.token !== 'string' || !value.token || value.token.length > 8192 ||
+            typeof value.token !== 'string' || !value.token || value.token.length > 32768 ||
             !Array.isArray(value.rows) || value.rows.length !== snapshot.listingIds.length) return false;
         return value.rows.every(function (row, index) {
             return validListingUpdateRow(row, snapshot.listingIds[index], ['ready', 'existing', 'blocked']);
@@ -85,11 +191,20 @@
         return Number.isNaN(parsed.getTime()) ? null : parsed;
     }
 
+    var workspaceRequest = workspaceRequestFromLocation(bootstrap.workspaceUpdateMode === true);
+
     Vue.createApp({
         directives: {'image-deadline': S.imageDeadline},
         components: {'ozon-prices': S.ozonPrices},
         data: function () {
             return {
+                workspaceUpdateMode: workspaceRequest.requested,
+                workspaceUpdateToken: workspaceRequest.token,
+                workspaceExpectedAccountId: workspaceRequest.accountId,
+                workspaceUpdate: null,
+                workspaceUpdateReturnUrl: '/my-products/beta',
+                workspaceUpdateError: workspaceRequest.error || (typeof bootstrap.workspaceUpdateError === 'string'
+                    ? bootstrap.workspaceUpdateError.slice(0, 300) : ''),
                 ozonEnabled: !!bootstrap.ozonEnabled,
                 listingUpdateOwner: typeof bootstrap.selectionOwner === 'string'
                     ? bootstrap.selectionOwner : '',
@@ -109,7 +224,7 @@
 
                 items: [],
                 pagination: { page: 1, pages: 1, total: 0, has_next: false },
-                loading: true,
+                loading: !workspaceRequest.requested,
                 loadingMore: false,
                 syncError: '', syncFailures: 0, syncSessionExpired: false,
                 cooldownClock: Date.now(),
@@ -118,8 +233,8 @@
                 advancedFiltersOpen: false,
 
                 filters: {
-                    marketplace: (bootstrap.filters || {}).marketplace_code || null,
-                    account_id: (bootstrap.filters || {}).account_id || null,
+                    marketplace: workspaceRequest.requested ? 'ozon' : (bootstrap.filters || {}).marketplace_code || null,
+                    account_id: workspaceRequest.requested ? workspaceRequest.accountId : (bootstrap.filters || {}).account_id || null,
                     status: (bootstrap.filters || {}).normalized_status || '',
                     link_status: (bootstrap.filters || {}).link_status || '',
                     include_unavailable: !!(bootstrap.filters || {}).include_unavailable,
@@ -130,8 +245,8 @@
                 channelCounts: {},
                 displayTotal: 0,
 
-                view: saved('sh-mcat-view') === 'table' ? 'table' : 'grid',
-                mode: saved('sh-mcat-mode') === 'listings' ? 'listings' : 'products',
+                view: workspaceRequest.requested ? 'grid' : (saved('sh-mcat-view') === 'table' ? 'table' : 'grid'),
+                mode: workspaceRequest.requested ? 'listings' : (saved('sh-mcat-mode') === 'listings' ? 'listings' : 'products'),
                 selectedIndex: -1,
                 listingUpdate: {
                     selectedIds: [], phase: 'idle', preview: null, report: null,
@@ -182,6 +297,11 @@
             },
             listingUpdateScopeEligible: function () {
                 var accountId = Number(this.filters.account_id);
+                if (this.workspaceUpdateMode) {
+                    return !!this.workspaceUpdate && this.mode === 'listings' &&
+                        this.filters.marketplace === 'ozon' &&
+                        Number.isSafeInteger(accountId) && accountId === this.workspaceUpdate.accountId;
+                }
                 return this.ozonEnabled && this.mode === 'listings' &&
                     this.filters.marketplace === 'ozon' &&
                     Number.isSafeInteger(accountId) && accountId > 0 &&
@@ -225,6 +345,12 @@
                     this.listingUpdate.selectedIds.length <= LISTING_UPDATE_MAX &&
                     this.listingUpdate.selectionScopeKey === this.listingUpdateScopeKey() &&
                     positiveIdList(this.listingUpdate.selectedIds, LISTING_UPDATE_MAX);
+            },
+            workspaceUpdateCanOpen: function () {
+                if (!this.workspaceUpdateMode || !this.workspaceUpdateToken ||
+                    !!this.workspaceUpdateError ||
+                    !Number.isSafeInteger(this.workspaceExpectedAccountId) || this.workspaceExpectedAccountId <= 0) return false;
+                return !this.workspaceUpdate || this.listingUpdateCanPreview;
             },
             listingUpdatePreviewLabel: function () {
                 if (this.listingUpdate.phase === 'complete') return 'Открыть итог подготовки';
@@ -354,6 +480,7 @@
 
         watch: {
             searchInput: function (value) {
+                if (this.workspaceUpdateMode) return;
                 var self = this;
                 clearTimeout(this._searchTimer);
                 this.clearListingUpdateSelection();
@@ -365,6 +492,7 @@
             filters: {
                 deep: true,
                 handler: function () {
+                    if (this.workspaceUpdateMode) return;
                     var currentScope = this.listingUpdateScopeKey();
                     var retainedScope = this.listingUpdate.selectionScopeKey;
                     if (currentScope && retainedScope === currentScope &&
@@ -378,6 +506,7 @@
                 }
             },
             perPage: function () {
+                if (this.workspaceUpdateMode) return;
                 this.clearListingUpdateSelection();
                 if (this.historyRestoring) return;
                 this.requestedPage = 1;
@@ -409,7 +538,25 @@
                     this.scheduleSyncPoll();
                 }
             };
-            document.addEventListener('visibilitychange', this._onVisibility);
+            if (!this.workspaceUpdateMode) document.addEventListener('visibilitychange', this._onVisibility);
+            if (this.workspaceUpdateMode) {
+                this.loading = false;
+                this.mode = 'listings';
+                this.filters.marketplace = 'ozon';
+                this.filters.account_id = this.workspaceExpectedAccountId;
+                if (!workspaceRequest.valid || this.workspaceUpdateError ||
+                    !Number.isSafeInteger(this.workspaceExpectedAccountId) || this.workspaceExpectedAccountId <= 0) {
+                    this.listingUpdate.error = this.workspaceUpdateError ||
+                        'Не удалось проверить магазин Ozon. Вернитесь в «Мои товары» и повторите действие.';
+                    return;
+                }
+                this.$nextTick(() => {
+                    var trigger = this.$refs && this.$refs.workspaceUpdateReopen;
+                    if (!this.openListingUpdateDialog({currentTarget: trigger || document.body})) return;
+                    this.readWorkspaceListingUpdatePreview();
+                });
+                return;
+            }
             this.scheduleCooldownWake();
             this.scheduleSyncPoll();
             this.restoreListingUpdateSelection();
@@ -609,12 +756,119 @@
                 return true;
             },
             startListingUpdatePreview: function (event) {
+                if (this.workspaceUpdateMode) {
+                    if (!this.workspaceUpdateCanOpen || this.listingUpdate.phase === 'applying' ||
+                        this.listingUpdate.phase === 'previewing') return false;
+                    if (this.listingUpdate.phase === 'complete' && this.listingUpdate.report) {
+                        return this.openListingUpdateDialog(event);
+                    }
+                    if (!this.openListingUpdateDialog(event)) return false;
+                    return this.readWorkspaceListingUpdatePreview();
+                }
                 if (!this.listingUpdateCanPreview) return false;
                 if (this.listingUpdate.phase === 'complete' && this.listingUpdate.report) {
                     return this.openListingUpdateDialog(event);
                 }
                 if (!this.openListingUpdateDialog(event)) return false;
                 return this.readListingUpdatePreview();
+            },
+            readWorkspaceListingUpdatePreview: async function () {
+                var accountId = this.workspaceExpectedAccountId;
+                var endpoint = this.safeListingUpdateEndpoint(this.urls.previewUpdateDrafts);
+                var prior = this.workspaceUpdate;
+                if (!this.workspaceUpdateMode || !this.workspaceUpdateToken || !endpoint ||
+                    !!this.workspaceUpdateError ||
+                    !Number.isSafeInteger(accountId) || accountId <= 0 ||
+                    (prior && (prior.accountId !== accountId ||
+                        !sameOrderedIds(this.listingUpdate.selectedIds, prior.listingIds) ||
+                        this.listingUpdate.selectionScopeKey !== this.listingUpdateScopeKey()))) {
+                    this.listingUpdate.error = 'Не удалось подтвердить точный список Ozon. Вернитесь в «Мои товары» и повторите действие.';
+                    this.listingUpdate.phase = 'read_failed';
+                    return false;
+                }
+                if (this._listingUpdateAbort) this._listingUpdateAbort.abort();
+                this.clearListingUpdateTimeout();
+                var controller = new AbortController();
+                var timedOut = false;
+                var timeout = setTimeout(function () {
+                    timedOut = true;
+                    controller.abort();
+                }, LISTING_UPDATE_PREVIEW_TIMEOUT_MS);
+                this._listingUpdateTimeout = timeout;
+                var revision = (this._listingUpdateRevision || 0) + 1;
+                this._listingUpdateRevision = revision;
+                this._listingUpdateAbort = controller;
+                this.listingUpdate.phase = 'previewing';
+                this.listingUpdate.error = '';
+                this.listingUpdate.confirmLocal = false;
+                this.listingUpdate.preview = null;
+                this.listingUpdate.report = null;
+                this.listingUpdate.editorUrl = null;
+                try {
+                    var response = await fetch(endpoint, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            Accept: 'application/json',
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': CSRF,
+                        },
+                        body: JSON.stringify({workspace_update: this.workspaceUpdateToken}),
+                        signal: controller.signal,
+                    });
+                    var data = await response.json();
+                    if (timedOut) throw new Error(LISTING_UPDATE_PREVIEW_TIMEOUT_MESSAGE);
+                    var metadata = data && data.success === true
+                        ? normalizeWorkspaceUpdate(data.workspace_update, accountId) : null;
+                    var snapshot = metadata ? {
+                        accountId: metadata.accountId,
+                        accountLabel: metadata.accountLabel,
+                        listingIds: metadata.listingIds,
+                    } : null;
+                    if (!response.ok || !metadata || !validListingUpdatePreview(data.preview, snapshot) ||
+                        !sameOrderedIds(data.preview.listing_ids, metadata.listingIds) ||
+                        (prior && (!sameOrderedIds(metadata.listingIds, prior.listingIds) ||
+                            metadata.returnTo !== prior.returnTo))) {
+                        throw new Error('Состав выбранных товаров или магазин изменился. Вернитесь в «Мои товары» и повторите действие.');
+                    }
+                    if (controller.signal.aborted || this._listingUpdateRevision !== revision) return false;
+                    this.workspaceUpdate = metadata;
+                    this.workspaceUpdateReturnUrl = metadata.returnTo;
+                    this.listingUpdate.selectedIds = metadata.listingIds.slice();
+                    this.listingUpdate.selectionScopeKey = this.listingUpdateScopeKey();
+                    this._listingUpdateSnapshot = {
+                        accountId: metadata.accountId,
+                        accountLabel: metadata.accountLabel,
+                        listingIds: metadata.listingIds.slice(),
+                        scopeKey: this.listingUpdateScopeKey(),
+                        returnTo: metadata.returnTo,
+                        workspaceUpdate: true,
+                    };
+                    this.listingUpdate.preview = data.preview;
+                    this.listingUpdate.phase = 'review';
+                    this.$nextTick(() => {
+                        if (this.$refs && this.$refs.listingUpdateConfirm &&
+                            this.$refs.listingUpdateConfirm.isConnected !== false) {
+                            this.$refs.listingUpdateConfirm.focus();
+                        }
+                    });
+                    return true;
+                } catch (error) {
+                    if (error && error.name === 'AbortError' && !timedOut) return false;
+                    if (this._listingUpdateRevision === revision) {
+                        this.listingUpdate.phase = 'read_failed';
+                        this.listingUpdate.preview = null;
+                        this.listingUpdate.error = timedOut
+                            ? LISTING_UPDATE_PREVIEW_TIMEOUT_MESSAGE
+                            : error && typeof error.message === 'string'
+                                ? error.message.slice(0, 300)
+                                : 'Не удалось проверить список. Вернитесь в «Мои товары» и повторите действие.';
+                    }
+                    return false;
+                } finally {
+                    this.clearListingUpdateTimeout(timeout);
+                    if (this._listingUpdateAbort === controller) this._listingUpdateAbort = null;
+                }
             },
             cancelListingUpdateDialog: function () {
                 if (this.listingUpdate.phase === 'applying') return false;
@@ -652,9 +906,11 @@
                 } catch (_) { return null; }
             },
             readListingUpdatePreview: async function () {
+                if (this.workspaceUpdateMode) return this.readWorkspaceListingUpdatePreview();
                 var ids = this.listingUpdate.selectedIds.slice();
                 var accountId = Number(this.filters.account_id);
-                var accountLabel = this.accountLabel(accountId) || '';
+                var accountLabel = this.workspaceUpdateMode
+                    ? this.workspaceUpdate.accountLabel : this.accountLabel(accountId) || '';
                 var scopeKey = this.listingUpdateScopeKey();
                 if (!scopeKey || !accountLabel || !positiveIdList(ids, LISTING_UPDATE_MAX) ||
                     !this.listingUpdateScopeEligible || this.listingUpdate.selectionScopeKey !== scopeKey) {
@@ -663,8 +919,13 @@
                     return false;
                 }
                 var endpoint = this.safeListingUpdateEndpoint(this.urls.previewUpdateDrafts);
-                var returnTo = this.catalogUrl(this.requestedPage || this.loadedStartPage || 1, this.urls.base);
-                if (!endpoint || !this.safeCatalogReturnUrl(returnTo)) {
+                var returnTo = this.workspaceUpdateMode
+                    ? this.workspaceUpdateReturnUrl
+                    : this.catalogUrl(this.requestedPage || this.loadedStartPage || 1, this.urls.base);
+                var returnToIsSafe = this.workspaceUpdateMode
+                    ? normalizeWorkspaceReturn(returnTo) === returnTo
+                    : this.safeCatalogReturnUrl(returnTo);
+                if (!endpoint || !returnToIsSafe) {
                     this.listingUpdate.error = 'Не удалось проверить адрес каталога. Обновите страницу и повторите выбор.';
                     this.listingUpdate.phase = 'read_failed';
                     return false;
@@ -687,6 +948,7 @@
                     listingIds: ids,
                     scopeKey: scopeKey,
                     returnTo: returnTo,
+                    workspaceUpdate: this.workspaceUpdateMode,
                 };
                 this._listingUpdateSnapshot = snapshot;
                 this.listingUpdate.phase = 'previewing';
@@ -704,11 +966,9 @@
                             'Content-Type': 'application/json',
                             'X-CSRFToken': CSRF,
                         },
-                        body: JSON.stringify({
-                            account_id: accountId,
-                            listing_ids: ids,
-                            return_to: returnTo,
-                        }),
+                        body: JSON.stringify(this.workspaceUpdateMode
+                            ? {workspace_update: this.workspaceUpdate.token}
+                            : {account_id: accountId, listing_ids: ids, return_to: returnTo}),
                         signal: controller.signal,
                     });
                     var data = await response.json();
@@ -784,18 +1044,29 @@
                 }).map(function (row) { return row.draft_id; });
                 if (!draftIds.length) return value === null ? null : false;
                 try {
-                    if (typeof value !== 'string' || value.length > 4096) return false;
+                    if (typeof value !== 'string' || value.length > 32768) return false;
                     var target = new URL(value, window.location.origin);
                     var expected = new URL(this.urls.repairDraftSelection, window.location.origin);
                     if (target.origin !== window.location.origin || target.pathname !== expected.pathname ||
-                        target.username || target.password || target.hash) return false;
+                        target.username || target.password || (!snapshot.workspaceUpdate && target.hash)) return false;
                     var params = target.searchParams;
-                    var allowed = ['account_id', 'draft_ids', 'return_to'];
+                    var allowed = snapshot.workspaceUpdate
+                        ? ['account_id', 'workspace_selection', 'workspace_return']
+                        : ['account_id', 'draft_ids', 'return_to'];
                     if (Array.from(params.keys()).some(function (key) { return !allowed.includes(key); }) ||
                         params.getAll('account_id').length !== 1 ||
                         params.get('account_id') !== String(snapshot.accountId) ||
-                        params.getAll('draft_ids').length !== 1 ||
-                        params.getAll('return_to').length !== 1) return false;
+                        params.getAll(snapshot.workspaceUpdate ? 'workspace_selection' : 'draft_ids').length !== 1 ||
+                        params.getAll(snapshot.workspaceUpdate ? 'workspace_return' : 'return_to').length !== 1) return false;
+                    if (snapshot.workspaceUpdate) {
+                        var expectedSelection = encodeWorkspaceDraftSelection(draftIds);
+                        var expectedReturn = encodeWorkspaceReturn(snapshot.returnTo);
+                        if (!expectedSelection || !expectedReturn ||
+                            params.get('workspace_selection') !== expectedSelection ||
+                            params.get('workspace_return') !== '1' ||
+                            target.hash !== '#workspace-return=' + expectedReturn) return false;
+                        return target.pathname + target.search + target.hash;
+                    }
                     var parsedDraftIds = params.get('draft_ids').split(',').map(function (item) {
                         return /^[1-9][0-9]*$/.test(item) ? Number(item) : NaN;
                     });
@@ -926,6 +1197,7 @@
                 return (this.loadedStartPage || 1) + Math.floor(safeIndex / this.perPage);
             },
             onPopState: function () {
+                if (this.workspaceUpdateMode) return;
                 var current = new URL(window.location.href);
                 if (![this.urls.base, this.urls.base.slice(0, -1) + '/beta'].includes(current.pathname)) return;
                 var allowed = ['marketplace', 'account_id', 'status', 'link_status', 'include_unavailable', 'search', 'page', 'per_page'];
@@ -1212,6 +1484,7 @@
             /* ---------- клавиатура ---------- */
             onKey: function (event) {
                 if (event.defaultPrevented) return;
+                if (this.workspaceUpdateMode) return;
                 var target = event.target;
                 var isField = target && (/^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName) || target.isContentEditable);
                 if (this.drawer.open) {
@@ -1564,6 +1837,9 @@
             discountOf: function (item) { return S.discountPercent(item); },
             fallbackClass: function (item) { return S.fallbackClass(item); },
             accountLabel: function (accountId) {
+                if (this.workspaceUpdateMode && accountId === this.workspaceExpectedAccountId) {
+                    return this.workspaceUpdate ? this.workspaceUpdate.accountLabel : 'Магазин Ozon';
+                }
                 for (var i = 0; i < this.accounts.length; i++) {
                     if (this.accounts[i].id === accountId) return this.accounts[i].label;
                 }
