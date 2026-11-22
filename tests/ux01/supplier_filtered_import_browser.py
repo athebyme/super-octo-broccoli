@@ -1052,25 +1052,48 @@ def run():
             page.locator(
                 f'.mp-row .mp-check input[type="checkbox"][value="{product_id}"]',
             ).check()
+        page.mouse.move(100, 450)
+        page.mouse.wheel(0, 600)
+        page.wait_for_function("""() => {
+            const rail = document.querySelector('.mp-bulkbar');
+            const selected = Array.from(document.querySelectorAll('.mp-row.is-selected'));
+            if (!rail || selected.length !== 2) return false;
+            const railTop = rail.getBoundingClientRect().top;
+            const rowRects = selected.map(row => row.getBoundingClientRect());
+            return window.scrollY + window.innerHeight >=
+                    document.documentElement.scrollHeight - 1 &&
+                rowRects.every(rect => rect.top >= 0 && rect.bottom <= railTop);
+        }""")
         before_confirmation_position = page.evaluate("""() => {
             const selectedRows = Array.from(document.querySelectorAll('.mp-row.is-selected'));
             const rects = selectedRows.map(row => row.getBoundingClientRect());
+            const rail = document.querySelector('.mp-bulkbar');
+            const railRect = rail && rail.getBoundingClientRect();
             return {
                 scrollY: window.scrollY,
                 viewportHeight: window.innerHeight,
                 pageHeight: document.documentElement.scrollHeight,
                 selectedCount: selectedRows.length,
+                selectedIds: selectedRows.map(row => row.querySelector('.mp-check input')?.value),
+                railTop: railRect && railRect.top,
+                railBottom: railRect && railRect.bottom,
+                railVisible: !!railRect && railRect.top < window.innerHeight && railRect.bottom > 0,
                 selectedRowsVisible: rects.length === 2 && rects.every(rect =>
-                    rect.top >= 0 && rect.bottom <= window.innerHeight
+                    rect.top >= 0 && rect.bottom <= window.innerHeight &&
+                    !!railRect && rect.bottom <= railRect.top
                 ),
             };
         }""")
-        assert before_confirmation_position["scrollY"] > 0, (
-            "selecting the last two signed-batch rows must scroll the page down",
+        assert before_confirmation_position["scrollY"] + before_confirmation_position[
+            "viewportHeight"
+        ] >= before_confirmation_position["pageHeight"] - 1, (
+            "user scroll should reach the bottom of the signed batch",
             before_confirmation_position,
         )
         assert before_confirmation_position["pageHeight"] > before_confirmation_position["viewportHeight"]
         assert before_confirmation_position["selectedCount"] == 2
+        assert before_confirmation_position["selectedIds"] == wb_selected_ids
+        assert before_confirmation_position["railVisible"]
         assert before_confirmation_position["selectedRowsVisible"], before_confirmation_position
         checks.append("last_two_signed_batch_rows_are_selected_from_a_measured_scrolled_position")
         selected_before_create = page.evaluate("""() => {
@@ -1078,6 +1101,23 @@ def run():
             return proxy ? proxy.selected.slice() : null;
         }""")
         assert selected_before_create == wb_selected_ids
+        create_launcher = page.locator('button[data-bulk-action-group="create"]')
+        assert create_launcher.count() == 1 and create_launcher.is_enabled()
+        direct_create_action = create_launcher.get_attribute("data-bulk-direct-action")
+        if direct_create_action:
+            assert direct_create_action == "push_wb"
+        else:
+            create_launcher.click()
+            wb_create_choice = page.locator('[data-bulk-action-key="push_wb"]')
+            wb_create_choice.wait_for(state="visible")
+            assert wb_create_choice.locator(
+                ".mp-bulk-intent-option-label",
+            ).inner_text() == "Создать карточки WB"
+            assert wb_create_choice.locator(
+                ".mp-bulk-intent-option-hint",
+            ).inner_text() == "для 2 товаров, ещё не связанных с WB"
+            create_launcher.click()
+            assert not wb_create_choice.is_visible()
         invoke_workspace_action(page, "push_wb")
         confirmation = page.get_by_role("alertdialog")
         confirmation.wait_for(state="visible")
