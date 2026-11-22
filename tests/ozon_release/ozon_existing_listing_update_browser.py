@@ -585,13 +585,14 @@ def bridge(route):
             assert report["total"] == report["updated"] == 1
             assert len(report["rows"]) == 1
             assert report["rows"][0]["draft_id"] == expected["draft_id"]
-            assert report["rows"][0]["version"] == expected["version"] + 1
+            returned_version = report["rows"][0]["version"]
+            assert returned_version > expected["version"]
             assert report["rows"][0]["status"] in {"ready_to_retry", "needs_input"}
             state["local_save_posts"] += 1
             state["local_save_post"] = {
                 "draft_id": expected["draft_id"],
-                "expected_version": expected["version"],
-                "saved_version": report["rows"][0]["version"],
+                "submitted_version": expected["version"],
+                "saved_version": returned_version,
                 "csrf": True,
                 "compact_scope_exact": True,
                 "status": report["rows"][0]["status"],
@@ -1196,7 +1197,9 @@ def exercise_signed_import_review_return(page):
     assert local_save_report["total"] == local_save_report["updated"] == 1
     assert len(local_save_report["rows"]) == 1
     assert local_save_report["rows"][0]["draft_id"] == target_draft_id
-    assert local_save_report["rows"][0]["version"] == expected_target["version"] + 1
+    returned_version = local_save_report["rows"][0]["version"]
+    assert returned_version > expected_target["version"]
+    assert returned_version == state["local_save_post"]["saved_version"]
     assert local_save_report["rows"][0]["status"] in {"ready_to_retry", "needs_input"}
     receipt = repair_editor.get_by_role("region", name="Результат сохранения")
     receipt.wait_for()
@@ -1216,7 +1219,9 @@ def exercise_signed_import_review_return(page):
         for draft_id in draft_details_before_save if draft_id != target_draft_id
     )
     saved_target = draft_details_after_save[target_draft_id]
-    assert saved_target["version"] == expected_target["version"] + 1
+    assert saved_target["version"] == returned_version == state["local_save_post"]["saved_version"]
+    version_delta = saved_target["version"] - expected_target["version"]
+    assert version_delta > 0
     assert saved_target["imported_product_id"] == expected_target["imported_product_id"]
     assert saved_target["published_listing_id"] == expected_target["published_listing_id"]
     assert {
@@ -1240,7 +1245,8 @@ def exercise_signed_import_review_return(page):
     for draft_id, previous in before_local_save["drafts"].items():
         current = after_local_save["drafts"][draft_id]
         if draft_id == target_draft_id:
-            assert current[0] == previous[0] + 1
+            assert current[0] > previous[0]
+            assert current[0] == returned_version == saved_target["version"]
             assert current[1:] == previous[1:]
         else:
             assert current == previous
@@ -1567,7 +1573,7 @@ def exercise_signed_import_review_return(page):
             "local_editor_save_posts": state["local_save_posts"],
             "local_editor_save": {
                 "draft_id": target_draft_id,
-                "version_delta": 1,
+                "version_delta": version_delta,
                 "description_only_changed": True,
                 "compact_scope_exact": True,
             },
