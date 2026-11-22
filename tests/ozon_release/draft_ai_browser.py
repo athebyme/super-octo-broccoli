@@ -29,6 +29,7 @@ for asset in manifest.values():
 report = {'status':'running','checks':[],'layouts':[],'js_errors':[],
           'unexpected_http':[],'external':[],'provider_attempts':0,'posts':{},
           'review_responses':[],
+          'review_progress_states':{},
           'scope':'synthetic_seller_ai_review'}
 temporary = tempfile.TemporaryDirectory(prefix='ozon-ai-browser-')
 os.environ.update(DATABASE_URL='sqlite:///'+str(Path(temporary.name)/'app.sqlite'),
@@ -330,6 +331,75 @@ try:
             page.locator('#ozon-draft-editor:not([v-cloak])').wait_for()
             page.locator('.ode-ai-item').first.wait_for()
             assert page.locator('.ode-ai-item').count() == 2
+
+            # Hold one review request at the browser boundary. This proves the
+            # UI distinguishes an in-flight decision from a settled unknown
+            # result without sleeping or creating a service-side effect.
+            pending_page = context.new_page(); pending_page.set_default_timeout(20000)
+            pending_page.on('pageerror',lambda error:report['js_errors'].append(str(error)))
+            pending_page.goto(base+'/marketplaces/drafts/'+str(draft_id)+'?ai_item_id=21')
+            pending_page.locator('#ozon-draft-editor:not([v-cloak])').wait_for()
+            pending_page.locator('.ode-ai-item').first.wait_for()
+            pending_page.locator('.ode-ai-item').first.get_by_role('checkbox').check()
+            pending_page.get_by_role('button',name='Принять выбранные').click()
+            pending_page.locator('.ode-ai-dialog[open]').get_by_role('checkbox').check()
+            review_path = '/marketplaces/api/drafts/'+str(draft_id)+'/ai-suggestions/apply'
+            review_post_count = report['posts'].get(review_path,0)
+            pending_effect_count = state['review_effects']
+            pending_page.evaluate('''() => {
+                const fixture = {started:false, resolve:null, reject:null};
+                fixture.originalFetch = window.fetch.bind(window);
+                fixture.promise = new Promise((resolve,reject) => {
+                    fixture.resolve = resolve; fixture.reject = reject;
+                });
+                window.__reviewFetchFixture = fixture;
+                window.fetch = (input,options) => {
+                    const path = new URL(typeof input === 'string' ? input : input.url,location.href).pathname;
+                    if (path === '''+json.dumps(review_path)+''' && !fixture.started) {
+                        fixture.started = true; return fixture.promise;
+                    }
+                    return fixture.originalFetch(input,options);
+                };
+            }''')
+            pending_page.locator('.ode-ai-dialog[open]').get_by_role('button',name='Подтвердить решение').click()
+            pending_page.wait_for_function('window.__reviewFetchFixture?.started === true')
+            progress = pending_page.locator('[data-review-progress]')
+            progress.wait_for()
+            assert 'Дождитесь ответа' in progress.inner_text()
+            assert pending_page.locator('[data-review-unknown]').count() == 0
+            assert pending_page.get_by_role('button',name='Прочитать состояние').count() == 0
+            assert pending_page.get_by_role('button',name='Повторить то же решение').count() == 0
+            report['review_progress_states']['in_flight'] = {
+                'progress_visible':progress.is_visible(),
+                'unknown_hidden':pending_page.locator('[data-review-unknown]').count() == 0,
+                'read_hidden':pending_page.get_by_role('button',name='Прочитать состояние').count() == 0,
+                'replay_hidden':pending_page.get_by_role('button',name='Повторить то же решение').count() == 0,
+            }
+            pending_page.evaluate('''() => {
+                const fixture = window.__reviewFetchFixture;
+                window.fetch = fixture.originalFetch;
+                fixture.reject(new TypeError('controlled fixture transport loss'));
+            }''')
+            pending_unknown = pending_page.locator('[data-review-unknown]')
+            pending_unknown.wait_for()
+            pending_read = pending_page.get_by_role('button',name='Прочитать состояние')
+            pending_page.wait_for_function('''() => {
+                const button = [...document.querySelectorAll('[data-review-unknown] button')]
+                    .find(node => node.textContent.trim() === 'Прочитать состояние');
+                return !!button && !button.disabled;
+            }''')
+            assert pending_read.is_enabled()
+            report['review_progress_states']['settled_unknown'] = {
+                'unknown_visible':pending_unknown.is_visible(),
+                'read_enabled':pending_read.is_enabled(),
+            }
+            assert report['posts'].get(review_path,0) == review_post_count
+            assert state['review_effects'] == pending_effect_count
+            pending_page.close()
+            assert all(report['review_progress_states']['in_flight'].values())
+            assert all(report['review_progress_states']['settled_unknown'].values())
+            passed('pending_review_shows_progress_until_controlled_transport_loss')
+
             page.locator('.ode-ai-item details').first.locator('summary').click()
             assert page.locator('.ode-ai-item q').first.is_visible()
             assert page.locator('.ode-ai-item q').first.inner_text() == 'Цвет — Красный. Фактура — Гладкая.'
