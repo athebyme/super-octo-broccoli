@@ -6,7 +6,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261122-bulk-intent-rail-r58') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261122-bulk-intent-mobile-rail-r58') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
     'wbConnected': wb_connected,
@@ -35,7 +35,7 @@
         'wbPreviewBase': '/my-products/',
         'wbSelectionResolve': url_for('products_selection_resolve'),
         'wbBulkEdit': url_for('products_bulk_edit'),
-        'supplierCatalog': url_for('supplier_catalog'),
+        'supplierCatalog': url_for('supplier_catalog', action='import'),
         'wbPriceChange': url_for('prices.prices_change'),
         'ozonCommercial': url_for('marketplace_commercial.index'),
         'ozonWorkspaceUpdateHandoff': url_for('marketplace_listings.workspace_update_handoff'),
@@ -52,8 +52,18 @@
      data-supplier-refresh-handoff="active"{% endif %}>
 {% raw %}
     <header class="shk-head">
-        <div>
-            <h1 class="shk-head-title">{{ supplierRefreshBatchMode ? 'Обновление из каталога' : (supplierRefreshResultBatchMode ? 'Обновлённые товары' : (importBatchMode ? 'Товары из импорта' : 'Мои товары')) }}</h1>
+        <div class="mp-head-title-wrap">
+            <div class="mp-head-title-line">
+                <h1 class="shk-head-title">{{ supplierRefreshBatchMode ? 'Обновление из каталога' : (supplierRefreshResultBatchMode ? 'Обновлённые товары' : (importBatchMode ? 'Товары из импорта' : 'Мои товары')) }}</h1>
+                <details v-if="!supplierRefreshBatchMode && !importBatchMode" ref="headMore"
+                         class="mp-head-more" @toggle="onHeadMoreToggle">
+                    <summary aria-label="Другие разделы">Разделы</summary>
+                    <nav class="mp-head-more-menu" aria-label="Работа с ценами">
+                        <a :href="urls.wbPriceChange">Цены WB</a>
+                        <a v-if="ozonEnabled" :href="urls.ozonPriceProposals">Ценовые заявки Ozon</a>
+                    </nav>
+                </details>
+            </div>
             <p class="shk-head-sub" v-if="supplierRefreshBatchMode">Выбор из классического списка будет проверен заново. Вы сможете посмотреть изменения перед применением.</p>
             <p class="shk-head-sub" v-if="supplierRefreshResultBatchMode">В списке только товары, обновлённые из каталога поставщика. Итог обновления остаётся на этой странице.</p>
             <p class="shk-head-sub" v-if="importBatchMode && !supplierRefreshResultBatchMode">Выберите товары из этой подборки для массовых действий.</p>
@@ -70,13 +80,6 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="shk-btn-icon"><path d="M12 5v14M5 12h14"/></svg>
                 Импортировать товары
             </a>
-            <details ref="headMore" class="mp-head-more" @toggle="onHeadMoreToggle">
-                <summary>Другие разделы</summary>
-                <nav class="mp-head-more-menu" aria-label="Работа с ценами">
-                    <a :href="urls.wbPriceChange">Цены WB</a>
-                    <a v-if="ozonEnabled" :href="urls.ozonPriceProposals">Ценовые заявки Ozon</a>
-                </nav>
-            </details>
         </div>
     </header>
 
@@ -347,6 +350,25 @@
 
     <!-- Выбранный список сразу показывает четыре понятных намерения. -->
     <sh-bulk-bar class="mp-bulkbar" :count="selected.length" @clear="selected = []">
+        <div class="mp-bulk-topline">
+            <details ref="moreActions" class="mp-more-actions" v-if="selected.length"
+                     @toggle="onMoreActionsToggle">
+                <summary>Ещё</summary>
+                <div class="mp-more-actions-menu" role="group" aria-label="Дополнительные действия">
+                    <span class="shk-actions-group-title">Дополнительно</span>
+                    <button v-for="action in secondaryActions" :key="action.key" type="button"
+                            class="shk-actions-item" :class="{'is-danger': action.danger}"
+                            :data-bulk-action-key="action.key"
+                            :disabled="action.disabled"
+                            @click="startAction(action); $event.currentTarget.closest('details').open = false">
+                        <span class="shk-actions-item-label">{{ action.label }}</span>
+                        <span v-if="action.hint" class="shk-actions-item-hint">{{ action.hint }}</span>
+                    </button>
+                </div>
+            </details>
+            <button type="button" class="mp-bulk-clear" aria-label="Снять выбор"
+                    @click="selected = []">Снять</button>
+        </div>
         <div class="mp-bulk-intents" role="group" aria-label="Основные действия">
             <div v-for="group in bulkIntentGroups" :key="group.key" class="mp-bulk-intent-group"
                  @keydown.esc.stop.prevent="closeBulkActionPanel(true)">
@@ -356,8 +378,8 @@
                         :aria-expanded="group.actions.length !== 1 ? (activeBulkActionGroup === group.key ? 'true' : 'false') : null"
                         @click="activateBulkIntent(group, $event)">
                     <span class="mp-bulk-intent-name">{{ group.label }}</span>
-                    <span class="mp-bulk-intent-detail">
-                        {{ group.actions.length === 1 ? group.actions[0].shortLabel : group.actions.length > 1 ? 'Выбрать действие' : 'Проверить доступность' }}
+                    <span v-if="group.actions.length === 1" class="mp-bulk-intent-detail">
+                        {{ group.actions[0].key === 'common_content' ? 'Общий контент' : ['wb_edit', 'wb_prices', 'push_wb'].includes(group.actions[0].key) ? 'WB' : group.actions[0].key === 'refresh_supplier' ? 'Поставщик' : 'Ozon' }}
                     </span>
                     <svg v-if="group.actions.length !== 1" viewBox="0 0 24 24" fill="none"
                          stroke="currentColor" stroke-width="2" aria-hidden="true" class="mp-bulk-intent-caret">
@@ -379,21 +401,6 @@
                 </div>
             </div>
         </div>
-        <details ref="moreActions" class="mp-more-actions" v-if="selected.length"
-                 @toggle="onMoreActionsToggle">
-            <summary>Ещё</summary>
-            <div class="mp-more-actions-menu" role="group" aria-label="Дополнительные действия">
-                <span class="shk-actions-group-title">Дополнительно</span>
-                <button v-for="action in secondaryActions" :key="action.key" type="button"
-                        class="shk-actions-item" :class="{'is-danger': action.danger}"
-                        :data-bulk-action-key="action.key"
-                        :disabled="action.disabled"
-                        @click="startAction(action); $event.currentTarget.closest('details').open = false">
-                    <span class="shk-actions-item-label">{{ action.label }}</span>
-                    <span v-if="action.hint" class="shk-actions-item-hint">{{ action.hint }}</span>
-                </button>
-            </div>
-        </details>
     </sh-bulk-bar>
 
     <sh-confirm :open="confirm.open" :title="confirm.title" :message="confirm.message"
