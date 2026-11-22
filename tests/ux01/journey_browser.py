@@ -345,7 +345,179 @@ def set_theme(page, theme: str):
     return actual
 
 
+def supplier_catalog_assertions(page, name: str):
+    """Check the redesigned supplier entry/list routes without a journey banner."""
+    assert page.locator(".preparation-journey").count() == 0, name
+
+    if name == "supplier_catalog":
+        assert page.get_by_role("heading", name="Каталог поставщиков", exact=True).count() == 1
+        card = page.locator(".sc-card").filter(has_text="UX Synthetic Supplier")
+        card.wait_for()
+        assert card.count() == 1
+        primary = card.locator("a.sc-card-primary")
+        assert primary.count() == 1
+        assert primary.inner_text().strip() == "Открыть товары"
+        primary_href = primary.get_attribute("href")
+        assert primary_href and urlsplit(primary_href).path == urlsplit(PAGE_PATHS["supplier_products"]).path, (
+            name, primary_href, PAGE_PATHS["supplier_products"],
+        )
+
+        # Follow the visible supplier action through the real local route, then
+        # return to the catalog. This is a GET-only transition.
+        primary.click()
+        expected_products_path = urlsplit(PAGE_PATHS["supplier_products"]).path
+        page.wait_for_url(lambda value: urlsplit(value).path == expected_products_path)
+        page.wait_for_load_state("networkidle")
+        assert page.get_by_role("heading", name="UX Synthetic Supplier", exact=True).count() == 1
+        assert page.locator("nav.sc-intent-switch a[aria-current='page']").inner_text().strip() == "Импорт"
+        page.go_back(wait_until="domcontentloaded")
+        page.wait_for_load_state("networkidle")
+        assert urlsplit(page.url).path == urlsplit(PAGE_PATHS["supplier_catalog"]).path
+
+        # When a supplier has imported items the catalog exposes a separate
+        # local-refresh review form. Verify its route and CSRF contract without
+        # submitting it; this synthetic supplier has no imported item yet.
+        secondary = card.get_by_role("button", name="Проверить локальные изменения", exact=True)
+        if secondary.count():
+            form = secondary.locator("xpath=ancestor::form[1]")
+            assert form.get_attribute("method").upper() == "POST"
+            assert urlsplit(form.get_attribute("action")).path == "/supplier-catalog/update/review"
+            assert form.locator('input[name="csrf_token"]').count() == 1
+            assert form.locator('input[name="update_all_for_supplier"][value="1"]').count() == 1
+            assert form.locator('input[name="return_to"]').get_attribute("value") == PAGE_PATHS["supplier_catalog"]
+        else:
+            assert card.get_by_role("link", name="Открыть товары", exact=True).count() == 1
+
+        focus_target = f'a.sc-card-primary[href="{primary_href}"]'
+        check_name = "supplier_catalog_single_entry_and_local_refresh_route"
+    elif name == "supplier_products":
+        assert page.get_by_role("heading", name="UX Synthetic Supplier", exact=True).count() == 1
+        breadcrumb = page.get_by_role("link", name="Поставщики", exact=True)
+        assert breadcrumb.count() == 1
+        assert urlsplit(breadcrumb.get_attribute("href")).path == urlsplit(PAGE_PATHS["supplier_catalog"]).path
+
+        switch = page.locator("nav.sc-intent-switch[aria-label='Действие с товарами поставщика']")
+        assert switch.count() == 1
+        links = switch.locator("a")
+        assert links.count() == 2
+        import_link = switch.get_by_role("link", name="Импорт", exact=True)
+        updates_link = switch.get_by_role("link", name="Обновления", exact=True)
+        assert import_link.count() == updates_link.count() == 1
+        assert import_link.get_attribute("aria-current") == "page"
+        assert updates_link.get_attribute("aria-current") is None
+        product_path = urlsplit(PAGE_PATHS["supplier_products"]).path
+        import_href = import_link.get_attribute("href")
+        update_href = updates_link.get_attribute("href")
+        import_query = parse_qs(urlsplit(import_href).query)
+        update_query = parse_qs(urlsplit(update_href).query)
+        assert urlsplit(import_href).path == product_path
+        assert import_query.get("intent") == ["import"]
+        assert import_query.get("stock_status") == ["all"]
+        assert update_query.get("intent") == ["updates"]
+        assert update_query.get("updates_only") == ["1"]
+        assert update_query.get("show_imported") == ["1"]
+        assert update_query.get("stock_status") == ["all"]
+
+        import_panel = page.locator("section.sc-action-panel--import")
+        assert import_panel.count() == 1 and import_panel.is_visible()
+        assert page.locator("section.sc-action-panel").count() == 1
+        assert import_panel.get_by_role("heading", name="Добавить товары", exact=True).count() == 1
+        import_copy = import_panel.inner_text()
+        assert "После импорта откроются «Мои товары»." in import_copy, import_copy
+        assert "Отправки на площадки здесь нет." in import_copy, import_copy
+        import_form = page.locator("form#supplier-import-form")
+        assert import_form.count() == 1
+        assert import_form.get_attribute("method").upper() == "POST"
+        assert urlsplit(import_form.get_attribute("action")).path == "/supplier-catalog/import"
+        import_button = page.locator("button[form='supplier-import-form'].sc-action-submit")
+        assert import_button.count() == 1 and import_button.is_disabled()
+
+        source_tile = page.locator(".sc-product-tile").filter(has_text="Synthetic source product")
+        source_detail = source_tile.locator("a.sc-product-title")
+        assert source_tile.count() == source_detail.count() == 1
+        assert urlsplit(source_detail.get_attribute("href")).path == urlsplit(PAGE_PATHS["supplier_source_detail"]).path
+        import_boxes = page.locator('input[data-selection-kind="import"]')
+        assert import_boxes.count() == 1 and import_boxes.first.is_enabled()
+
+        # The alternate mode is a safe GET and contains only the local refresh
+        # review action. Return to Import so the existing page/layout matrix
+        # continues to measure the default seller path.
+        updates_link.click()
+        page.wait_for_url(lambda value: parse_qs(urlsplit(value).query).get("intent") == ["updates"])
+        page.wait_for_load_state("networkidle")
+        assert urlsplit(page.url).path == product_path
+        update_switch = page.locator("nav.sc-intent-switch[aria-label='Действие с товарами поставщика']")
+        assert update_switch.get_by_role("link", name="Обновления", exact=True).get_attribute("aria-current") == "page"
+        updates_panel = page.locator("section.sc-action-panel--updates")
+        assert updates_panel.count() == 1 and updates_panel.is_visible()
+        assert page.locator("section.sc-action-panel").count() == 1
+        assert page.locator("section.sc-action-panel--import").count() == 0
+        update_copy = updates_panel.inner_text()
+        assert "Перед сохранением покажем отличия." in update_copy, update_copy
+        assert "Данные в WB и Ozon не меняются." in update_copy, update_copy
+        update_form = page.locator("form#supplier-update-form")
+        assert update_form.count() == 1
+        assert update_form.get_attribute("method").upper() == "POST"
+        assert urlsplit(update_form.get_attribute("action")).path == "/supplier-catalog/update/review"
+        assert update_form.locator('input[name="csrf_token"]').count() == 1
+        assert page.locator('input[data-selection-kind="update"]').count() == 0
+        assert updates_panel.locator(".sc-action-empty").count() == 1
+
+        update_switch.get_by_role("link", name="Импорт", exact=True).click()
+        page.wait_for_url(lambda value: parse_qs(urlsplit(value).query).get("intent") == ["import"])
+        page.wait_for_load_state("networkidle")
+        assert page.locator("section.sc-action-panel--import").count() == 1
+        assert page.locator("nav.sc-intent-switch a[aria-current='page']").inner_text().strip() == "Импорт"
+
+        focus_target = "nav.sc-intent-switch a[aria-current='page']"
+        check_name = "supplier_products_single_intent_local_import_and_update_routes"
+    else:
+        raise AssertionError(("Unexpected supplier catalog page", name))
+
+    target = page.locator(focus_target)
+    target.wait_for()
+    page.evaluate("() => document.activeElement instanceof HTMLElement && document.activeElement.blur()")
+    keyboard_reached_target = False
+    for _ in range(160):
+        page.keyboard.press("Tab")
+        if target.evaluate("element => document.activeElement === element"):
+            keyboard_reached_target = True
+            break
+    assert keyboard_reached_target, {"page": name, "target": focus_target, "active": page.evaluate("() => document.activeElement?.outerHTML")}
+    focus = target.evaluate("""el => {
+        const parse = value => {
+            const match = value.match(/^rgba?\\(([^)]+)\\)$/);
+            if (!match) return null;
+            const parts = match[1].split(/[,\\s/]+/).filter(Boolean).map(Number);
+            return parts.length < 3 ? null : {rgb:parts.slice(0,3), alpha:Number.isFinite(parts[3]) ? parts[3] : 1};
+        };
+        const blend = (front, back) => front.rgb.map((value,index) => value*front.alpha+back.rgb[index]*(1-front.alpha));
+        const bodyBg = parse(getComputedStyle(document.body).backgroundColor) || {rgb:[255,255,255],alpha:1};
+        let bg = bodyBg.rgb;
+        const parents=[]; for(let node=el.parentElement;node;node=node.parentElement) parents.unshift(node);
+        parents.forEach(node => { const color=parse(getComputedStyle(node).backgroundColor); if(color && color.alpha>0) bg=blend(color,{rgb:bg,alpha:1}); });
+        const outline=parse(getComputedStyle(el).outlineColor);
+        const visible=outline ? blend(outline,{rgb:bg,alpha:1}) : null;
+        const lum=rgb=>{const c=rgb.map(v=>{v/=255;return v<=.04045?v/12.92:Math.pow((v+.055)/1.055,2.4)});return .2126*c[0]+.7152*c[1]+.0722*c[2]};
+        const contrast=visible ? (Math.max(lum(visible),lum(bg))+.05)/(Math.min(lum(visible),lum(bg))+.05) : null;
+        return {active:document.activeElement===el,visible:el.matches(':focus-visible'),width:getComputedStyle(el).outlineWidth,color:getComputedStyle(el).outlineColor,contrast,height:el.getBoundingClientRect().height};
+    }""")
+    assert focus["active"] and focus["visible"], (name, focus)
+    assert float(focus["width"].removesuffix("px")) >= 2, (name, focus)
+    assert focus["contrast"] is not None and focus["contrast"] >= 3, (name, focus)
+    assert focus["height"] >= 44, (name, focus)
+    REPORT["checks"].append(check_name)
+    REPORT["interactions"].append({
+        "name": name + "_supplier_action_keyboard_focus",
+        "focus": focus,
+        "keyboard_tab_reached_action": True,
+    })
+    return None
+
+
 def journey_assertions(page, name: str, current: str, account_id: int | None = None):
+    if name in {"supplier_catalog", "supplier_products"}:
+        return supplier_catalog_assertions(page, name)
     section = page.locator("section.preparation-journey")
     section.wait_for()
     text = section.inner_text()
@@ -521,22 +693,40 @@ def geometry(page, name: str, width: int, theme: str):
     actual = set_theme(page, theme)
     result = page.evaluate("""pageName => {
         const overview = pageName === 'listing_vue';
+        const supplierCatalog = pageName === 'supplier_catalog';
+        const supplierProducts = pageName === 'supplier_products';
         const roots = Array.from(document.querySelectorAll(overview
             ? '#marketplace-detail-app .mdet-actions'
-            : '.preparation-journey, .preparation-listing-end-state'));
+            : supplierCatalog
+                ? '.sc-card'
+                : supplierProducts
+                    ? '.sc-products-page'
+                    : '.preparation-journey, .preparation-listing-end-state'));
         return roots.map(el => {
             const rect = el.getBoundingClientRect();
             const disclosure = el.querySelector('.preparation-journey-path ol');
             const nav = el.querySelector('nav');
+            const targetSelector = overview
+                ? '.mdet-upload-history, .mdet-update-draft-trigger'
+                : supplierCatalog
+                    ? '.sc-card-primary, .sc-card-secondary'
+                    : supplierProducts
+                        ? '.sc-intent-switch a, .sc-action-submit'
+                        : 'a';
             return {
-                kind: overview ? 'listing_actions' : el.classList.contains('preparation-journey') ? 'journey' : 'listing_end_state',
+                kind: overview
+                    ? 'listing_actions'
+                    : supplierCatalog
+                        ? 'supplier_catalog_card'
+                        : supplierProducts
+                            ? 'supplier_products_actions'
+                            : el.classList.contains('preparation-journey') ? 'journey' : 'listing_end_state',
                 left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width),
                 clientWidth: el.clientWidth, scrollWidth: el.scrollWidth,
                 pathClientWidth: disclosure?.clientWidth ?? null,
                 pathScrollWidth: disclosure?.scrollWidth ?? null,
                 navClientWidth: nav?.clientWidth ?? null, navScrollWidth: nav?.scrollWidth ?? null,
-                touchTargets: Array.from(el.querySelectorAll(overview
-                    ? '.mdet-upload-history, .mdet-update-draft-trigger' : 'a'))
+                touchTargets: Array.from(el.querySelectorAll(targetSelector))
                     .map(control => Math.round(control.getBoundingClientRect().height)),
                 summaryHeight: el.querySelector('summary') ? Math.round(el.querySelector('summary').getBoundingClientRect().height) : null,
             };
