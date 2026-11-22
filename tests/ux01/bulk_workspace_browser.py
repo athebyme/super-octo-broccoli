@@ -1874,6 +1874,7 @@ def run():
         dialog, unlinked_preview = open_supplier_refresh_preview(
             page, [fixture_ids["manual_id"]], refresh_preview_posts,
         )
+        checks.append("supplier_refresh_intent_dispatches_without_choice_menu")
         assert (unlinked_preview["eligible"], unlinked_preview["changed"],
                 unlinked_preview["skipped"]) == (0, 0, 1)
         assert unlinked_preview["items"][0]["state"] == "unlinked"
