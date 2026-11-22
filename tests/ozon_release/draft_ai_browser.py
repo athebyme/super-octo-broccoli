@@ -363,17 +363,19 @@ try:
             }''')
             pending_page.locator('.ode-ai-dialog[open]').get_by_role('button',name='Подтвердить решение').click()
             pending_page.wait_for_function('window.__reviewFetchFixture?.started === true')
-            progress = pending_page.locator('[data-review-progress]')
+            progress = pending_page.locator('.ode-ai-dialog [data-review-progress]')
             progress.wait_for()
             assert 'Дождитесь ответа' in progress.inner_text()
             assert pending_page.locator('[data-review-unknown]').count() == 0
             assert pending_page.get_by_role('button',name='Прочитать состояние').count() == 0
             assert pending_page.get_by_role('button',name='Повторить то же решение').count() == 0
+            assert pending_page.locator('[data-review-progress-panel]').get_attribute('aria-hidden') == 'true'
             report['review_progress_states']['in_flight'] = {
                 'progress_visible':progress.is_visible(),
                 'unknown_hidden':pending_page.locator('[data-review-unknown]').count() == 0,
                 'read_hidden':pending_page.get_by_role('button',name='Прочитать состояние').count() == 0,
                 'replay_hidden':pending_page.get_by_role('button',name='Повторить то же решение').count() == 0,
+                'panel_status_hidden_behind_dialog':pending_page.locator('[data-review-progress-panel]').get_attribute('aria-hidden') == 'true',
             }
             pending_page.evaluate('''() => {
                 const fixture = window.__reviewFetchFixture;
@@ -512,7 +514,43 @@ try:
                 return !!button && !button.disabled;
             }''')
             assert replay_button.is_enabled()
+            page.evaluate('''(path) => {
+                const fixture = {started:false, resolve:null, reject:null, input:null, options:null};
+                fixture.originalFetch = window.fetch.bind(window);
+                fixture.promise = new Promise((resolve,reject) => {
+                    fixture.resolve = resolve; fixture.reject = reject;
+                });
+                window.__reviewFetchFixture = fixture;
+                window.fetch = (input,options) => {
+                    const requestPath = new URL(typeof input === 'string' ? input : input.url,location.href).pathname;
+                    if (requestPath === path && !fixture.started) {
+                        fixture.started = true; fixture.input = input; fixture.options = options;
+                        return fixture.promise;
+                    }
+                    return fixture.originalFetch(input,options);
+                };
+            }''',review_path)
             replay_button.click()
+            page.wait_for_function('window.__reviewFetchFixture?.started === true')
+            replay_progress = page.locator('[data-review-progress-panel]')
+            replay_progress.wait_for()
+            assert replay_progress.is_visible()
+            assert replay_progress.get_attribute('aria-hidden') is None
+            assert page.locator('[data-review-unknown]').count() == 0
+            assert page.get_by_role('button',name='Прочитать состояние').count() == 0
+            assert page.get_by_role('button',name='Повторить то же решение').count() == 0
+            report['review_progress_states']['same_key_replay_in_flight'] = {
+                'progress_visible':replay_progress.is_visible(),
+                'accessible':replay_progress.get_attribute('aria-hidden') is None,
+                'unknown_hidden':page.locator('[data-review-unknown]').count() == 0,
+                'read_hidden':page.get_by_role('button',name='Прочитать состояние').count() == 0,
+                'replay_hidden':page.get_by_role('button',name='Повторить то же решение').count() == 0,
+            }
+            page.evaluate('''() => {
+                const fixture = window.__reviewFetchFixture;
+                window.fetch = fixture.originalFetch;
+                fixture.originalFetch(fixture.input,fixture.options).then(fixture.resolve,fixture.reject);
+            }''')
             page.get_by_text('Выбранные значения сохранены.').wait_for()
             page.locator('.ode-ai-item.is-accepted').wait_for()
             assert page.locator('.ode-ai-item.is-accepted').count() == 1
@@ -528,6 +566,7 @@ try:
                     'selected_count':1,'replayed':True,
                 },
             ], report['review_responses']
+            assert all(report['review_progress_states']['same_key_replay_in_flight'].values())
             after_ai = editor_document(page)
             assert after_ai['draft']['version'] == before_ai['draft']['version']
             assert after_ai['draft']['source_fact_hash'] == before_ai['draft']['source_fact_hash']

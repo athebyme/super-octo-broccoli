@@ -20,7 +20,7 @@
             const reviewKey = 'ozon-ai-single-review-v1:'+this.draftId;
             const generation = read(generateKey), review = read(reviewKey);
             return {doc:null, loading:false, busy:'', error:'', notice:'', sessionEnded:false,
-                localCsrf:this.csrf, selected:[], confirmGenerate:false, confirmReview:false, reviewAction:'',
+                localCsrf:this.csrf, selected:[], confirmGenerate:false, confirmReview:false, reviewAction:'', reviewDialogOpen:false,
                 generationPending:this.validGeneration(generation) ? generation : null,
                 generationProblem:exists(generateKey) && !this.validGeneration(generation),
                 generationRetry:false,
@@ -206,11 +206,12 @@
                 if (this.reviewLocked || !['apply','reject'].includes(action) || !this.selectedIds().length ||
                     this.doc.version !== this.version) return;
                 this.reviewAction = action; this.confirmReview = false;
-                this.$refs.reviewDialog.showModal(); this.$nextTick(() => this.$refs.reviewCheck?.focus());
+                this.$refs.reviewDialog.showModal(); this.reviewDialogOpen = true;
+                this.$nextTick(() => this.$refs.reviewCheck?.focus());
             },
             closeReview() {
                 if (this.busy === 'review') return;
-                this.$refs.reviewDialog?.close(); this.confirmReview = false;
+                this.$refs.reviewDialog?.close(); this.reviewDialogOpen = false; this.confirmReview = false;
             },
             async decide() {
                 if (this.reviewLocked || !this.confirmReview || !['apply','reject'].includes(this.reviewAction) ||
@@ -256,7 +257,7 @@
                         forget(this.reviewStorage()); this.reviewPending = null;
                     }
                     this.handle(error,'Результат решения неизвестен.');
-                } finally { this.busy = ''; this.$refs.reviewDialog?.close(); this.confirmReview = false; }
+                } finally { this.busy = ''; this.$refs.reviewDialog?.close(); this.reviewDialogOpen = false; this.confirmReview = false; }
             },
         },
         watch: {csrf(value) { if (typeof value === 'string' && value.length >= 20 && value.length <= 512) this.localCsrf = value; }},
@@ -275,6 +276,7 @@
             <p v-if="notice" class="ode-message ode-message--success" role="status">{{ notice }}</p>
             <div v-if="generationProblem || reviewProblem" class="ode-message ode-message--warning"><span>Сохранённое действие нельзя прочитать. Проверьте историю карточки перед новым действием.</span><button v-if="generationProblem" type="button" class="sh-btn sh-btn--secondary" @click="clearGenerationProblem">Я проверил AI-запуск</button><button v-if="reviewProblem" type="button" class="sh-btn sh-btn--secondary" @click="clearReviewProblem">Я проверил решение</button></div>
             <div v-if="generationPending" class="ode-message ode-message--warning"><span>Результат AI-запуска неизвестен. Сначала проверьте сохранённый ключ; повтор возможен только вручную с тем же запросом.</span><div class="ode-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy || sessionEnded" @click="readGenerate">Проверить запуск</button><button v-if="generationRetry" type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy || sessionEnded" @click="retryGenerate">Повторить тот же запрос</button></div></div>
+            <p v-if="reviewPending && busy === 'review'" class="ode-message ode-message--warning" role="status" data-review-progress-panel :aria-hidden="reviewDialogOpen ? 'true' : undefined">Отправляем решение. Дождитесь ответа.</p>
             <div v-if="reviewPending && busy !== 'review'" class="ode-message ode-message--warning" data-review-unknown><span>Результат решения неизвестен. Прочитайте текущее состояние, затем явно повторите то же решение с сохранённым ключом.</span><div class="ode-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy || sessionEnded" @click="readReview">Прочитать состояние</button><button v-if="reviewCanReplay" type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy || sessionEnded" @click="replayReview">Повторить то же решение</button></div></div>
             <p v-if="loading" class="ode-help" role="status">Читаем предложения…</p><button v-if="!loading" type="button" class="ode-text-button" :disabled="!!busy || sessionEnded" @click="loadSuggestions">Обновить предложения</button>
             <p v-if="doc?.item" class="ode-help">Состояние AI-запуска: {{ statusLabel(doc.item.status) }} · версия черновика {{ doc.version }}. <a v-if="/^ozon-ai-[0-9a-f]{32}$/.test(doc.item.run_uid)" :href="urls.runBase+doc.item.run_uid" class="ode-link">Открыть запуск</a></p>
