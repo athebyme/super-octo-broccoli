@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-22T19:41:42.444927+00:00",
+  "generated_at": "2026-11-22T20:08:11.541011+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "af522427c1a9499b1086d5817b5c5f666165bb9b5ce24012e5fa66629bc1b08a"
+      "sha256": "3da2f049427b7ecd1b61e53cab2f0f26c13f057fc69dff28a1dbfd7beb777448"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -2653,7 +2653,7 @@
     },
     {
       "path": "static/my-products-beta.js",
-      "sha256": "15a59439486a776d02d24b09d90d4f241b69e4c020ee3d445454b1816369acca"
+      "sha256": "8726bd7f60ebb48a0bda92d40cb0e1dc82ce39606f3e039bc053de174463f15a"
     },
     {
       "path": "static/operations-workspace.css",
@@ -4509,7 +4509,7 @@
     },
     {
       "path": "tests/test_my_products_supplier_refresh_handoff.py",
-      "sha256": "16d8a2fe4d62e5f7e303955707804547a9a02cf4b82ba298c20b5699b56a080f"
+      "sha256": "fd1726200e1d1dda45fa6f32aac140e7c201e6607954f91bedce2e39717baf94"
     },
     {
       "path": "tests/test_my_products_wb_workspace_handoff.py",
@@ -5273,7 +5273,7 @@
     },
     {
       "path": "tests/ux01/supplier_filtered_import_browser.py",
-      "sha256": "086950c403e6fabb384890232264b217a54b25b150d253cdc09d25776411e666"
+      "sha256": "9eb6a2955ccc083cb6b14d0ede38bbcba1765db5010e4ee40bcf21241fedd3fb"
     },
     {
       "path": "tests/ux01/wb_edit_browser.py",
@@ -5288,5 +5288,5 @@
       "sha256": "1365ad05c62c72d241724ee7a8a4370c7704362262c7e0f54e2d8cdaafeb0606"
     }
   ],
-  "aggregate_sha256": "4cf29f0d6f01386f5bbe4f6f3be40039fa9ada1dbbc435d68918789fec212161"
+  "aggregate_sha256": "3335d680e4753503c12b0fcca986f33e31864466b95d3d533ede9e2de5106815"
 }
