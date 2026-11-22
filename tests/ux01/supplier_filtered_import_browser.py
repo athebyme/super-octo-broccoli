@@ -314,6 +314,94 @@ def seed_supplier_update_review_rows(fixture_ids, imported_source_ids):
         }
 
 
+def seed_filtered_supplier_update_rows(supplier_id):
+    """Seed multi-page stale sources with exact seller-owned local copies.
+
+    One source has both a stale and already-current local copy, and one
+    matching source has no local copy for this seller.
+    """
+    with fixture.app.app_context():
+        seller_id = fixture.FIXTURE["seller_id"]
+        sources = []
+        stale_copies = []
+        for index in range(55):
+            source = SupplierProduct(
+                supplier_id=supplier_id,
+                external_id=f"R52-FILTERED-{index:03d}",
+                vendor_code=f"R52-FILTERED-{index:03d}",
+                title=f"R52 Filtered update {index:03d}",
+                description=f"Synthetic filtered-update source {index:03d}.",
+                brand="R52 Filtered update fixture",
+                category="Synthetic supplier category",
+                wb_category_name="Synthetic WB category",
+                wb_subject_id=7000,
+                wb_subject_name="Synthetic WB subject",
+                supplier_price=200 + index,
+                currency="RUB",
+                supplier_quantity=5,
+                supplier_status="in_stock",
+                status="ready",
+                ai_parsed_at=datetime(2026, 11, 21),
+                content_revision=2,
+            )
+            db.session.add(source)
+            sources.append(source)
+
+        unimported_source = SupplierProduct(
+            supplier_id=supplier_id,
+            external_id="R52-FILTERED-UNIMPORTED",
+            vendor_code="R52-FILTERED-UNIMPORTED",
+            title="R52 Filtered update unimported",
+            brand="R52 Filtered update fixture",
+            category="Synthetic supplier category",
+            wb_category_name="Synthetic WB category",
+            wb_subject_id=7000,
+            wb_subject_name="Synthetic WB subject",
+            supplier_quantity=5,
+            supplier_status="in_stock",
+            status="ready",
+            ai_parsed_at=datetime(2026, 11, 21),
+            content_revision=2,
+        )
+        db.session.add(unimported_source)
+        db.session.flush()
+
+        for index, source in enumerate(sources):
+            stale_copy = ImportedProduct(
+                seller_id=seller_id,
+                supplier_id=supplier_id,
+                supplier_product_id=source.id,
+                supplier_content_revision=1,
+                title=f"R52 stale local copy {index:03d}",
+                import_status="validated",
+            )
+            db.session.add(stale_copy)
+            stale_copies.append(stale_copy)
+            if index == 0:
+                db.session.add(ImportedProduct(
+                    seller_id=seller_id,
+                    supplier_id=supplier_id,
+                    supplier_product_id=source.id,
+                    supplier_content_revision=source.content_revision,
+                    title=source.title,
+                    import_status="validated",
+                ))
+        db.session.flush()
+        current_duplicate = ImportedProduct.query.filter_by(
+            seller_id=seller_id,
+            supplier_id=supplier_id,
+            supplier_product_id=sources[0].id,
+            supplier_content_revision=sources[0].content_revision,
+        ).one()
+        db.session.commit()
+        return {
+            "source_ids": [source.id for source in sources],
+            "stale_copy_ids": [copy.id for copy in stale_copies],
+            "current_duplicate_copy_id": current_duplicate.id,
+            "unimported_source_id": unimported_source.id,
+        }
+
+
 def assert_supplier_warning_contrast(page, selector):
     initial_theme = page.evaluate("document.documentElement.dataset.theme")
     for theme in ("light", "dark"):
@@ -1506,6 +1594,344 @@ def run():
             "confirm_post_count": len(supplier_confirm_posts),
         }
 
+        # Selecting stale sources from a filtered catalog spans the initial
+        # 50-row page without turning the update into a supplier-wide action.
+        filtered_update_fixture = seed_filtered_supplier_update_rows(
+            fixture_ids["supplier_id"],
+        )
+        filtered_update_filters = {
+            "page": "1",
+            "search": "R52 Filtered update",
+            "show_imported": "1",
+            "updates_only": "1",
+            "stock_status": "in_stock",
+            "wb_filter": "not_on_wb",
+            "ai_filter": "ai_parsed",
+        }
+        filtered_update_path = "/supplier-catalog/{}/products?{}".format(
+            fixture_ids["supplier_id"], urlencode(filtered_update_filters),
+        )
+        filtered_catalog_path = (
+            f"/supplier-catalog/{fixture_ids['supplier_id']}/products"
+        )
+        page.set_viewport_size({"width": 320, "height": 900})
+        filtered_page_response = page.goto(
+            fixture.BASE + filtered_update_path,
+            wait_until="domcontentloaded",
+        )
+        assert filtered_page_response and filtered_page_response.status == 200
+        page.wait_for_load_state("networkidle")
+        filtered_source_ids = filtered_update_fixture["source_ids"]
+        unimported_source_id = str(filtered_update_fixture["unimported_source_id"])
+        ordinary_update_inputs = page.locator(
+            'input[form="supplier-update-form"][name="update_product_ids"]',
+        )
+        ordinary_visible_ids = ordinary_update_inputs.evaluate_all(
+            "items => items.map(item => item.value)",
+        )
+        assert len(ordinary_visible_ids) == 50, len(ordinary_visible_ids)
+        assert ordinary_visible_ids == [str(value) for value in filtered_source_ids[:50]]
+        assert str(filtered_source_ids[54]) not in ordinary_visible_ids
+        assert unimported_source_id not in ordinary_visible_ids
+        assert ordinary_update_inputs.evaluate_all(
+            "items => items.filter(item => item.checked).map(item => item.value)",
+        ) == []
+
+        filtered_update_link = page.locator("a[data-supplier-filter-update-select]")
+        assert filtered_update_link.count() == 1
+        assert filtered_update_link.is_visible()
+        assert filtered_update_link.inner_text().strip() == (
+            "Выбрать обновления по фильтру (55)"
+        )
+        filtered_link_geometry = filtered_update_link.evaluate("""element => {
+            const rect = element.getBoundingClientRect();
+            return {
+                height: rect.height,
+                left: rect.left,
+                right: rect.right,
+                viewport: document.documentElement.clientWidth,
+                scroll: document.documentElement.scrollWidth,
+            };
+        }""")
+        assert filtered_link_geometry["height"] >= 44
+        assert filtered_link_geometry["left"] >= 0
+        assert filtered_link_geometry["right"] <= 320
+        assert filtered_link_geometry["scroll"] <= 321
+        filtered_select_href = urlsplit(filtered_update_link.get_attribute("href"))
+        assert filtered_select_href.path == (
+            f"/supplier-catalog/{fixture_ids['supplier_id']}/products"
+        )
+        filtered_select_query = parse_qs(filtered_select_href.query, keep_blank_values=True)
+        assert filtered_select_query == {
+            **{key: [value] for key, value in filtered_update_filters.items()},
+            "select_all": ["updates"],
+        }
+
+        update_selection_screenshot = "supplier-filtered-update-selection-dark-320.png"
+        with page.expect_response(
+            lambda response: urlsplit(response.url).path == filtered_select_href.path
+            and response.request.method == "GET"
+            and parse_qs(urlsplit(response.url).query, keep_blank_values=True)
+            == filtered_select_query,
+        ) as filtered_selection_response:
+            filtered_update_link.click()
+        assert filtered_selection_response.value.status == 200
+        page.wait_for_load_state("networkidle")
+        assert urlsplit(page.url).path == filtered_select_href.path
+        assert parse_qs(page.url.split("?", 1)[1], keep_blank_values=True) == filtered_select_query
+
+        all_update_inputs = page.locator(
+            'input[form="supplier-update-form"][name="update_product_ids"]',
+        )
+        assert all_update_inputs.count() == 55
+        selected_stale_source_ids = all_update_inputs.evaluate_all(
+            "items => items.filter(item => item.checked).map(item => item.value)",
+        )
+        expected_stale_source_ids = [str(value) for value in filtered_source_ids]
+        assert selected_stale_source_ids == expected_stale_source_ids
+        assert selected_stale_source_ids[-1] == str(filtered_source_ids[54])
+        assert unimported_source_id not in selected_stale_source_ids
+        assert page.locator(
+            'input[form="supplier-import-form"][name="product_ids"]:checked',
+        ).count() == 0
+        selection_screenshot_geometry = page.evaluate("""() => ({
+            viewport: document.documentElement.clientWidth,
+            scroll: document.documentElement.scrollWidth,
+            checkedUpdateCount: document.querySelectorAll(
+                'input[form="supplier-update-form"][name="update_product_ids"]:checked'
+            ).length,
+        })""")
+        assert selection_screenshot_geometry["viewport"] == 320
+        assert selection_screenshot_geometry["scroll"] <= 321
+        assert selection_screenshot_geometry["checkedUpdateCount"] == 55
+        page.screenshot(
+            path=REPORT_PATH.parent / update_selection_screenshot,
+            animations="disabled",
+        )
+
+        # The duplicate current copy is included in preview scope, while the
+        # explicitly unchecked source remains outside preview and apply.
+        excluded_source_id = str(filtered_source_ids[1])
+        current_duplicate_copy_id = filtered_update_fixture["current_duplicate_copy_id"]
+        page.locator(
+            f'input[form="supplier-update-form"][name="update_product_ids"]'
+            f'[value="{excluded_source_id}"]',
+        ).uncheck()
+        selected_after_exclusion = [
+            value for value in expected_stale_source_ids if value != excluded_source_id
+        ]
+        actual_selection_form_data = page.evaluate("""() => {
+            const form = document.querySelector('#supplier-update-form');
+            const data = new FormData(form);
+            return {
+                supplierIds: data.getAll('supplier_id'),
+                sourceIds: data.getAll('update_product_ids'),
+                fallbackIds: data.getAll('product_ids'),
+                allSupplier: data.getAll('update_all_for_supplier'),
+                returnTo: data.getAll('return_to'),
+                csrf: data.getAll('csrf_token'),
+            };
+        }""")
+        assert actual_selection_form_data["supplierIds"] == [
+            str(fixture_ids["supplier_id"]),
+        ]
+        assert actual_selection_form_data["sourceIds"] == selected_after_exclusion
+        assert actual_selection_form_data["fallbackIds"] == []
+        assert actual_selection_form_data["allSupplier"] == []
+        assert len(actual_selection_form_data["returnTo"]) == 1
+        assert urlsplit(actual_selection_form_data["returnTo"][0]).path == filtered_catalog_path
+        return_to_query = parse_qs(
+            urlsplit(actual_selection_form_data["returnTo"][0]).query,
+            keep_blank_values=True,
+        )
+        assert return_to_query == {
+            key: [value] for key, value in filtered_update_filters.items()
+        }
+        assert "select_all" not in return_to_query
+        assert actual_selection_form_data["csrf"] and actual_selection_form_data["csrf"][0]
+
+        local_copy_ids = filtered_update_fixture["stale_copy_ids"] + [
+            current_duplicate_copy_id,
+        ]
+        with fixture.app.app_context():
+            filtered_before_preview = {
+                row.id: (row.title, row.supplier_content_revision, row.updated_at)
+                for row in ImportedProduct.query.filter(
+                    ImportedProduct.seller_id == fixture.FIXTURE["seller_id"],
+                    ImportedProduct.supplier_id == fixture_ids["supplier_id"],
+                    ImportedProduct.id.in_(local_copy_ids),
+                ).all()
+            }
+
+        with page.expect_response(
+            lambda response: urlsplit(response.url).path == SUPPLIER_REVIEW_PATH
+            and response.request.method == "POST",
+        ) as filtered_review_response:
+            page.get_by_role("button", name=re.compile("Проверить выбранное")).click()
+        assert filtered_review_response.value.status == 200
+        page.locator("[data-supplier-review-summary]").wait_for(state="visible")
+        filtered_review_body = supplier_review_posts[-1]["body"]
+        assert filtered_review_body.get("supplier_id") == [
+            str(fixture_ids["supplier_id"]),
+        ]
+        assert filtered_review_body.get("update_product_ids") == selected_after_exclusion
+        assert not filtered_review_body.get("product_ids")
+        assert not filtered_review_body.get("update_all_for_supplier")
+        assert urlsplit(filtered_review_body["return_to"][0]).path == filtered_catalog_path
+        assert parse_qs(
+            urlsplit(filtered_review_body["return_to"][0]).query,
+            keep_blank_values=True,
+        ) == {
+            key: [value] for key, value in filtered_update_filters.items()
+        }
+        assert page.locator("[data-review-requested]").inner_text() == "55"
+        assert page.locator("[data-review-eligible]").inner_text() == "55"
+        assert page.locator("[data-review-changed]").inner_text() == "54"
+        assert page.locator("[data-review-already-current]").inner_text() == "1"
+        assert page.locator("[data-review-unlinked]").inner_text() == "0"
+        assert page.locator("[data-review-skipped]").inner_text() == "1"
+        assert page.locator(
+            f'[data-supplier-review-row][data-local-product-id="{current_duplicate_copy_id}"]'
+            '[data-row-state="unchanged"]',
+        ).count() == 1
+        assert page.locator(
+            f'[data-supplier-review-row][data-local-product-id="'
+            f'{filtered_update_fixture["stale_copy_ids"][0]}"]'
+            '[data-row-state="changed"]',
+        ).count() == 1
+        assert len(supplier_confirm_posts) == 3
+        with fixture.app.app_context():
+            reviewed_copy_state = {
+                row.id: (row.title, row.supplier_content_revision, row.updated_at)
+                for row in ImportedProduct.query.filter(
+                    ImportedProduct.seller_id == fixture.FIXTURE["seller_id"],
+                    ImportedProduct.supplier_id == fixture_ids["supplier_id"],
+                    ImportedProduct.id.in_(local_copy_ids),
+                ).all()
+            }
+        assert reviewed_copy_state == filtered_before_preview
+
+        filtered_confirm_form_data = page.evaluate("""() => {
+            const button = document.querySelector('[data-supplier-review-confirm]');
+            if (!button || !button.form) return null;
+            const data = new FormData(button.form);
+            return {
+                supplierIds: data.getAll('supplier_id'),
+                sourceIds: data.getAll('update_product_ids'),
+                fallbackIds: data.getAll('product_ids'),
+                allSupplier: data.getAll('update_all_for_supplier'),
+                returnTo: data.getAll('return_to'),
+                reviewTokens: data.getAll('review_token'),
+                csrf: data.getAll('csrf_token'),
+            };
+        }""")
+        assert filtered_confirm_form_data is not None
+        assert filtered_confirm_form_data["supplierIds"] == [
+            str(fixture_ids["supplier_id"]),
+        ]
+        assert filtered_confirm_form_data["sourceIds"] == selected_after_exclusion
+        assert filtered_confirm_form_data["fallbackIds"] == []
+        assert filtered_confirm_form_data["allSupplier"] == []
+        assert urlsplit(filtered_confirm_form_data["returnTo"][0]).path == filtered_catalog_path
+        assert parse_qs(
+            urlsplit(filtered_confirm_form_data["returnTo"][0]).query,
+            keep_blank_values=True,
+        ) == {
+            key: [value] for key, value in filtered_update_filters.items()
+        }
+        assert len(filtered_confirm_form_data["reviewTokens"]) == 1
+        assert filtered_confirm_form_data["csrf"] and filtered_confirm_form_data["csrf"][0]
+
+        with page.expect_response(
+            lambda response: urlsplit(response.url).path == SUPPLIER_CONFIRM_PATH
+            and response.request.method == "POST",
+        ) as filtered_confirm_response:
+            page.locator("[data-supplier-review-confirm]").click()
+        assert filtered_confirm_response.value.status == 302
+        filtered_confirm_body = supplier_confirm_posts[-1]["body"]
+        assert filtered_confirm_body.get("supplier_id") == [
+            str(fixture_ids["supplier_id"]),
+        ]
+        assert filtered_confirm_body.get("update_product_ids") == selected_after_exclusion
+        assert not filtered_confirm_body.get("product_ids")
+        assert not filtered_confirm_body.get("update_all_for_supplier")
+        page.wait_for_url(lambda url: urlsplit(url).path == filtered_catalog_path)
+        filtered_return_location = urlsplit(page.url)
+        filtered_return_query = parse_qs(
+            filtered_return_location.query,
+            keep_blank_values=True,
+        )
+        assert filtered_return_query == {
+            key: [value] for key, value in filtered_update_filters.items()
+        }
+        assert "select_all" not in filtered_return_query
+        returned_update_checks = page.locator(
+            'input[form="supplier-update-form"][name="update_product_ids"]',
+        )
+        assert returned_update_checks.count() == 1
+        assert returned_update_checks.first.get_attribute("value") == excluded_source_id
+        assert returned_update_checks.evaluate_all(
+            "items => items.filter(item => item.checked).map(item => item.value)",
+        ) == [], "returning from confirm must clear the automatic selection state"
+        with fixture.app.app_context():
+            db.session.expire_all()
+            source_by_id = {
+                row.id: row for row in SupplierProduct.query.filter(
+                    SupplierProduct.id.in_(filtered_source_ids),
+                ).all()
+            }
+            updated_copies = {
+                row.id: row for row in ImportedProduct.query.filter(
+                    ImportedProduct.seller_id == fixture.FIXTURE["seller_id"],
+                    ImportedProduct.supplier_id == fixture_ids["supplier_id"],
+                    ImportedProduct.id.in_(local_copy_ids),
+                ).all()
+            }
+            assert len(updated_copies) == 56
+            assert updated_copies[current_duplicate_copy_id].title == source_by_id[
+                filtered_source_ids[0]
+            ].title
+            assert updated_copies[current_duplicate_copy_id].supplier_content_revision == 2
+            assert updated_copies[current_duplicate_copy_id].updated_at == (
+                filtered_before_preview[current_duplicate_copy_id][2]
+            )
+            for index, (source_id, copy_id) in enumerate(zip(
+                filtered_source_ids,
+                filtered_update_fixture["stale_copy_ids"],
+            )):
+                copy = updated_copies[copy_id]
+                source = source_by_id[source_id]
+                if index == 1:
+                    assert copy.title == f"R52 stale local copy {index:03d}"
+                    assert copy.supplier_content_revision == 1
+                    assert copy.updated_at == filtered_before_preview[copy_id][2]
+                else:
+                    assert copy.title == source.title
+                    assert copy.supplier_content_revision == source.content_revision
+            assert ImportedProduct.query.filter_by(
+                seller_id=fixture.FIXTURE["seller_id"],
+                supplier_id=fixture_ids["supplier_id"],
+                supplier_product_id=filtered_update_fixture["unimported_source_id"],
+            ).count() == 0
+        filtered_update_report = {
+            "filtered_source_rows": len(filtered_source_ids),
+            "initial_page_rows": len(ordinary_visible_ids),
+            "initially_selected_sources": len(selected_stale_source_ids),
+            "selected_sources_after_exclusion": len(selected_after_exclusion),
+            "selected_from_beyond_initial_page": sum(
+                source_id in selected_after_exclusion
+                for source_id in expected_stale_source_ids[50:]
+            ),
+            "reviewed_local_copies": 55,
+            "changed_local_copies": 54,
+            "already_current_local_copies": 1,
+            "unimported_source_rows": 1,
+            "returned_filters": filtered_return_query,
+            "screenshot": update_selection_screenshot,
+        }
+        checks.append("filtered_update_selection_checks_exact_stale_sources_across_pages_at_320px")
+        checks.append("filtered_update_review_apply_preserve_owner_scope_and_excluded_current_unimported_rows")
+
         # Classic updates hand off the exact checked IDs to beta. The handoff
         # and exact feed read are read-only; the existing action opens preview,
         # then its separate confirmation applies only Seller Hub data.
@@ -1745,6 +2171,7 @@ def run():
             {"method": "POST", "path": SUPPLIER_CONFIRM_PATH},
             {"method": "POST", "path": SUPPLIER_CONFIRM_PATH},
             {"method": "POST", "path": SUPPLIER_CONFIRM_PATH},
+            {"method": "POST", "path": SUPPLIER_CONFIRM_PATH},
             {"method": "POST", "path": SUPPLIER_REFRESH_APPLY_PATH},
         ], fixture.REPORT["writes"]
         assert wb_create_report is not None
@@ -1756,18 +2183,20 @@ def run():
 
     return {
         "status": "passed",
-        "scope": "synthetic_supplier_refresh_review_and_classic_beta_handoff",
+        "scope": "synthetic_filtered_supplier_update_selection_review_and_classic_beta_handoff",
         "checks": checks,
         "provider_attempts": fixture.REPORT["provider_attempts"],
         "selected_count": len(selected_ids),
         "imported_count": imported_count,
         "supplier_catalog_review": supplier_review_report,
+        "filtered_update_selection": filtered_update_report,
         "supplier_refresh_handoff": supplier_refresh_handoff_report,
         "wb_create": wb_create_report,
         "screenshots": [
             freshness_screenshot,
             "supplier-filtered-import-batch-dark-320.png",
             supplier_review_screenshot,
+            update_selection_screenshot,
             wb_create_report["screenshot"] if wb_create_report else None,
         ],
         "writes": fixture.REPORT["writes"],
