@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-22T19:00:28.099889+00:00",
+  "generated_at": "2026-11-22T19:18:16.107132+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -4501,7 +4501,7 @@
     },
     {
       "path": "tests/test_my_products_ozon_price_handoff.py",
-      "sha256": "79cb8c15487514b6c28ac380e97204bb22200b9dc6872657d9bb41917d31366b"
+      "sha256": "d46a37b7587b75f725a7ca2aa240818093de2a9e10c8ad7776f6d356806d656b"
     },
     {
       "path": "tests/test_my_products_ozon_workspace_update_handoff.py",
@@ -4509,7 +4509,7 @@
     },
     {
       "path": "tests/test_my_products_supplier_refresh_handoff.py",
-      "sha256": "4ddcf13eeb798b0ff937b27f6c1708ccc1d9557a2dbf49fb0da8ff6f67343080"
+      "sha256": "16d8a2fe4d62e5f7e303955707804547a9a02cf4b82ba298c20b5699b56a080f"
     },
     {
       "path": "tests/test_my_products_wb_workspace_handoff.py",
@@ -5288,5 +5288,5 @@
       "sha256": "1365ad05c62c72d241724ee7a8a4370c7704362262c7e0f54e2d8cdaafeb0606"
     }
   ],
-  "aggregate_sha256": "a960fac8b07b73a50a6dd8960dfca7f927a0ac0f1b1504be95c4946f6eb73117"
+  "aggregate_sha256": "f4a4f896d1145d21fb13fa0acc7adbf3e16dbbf1c575bb002108e51a58a1be78"
 }
