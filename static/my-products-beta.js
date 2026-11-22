@@ -1116,6 +1116,9 @@
                     this.error = 'Не удалось открыть точный список обновлённых товаров. Обновите страницу и повторите действие.';
                     return false;
                 }
+                this.supplierRefreshBatch = '';
+                this.supplierRefreshBatchMode = false;
+                this.supplierRefreshBatchInvalid = false;
                 this.importBatch = token;
                 this.importBatchMode = true;
                 this.importBatchKind = 'supplier_refresh_result';
