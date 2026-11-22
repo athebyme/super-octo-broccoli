@@ -321,6 +321,19 @@
         return terminalStatus ? data.worker_exited === true : data.worker_exited === false;
     }
 
+    function wbCreateReceiptCounts(data, total) {
+        var counts = data && data.result_counts;
+        if (!counts || typeof counts !== 'object' || Array.isArray(counts)) return null;
+        var processed = counts.processed;
+        var succeeded = counts.succeeded;
+        var failed = counts.failed;
+        if (![processed, succeeded, failed].every(function (value) {
+            return Number.isSafeInteger(value) && value >= 0;
+        }) || processed > total || succeeded > processed || failed > processed ||
+            succeeded + failed > processed) return null;
+        return { processed: processed, succeeded: succeeded, failed: failed };
+    }
+
     function knownWbCreateNotAccepted(response, data) {
         return !!response && response.status >= 400 && response.status < 500 &&
             !!data && typeof data === 'object' && !Array.isArray(data) &&
@@ -1176,6 +1189,7 @@
                 ozonRetrySameKey: false,
                 ozonSessionEnded: false,
                 wbCreatePending: savedWbCreate.pending,
+                wbCreateTerminalResult: null,
                 wbCreateStorageProblem: savedWbCreate.storageProblem,
                 wbCreateBusy: false,
                 wbCreateReading: false,
@@ -1499,11 +1513,13 @@
                     this.importBatchKind === 'import' && this.importBatch === this.wbCreatePending.import_batch;
             },
             wbCreateReceiptVisible: function () {
-                return this.wbCreateStorageProblem || this.wbCreatePendingForCurrentOwner || !!this.wbCreateError;
+                return this.wbCreateStorageProblem || this.wbCreatePendingForCurrentOwner ||
+                    !!this.wbCreateError || !!this.wbCreateTerminalResult;
             },
             wbCreateReceiptState: function () {
                 if (this.wbCreateStorageProblem) return 'blocked';
-                return this.wbCreatePending ? this.wbCreatePending.state : '';
+                return this.wbCreatePending ? this.wbCreatePending.state :
+                    this.wbCreateTerminalResult ? 'terminal_result' : '';
             },
             wbCreateRetryAvailable: function () {
                 return !!(this.wbCreateRetrySameKey && !this.wbCreateStorageProblem &&
@@ -3869,11 +3885,12 @@
                     return false;
                 }
                 this.wbCreatePending = pending;
+                this.wbCreateTerminalResult = null;
                 this.wbCreateStorageProblem = false;
                 this.wbCreateRetrySameKey = false;
                 this.wbCreateError = '';
                 this.wbCreateReadError = '';
-                this.jobTitle = 'Создаём карточки WB';
+                this.jobTitle = 'Запускаем создание карточек WB…';
                 this.job = null;
                 this.confirm.open = false;
                 this.postInlineWbCreate(pending, false);
@@ -3990,6 +4007,11 @@
                 }
                 var terminal = ['completed', 'failed', 'cancelled'].includes(data.status) && data.worker_exited === true;
                 this.wbCreateTerminalReceiptVerified = terminal;
+                this.wbCreateTerminalResult = terminal ? {
+                    status: data.status,
+                    total: data.total,
+                    counts: wbCreateReceiptCounts(data, data.total),
+                } : null;
                 var next = Object.assign({}, this.wbCreatePending, {
                     state: terminal ? 'terminal_refresh' :
                         data.status === 'unknown' || (['completed', 'failed', 'cancelled'].includes(data.status) && !data.worker_exited)
@@ -4001,31 +4023,16 @@
                 this.saveCurrentWbCreatePending(next);
                 this.wbCreateRetrySameKey = false;
                 this.wbCreateError = terminal
-                    ? 'WB завершил запуск. Проверяем точный список импорта перед восстановлением выбора.'
+                    ? 'Локальная задача завершена. Проверяем точный список импорта перед восстановлением выбора.'
                     : data.status === 'unknown' || (['completed', 'failed', 'cancelled'].includes(data.status) && !data.worker_exited)
                         ? 'Результат WB пока не подтверждён. Повторно проверьте его перед новым запуском.'
                         : '';
                 this.wbCreateReadError = '';
-                this.jobTitle = 'Создание карточек WB';
-                if (data.status === 'completed' && terminal) {
-                    this.job = {
-                        job_uid: data.job_uid, status: 'done', total: data.total,
-                        processed: data.total, succeeded: data.total,
-                        message: 'WB подтвердил завершение фонового запуска.',
-                    };
-                } else if (['failed', 'cancelled'].includes(data.status) && terminal) {
-                    this.job = {
-                        job_uid: data.job_uid, status: data.status, total: data.total,
-                        processed: 0, message: data.status === 'failed'
-                            ? 'WB подтвердил завершение с ошибкой.' : 'WB подтвердил остановку запуска.',
-                    };
-                } else {
-                    this.job = null;
-                }
+                this.jobTitle = 'Итог локальной задачи WB';
+                this.job = null;
                 if (terminal) {
                     this.stopWbCreateReceiptTracking();
                     if (this.wbCreatePendingMatchesCurrentBatch(next) && !this.loading) this.load();
-                    this.focusJobProgress();
                 } else if (next.state === 'accepted') {
                     this.scheduleWbCreateReceiptPoll();
                 } else {
@@ -4167,8 +4174,11 @@
                 this.wbCreateTerminalReceiptVerified = false;
                 this.wbCreateError = '';
                 this.stopWbCreateReceiptTracking();
-                this.focusJobProgress();
                 return true;
+            },
+            dismissWbCreateTerminalResult: function () {
+                if (this.wbCreatePending) return;
+                this.wbCreateTerminalResult = null;
             },
             refreshListAfterSupplierResult: function () {
                 this.load();

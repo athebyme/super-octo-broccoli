@@ -241,13 +241,18 @@
              :data-wb-create-state="wbCreateReceiptState">
         <div class="mp-wb-create-receipt-copy">
             <strong v-if="wbCreateStorageProblem">Сохранённый запуск WB нельзя прочитать</strong>
+            <strong v-else-if="wbCreateTerminalResult && wbCreateTerminalResult.status === 'completed'">Локальная задача создания карточек завершилась</strong>
+            <strong v-else-if="wbCreateTerminalResult && wbCreateTerminalResult.status === 'failed'">Локальная задача создания карточек завершилась с ошибкой</strong>
+            <strong v-else-if="wbCreateTerminalResult && wbCreateTerminalResult.status === 'cancelled'">Локальная задача создания карточек остановлена</strong>
             <strong v-else-if="wbCreateError && !wbCreatePending">Запуск WB не создан</strong>
-            <strong v-else-if="wbCreateBusy">Создаём карточки WB…</strong>
+            <strong v-else-if="wbCreateBusy">Запускаем создание карточек WB…</strong>
             <strong v-else-if="wbCreatePending && wbCreatePending.state === 'posting'">Проверяем сохранённый запуск WB…</strong>
-            <strong v-else-if="wbCreatePending && wbCreatePending.state === 'terminal_refresh'">WB завершил запуск, проверяем список</strong>
-            <strong v-else-if="wbCreatePending && wbCreatePending.state === 'accepted'">Запуск WB принят</strong>
-            <strong v-else>Результат запуска WB пока неизвестен</strong>
-            <span v-if="wbCreatePending">В запросе WB: {{ wbCreatePending.product_ids.length }} {{ $fmt.plural(wbCreatePending.product_ids.length, 'карточка', 'карточки', 'карточек') }} · общий выбор сохранён; подготовка Ozon остаётся доступной.</span>
+            <strong v-else-if="wbCreatePending && wbCreatePending.state === 'terminal_refresh'">Проверяем список после локального запуска WB</strong>
+            <strong v-else-if="wbCreatePending && wbCreatePending.state === 'accepted'">Создание карточек поставлено в очередь Seller Hub</strong>
+            <strong v-else>Результат локальной задачи WB пока неизвестен</strong>
+            <span v-if="wbCreatePending">В запросе WB: {{ wbCreatePending.product_ids.length }} {{ $fmt.plural(wbCreatePending.product_ids.length, 'карточка', 'карточки', 'карточек') }} · общий выбор сохранён.</span>
+            <span v-if="wbCreateTerminalResult && wbCreateTerminalResult.counts">В Seller Hub обработано: {{ wbCreateTerminalResult.counts.processed }} из {{ wbCreateTerminalResult.total }}<template v-if="wbCreateTerminalResult.counts.succeeded"> · успешно: {{ wbCreateTerminalResult.counts.succeeded }}</template><template v-if="wbCreateTerminalResult.counts.failed"> · не созданы: {{ wbCreateTerminalResult.counts.failed }}</template>.</span>
+            <span v-else-if="wbCreateTerminalResult">Точные локальные счётчики недоступны.</span>
             <span v-if="wbCreateError || wbCreateReadError">{{ wbCreateError || wbCreateReadError }}</span>
         </div>
         <div class="mp-wb-create-receipt-actions">
@@ -262,6 +267,8 @@
                     data-wb-create-retry @click="retryWbCreateSameKey">Повторить тот же запуск</button>
             <button v-if="wbCreateVerifyFeedAvailable" type="button" class="sh-btn sh-btn--secondary"
                     data-wb-create-verify-feed @click="load">Проверить список</button>
+            <button v-if="wbCreateTerminalResult && !wbCreatePending" type="button" class="sh-btn sh-btn--secondary"
+                    data-wb-create-dismiss @click="dismissWbCreateTerminalResult">Скрыть итог</button>
         </div>
     </section>
 
@@ -652,5 +659,5 @@
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261122-ozon-update-return-r56') }}"></script>
 <script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261122-unified-import-r60c') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-wb-create-continuity-r61') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-wb-create-honest-result-r61b') }}"></script>
 {% endblock %}
