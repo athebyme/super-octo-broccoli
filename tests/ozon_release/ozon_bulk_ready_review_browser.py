@@ -2256,11 +2256,9 @@ def run_review_editor_navigation_journey(page):
     assert f"Карточек в наборе: {len(draft_ids)}" in header_text
     assert "страница 1 из 1" in header_text
     source_checked_at = initial_review["checked_at"]
-    parsed_checked_at = datetime.fromisoformat(source_checked_at)
-    if parsed_checked_at.tzinfo is None:
-        parsed_checked_at = parsed_checked_at.replace(tzinfo=timezone.utc)
-    else:
-        parsed_checked_at = parsed_checked_at.astimezone(timezone.utc)
+    parsed_checked_at = datetime.fromisoformat(source_checked_at).replace(
+        tzinfo=timezone.utc,
+    )
     expected_checked_at_label = parsed_checked_at.strftime("%d.%m.%Y, %H:%M UTC")
     expected_checked_at_datetime = parsed_checked_at.isoformat().replace("+00:00", "Z")
     checked_at_element = review_header.locator("time")

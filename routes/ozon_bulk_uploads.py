@@ -79,25 +79,6 @@ def _integer(value: Any, field_name: str) -> int:
     return parsed
 
 
-def _review_checked_at_html_values(value: Any) -> tuple[str, str]:
-    """Format the review's UTC generation time for HTML without changing its DTO."""
-    if not isinstance(value, str) or not value:
-        raise OzonBulkUploadValidationError("Некорректное время проверки")
-    iso_value = value[:-1] + "+00:00" if value.endswith("Z") else value
-    try:
-        checked_at = datetime.fromisoformat(iso_value)
-    except ValueError:
-        raise OzonBulkUploadValidationError("Некорректное время проверки") from None
-    if checked_at.tzinfo is None:
-        checked_at = checked_at.replace(tzinfo=timezone.utc)
-    else:
-        checked_at = checked_at.astimezone(timezone.utc)
-    return (
-        checked_at.strftime("%d.%m.%Y, %H:%M UTC"),
-        checked_at.isoformat().replace("+00:00", "Z"),
-    )
-
-
 def _bounded_integer_list(values: Any, field_name: str) -> list[int]:
     if not isinstance(values, list):
         raise OzonBulkUploadValidationError(
@@ -1576,9 +1557,11 @@ def review():
                 str(item["draft_id"]): item["version"] for item in document["items"]
                 if item["selectable"]
             }
-            checked_at_label, checked_at_datetime = _review_checked_at_html_values(
-                document.get("checked_at"),
+            checked_at = datetime.fromisoformat(document["checked_at"]).replace(
+                tzinfo=timezone.utc,
             )
+            checked_at_label = checked_at.strftime("%d.%m.%Y, %H:%M UTC")
+            checked_at_datetime = checked_at.isoformat().replace("+00:00", "Z")
             response = make_response(render_template(
                 "ozon_upload_review.html",
                 review=document,

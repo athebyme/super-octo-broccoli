@@ -385,7 +385,7 @@ def journey_assertions(page, name: str, current: str, account_id: int | None = N
         }
         actual_links = {}
         for step in section.locator("li").all():
-            label = step.locator("strong").inner_text().strip()
+            label = step.locator("strong").text_content().strip()
             link = step.locator("a")
             if label in expected_links:
                 assert link.count() == 1, (name, label)
