@@ -1,0 +1,34 @@
+.mp-workspace-content { min-width: 0; }
+.mp-import-outcome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 16px;
+  padding: 13px 15px;
+  border: 1px solid var(--ok-border);
+  border-radius: var(--r-md);
+  background: var(--ok-bg);
+  color: var(--text);
+}
+.mp-import-outcome-copy { display: grid; gap: 4px; min-width: 0; }
+.mp-import-outcome-copy strong { font-size: 14px; }
+.mp-import-outcome-copy span { color: var(--text-secondary); font-size: 12px; line-height: 1.4; }
+.mp-import-outcome .sh-btn { min-height: 42px; flex: 0 0 auto; }
+.mp-import-outcome-close {
+  min-height: 40px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mp-import-outcome-close:hover { color: var(--text); }
+.mp-import-outcome-close:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; }
+@media (max-width: 520px) {
+  .mp-import-outcome { align-items: stretch; flex-direction: column; gap: 9px; padding: 12px; }
+  .mp-import-outcome .sh-btn { width: 100%; }
+  .mp-import-outcome-close { align-self: flex-start; }
+}

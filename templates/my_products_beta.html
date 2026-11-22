@@ -7,6 +7,7 @@
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261122-ozon-local-prepare-r59') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261122-supplier-import-r60') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
     'wbConnected': wb_connected,
@@ -14,6 +15,7 @@
     'ozonEnabled': ozon_enabled,
     'ozonAccounts': ozon_accounts,
     'suppliers': suppliers_payload,
+    'importSuppliers': supplier_import_sources|default([]),
     'importBatch': import_batch|default(none),
     'batchKind': import_batch_kind_context,
     'supplierRefreshBatch': supplier_refresh_batch|default(none),
@@ -36,6 +38,8 @@
         'wbSelectionResolve': url_for('products_selection_resolve'),
         'wbBulkEdit': url_for('products_bulk_edit'),
         'supplierCatalog': url_for('supplier_catalog', action='import'),
+        'supplierImportPost': url_for('supplier_catalog_import'),
+        'supplierImportResult': url_for('supplier_catalog_import_result'),
         'wbPriceChange': url_for('prices.prices_change'),
         'ozonCommercial': url_for('marketplace_commercial.index'),
         'ozonWorkspaceUpdateHandoff': url_for('marketplace_listings.workspace_update_handoff'),
@@ -51,6 +55,33 @@
 <div id="my-products-app" class="shk-page" v-cloak{% if supplier_refresh_batch|default(none) %}
      data-supplier-refresh-handoff="active"{% endif %}>
 {% raw %}
+    <mp-supplier-import :open="supplierImportOpen" :suppliers="importSuppliers"
+                        :owner="workspaceOwner" :urls="importUrls"
+                        @close="closeSupplierImport" @open="openSupplierImport"
+                        @import-success="handleSupplierImportSuccess"></mp-supplier-import>
+
+    <div v-show="!supplierImportOpen" class="mp-workspace-content">
+    <section v-if="supplierImportOutcome" class="mp-import-outcome" data-supplier-import-result
+             role="status" aria-live="polite" aria-atomic="true">
+        <div class="mp-import-outcome-copy">
+            <strong>{{ supplierImportOutcome.imported > 0 ?
+                (supplierImportOutcome.errors || supplierImportOutcome.skipped ? 'Импорт завершён частично' : 'Импорт завершён') :
+                'Новых товаров не добавлено' }}</strong>
+            <span>Добавлено: {{ supplierImportOutcome.imported }} · пропущено: {{ supplierImportOutcome.skipped }} · ошибок: {{ supplierImportOutcome.errors }}</span>
+            <span v-if="supplierImportOutcome.drafts_status === 'complete'">
+                Черновики Ozon: {{ supplierImportOutcome.drafts_created }} · требуют внимания: {{ supplierImportOutcome.draft_errors }}
+            </span>
+            <span v-else>Итог подготовки черновиков Ozon пока не подтверждён. Проверьте раздел «Черновики Ozon».</span>
+            <span v-if="supplierImportOutcome.imported > 0 && importBatchSelectionPending">
+                Проверяем точный список добавленных товаров перед выбором.
+            </span>
+        </div>
+        <a v-if="supplierImportOutcome.imported > 0 && supplierImportFallbackUrl"
+           class="sh-btn sh-btn--secondary" :href="supplierImportFallbackUrl">Открыть точный список</a>
+        <button type="button" class="mp-import-outcome-close" aria-label="Скрыть итог импорта"
+                @click="supplierImportOutcome = null">Скрыть</button>
+    </section>
+
     <header class="shk-head">
         <div class="mp-head-title-wrap">
             <div class="mp-head-title-line">
@@ -73,10 +104,17 @@
                :href="supplierRefreshReturnUrl">Вернуться к классическому списку</a>
         </div>
         <div v-else-if="importBatchMode" class="mp-batch-head-actions">
-            <a class="sh-btn sh-btn--secondary" :href="urls.workspace">Все мои товары</a>
+            <button v-if="importPanelAvailable" type="button" class="sh-btn sh-btn--secondary"
+                    @click="clearImportBatch">Все мои товары</button>
+            <a v-else class="sh-btn sh-btn--secondary" :href="urls.workspace">Все мои товары</a>
         </div>
         <div v-else class="mp-head-actions">
-            <a class="sh-btn sh-btn--primary" :href="urls.supplierCatalog">
+            <button v-if="importPanelAvailable" type="button" class="sh-btn sh-btn--primary"
+                    data-supplier-import-open @click="openSupplierImport">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="shk-btn-icon"><path d="M12 5v14M5 12h14"/></svg>
+                Импортировать товары
+            </button>
+            <a v-else class="sh-btn sh-btn--primary" :href="urls.supplierCatalog">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="shk-btn-icon"><path d="M12 5v14M5 12h14"/></svg>
                 Импортировать товары
             </a>
@@ -257,6 +295,8 @@
                   :title="emptyState.title" :text="emptyState.text">
             <button v-if="emptyState.action === 'reset'" type="button"
                     class="sh-btn sh-btn--secondary" @click="resetFilters">Сбросить фильтры</button>
+            <button v-else-if="emptyState.action === 'catalog' && importPanelAvailable" type="button"
+                    class="sh-btn sh-btn--primary" data-supplier-import-empty-open @click="openSupplierImport">Импортировать товары</button>
             <a v-else-if="emptyState.action === 'catalog'" class="sh-btn sh-btn--primary"
                :href="urls.supplierCatalog">Открыть каталог поставщика</a>
         </sh-empty>
@@ -514,11 +554,13 @@
                     @click="continueOzonPriceHandoff">{{ ozonAccountChooserKind === 'workspace_update' ? 'Проверить карточки' : 'Открыть сравнение' }}</button>
         </div>
     </dialog>
+    </div>
 {% endraw %}
 </div>
 
-<script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/vue-3.5.46.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261122-ozon-update-return-r56') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-ozon-local-prepare-r59') }}"></script>
+<script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261122-supplier-import-r60') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-supplier-import-r60') }}"></script>
 {% endblock %}

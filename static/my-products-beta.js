@@ -6,6 +6,12 @@
 
     if (typeof window.shVue === 'undefined') return;
     var boot = window.shVue.bootstrapData('mp-bootstrap');
+    var importBundle = window.SellerHubMyProductsImport || null;
+    var importPanelAvailable = !!(importBundle && importBundle.SupplierImportPanel &&
+        typeof importBundle.canonicalBatchLocation === 'function');
+    if (importPanelAvailable) {
+        window.shVue.components['mp-supplier-import'] = importBundle.SupplierImportPanel;
+    }
     var importBatchQueryRequested = false;
     var locationSearch = window.location && typeof window.location.search === 'string'
         ? window.location.search : '';
@@ -912,7 +918,22 @@
                 ozonEnabled: !!boot.ozonEnabled,
                 ozonAccounts: boot.ozonAccounts || [],
                 suppliers: boot.suppliers || [],
+                importSuppliers: boot.importSuppliers || [],
+                workspaceOwner: typeof boot.workspaceOwner === 'string' ? boot.workspaceOwner : '',
                 urls: boot.urls || {},
+                importUrls: {
+                    workspace: (boot.urls || {}).workspace || '',
+                    supplierCatalog: (boot.urls || {}).supplierCatalog || '',
+                    importPost: (boot.urls || {}).supplierImportPost || '',
+                    importResult: (boot.urls || {}).supplierImportResult || '',
+                },
+                importPanelAvailable: importPanelAvailable,
+                supplierImportOpen: false,
+                supplierImportOutcome: null,
+                supplierImportFallbackUrl: '',
+                importBatchSelectionPending: false,
+                importBatchExpectedCount: 0,
+                _importSelectionBeforeOpen: null,
                 importBatch: importBatchToken,
                 importBatchMode: importBatchMode,
                 importBatchKind: importBatchKind,
@@ -1403,6 +1424,121 @@
         },
 
         methods: {
+            openSupplierImport: function () {
+                if (!this.importPanelAvailable) return false;
+                this.closeBulkActionPanel(false);
+                if (this.$refs.moreActions) this.$refs.moreActions.open = false;
+                if (this.$refs.headMore) this.$refs.headMore.open = false;
+                this._importSelectionBeforeOpen = this.selected.slice();
+                this.supplierImportOpen = true;
+                return true;
+            },
+            closeSupplierImport: function () {
+                this.supplierImportOpen = false;
+                if (Array.isArray(this._importSelectionBeforeOpen)) {
+                    this.selected = this._importSelectionBeforeOpen.slice();
+                }
+                this._importSelectionBeforeOpen = null;
+            },
+            handleSupplierImportSuccess: function (result) {
+                this.supplierImportOutcome = result;
+                this.supplierImportFallbackUrl = '';
+                this.supplierImportOpen = false;
+                this.selected = [];
+                this.closeBulkActionPanel(false);
+                if (this.$refs.moreActions) this.$refs.moreActions.open = false;
+                this._importSelectionBeforeOpen = null;
+                if (!result || !Number.isSafeInteger(result.imported) || result.imported < 1) {
+                    this.importBatchSelectionPending = false;
+                    this.importBatchExpectedCount = 0;
+                    this.selected = [];
+                    return false;
+                }
+                var bundle = importBundle || {};
+                var targetLocation = typeof bundle.canonicalBatchLocation === 'function'
+                    ? bundle.canonicalBatchLocation(
+                        result.batch_url, result.import_batch, this.urls.workspace,
+                        window.location.origin,
+                    ) : null;
+                if (!targetLocation || result.imported > MAX_BULK_SELECTION) {
+                    this.error = 'Импорт подтверждён, но точный список не прошёл проверку. Обновите эту страницу перед следующим действием.';
+                    return false;
+                }
+                this.supplierImportFallbackUrl = targetLocation;
+                if (!window.history || typeof window.history.replaceState !== 'function') {
+                    this.error = 'Импорт подтверждён, но браузер не позволил обновить список без перезагрузки. Откройте точный список по ссылке.';
+                    return false;
+                }
+                try {
+                    if (this.workspaceReturnPending && workspaceReturnCapsule) {
+                        this.consumeWorkspaceReturn(workspaceReturnCapsule.nonce);
+                    }
+                    var currentState = window.history.state && typeof window.history.state === 'object'
+                        ? Object.assign({}, window.history.state) : {};
+                    currentState.sellerHubImportBatch = {
+                        token: result.import_batch,
+                        kind: 'import',
+                    };
+                    window.history.replaceState(currentState, '', targetLocation);
+                } catch (_) {
+                    this.error = 'Импорт подтверждён, но ссылку рабочего списка не удалось обновить. Откройте точный список по ссылке.';
+                    return false;
+                }
+                this.supplierRefreshBatch = '';
+                this.supplierRefreshBatchMode = false;
+                this.supplierRefreshBatchInvalid = false;
+                this.importBatch = result.import_batch;
+                this.importBatchMode = true;
+                this.importBatchKind = 'import';
+                this.importBatchInvalid = false;
+                this.supplierRefreshResultBatchMode = false;
+                this.supplierRefreshSelectPending = false;
+                this.importBatchExpectedCount = result.imported;
+                this.importBatchSelectionPending = true;
+                this.activeTab = '';
+                this.searchInput = '';
+                this.filters = { search: '', supplier: '', has_photos: '', stock: '', sort: '' };
+                this.selected = [];
+                this.error = '';
+                this.load();
+                return true;
+            },
+            clearImportBatch: function () {
+                var target;
+                try {
+                    if (typeof this.urls.workspace !== 'string' || !this.urls.workspace) throw new Error('missing URL');
+                    target = new URL(this.urls.workspace, window.location.origin);
+                    if (target.origin !== window.location.origin || target.username || target.password ||
+                        target.hash || target.pathname !== window.location.pathname ||
+                        !window.history || typeof window.history.replaceState !== 'function') {
+                        throw new Error('unsafe workspace URL');
+                    }
+                    target.search = '';
+                    var currentState = window.history.state && typeof window.history.state === 'object'
+                        ? Object.assign({}, window.history.state) : {};
+                    delete currentState.sellerHubImportBatch;
+                    window.history.replaceState(currentState, '', target.pathname);
+                } catch (_) {
+                    this.error = 'Не удалось вернуться к общему списку без перезагрузки. Текущий выбор сохранён.';
+                    return false;
+                }
+                this.importBatch = '';
+                this.importBatchMode = false;
+                this.importBatchKind = 'import';
+                this.importBatchInvalid = false;
+                this.supplierRefreshResultBatchMode = false;
+                this.supplierRefreshSelectPending = false;
+                this.importBatchSelectionPending = false;
+                this.importBatchExpectedCount = 0;
+                this.selected = [];
+                this.activeTab = '';
+                this.searchInput = '';
+                this.filters = { search: '', supplier: '', has_photos: '', stock: '', sort: '' };
+                this.error = '';
+                this.load();
+                this.loadFacets();
+                return true;
+            },
             closeBulkActionPanel: function (restoreFocus) {
                 if (!this.activeBulkActionGroup) return;
                 this.activeBulkActionGroup = '';
@@ -1937,6 +2073,7 @@
                                 self.itemsScope = '';
                                 self.pagination = {};
                                 self.supplierRefreshSelectPending = false;
+                                self.importBatchSelectionPending = false;
                                 var serverError = data && data.success === false &&
                                     typeof data.error === 'string' ? data.error.trim() : '';
                                 self.error = self.supplierRefreshResultBatchMode
@@ -1947,6 +2084,18 @@
                                 return;
                             }
                             var verifiedBatchIds = orderedProductIds(data.items);
+                            if (self.importBatchSelectionPending &&
+                                (self.importBatchKind !== 'import' ||
+                                    !Number.isSafeInteger(self.importBatchExpectedCount) ||
+                                    data.import_batch_count !== self.importBatchExpectedCount ||
+                                    verifiedBatchIds.length !== self.importBatchExpectedCount)) {
+                                self.items = [];
+                                self.itemsScope = '';
+                                self.pagination = {};
+                                self.importBatchSelectionPending = false;
+                                self.error = 'Список не совпал с подтверждённым итогом импорта. Товары не выбраны; обновите список и отметьте их заново.';
+                                return;
+                            }
                             if (self.supplierRefreshSelectPending) {
                                 var result = self.supplierRefreshResult;
                                 var resultUpdatedIds = result && Array.isArray(result.entries)
@@ -1966,6 +2115,11 @@
                             self.items = data.items;
                             self.pagination = data.pagination;
                             self.itemsScope = scope;
+                            if (self.importBatchSelectionPending) {
+                                self.selected = verifiedBatchIds.slice();
+                                self.importBatchSelectionPending = false;
+                                self.importBatchExpectedCount = 0;
+                            }
                             if (self.supplierRefreshSelectPending) {
                                 self.selected = verifiedBatchIds.slice();
                             }
@@ -2007,6 +2161,10 @@
                         }
                         if (self.importBatchMode || self.supplierRefreshBatchMode) {
                             self.supplierRefreshSelectPending = false;
+                            if (err && [400, 404, 410].includes(err.status)) {
+                                self.importBatchSelectionPending = false;
+                                self.importBatchExpectedCount = 0;
+                            }
                             self.items = [];
                             self.itemsScope = '';
                             self.pagination = {};
