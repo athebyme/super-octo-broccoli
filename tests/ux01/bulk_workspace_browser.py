@@ -2193,6 +2193,7 @@ def run():
         page.get_by_role("button", name="Скрыть итог обновления", exact=True).click()
         assert page.locator(".mp-refresh-result").count() == 0
         assert page.evaluate("key => sessionStorage.getItem(key) === null", resume_key)
+        assert not urlsplit(page.url).fragment
         with page.expect_response(
             lambda response: urlsplit(response.url).path == "/api/my-products"
             and response.request.method == "GET",
