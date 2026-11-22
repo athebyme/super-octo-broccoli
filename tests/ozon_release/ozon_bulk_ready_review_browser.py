@@ -1862,10 +1862,26 @@ def run_mixed_type_selection_journey(page):
     assert "Пропущено" in preview_summary
     assert str(len(other_selected_ids)) in preview_summary
     assert str(len(selected_ids)) in preview_summary
-    skipped_rows = dialog.locator(".orb-skipped li")
+    skipped_details = dialog.locator("details")
+    assert skipped_details.count() == 1, "expected one skipped-row disclosure"
+    skipped_summary = skipped_details.locator("summary")
+    assert skipped_summary.inner_text().strip() == (
+        f"Пропущено: {len(other_selected_ids)}"
+    )
+    skipped_summary.click()
+    assert skipped_details.evaluate("element => element.open") is True
+    skipped_rows = skipped_details.locator(".orb-skipped li")
     assert skipped_rows.count() == len(other_selected_ids)
-    skipped_titles = {row.locator("strong").inner_text() for row in skipped_rows.all()}
-    assert skipped_titles == {titles[draft_id] for draft_id in other_selected_ids}
+    assert all(row.locator("strong").is_visible() for row in skipped_rows.all())
+    skipped_titles = {
+        row.locator("strong").inner_text().strip()
+        for row in skipped_rows.all()
+    }
+    expected_skipped_titles = {titles[draft_id] for draft_id in other_selected_ids}
+    assert skipped_titles == expected_skipped_titles, (
+        f"Skipped draft names mismatch: actual={sorted(skipped_titles)!r}; "
+        f"expected={sorted(expected_skipped_titles)!r}"
+    )
     assert outside_title not in dialog.inner_text()
     assert f"Выбрано {len(selected_ids)}" in editor.locator(
         ".orb-toolbar",
