@@ -1476,6 +1476,81 @@ def _safe_supplier_catalog_update_return(supplier_id, candidate):
     )
 
 
+def _supplier_catalog_update_wants_json():
+    return any(
+        media.split(';', 1)[0].strip().lower() == 'application/json'
+        for media in request.headers.get('Accept', '').split(',')
+    )
+
+
+def _supplier_catalog_update_json(payload, status=200):
+    response = make_response(jsonify(payload), status)
+    response.headers['Cache-Control'] = 'private, no-store'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
+
+def _supplier_catalog_update_review_json(
+    *, supplier_id, source_ids, preview, review_token,
+):
+    rows = preview.get('items') if isinstance(preview, dict) else None
+    if not isinstance(rows, list):
+        rows = None
+    if rows is None or any(
+        not isinstance(row, dict)
+        or type(row.get('product_id')) is not int
+        or not isinstance(row.get('label'), str)
+        or row.get('state') not in ('changed', 'unchanged', 'unlinked')
+        or not isinstance(row.get('changes'), list)
+        for row in rows
+    ):
+        return _supplier_catalog_update_json({
+            'success': False,
+            'code': 'supplier_update_review_unavailable',
+            'error': 'Не удалось подготовить список изменений. Сократите выбор.',
+        }, 500)
+    payload = {
+        'success': True,
+        'supplier_id': str(supplier_id),
+        'scope': 'all' if source_ids is None else 'source_ids',
+        'source_ids': None if source_ids is None else [str(value) for value in source_ids],
+        'source_requested': preview.get('source_requested'),
+        'requested': preview.get('requested'),
+        'eligible': preview.get('eligible'),
+        'changed': preview.get('changed'),
+        'skipped': preview.get('skipped'),
+        'unlinked': preview.get('unlinked'),
+        'already_current': preview.get('already_current'),
+        'items': [
+            {
+                'product_id': str(row['product_id']),
+                'label': row['label'],
+                'state': row['state'],
+                'changes': row['changes'],
+            }
+            for row in rows[:50]
+        ],
+        'items_truncated': bool(preview.get('items_truncated')),
+        'review_token': review_token,
+    }
+    try:
+        response_size = len(current_app.json.dumps(payload).encode('utf-8'))
+    except (TypeError, ValueError):
+        return _supplier_catalog_update_json({
+            'success': False,
+            'code': 'supplier_update_review_unavailable',
+            'error': 'Не удалось подготовить список изменений. Сократите выбор.',
+        }, 500)
+    if response_size > SUPPLIER_REFRESH_REVIEW_MAX_RESPONSE_BYTES:
+        return _supplier_catalog_update_json({
+            'success': False,
+            'code': 'supplier_update_review_too_large',
+            'error': 'Список изменений слишком большой. Сократите выбор.',
+        }, 413)
+    return _supplier_catalog_update_json(payload)
+
+
 def _render_supplier_catalog_update_review(
     *, supplier, source_ids, preview, review_token, return_to,
     error=None, status=200, allow_recheck=True,
@@ -6028,12 +6103,29 @@ def register_supplier_routes(app):
     def supplier_catalog_update_review():
         """Read and sign a seller-local supplier update before applying it."""
         seller = current_user.seller
+        wants_json = _supplier_catalog_update_wants_json()
+        if (
+            wants_json
+            and request.content_length is not None
+            and request.content_length > SUPPLIER_REFRESH_REVIEW_MAX_BODY_BYTES
+        ):
+            return _supplier_catalog_update_json({
+                'success': False,
+                'code': 'supplier_update_scope_too_large',
+                'error': 'Список для проверки слишком большой',
+            }, 413)
         try:
             supplier_id, source_ids = _supplier_catalog_update_scope_from_form(
                 request.form,
             )
         except ValueError as exc:
             supplier_id = request.form.get('supplier_id', type=int)
+            if wants_json:
+                return _supplier_catalog_update_json({
+                    'success': False,
+                    'code': 'supplier_update_scope_invalid',
+                    'error': str(exc),
+                }, 400)
             flash(str(exc), 'warning')
             if supplier_id and supplier_id > 0:
                 return redirect(_safe_supplier_catalog_update_return(
@@ -6043,6 +6135,12 @@ def register_supplier_routes(app):
 
         supplier = Supplier.query.filter_by(id=supplier_id).first()
         if supplier is None:
+            if wants_json:
+                return _supplier_catalog_update_json({
+                    'success': False,
+                    'code': 'supplier_unavailable',
+                    'error': 'Поставщик не найден',
+                }, 404)
             abort(404)
         active_connection = SellerSupplier.query.filter_by(
             seller_id=seller.id,
@@ -6050,6 +6148,12 @@ def register_supplier_routes(app):
             is_active=True,
         ).first()
         if active_connection is None:
+            if wants_json:
+                return _supplier_catalog_update_json({
+                    'success': False,
+                    'code': 'supplier_access_unavailable',
+                    'error': 'Нет активного доступа к этому поставщику',
+                }, 404)
             abort(404)
         return_to = _safe_supplier_catalog_update_return(
             supplier_id, request.form.get('return_to'),
@@ -6062,6 +6166,12 @@ def register_supplier_routes(app):
                 details_limit=50,
             )
         except ValueError as exc:
+            if wants_json:
+                return _supplier_catalog_update_json({
+                    'success': False,
+                    'code': 'supplier_update_scope_changed',
+                    'error': str(exc),
+                }, 409)
             flash(str(exc), 'warning')
             return redirect(return_to)
 
@@ -6075,6 +6185,12 @@ def register_supplier_routes(app):
                 review_digest=preview.get('review_digest'),
             )
             if not review_token:
+                if wants_json:
+                    return _supplier_catalog_update_json({
+                        'success': False,
+                        'code': 'supplier_update_review_unavailable',
+                        'error': 'Не удалось подготовить проверку. Обновите список и повторите выбор.',
+                    }, 500)
                 return _render_supplier_catalog_update_review(
                     supplier=supplier,
                     source_ids=source_ids,
@@ -6085,6 +6201,13 @@ def register_supplier_routes(app):
                     status=500,
                 )
 
+        if wants_json:
+            return _supplier_catalog_update_review_json(
+                supplier_id=supplier_id,
+                source_ids=source_ids,
+                preview=preview,
+                review_token=review_token,
+            )
         return _render_supplier_catalog_update_review(
             supplier=supplier,
             source_ids=source_ids,
@@ -6099,12 +6222,29 @@ def register_supplier_routes(app):
     def supplier_catalog_update_confirm():
         """Recheck and apply only the exact reviewed seller-local source scope."""
         seller = current_user.seller
+        wants_json = _supplier_catalog_update_wants_json()
+        if (
+            wants_json
+            and request.content_length is not None
+            and request.content_length > SUPPLIER_REFRESH_REVIEW_MAX_BODY_BYTES
+        ):
+            return _supplier_catalog_update_json({
+                'success': False,
+                'code': 'supplier_update_confirmation_too_large',
+                'error': 'Проверка обновления слишком большая',
+            }, 413)
         try:
             supplier_id, source_ids = _supplier_catalog_update_scope_from_form(
                 request.form,
             )
         except ValueError as exc:
             supplier_id = request.form.get('supplier_id', type=int)
+            if wants_json:
+                return _supplier_catalog_update_json({
+                    'success': False,
+                    'code': 'supplier_update_scope_invalid',
+                    'error': str(exc),
+                }, 400)
             if supplier_id and supplier_id > 0:
                 supplier = Supplier.query.filter_by(id=supplier_id).first()
                 if supplier is not None:
@@ -6131,6 +6271,12 @@ def register_supplier_routes(app):
 
         supplier = Supplier.query.filter_by(id=supplier_id).first()
         if supplier is None:
+            if wants_json:
+                return _supplier_catalog_update_json({
+                    'success': False,
+                    'code': 'supplier_unavailable',
+                    'error': 'Поставщик не найден',
+                }, 404)
             abort(404)
         active_connection = SellerSupplier.query.filter_by(
             seller_id=seller.id,
@@ -6138,12 +6284,24 @@ def register_supplier_routes(app):
             is_active=True,
         ).first()
         if active_connection is None:
+            if wants_json:
+                return _supplier_catalog_update_json({
+                    'success': False,
+                    'code': 'supplier_access_unavailable',
+                    'error': 'Нет активного доступа к этому поставщику',
+                }, 404)
             abort(404)
         return_to = _safe_supplier_catalog_update_return(
             supplier_id, request.form.get('return_to'),
         )
         token_values = request.form.getlist('review_token')
         if len(token_values) != 1:
+            if wants_json:
+                return _supplier_catalog_update_json({
+                    'success': False,
+                    'code': 'supplier_update_review_missing',
+                    'error': 'Проверка обновления недоступна. Проверьте выбор заново.',
+                }, 409)
             return _render_supplier_catalog_update_review(
                 supplier=supplier,
                 source_ids=source_ids,
@@ -6161,6 +6319,12 @@ def register_supplier_routes(app):
                 supplier_id=supplier_id,
             )
         except SupplierCatalogUpdateReviewTokenError as exc:
+            if wants_json:
+                return _supplier_catalog_update_json({
+                    'success': False,
+                    'code': 'supplier_update_review_invalid',
+                    'error': str(exc),
+                }, exc.status_code)
             return _render_supplier_catalog_update_review(
                 supplier=supplier,
                 source_ids=source_ids,
@@ -6173,6 +6337,12 @@ def register_supplier_routes(app):
 
         submitted_scope = 'all' if source_ids is None else 'source_ids'
         if review['scope'] != submitted_scope or review['source_ids'] != source_ids:
+            if wants_json:
+                return _supplier_catalog_update_json({
+                    'success': False,
+                    'code': 'supplier_update_scope_mismatch',
+                    'error': 'Выбор товаров не совпадает с проверкой. Проверьте его заново.',
+                }, 409)
             return _render_supplier_catalog_update_review(
                 supplier=supplier,
                 source_ids=source_ids,
@@ -6191,6 +6361,12 @@ def register_supplier_routes(app):
                 expected_review_digest=review['review_digest'],
             )
         except SupplierRefreshReviewStale:
+            if wants_json:
+                return _supplier_catalog_update_json({
+                    'success': False,
+                    'code': 'supplier_update_review_stale',
+                    'error': 'Данные или доступ изменились после проверки. Запустите новую проверку.',
+                }, 409)
             try:
                 current_preview = SupplierService.preview_supplier_products(
                     seller.id,
@@ -6210,6 +6386,12 @@ def register_supplier_routes(app):
                 status=409,
             )
         except ValueError as exc:
+            if wants_json:
+                return _supplier_catalog_update_json({
+                    'success': False,
+                    'code': 'supplier_update_review_stale',
+                    'error': 'Проверка больше не подходит. Запустите новую проверку.',
+                }, 409)
             return _render_supplier_catalog_update_review(
                 supplier=supplier,
                 source_ids=source_ids,
@@ -6226,6 +6408,12 @@ def register_supplier_routes(app):
                 seller.id,
                 type(exc).__name__,
             )
+            if wants_json:
+                return _supplier_catalog_update_json({
+                    'success': False,
+                    'code': 'supplier_update_result_unknown',
+                    'error': 'Не удалось подтвердить результат. Проверьте данные заново.',
+                }, 500)
             return _render_supplier_catalog_update_review(
                 supplier=supplier,
                 source_ids=source_ids,
@@ -6235,6 +6423,54 @@ def register_supplier_routes(app):
                 error='Локальное обновление не сохранено. Откройте проверку заново.',
                 status=500,
             )
+
+        if wants_json and result.success is not True:
+            return _supplier_catalog_update_json({
+                'success': False,
+                'code': 'supplier_update_result_unknown',
+                'error': 'Не удалось подтвердить результат. Проверьте данные заново.',
+            }, 500)
+
+        if wants_json:
+            raw_items = result.item_results if isinstance(result.item_results, list) else []
+            items = []
+            for item in raw_items[:50]:
+                if (
+                    not isinstance(item, dict)
+                    or type(item.get('product_id')) is not int
+                    or item.get('status') not in ('updated', 'skipped', 'error')
+                    or item.get('reason') is not None
+                    and not isinstance(item.get('reason'), str)
+                ):
+                    return _supplier_catalog_update_json({
+                        'success': False,
+                        'code': 'supplier_update_result_unavailable',
+                        'error': 'Не удалось проверить состав результата. Проверьте данные заново.',
+                    }, 500)
+                items.append({
+                    'product_id': str(item['product_id']),
+                    'status': item['status'],
+                    'reason': item.get('reason'),
+                })
+            source_requested = None if source_ids is None else len(source_ids)
+            return _supplier_catalog_update_json({
+                'success': bool(result.success),
+                'status': (
+                    'completed_with_errors' if result.errors
+                    else 'completed'
+                ),
+                'supplier_id': str(supplier_id),
+                'scope': submitted_scope,
+                'source_requested': source_requested,
+                'requested': result.total_requested,
+                'updated': result.imported,
+                'skipped': result.skipped,
+                'errors': result.errors,
+                'items': items,
+                'items_truncated': len(raw_items) > len(items),
+                'wb_changed': False,
+                'ozon_changed': False,
+            })
 
         flash(
             f'Локально обновлено: {result.imported}, пропущено: '

@@ -112,7 +112,9 @@ class SupplierCatalogUpdateAllTest(unittest.TestCase):
         self.db.drop_all()
         self.ctx.pop()
 
-    def _post(self, data, *, path='/supplier-catalog/update', user=None):
+    def _post(
+        self, data, *, path='/supplier-catalog/update', user=None, headers=None,
+    ):
         user = user or self.user
         with patch('flask_login.utils._get_user', return_value=user), \
                 patch('routes.suppliers.current_user', user):
@@ -120,6 +122,7 @@ class SupplierCatalogUpdateAllTest(unittest.TestCase):
                 path,
                 data=data,
                 follow_redirects=False,
+                headers=headers,
             )
 
     def _add_source_copy(self, suffix='1', *, commit=True):
@@ -488,6 +491,122 @@ class SupplierCatalogUpdateAllTest(unittest.TestCase):
         self.assertNotIn(b'name="update_all_for_supplier"', confirmation.data)
         self.db.session.refresh(imported)
         self.assertEqual(imported.title, 'Старое имя malformed')
+
+    def test_json_review_is_pure_and_confirm_updates_all_exact_source_copies(self):
+        from models import ImportedProduct
+
+        source, first_copy = self._add_source_copy('inline-selected')
+        sibling_copy = ImportedProduct(
+            seller_id=self.seller_id,
+            supplier_id=self.supplier_id,
+            supplier_product_id=source.id,
+            supplier_content_revision=1,
+            external_id='copy-inline-sibling',
+            external_vendor_code='COPY-INLINE-SIBLING',
+            source_type='synthetic',
+            title='Старое имя sibling',
+            supplier_price=99,
+            supplier_quantity=1,
+            import_status='validated',
+        )
+        _, unrelated_copy = self._add_source_copy(
+            'inline-other-source',
+        )
+        self.db.session.add(sibling_copy)
+        self.db.session.commit()
+        unrelated_title = unrelated_copy.title
+        before = (first_copy.title, sibling_copy.title, unrelated_copy.title)
+
+        with patch(
+            'services.supplier_service.SupplierService.update_supplier_products',
+            wraps=__import__(
+                'services.supplier_service', fromlist=['SupplierService'],
+            ).SupplierService.update_supplier_products,
+        ) as updater:
+            preview_response = self._post(
+                {
+                    'supplier_id': str(self.supplier_id),
+                    'update_product_ids': [str(source.id)],
+                    'return_to': f'/supplier-catalog/{self.supplier_id}/products',
+                    'csrf_token': 'synthetic-csrf',
+                },
+                path='/supplier-catalog/update/review',
+                headers={'Accept': 'application/json'},
+            )
+            updater.assert_not_called()
+
+        self.assertEqual(preview_response.status_code, 200)
+        self.assertIn('no-store', preview_response.headers['Cache-Control'])
+        preview = preview_response.get_json()
+        self.assertTrue(preview['success'])
+        self.assertEqual(preview['scope'], 'source_ids')
+        self.assertEqual(preview['source_ids'], [str(source.id)])
+        self.assertEqual(preview['source_requested'], 1)
+        self.assertEqual(preview['requested'], 2)
+        self.assertEqual(preview['eligible'], 2)
+        self.assertEqual(preview['changed'], 2)
+        self.assertFalse(preview['items_truncated'])
+        self.assertTrue(preview['review_token'])
+        self.assertEqual(
+            (first_copy.title, sibling_copy.title, unrelated_copy.title),
+            before,
+        )
+
+        confirm_response = self._post(
+            self._confirm_values([source.id], preview['review_token']),
+            path='/supplier-catalog/update/confirm',
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(confirm_response.status_code, 200)
+        self.assertIn('no-store', confirm_response.headers['Cache-Control'])
+        result = confirm_response.get_json()
+        self.assertTrue(result['success'])
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(result['requested'], 2)
+        self.assertEqual(result['updated'], 2)
+        self.assertEqual(result['skipped'], 0)
+        self.assertEqual(result['errors'], 0)
+        self.assertEqual(
+            {row['product_id'] for row in result['items']},
+            {str(first_copy.id), str(sibling_copy.id)},
+        )
+        self.assertFalse(result['wb_changed'])
+        self.assertFalse(result['ozon_changed'])
+        self.db.session.refresh(first_copy)
+        self.db.session.refresh(sibling_copy)
+        self.db.session.refresh(unrelated_copy)
+        self.assertEqual(first_copy.title, source.title)
+        self.assertEqual(sibling_copy.title, source.title)
+        self.assertEqual(unrelated_copy.title, unrelated_title)
+
+    def test_json_confirm_denies_review_drift_without_partial_write(self):
+        source, imported = self._add_source_copy('inline-drift')
+        old_title = imported.title
+        preview = self._post(
+            {
+                'supplier_id': str(self.supplier_id),
+                'update_product_ids': [str(source.id)],
+            },
+            path='/supplier-catalog/update/review',
+            headers={'Accept': 'application/json'},
+        ).get_json()
+        self.assertTrue(preview['success'])
+        with self.app.app_context():
+            changed_source = self.db.session.get(type(source), source.id)
+            changed_source.title = 'Изменено после JSON проверки'
+            self.db.session.commit()
+
+        response = self._post(
+            self._confirm_values([source.id], preview['review_token']),
+            path='/supplier-catalog/update/confirm',
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.get_json()['code'], 'supplier_update_review_stale',
+        )
+        self.db.session.refresh(imported)
+        self.assertEqual(imported.title, old_title)
 
 
 if __name__ == '__main__':

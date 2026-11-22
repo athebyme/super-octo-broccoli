@@ -5,7 +5,7 @@
 
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='supplier-feed-freshness.css', v='20261121-r34') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='supplier-catalog-workspace.css', v='20261122-r58-g3') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='supplier-catalog-workspace.css', v='20261122-r60') }}">
 {% endblock %}
 
 {% block content %}
@@ -178,11 +178,32 @@
         <form method="POST" action="{{ url_for('supplier_catalog_import') }}" id="supplier-import-form" class="hidden">
             <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
         </form>
-        <form method="POST" action="{{ url_for('supplier_catalog_update_review') }}" id="supplier-update-form" class="hidden">
+        <form method="POST" action="{{ url_for('supplier_catalog_update_review') }}" id="supplier-update-form" class="hidden"
+              data-supplier-update-review-form
+              data-confirm-url="{{ url_for('supplier_catalog_update_confirm') }}">
             <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
             <input type="hidden" name="return_to" value="{{ update_intent_url if selection_mode == 'updates' else request.full_path }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         </form>
+
+        <section data-supplier-update-inline-review data-phase="closed" class="sc-inline-review" hidden
+                 aria-labelledby="supplier-update-inline-title" aria-busy="false">
+            <h2 id="supplier-update-inline-title" tabindex="-1">Проверить обновления</h2>
+            <p data-supplier-update-state role="status" aria-live="polite"></p>
+            <div data-supplier-update-summary class="sc-inline-review-summary"></div>
+            <div data-supplier-update-items class="sc-inline-review-items"></div>
+            <div class="sc-inline-review-actions">
+                <button type="button" data-supplier-update-apply class="sh-btn sh-btn--primary" hidden>
+                    Сохранить выбранные изменения
+                </button>
+                <button type="button" data-supplier-update-recheck class="sh-btn sh-btn--secondary" hidden>
+                    Проверить состояние
+                </button>
+                <button type="button" data-supplier-update-close class="sh-btn sh-btn--secondary">
+                    Вернуться к выбору
+                </button>
+            </div>
+        </section>
 
         {% if selection_review and selection_mode == 'updates' %}
         <div id="supplier-selection-status" class="sc-selection-note sc-selection-note--updates" role="status" aria-live="polite">
@@ -316,6 +337,7 @@
                 </a>
                 {% endif %}
                 <button type="submit" form="supplier-update-form" disabled
+                        data-supplier-update-preview
                         class="sh-btn sh-btn--secondary sc-action-submit"
                         :disabled="updateSelected.length === 0"
                         aria-describedby="{{ 'supplier-selection-count' if selection_review else 'update-selection-count' }}">
@@ -623,4 +645,5 @@
     }
 })();
 </script>
+<script defer src="{{ url_for('static', filename='supplier-catalog-update-review.js', v='20261122-r60') }}"></script>
 {% endblock %}
