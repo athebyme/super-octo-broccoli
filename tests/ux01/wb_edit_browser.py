@@ -18,6 +18,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import sys
@@ -2642,7 +2643,7 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
                 two_subject_page.locator(
                     'input[name="operation"][value="update_characteristic"]',
                 ).check()
-                assert "В выборе 2 товаров из нескольких категорий." in two_subject_page.locator("body").inner_text()
+                assert "поля разных категорий не смешиваются." in two_subject_page.locator("body").inner_text()
                 other_category_buttons = two_subject_page.get_by_role("button").filter(
                     has_text="Мастурбаторы мужские",
                 )
@@ -2683,6 +2684,7 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
                 value_field = two_subject_page.locator(
                     'div[x-show="addingChar"] input[placeholder="Введите значение"]:visible',
                 )
+                value_field.wait_for(state="visible", timeout=5000)
                 assert value_field.count() == 1
                 value_field.fill("Mixed category preview only")
                 two_subject_page.get_by_role(
@@ -3060,9 +3062,11 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             assert "Сохранено" in page.locator('label[for="char_506"]').inner_text()
             assert "SYNTHETIC-WB-SKU-000" in page.locator("body").inner_text()
             assert page.get_by_text("Размеры и штрихкоды", exact=False).count() == 1
-            assert page.get_by_role(
-                "columnheader", name="ID размера Wildberries", exact=True,
-            ).count() == 1
+            size_id_headers = page.locator("table thead th").filter(
+                has_text=re.compile(r"^ID размера Wildberries$", re.IGNORECASE),
+            )
+            assert size_id_headers.count() == 1
+            assert " ".join(size_id_headers.first.inner_text().split()).casefold() == "id размера wildberries"
             assert page.locator('input[name="sku"], input[name="sizes_json"]').count() == 0
 
             legacy_details = characteristics_panel.locator("details")

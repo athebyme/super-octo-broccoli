@@ -1000,7 +1000,12 @@ def run():
                 wait_until="domcontentloaded",
             )
             wb_page.get_by_role("heading", name="Массовое редактирование", exact=True).wait_for()
-            assert "2 товаров" in wb_page.locator("body").inner_text()
+            selected_summary = wb_page.locator("p").filter(
+                has_text="Для характеристик выберите категорию",
+            )
+            assert selected_summary.count() == 1, "Expected the bulk editor's selected-count summary"
+            selected_badge = " ".join(selected_summary.locator("span").first.inner_text().split())
+            assert "2 выбрано" in selected_badge, selected_badge
             resolver = wb_bulk_edit_resolver_posts[-1]
             resolver_result = wb_bulk_edit_resolver_results[-1]
             return_parts = urlsplit(resolver["return_to"])

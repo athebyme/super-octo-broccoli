@@ -1059,7 +1059,7 @@
                             <label class="block text-sm font-medium text-gray-700 mb-1.5">
                                 Новое значение
                                 <span x-show="addingChar && addingChar.required" class="text-red-500 ml-0.5">*</span>
-                                <span x-show="addingChar && addingChar.unit_name" class="text-xs text-gray-500 font-normal ml-1" x-text="'Единица: ' + addingChar.unit_name"></span>
+                                <span x-show="addingChar && addingChar.unit_name" class="text-xs text-gray-500 font-normal ml-1" x-text="addingChar ? 'Единица: ' + (addingChar.unit_name || '') : ''"></span>
                                 <span x-show="addingChar && addingChar.max_count > 1" class="text-xs text-gray-500 font-normal ml-1">
                                     (до <span x-text="addingChar && addingChar.max_count"></span> значений)
                                 </span>
@@ -1083,7 +1083,7 @@
                                     </div>
                                     <div class="flex items-center justify-between mt-2 text-xs text-gray-500">
                                         <span>Выбрано: <strong x-text="addingSelectedValues.length"></strong>
-                                            <span x-show="addingChar.max_count > 0"> из <strong x-text="addingChar.max_count"></strong></span>
+                                            <span x-show="addingChar && addingChar.max_count > 0"> из <strong x-text="addingChar ? addingChar.max_count : ''"></strong></span>
                                         </span>
                                         <button type="button"
                                                 x-show="addingSelectedValues.length > 0"
@@ -1108,23 +1108,25 @@
 
                             <!-- Свободный ввод (нет словаря) -->
                             <template x-if="addingChar && (!addingChar.values || addingChar.values.length === 0)">
-                                <template x-if="addingChar.charc_type === 4">
-                                    <input type="number" step="any" inputmode="decimal"
-                                           x-model="addingValue"
-                                           placeholder="Введите число"
-                                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                                </template>
-                                <template x-if="addingChar.charc_type === 1 && addingChar.max_count > 1">
-                                    <textarea x-model="addingValue" rows="3"
-                                              placeholder="По одному значению на строку"
-                                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"></textarea>
-                                </template>
-                                <template x-if="addingChar.charc_type !== 4 && !(addingChar.charc_type === 1 && addingChar.max_count > 1)">
-                                    <input type="text"
-                                           x-model="addingValue"
-                                           placeholder="Введите значение"
-                                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                                </template>
+                                <div>
+                                    <template x-if="addingChar && addingChar.charc_type === 4">
+                                        <input type="number" step="any" inputmode="decimal"
+                                               x-model="addingValue"
+                                               placeholder="Введите число"
+                                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                                    </template>
+                                    <template x-if="addingChar && addingChar.charc_type === 1 && addingChar.max_count > 1">
+                                        <textarea x-model="addingValue" rows="3"
+                                                  placeholder="По одному значению на строку"
+                                                  class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                                    </template>
+                                    <template x-if="addingChar && addingChar.charc_type !== 4 && !(addingChar.charc_type === 1 && addingChar.max_count > 1)">
+                                        <input type="text"
+                                               x-model="addingValue"
+                                               placeholder="Введите значение"
+                                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                                    </template>
+                                </div>
                             </template>
 
                             <!-- Текущие значения у товаров (компактно, по клику) -->
@@ -1445,23 +1447,25 @@
 
                         <!-- Если нет словаря - свободный ввод -->
                         <template x-if="selectedChar && (!selectedChar.values || selectedChar.values.length === 0)">
-                            <template x-if="selectedChar.charc_type === 4">
-                                <input type="number" step="any" inputmode="decimal"
-                                       x-model="charValueAdd"
-                                       placeholder="Введите число"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                            </template>
-                            <template x-if="selectedChar.charc_type === 1 && selectedChar.max_count > 1">
-                                <textarea x-model="charValueAdd" rows="3"
-                                          placeholder="По одному значению на строку"
-                                          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"></textarea>
-                            </template>
-                            <template x-if="selectedChar.charc_type !== 4 && !(selectedChar.charc_type === 1 && selectedChar.max_count > 1)">
-                                <input type="text"
-                                       x-model="charValueAdd"
-                                       placeholder="Введите значение характеристики"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                            </template>
+                            <div>
+                                <template x-if="selectedChar && selectedChar.charc_type === 4">
+                                    <input type="number" step="any" inputmode="decimal"
+                                           x-model="charValueAdd"
+                                           placeholder="Введите число"
+                                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                                </template>
+                                <template x-if="selectedChar && selectedChar.charc_type === 1 && selectedChar.max_count > 1">
+                                    <textarea x-model="charValueAdd" rows="3"
+                                              placeholder="По одному значению на строку"
+                                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                                </template>
+                                <template x-if="selectedChar && selectedChar.charc_type !== 4 && !(selectedChar.charc_type === 1 && selectedChar.max_count > 1)">
+                                    <input type="text"
+                                           x-model="charValueAdd"
+                                           placeholder="Введите значение характеристики"
+                                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                                </template>
+                            </div>
                         </template>
 
                         <!-- Скрытое поле для отправки значения -->
