@@ -27,7 +27,6 @@
             <p class="sh-page-subtitle">Журнал всех публикаций и изменений в Ozon: статусы задач и сверка результата.</p>
         </div>
         <div class="sh-page-actions">
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('ozon_bulk_uploads.index', account_id=filters.account_id) }}">Массовые загрузки</a>
             <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_drafts.index', account_id=filters.account_id) }}">Черновики</a>
             <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_listings.index', marketplace='ozon', account_id=filters.account_id) }}">Листинги</a>
         </div>

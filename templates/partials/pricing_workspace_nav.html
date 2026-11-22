@@ -20,7 +20,7 @@
     {'key': 'price-monitor', 'label': 'Мониторинг WB', 'href': url_for('price_monitor_settings')},
     {'key': 'price-alerts', 'label': 'Подозрительные изменения', 'href': url_for('suspicious_price_changes')}
 ] %}
-{% if config.get('MARKETPLACE_OZON_ENABLED', false) %}
+{% if config.get('MARKETPLACE_OZON_ENABLED', false) and not pricing_workspace_hide_ozon_context|default(false) %}
     {% set pricing_workspace_items = pricing_workspace_items + [
         {'key': 'ozon-proposals', 'label': 'Предложения Ozon', 'href': url_for('marketplace_commercial.index', account_id=pricing_nav_account)}
     ] %}
@@ -28,11 +28,14 @@
 {% set pricing_workspace_active = pricing_workspace_items | selectattr('key', 'equalto', pricing_workspace_current) | first %}
 {% macro render_pricing_workspace_links(items, current) %}
     {% for item in items %}
+    {% if current == item.key %}
+    <span class="pricing-workspace-link is-current" aria-current="page" data-current-href="{{ item.href }}">{{ item.label }}</span>
+    {% else %}
     <a href="{{ item.href }}"
-       class="pricing-workspace-link{% if current == item.key %} is-current{% endif %}"
-       {% if current == item.key %}aria-current="page"{% endif %}>
+       class="pricing-workspace-link">
         {{ item.label }}
     </a>
+    {% endif %}
     {% endfor %}
 {% endmacro %}
 <nav class="pricing-workspace-nav pricing-workspace-nav--desktop" aria-label="Цены, расчёты и история">
@@ -49,3 +52,25 @@
         {{ render_pricing_workspace_links(pricing_workspace_items, pricing_workspace_current) }}
     </nav>
 </details>
+
+{% macro render_pricing_channel_nav() %}
+{% set channel_nav = mp_nav() if config.get('MARKETPLACE_OZON_ENABLED', false) and mp_nav is defined else none %}
+{% if channel_nav and channel_nav.ozon_enabled %}
+<nav class="sh-channel-bar pricing-channel-nav mb-5" aria-label="Каналы цен">
+    <span class="sh-channel-tab sh-channel-tab--active" aria-current="page">
+        <span class="sh-mp-dot sh-mp-dot--wb" aria-hidden="true"></span>Wildberries
+    </span>
+    {% if channel_nav.accounts %}
+        {% for account in channel_nav.accounts %}
+        <a href="{{ url_for('marketplace_commercial.index', account_id=account.id) }}" class="sh-channel-tab">
+            <span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>Ozon{% if channel_nav.accounts|length > 1 %} · {{ account.label }}{% endif %}
+        </a>
+        {% endfor %}
+    {% else %}
+    <a href="{{ url_for('api_settings') }}" class="sh-channel-tab sh-channel-tab--ghost">
+        <span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>Подключить Ozon
+    </a>
+    {% endif %}
+</nav>
+{% endif %}
+{% endmacro %}

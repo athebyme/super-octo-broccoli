@@ -1,11 +1,19 @@
-{% set operations_nav_account = operations_history_account_id if operations_history_account_id is defined else request.args.get('account_id') %}
-{% if not operations_nav_account and filters is defined and filters.account_id is defined %}
+{% set operations_nav_account = none %}
+{% set operations_nav_has_context = false %}
+{% if operations_history_account_id is defined %}
+    {% set operations_nav_account = operations_history_account_id %}
+    {% set operations_nav_has_context = true %}
+{% elif request.args.get('account_id') is not none %}
+    {% set operations_nav_account = request.args.get('account_id') %}
+    {% set operations_nav_has_context = true %}
+{% elif filters is defined and filters.account_id is defined %}
     {% set operations_nav_account = filters.account_id %}
-{% endif %}
-{% if not operations_nav_account and operation is defined and operation.account_id is defined %}
+    {% set operations_nav_has_context = true %}
+{% elif operation is defined and operation.account_id is defined %}
     {% set operations_nav_account = operation.account_id %}
+    {% set operations_nav_has_context = true %}
 {% endif %}
-{% if not operations_nav_account and config.get('MARKETPLACE_OZON_ENABLED', false) and mp_nav is defined %}
+{% if not operations_nav_has_context and config.get('MARKETPLACE_OZON_ENABLED', false) and mp_nav is defined %}
     {% set operations_nav_account = mp_nav().last_account_id %}
 {% endif %}
 {% set operation_history_items = [
@@ -23,11 +31,14 @@
     <span class="operations-history-nav-label">Истории по каналу</span>
     <div class="operations-history-nav-links">
         {% for item in operation_history_items %}
+        {% if operations_history_current == item.key %}
+        <span class="operations-history-link is-current" aria-current="page" data-current-href="{{ item.href }}">{{ item.label }}</span>
+        {% else %}
         <a href="{{ item.href }}"
-           class="operations-history-link{% if operations_history_current == item.key %} is-current{% endif %}"
-           {% if operations_history_current == item.key %}aria-current="page"{% endif %}>
+           class="operations-history-link">
             {{ item.label }}
         </a>
+        {% endif %}
         {% endfor %}
     </div>
 </nav>

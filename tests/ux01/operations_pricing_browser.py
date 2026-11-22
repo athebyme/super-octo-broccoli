@@ -54,6 +54,7 @@ PRICING_NAV_LABELS = (
     "Подозрительные изменения",
     "Предложения Ozon",
 )
+PRICING_DASHBOARD_NAV_LABELS = PRICING_NAV_LABELS[:-1]
 OWNED_TEMPLATES = (
     "templates/base.html",
     "templates/bulk_edit_history.html",
@@ -853,42 +854,94 @@ def _pricing_nav_link_snapshot(locator) -> list[dict]:
     return locator.evaluate_all("""links => links.map(link => ({
         label:(link.innerText || '').trim(),
         href:link.getAttribute('href'),
+        destination:link.getAttribute('data-current-href'),
         current:link.getAttribute('aria-current'),
     }))""")
 
 
-def _pricing_desktop_nav_check(page, *, expected_account_id: int | None) -> dict:
+def _pricing_desktop_nav_check(
+    page,
+    *,
+    expected_account_id: int | None,
+    include_ozon_proposals: bool = True,
+    expected_channel_account_ids: list[int] | None = None,
+) -> dict:
     nav = page.locator("nav.pricing-workspace-nav--desktop")
     if nav.count() != 1:
         return {"check": "pricing_desktop_nav_full_row_account_scope", "passed": False,
                 "reason": "shared_pricing_nav_missing_or_duplicated"}
 
-    visible_links = nav.locator("a.pricing-workspace-link:visible")
-    desktop_rows = _pricing_nav_link_snapshot(visible_links)
+    visible_items = nav.locator(".pricing-workspace-link:visible")
+    desktop_rows = _pricing_nav_link_snapshot(visible_items)
     mobile_details = page.locator("details.pricing-workspace-mobile-nav")
     mobile_rows = (
-        _pricing_nav_link_snapshot(mobile_details.locator("a.pricing-workspace-link"))
+        _pricing_nav_link_snapshot(mobile_details.locator(".pricing-workspace-link"))
         if mobile_details.count() == 1 else []
     )
     current_rows = [row for row in desktop_rows if row["current"] == "page"]
+    expected_labels = list(
+        PRICING_NAV_LABELS if include_ozon_proposals else PRICING_DASHBOARD_NAV_LABELS
+    )
     expected_account_scope = None
     if expected_account_id is not None:
-        ozon_links = [row for row in desktop_rows if row["label"] == "Предложения Ozon"]
+        ozon_items = [row for row in desktop_rows if row["label"] == "Предложения Ozon"]
+        destination = (
+            ozon_items[0]["destination"] if len(ozon_items) == 1 and ozon_items[0]["current"] == "page"
+            else ozon_items[0]["href"] if len(ozon_items) == 1 else None
+        )
+        destination_parts = urlsplit(destination or "")
         expected_account_scope = (
-            len(ozon_links) == 1
-            and urlsplit(ozon_links[0]["href"] or "").path == "/marketplaces/commercial/"
-            and urlsplit(ozon_links[0]["href"] or "").query == f"account_id={expected_account_id}"
+            len(ozon_items) == 1
+            and destination_parts.path == "/marketplaces/commercial/"
+            and parse_qs(destination_parts.query) == {"account_id": [str(expected_account_id)]}
         )
 
     details_hidden = mobile_details.count() == 1 and not mobile_details.is_visible()
     passed = (
-        [row["label"] for row in desktop_rows] == list(PRICING_NAV_LABELS)
+        [row["label"] for row in desktop_rows] == expected_labels
         and len(current_rows) == 1
         and len(mobile_rows) == len(desktop_rows)
         and mobile_rows == desktop_rows
         and details_hidden
         and (expected_account_scope is not False)
     )
+    channel_choices = None
+    if expected_channel_account_ids is not None:
+        channel_nav = page.locator("nav.pricing-channel-nav")
+        channel_items = channel_nav.locator(".sh-channel-tab")
+        current_channel = channel_nav.locator(
+            ".sh-channel-tab--active[aria-current='page']"
+        )
+        channel_links = channel_nav.locator("a.sh-channel-tab")
+        channel_rows = _pricing_nav_link_snapshot(channel_items)
+        channel_targets = channel_items.evaluate_all(
+            "items => items.map(item => Math.round(item.getBoundingClientRect().height))"
+        )
+        linked_accounts = []
+        for row in channel_rows:
+            if row["label"].startswith("Ozon"):
+                query = parse_qs(urlsplit(row["href"] or "").query)
+                linked_accounts.append(int(query["account_id"][0]) if query.get("account_id") else None)
+        channel_choices = {
+            "labels": [row["label"] for row in channel_rows],
+            "account_ids": linked_accounts,
+            "current_label": current_channel.inner_text().strip() if current_channel.count() else None,
+            "current_is_nonlink": current_channel.count() == 1 and current_channel.evaluate(
+                "node => node.tagName.toLowerCase() !== 'a' && !node.hasAttribute('href')"
+            ),
+            "target_heights": channel_targets,
+        }
+        channel_passed = (
+            channel_nav.count() == 1
+            and channel_choices["current_label"] == "Wildberries"
+            and channel_choices["current_is_nonlink"]
+            and linked_accounts == expected_channel_account_ids
+            and len(channel_targets) == len(expected_channel_account_ids) + 1
+            and all(height >= 44 for height in channel_targets)
+            and [row["label"] for row in desktop_rows if row["current"] == "page"] == ["Текущие цены WB"]
+            and not any(row["href"] and urlsplit(row["href"]).path == "/prices/" for row in desktop_rows)
+        )
+        passed = passed and channel_passed
     return {
         "check": "pricing_desktop_nav_full_row_account_scope",
         "passed": passed,
@@ -896,21 +949,26 @@ def _pricing_desktop_nav_check(page, *, expected_account_id: int | None) -> dict
         "mobile_links_match": mobile_rows == desktop_rows,
         "mobile_details_hidden": details_hidden,
         "selected_account_href_preserved": expected_account_scope,
+        "channel_choices": channel_choices,
+        "include_ozon_proposals": include_ozon_proposals,
     }
 
 
-def _pricing_mobile_nav_check(page) -> dict:
+def _pricing_mobile_nav_check(page, *, include_ozon_proposals: bool = True) -> dict:
     details = page.locator("details.pricing-workspace-mobile-nav")
     if details.count() != 1:
         return {"check": "pricing_mobile_nav_disclosure_closed_by_default_and_keyboard_open",
                 "passed": False, "reason": "native_mobile_disclosure_missing_or_duplicated"}
 
     summary = details.locator("summary.pricing-workspace-nav-summary")
-    links = details.locator("a.pricing-workspace-link")
+    items = details.locator(".pricing-workspace-link")
     summary_visible = summary.is_visible()
     initially_closed = not details.evaluate("node => node.open")
-    closed_links_hidden = links.count() == len(PRICING_NAV_LABELS) and all(
-        not links.nth(index).is_visible() for index in range(links.count())
+    expected_labels = list(
+        PRICING_NAV_LABELS if include_ozon_proposals else PRICING_DASHBOARD_NAV_LABELS
+    )
+    closed_links_hidden = items.count() == len(expected_labels) and all(
+        not items.nth(index).is_visible() for index in range(items.count())
     )
     summary_height = summary.evaluate("node => node.getBoundingClientRect().height") if summary.count() else 0
 
@@ -940,8 +998,8 @@ def _pricing_mobile_nav_check(page) -> dict:
     }""")
     page.keyboard.press("Enter")
     opened_by_keyboard = details.evaluate("node => node.open")
-    visible_links = details.locator("a.pricing-workspace-link:visible")
-    opened_rows = _pricing_nav_link_snapshot(visible_links)
+    visible_items = details.locator(".pricing-workspace-link:visible")
+    opened_rows = _pricing_nav_link_snapshot(visible_items)
     current_rows = [row for row in opened_rows if row["current"] == "page"]
     expanded_page_geometry = page.evaluate("""() => ({
         rootOverflow:document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
@@ -959,7 +1017,7 @@ def _pricing_mobile_nav_check(page) -> dict:
         and summary_keyboard_focus["outlineStyle"] == "solid"
         and summary_keyboard_focus["outlineWidth"] >= 2
         and opened_by_keyboard
-        and [row["label"] for row in opened_rows] == list(PRICING_NAV_LABELS)
+        and [row["label"] for row in opened_rows] == expected_labels
         and len(current_rows) == 1
         and expanded_page_geometry["summaryCurrent"] == current_rows[0]["label"]
         and not expanded_page_geometry["rootOverflow"]
@@ -977,6 +1035,7 @@ def _pricing_mobile_nav_check(page) -> dict:
         "opened_by_keyboard": opened_by_keyboard,
         "visible_links": opened_rows,
         "current_link_count": len(current_rows),
+        "current_item_count": len(current_rows),
         "expanded_page_geometry": expanded_page_geometry,
     }
 
@@ -1183,6 +1242,34 @@ def main() -> None:
                     page.wait_for_function("() => !!document.querySelector('.main-content') && !!document.querySelector('#main-content')")
                     _settle_main_geometry(page)
                     page.evaluate("document.fonts.ready")
+                    if label == "ozon_operations" and SOURCE == "worktree":
+                        history_nav = page.locator("nav.operations-history-nav")
+                        upload_link = history_nav.locator("a.operations-history-link").filter(
+                            has_text="Загрузки Ozon",
+                        )
+                        current_item = history_nav.locator(
+                            "span.operations-history-link.is-current[aria-current='page']"
+                        )
+                        upload_href = urlsplit(upload_link.get_attribute("href") or "")
+                        upload_query = parse_qs(upload_href.query)
+                        assert history_nav.count() == 1
+                        assert upload_link.count() == 1
+                        assert upload_href.path == "/marketplaces/ozon/uploads/"
+                        assert upload_query == {"account_id": [str(fixture["account_id"])]}
+                        assert page.locator(
+                            ".sh-page-actions a",
+                        ).filter(has_text="Массовые загрузки").count() == 0
+                        assert current_item.count() == 1
+                        assert current_item.inner_text().strip() == "Операции Ozon"
+                        assert current_item.get_attribute("href") is None
+                        REPORT["checks"].append({
+                            "page": label,
+                            "check": "ozon_uploads_has_one_account_scoped_navigation_entry",
+                            "passed": True,
+                            "upload_href": upload_href.path + "?account_id=" + upload_query["account_id"][0],
+                            "duplicate_header_action": False,
+                            "current_item_is_nonlink": True,
+                        })
                     actual_theme = page.evaluate("document.documentElement.dataset.theme")
                     REPORT["actual_theme_assertions"].append({
                         "page": label,
@@ -1406,6 +1493,14 @@ def main() -> None:
                             )
                             pricing_desktop_nav = _pricing_desktop_nav_check(
                                 page, expected_account_id=expected_nav_account,
+                                include_ozon_proposals=not (
+                                    SOURCE == "worktree" and label == "wb_prices_dashboard"
+                                ),
+                                expected_channel_account_ids=(
+                                    [int(fixture["account_id"])]
+                                    if SOURCE == "worktree" and label == "wb_prices_dashboard"
+                                    else None
+                                ),
                             )
                             if SOURCE == "worktree" and not pricing_desktop_nav["passed"]:
                                 raise AssertionError({"page": label, "desktop_nav": pricing_desktop_nav})
@@ -1446,7 +1541,12 @@ def main() -> None:
                     _settle_main_geometry(page)
                     pricing_mobile_nav = None
                     if page.locator("nav.pricing-workspace-nav--desktop").count():
-                        pricing_mobile_nav = _pricing_mobile_nav_check(page)
+                        pricing_mobile_nav = _pricing_mobile_nav_check(
+                            page,
+                            include_ozon_proposals=not (
+                                SOURCE == "worktree" and label == "wb_prices_dashboard"
+                            ),
+                        )
                         if SOURCE == "worktree" and not pricing_mobile_nav["passed"]:
                             raise AssertionError({"page": label, "mobile_nav": pricing_mobile_nav})
                         nav_selector = (
@@ -1454,7 +1554,7 @@ def main() -> None:
                             "a.pricing-workspace-link:visible"
                         )
                     else:
-                        nav_selector = ".operations-history-link:visible, .pricing-workspace-link:visible"
+                        nav_selector = "a.operations-history-link:visible, a.pricing-workspace-link:visible"
                     focus = _keyboard_nav_check(page, nav_selector)
                     interaction_passed = focus.get("passed") is True
                     if SOURCE == "worktree":

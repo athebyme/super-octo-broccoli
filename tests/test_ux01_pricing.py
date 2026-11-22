@@ -4,7 +4,7 @@ import shutil
 import subprocess
 from types import SimpleNamespace
 
-from flask import Flask, render_template
+from flask import Flask, render_template, render_template_string
 from jinja2 import ChoiceLoader, DictLoader, FileSystemLoader
 
 
@@ -38,10 +38,22 @@ def _app(*, ozon_enabled=True):
         "price_monitor_settings": "/price-monitor/settings",
         "suspicious_price_changes": "/price-monitor/suspicious",
         "marketplace_commercial.index": "/marketplaces/commercial/",
+        "api_settings": "/settings/api",
+        "ozon_bulk_uploads.index": "/marketplaces/ozon/uploads/",
+        "bulk_edit_history": "/bulk-history",
+        "products_merge_history_list": "/products/merge/history",
+        "marketplace_operations.index": "/marketplaces/operations/",
     }
     for endpoint, path in endpoints.items():
         app.add_url_rule(path, endpoint=endpoint, view_func=lambda: "")
-    app.jinja_env.globals["mp_nav"] = lambda: SimpleNamespace(last_account_id=92)
+    app.jinja_env.globals["mp_nav"] = lambda: SimpleNamespace(
+        last_account_id=92,
+        ozon_enabled=True,
+        accounts=[
+            SimpleNamespace(id=41, label="Synthetic one"),
+            SimpleNamespace(id=42, label="Synthetic two"),
+        ],
+    )
     return app
 
 
@@ -54,6 +66,8 @@ def test_pricing_navigation_preserves_account_and_respects_ozon_gate():
         )
     assert 'href="/marketplaces/commercial/?account_id=41"' in html
     assert 'aria-current="page"' in html
+    assert '<span class="pricing-workspace-link is-current" aria-current="page" data-current-href="/prices/">Текущие цены WB</span>' in html
+    assert '<a href="/prices/"' not in html
 
     disabled = _app(ozon_enabled=False)
     with disabled.test_request_context("/prices/"):
@@ -63,6 +77,50 @@ def test_pricing_navigation_preserves_account_and_respects_ozon_gate():
         )
     assert "Предложения Ozon" not in html
     assert "marketplaces/commercial" not in html
+
+
+def test_prices_dashboard_has_one_current_wb_label_and_explicit_ozon_shop_destinations():
+    app = _app()
+    with app.test_request_context("/prices/"):
+        nav = render_template(
+            "partials/pricing_workspace_nav.html",
+            pricing_workspace_current="wb-current",
+            pricing_workspace_hide_ozon_context=True,
+        )
+        channels = render_template_string(
+            '{% from "partials/pricing_workspace_nav.html" import render_pricing_channel_nav %}'
+            "{{ render_pricing_channel_nav() }}"
+        )
+
+    assert "Предложения Ozon" not in nav
+    assert '<a href="/prices/"' not in nav
+    assert '<span class="sh-channel-tab sh-channel-tab--active" aria-current="page">' in channels
+    assert "Wildberries" in channels
+    assert 'href="/marketplaces/commercial/?account_id=41"' in channels
+    assert 'href="/marketplaces/commercial/?account_id=42"' in channels
+    assert channels.count("class=\"sh-channel-tab\"") == 2
+
+
+def test_operations_history_context_preserves_all_accounts_and_marks_current_without_link():
+    app = _app()
+    with app.test_request_context("/marketplaces/operations/?account_id="):
+        all_accounts = render_template(
+            "partials/operations_workspace_history_nav.html",
+            operations_history_current="ozon-operations",
+            filters=SimpleNamespace(account_id=""),
+        )
+    assert 'href="/marketplaces/ozon/uploads/?account_id="' in all_accounts
+    assert 'href="/marketplaces/ozon/uploads/?account_id=92"' not in all_accounts
+    assert '<span class="operations-history-link is-current" aria-current="page" data-current-href="/marketplaces/operations/?account_id=">Операции Ozon</span>' in all_accounts
+
+    with app.test_request_context("/marketplaces/operations/?account_id=41"):
+        one_account = render_template(
+            "partials/operations_workspace_history_nav.html",
+            operations_history_current="ozon-operations",
+            filters=SimpleNamespace(account_id="41"),
+        )
+    assert 'href="/marketplaces/ozon/uploads/?account_id=41"' in one_account
+    assert '<a href="/marketplaces/operations/?account_id=41"' not in one_account
 
 
 def test_ozon_facts_call_buyer_price_and_marketplace_discount_unknown():

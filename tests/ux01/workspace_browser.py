@@ -1656,7 +1656,7 @@ def main() -> None:
                 )
                 wb_heading = extra_page.locator(
                     ".seller-workspace-alt-heading",
-                ).filter(has_text="Товары и поставщики").inner_text().strip()
+                ).filter(has_text="Товары и поставщики").text_content().strip()
                 wb_merge_href = extra_page.locator(
                     '.seller-workspace-sublink[href="/products/merge"]',
                 ).get_attribute("href")
