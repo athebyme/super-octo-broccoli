@@ -1,14 +1,16 @@
-.our { --our-ink:var(--text); --our-muted:var(--text-secondary); --our-line:var(--border); max-width:1180px; margin:0 auto; padding:28px 20px 70px; color:var(--our-ink); }
+.our { --our-ink:var(--text); --our-muted:var(--text-secondary); --our-line:var(--border); max-width:1180px; margin:0 auto; padding:24px 20px 70px; color:var(--our-ink); }
 .our-boot { max-width:1180px; margin:25px auto; padding:20px; color:var(--text-secondary); }
 .our[v-cloak], .our [v-cloak] { display:none; }
 .our-header { max-width:850px; }
-.our-back,.our-card-link { color:var(--accent-text); text-decoration:underline; text-underline-offset:3px; }
-.our-back { display:inline-block; margin-bottom:28px; font-size:13px; }
+.our-back { display:inline-flex; min-height:44px; align-items:center; margin-bottom:7px; color:var(--accent-text); text-decoration:underline; text-underline-offset:3px; font-size:13px; }
 .our-eyebrow { margin:0 0 8px; color:var(--accent-text); font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
-.our h1 { margin:0; font-size:clamp(28px,4vw,46px); line-height:1.12; letter-spacing:-.035em; }
-.our-lead { max-width:720px; margin:15px 0 0; color:var(--our-muted); font-size:15px; line-height:1.6; }
-.our-context { display:flex; flex-wrap:wrap; gap:8px 17px; margin:22px 0 27px; color:var(--our-muted); font-size:12px; }
+.our h1 { margin:0; font-size:clamp(24px,3vw,34px); line-height:1.12; letter-spacing:-.035em; }
+.our-lead { max-width:720px; margin:6px 0 0; color:var(--our-muted); font-size:13px; line-height:1.45; }
+.our-context { display:flex; flex-wrap:wrap; gap:4px 12px; margin:10px 0 0; color:var(--our-muted); font-size:12px; line-height:1.45; }
 .our-context strong { color:var(--our-ink); }
+.our-header .preparation-journey--compact { margin:4px 0 0; padding:0; border:0; border-radius:0; background:transparent; }
+.our-header .preparation-journey--compact .preparation-journey-path { margin-top:0; }
+.our-header .preparation-journey--compact .preparation-journey-path > summary { color:var(--accent-text); }
 .our-message { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:14px; margin:0 0 14px; padding:14px 17px; border:1px solid var(--our-line); border-left:3px solid var(--accent); border-radius:8px; background:var(--bg-card); color:var(--our-muted); font-size:13px; line-height:1.5; }
 .our-message p { margin:4px 0 0; }
 .our-message--error { border-left-color:var(--danger); }
@@ -39,7 +41,7 @@
 .our-badges .our-ready { color:var(--ok); }
 .our-badges .our-blocked { color:var(--warn); }
 .our-card h2,.our-card h3 { margin:0 0 5px; font-size:16px; line-height:1.35; overflow-wrap:anywhere; }
-.our-card h2 a { color:var(--our-ink); }
+.our-card h2 a { display:inline-block; max-width:100%; min-height:44px; padding:4px 0; color:var(--our-ink); text-decoration:underline; text-underline-offset:2px; overflow-wrap:anywhere; }
 .our-meta { margin:3px 0; color:var(--our-muted); font-size:11px; line-height:1.45; overflow-wrap:anywhere; }
 .our-facts { display:flex; flex-wrap:wrap; gap:4px 13px; margin:10px 0 4px; color:var(--our-muted); font-size:11px; line-height:1.45; }
 .our-facts strong { color:var(--our-ink); font-weight:600; }
@@ -48,7 +50,6 @@
 .our-issues [data-review-issue-link] { color:inherit; text-decoration:underline; text-decoration-color:currentColor; text-underline-offset:2px; }
 .our-warnings { margin:9px 0; color:var(--our-muted); font-size:11px; }
 .our-warnings ul { margin:6px 0; padding-left:18px; }
-.our-card-link { display:inline-block; margin-top:8px; font-size:12px; }
 .our-pagination { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:10px; margin-top:22px; font-size:12px; color:var(--our-muted); }
 .our-dialog { width:min(94vw,660px); max-height:min(90vh,850px); padding:25px; border:1px solid var(--our-line); border-radius:12px; background:var(--bg-card); color:var(--our-ink); box-shadow:0 30px 80px #0005; overscroll-behavior:contain; }
 .our-dialog::backdrop { background:#171a1dcc; }
@@ -76,6 +77,7 @@
 .our-noscript { padding-top:0; }
 @media (max-width:650px) {
     .our { padding:20px 12px 52px; }
+    .our-context { gap:3px 10px; }
     .our-toolbar { top:64px; display:block; padding:13px; }
     .our-toolbar .our-actions { display:grid; grid-template-columns:minmax(0,1fr); margin-top:12px; }
     .our-toolbar .sh-btn { width:100%; }

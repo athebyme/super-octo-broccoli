@@ -1,4 +1,4 @@
-{% macro journey(current, account, object, next_action, source_url=none, internal_url=none, draft_url=none, review_url=false, publish_url=false, result_url=none, listing_url=none, channel='Ozon', review_reason='Сначала сохраните черновик и выберите точный набор.', publish_reason='Доступно после свежей проверки выбранных версий.') -%}
+{% macro journey(current, account, object, next_action, source_url=none, internal_url=none, draft_url=none, review_url=false, publish_url=false, result_url=none, listing_url=none, channel='Ozon', review_reason='Сначала сохраните черновик и выберите точный набор.', publish_reason='Доступно после свежей проверки выбранных версий.', compact=false) -%}
 {% set source_href = source_url if source_url is not none else url_for('supplier_catalog') %}
 {% set internal_href = internal_url if internal_url is not none else url_for('seller_my_products') %}
 {% set draft_href = draft_url if draft_url is not none else url_for('marketplace_drafts.index') %}
@@ -16,7 +16,8 @@
     ('listing', 'Карточка ' ~ channel, 'Статус площадки и видимость', listing_href, 'Сверьте синхронизированную карточку: обработка не означает, что она видна покупателю.')
 ] %}
 <link rel="stylesheet" href="{{ url_for('static', filename='preparation-workspace.css') }}">
-<section class="preparation-journey" aria-labelledby="preparation-journey-title-{{ current }}">
+<section class="preparation-journey{% if compact %} preparation-journey--compact{% endif %}" {% if compact %}aria-label="Этапы подготовки"{% else %}aria-labelledby="preparation-journey-title-{{ current }}"{% endif %}>
+    {% if not compact %}
     <div class="preparation-journey-head">
         <div>
             <p class="preparation-journey-kicker">Путь карточки {{ channel }} · шаг {{ number.get(current, 0) }} из 7</p>
@@ -29,8 +30,9 @@
         <span><strong>Магазин:</strong> {{ account or 'выберите при подготовке' }}</span>
         <span><strong>Объект:</strong> {{ object or 'товар продавца' }}</span>
     </p>
+    {% endif %}
     <details class="preparation-journey-path">
-        <summary>Показать все этапы</summary>
+        <summary>{% if compact %}Этапы подготовки{% else %}Показать все этапы{% endif %}</summary>
         <ol>
             {% for key, label, detail, href, reason in steps %}
             <li class="preparation-journey-step{% if key == current %} is-current{% elif not href %} is-unavailable{% endif %}"{% if key == current %} aria-current="step"{% elif not href %} aria-disabled="true"{% endif %}>
