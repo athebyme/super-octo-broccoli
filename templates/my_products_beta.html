@@ -6,7 +6,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261122-wb-create-continuity-r61') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-catalog-layout-r62') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261122-unified-import-r60c') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
@@ -280,7 +280,18 @@
         {{ workspaceReturnNote }}
     </div>
 
-    <!-- Вкладки: одно состояние — одна вкладка, со счётчиком -->
+    <sh-error :message="error" @retry="load"></sh-error>
+    <div v-if="ozonError" ref="ozonError" class="mp-ozon-message mp-ozon-message--error" role="alert" tabindex="-1">{{ ozonError }}</div>
+    <div v-if="ozonPriceError" ref="ozonPriceError" class="mp-ozon-message mp-ozon-message--error" role="alert" tabindex="-1">{{ ozonPriceError }}</div>
+    <div v-if="ozonSessionEnded" class="mp-ozon-message" role="status">Действия Ozon остановлены. Войдите снова и проверьте состояние подготовки.</div>
+    <div v-if="ozonStorageProblem" class="mp-ozon-message" data-ozon-preparation-storage-problem role="status"><div><strong>Сохранённый результат подготовки нельзя прочитать.</strong><p>Проверьте историю запусков перед новым действием.</p></div><div class="mp-ozon-actions"><a class="sh-btn sh-btn--secondary" data-ozon-preparation-history :href="urls.ozonUploads">История запусков</a><button type="button" class="sh-btn sh-btn--secondary" @click="clearOzonStorageProblem">Я проверил историю</button></div></div>
+    <div v-if="ozonPending" class="mp-ozon-message" data-ozon-preparation-pending role="status">
+        <div><strong>Результат локальной подготовки пока неизвестен.</strong><p>{{ ozonPending.imported_product_ids.length }} товаров · магазин № {{ ozonPending.account_id }}. Сначала проверьте запуск по сохранённому ключу. Повтор возможен только вручную с тем же ключом и набором товаров.</p></div>
+        <div class="mp-ozon-actions"><button type="button" class="sh-btn sh-btn--secondary" data-ozon-preparation-reconcile :disabled="!!ozonBusy || ozonSessionEnded" @click="readOzonPending">{{ ozonBusy === 'read' ? 'Проверяем…' : 'Проверить результат' }}</button><button v-if="ozonRetrySameKey" type="button" class="sh-btn sh-btn--secondary" data-ozon-preparation-retry :disabled="!!ozonBusy || ozonSessionEnded" @click="retryOzonPending">Повторить тот же запрос</button></div>
+    </div>
+
+    <section class="mp-catalog-surface" data-workspace-catalog aria-label="Каталог товаров">
+    <!-- Вкладки статуса, точный выбор и карточки остаются на одной поверхности. -->
     <nav v-if="!importBatchMode && !supplierRefreshBatchMode" class="mp-tabs" aria-label="Статус карточек">
         <button v-for="tab in tabs" :key="tab.key" type="button"
                 class="mp-tab" :class="{'is-active': activeTab === tab.key}"
@@ -316,16 +327,6 @@
         </select>
     </sh-filter-bar>
 
-    <sh-error :message="error" @retry="load"></sh-error>
-    <div v-if="ozonError" ref="ozonError" class="mp-ozon-message mp-ozon-message--error" role="alert" tabindex="-1">{{ ozonError }}</div>
-    <div v-if="ozonPriceError" ref="ozonPriceError" class="mp-ozon-message mp-ozon-message--error" role="alert" tabindex="-1">{{ ozonPriceError }}</div>
-    <div v-if="ozonSessionEnded" class="mp-ozon-message" role="status">Действия Ozon остановлены. Войдите снова и проверьте состояние подготовки.</div>
-    <div v-if="ozonStorageProblem" class="mp-ozon-message" data-ozon-preparation-storage-problem role="status"><div><strong>Сохранённый результат подготовки нельзя прочитать.</strong><p>Проверьте историю запусков перед новым действием.</p></div><div class="mp-ozon-actions"><a class="sh-btn sh-btn--secondary" data-ozon-preparation-history :href="urls.ozonUploads">История запусков</a><button type="button" class="sh-btn sh-btn--secondary" @click="clearOzonStorageProblem">Я проверил историю</button></div></div>
-    <div v-if="ozonPending" class="mp-ozon-message" data-ozon-preparation-pending role="status">
-        <div><strong>Результат локальной подготовки пока неизвестен.</strong><p>{{ ozonPending.imported_product_ids.length }} товаров · магазин № {{ ozonPending.account_id }}. Сначала проверьте запуск по сохранённому ключу. Повтор возможен только вручную с тем же ключом и набором товаров.</p></div>
-        <div class="mp-ozon-actions"><button type="button" class="sh-btn sh-btn--secondary" data-ozon-preparation-reconcile :disabled="!!ozonBusy || ozonSessionEnded" @click="readOzonPending">{{ ozonBusy === 'read' ? 'Проверяем…' : 'Проверить результат' }}</button><button v-if="ozonRetrySameKey" type="button" class="sh-btn sh-btn--secondary" data-ozon-preparation-retry :disabled="!!ozonBusy || ozonSessionEnded" @click="retryOzonPending">Повторить тот же запрос</button></div>
-    </div>
-
     <div class="mp-listhead" :class="{'mp-listhead--import-batch': importBatchMode || supplierRefreshBatchMode}" v-if="items.length || loading">
         <div class="mp-select-controls">
             <label class="mp-selectall">
@@ -345,6 +346,12 @@
         <span class="mp-listhead-count">
             {{ $fmt.int(pagination.total || 0) }} {{ $fmt.plural(pagination.total || 0, 'товар', 'товара', 'товаров') }}
         </span>
+    </div>
+
+    <div v-if="items.length || loading" class="mp-grid-head" aria-hidden="true">
+        <span></span><span></span><span>Товар</span><span data-workspace-column="category">Категория</span>
+        <span data-workspace-column="supplier">Закупка · остаток</span><span data-workspace-column="wb">WB</span>
+        <span data-workspace-column="ozon">Ozon</span><span></span>
     </div>
 
     <div class="mp-list">
@@ -388,7 +395,6 @@
                 <div class="mp-meta">
                     <span class="mp-mono">{{ item.vendor_code }}</span>
                     <span v-if="item.brand">{{ item.brand }}</span>
-                    <span v-if="item.category" class="mp-cat">{{ item.category }}</span>
                 </div>
                 <a class="sh-quiet-link" data-common-content-row-link
                    :href="urls.commonContent + '?product_id=' + encodeURIComponent(item.id)"
@@ -401,53 +407,79 @@
                 </div>
             </div>
 
-            <!-- Связанные карточки товара на маркетплейсах -->
-            <div class="mp-channels">
-                <span v-if="item.wb" class="mp-chan mp-chan--wb" :title="wbTitle(item)">
-                    <i class="mp-dot mp-dot--wb"></i>WB
-                    <b v-if="item.wb.price">{{ $fmt.money(item.wb.price) }}</b>
-                </span>
-                <span v-else class="mp-chan mp-chan--off">не на WB</span>
+            <div class="mp-category" data-workspace-column="category">
+                <span class="mp-cell-label">Категория</span>
+                <span class="mp-cat">{{ item.category || '—' }}</span>
+            </div>
 
+            <div class="mp-supplier" data-workspace-column="supplier">
+                <div class="mp-supplier-fact">
+                    <span class="mp-cell-label">Закупка</span>
+                    <strong>{{ item.supplier_price !== null && item.supplier_price !== undefined ? $fmt.money(item.supplier_price) : '—' }}</strong>
+                </div>
+                <div class="mp-supplier-fact">
+                    <span class="mp-cell-label">Остаток</span>
+                    <strong v-if="item.supplier_quantity !== null && item.supplier_quantity !== undefined">{{ $fmt.int(item.supplier_quantity) }} <small>шт.</small></strong>
+                    <strong v-else>—</strong>
+                </div>
+            </div>
+
+            <!-- Связанные карточки и сохранённые наблюдения площадок -->
+            <div class="mp-channel-column mp-channel-column--wb" data-workspace-column="wb">
+                <span class="mp-cell-label">Wildberries</span>
+                <span v-if="item.wb" class="mp-chan mp-chan--wb" :title="wbTitle(item)">
+                    <i class="mp-dot mp-dot--wb"></i><span>{{ item.import_status === 'imported_pending_sync' ? 'Ждёт артикул' : (item.wb.nm_id ? 'На площадке' : 'Есть связь') }}</span>
+                    <b v-if="item.wb.price !== null && item.wb.price !== undefined">{{ $fmt.money(item.wb.price) }}</b>
+                </span>
+                <span v-else class="mp-chan mp-chan--off">Не связана</span>
+                <details v-if="item.wb && (item.wb.views_30d !== null || item.wb.orders_30d !== null || item.wb.quality_score !== null)" class="mp-row-facts">
+                    <summary>Динамика</summary>
+                    <div class="mp-signal">
+                        <div class="mp-signal-row" v-if="item.wb.views_30d !== null">
+                            <span>Смотрят · 30 дней</span><b>{{ $fmt.int(item.wb.views_30d) }}</b>
+                        </div>
+                        <div class="mp-signal-row" v-if="item.wb.orders_30d !== null">
+                            <span>Заказы · 30 дней</span>
+                            <b :class="{'mp-zero': item.wb.views_30d > 30 && !item.wb.orders_30d}">{{ $fmt.int(item.wb.orders_30d) }}</b>
+                        </div>
+                        <div class="mp-signal-score" v-if="item.wb.quality_score !== null"
+                             :class="'is-' + scoreTone(item.wb.quality_score)"
+                             :title="reasonsTitle(item)">
+                            {{ item.wb.quality_score }}
+                        </div>
+                    </div>
+                </details>
+            </div>
+
+            <div class="mp-channel-column mp-channel-column--ozon" data-workspace-column="ozon">
+                <span class="mp-cell-label">Ozon</span>
                 <template v-if="ozonEnabled">
                     <span v-for="listing in (item.ozon ? item.ozon.listings : [])" :key="'l' + listing.id"
-                          class="mp-chan mp-chan--ozon" :class="{'mp-chan--accounted': ozonAccounts.length > 1}"
-                          :title="listing.account_label">
-                        <i class="mp-dot mp-dot--ozon"></i><span>Ozon</span>
-                        <small v-if="ozonAccounts.length > 1" class="mp-chan-account">
+                          class="mp-chan mp-chan--ozon mp-chan--accounted"
+                          :title="listing.account_label || (listing.account_id ? ('Магазин №' + listing.account_id) : 'Карточка Ozon')">
+                        <i class="mp-dot mp-dot--ozon"></i>
+                        <span v-if="listing.is_archived || listing.status === 'archived'">В архиве</span>
+                        <span v-else-if="listing.status === 'active' && listing.is_available">На площадке</span>
+                        <span v-else-if="listing.status === 'moderation'">На модерации</span>
+                        <span v-else-if="listing.status === 'creating'">Создаётся</span>
+                        <span v-else-if="listing.status === 'error'">Ошибка</span>
+                        <span v-else-if="listing.status === 'inactive'">Неактивна</span>
+                        <span v-else>Карточка связана</span>
+                        <small class="mp-chan-account">
                             {{ listing.account_label || (listing.account_id ? ('Магазин №' + listing.account_id) : 'Магазин Ozon') }}
                         </small>
                     </span>
                     <span v-for="draft in (item.ozon ? item.ozon.drafts : [])" :key="'d' + draft.id"
-                          class="mp-chan mp-chan--draft" :class="{'mp-chan--accounted': ozonAccounts.length > 1}"
-                          :title="'Черновик · ' + draft.account_label">
-                        <span>{{ ozonAccounts.length > 1 ? 'Черновик' : 'Черновик Ozon' }}</span>
-                        <small v-if="ozonAccounts.length > 1" class="mp-chan-account">
+                          class="mp-chan mp-chan--draft mp-chan--accounted"
+                          :title="'Черновик · ' + (draft.account_label || (draft.account_id ? ('Магазин №' + draft.account_id) : 'Магазин Ozon'))">
+                        <span>Черновик</span>
+                        <small class="mp-chan-account">
                             {{ draft.account_label || (draft.account_id ? ('Магазин №' + draft.account_id) : 'Магазин Ozon') }}
                         </small>
                     </span>
+                    <span v-if="!(item.ozon && (item.ozon.listings.length || item.ozon.drafts.length))" class="mp-chan mp-chan--off">{{ ozonAccounts.length ? 'Не создана' : 'Нет активного магазина' }}</span>
                 </template>
-            </div>
-
-            <!-- Сигнал: продаётся ли и что мешает -->
-            <div class="mp-signal" v-if="item.wb">
-                <div class="mp-signal-row" v-if="item.wb.views_30d !== null">
-                    <span>Смотрят</span><b>{{ $fmt.int(item.wb.views_30d) }}</b>
-                </div>
-                <div class="mp-signal-row" v-if="item.wb.orders_30d !== null">
-                    <span>Заказы</span>
-                    <b :class="{'mp-zero': item.wb.views_30d > 30 && !item.wb.orders_30d}">{{ $fmt.int(item.wb.orders_30d) }}</b>
-                </div>
-                <div class="mp-signal-score" v-if="item.wb.quality_score !== null"
-                     :class="'is-' + scoreTone(item.wb.quality_score)"
-                     :title="reasonsTitle(item)">
-                    {{ item.wb.quality_score }}
-                </div>
-            </div>
-            <div class="mp-signal mp-signal--empty" v-else>
-                <span class="mp-supplier-price" v-if="item.supplier_price">
-                    закупка {{ $fmt.money(item.supplier_price) }}
-                </span>
+                <span v-else class="mp-chan mp-chan--off">Недоступен</span>
             </div>
 
             <a class="mp-open" :href="urls.wbPreviewBase + item.id + '/wb-preview'"
@@ -463,6 +495,7 @@
                 :class="{'is-loading': loadingMore}" :disabled="loading || loadingMore || selectAllLoading" @click="loadMore">Показать ещё</button>
         <a v-if="!importBatchMode && !supplierRefreshBatchMode" class="mp-legacy-link" :href="urls.classic">Прежний список</a>
     </div>
+    </section>
 
     <!-- Выбранный список сразу показывает четыре понятных намерения. -->
     <sh-bulk-bar class="mp-bulkbar" :count="selected.length" @clear="clearSelection">
