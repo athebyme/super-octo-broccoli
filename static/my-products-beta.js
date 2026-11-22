@@ -1454,9 +1454,17 @@
                 var capsule = workspaceReturnCapsule;
                 if (!capsule || capsule.v !== 6) return true;
                 var target = capsule.ozonUpdateTarget;
-                if (!target || !sameOrderedIds(selectionIds, capsule.selectionIds)) return false;
+                var feedIds = orderedProductIds(items);
+                if (!target || !sameOrderedIds(selectionIds, capsule.selectionIds) || !feedIds) return false;
+                var itemsById = new Map((items || []).map(function (item) {
+                    return [item.id, item];
+                }));
+                var selectedItems = selectionIds.map(function (id) {
+                    return itemsById.get(id);
+                });
+                if (selectedItems.some(function (item) { return !item; })) return false;
                 var result = exactOzonWorkspaceUpdateAccountChoices(
-                    items, selectionIds, this.ozonAccounts,
+                    selectedItems, selectionIds, this.ozonAccounts,
                 );
                 var choice = result.choices.find(function (row) {
                     return row.account_id === target.accountId;

@@ -371,12 +371,21 @@ const returnedApp = pageComponent.data();
 Object.assign(returnedApp, pageComponent.methods);
 returnedApp.ozonAccounts = [{id: 11, label: 'Shop A', connection_status: 'connected'}];
 const returnedRows = [
-  {id: 1, ozon: {listings: [{id: 101, account_id: 11, marketplace_code: 'ozon', link_status: 'linked', account_is_active: true, is_available: true, is_archived: false}]}},
   {id: 2, ozon: {listings: [{id: 102, account_id: 11, marketplace_code: 'ozon', link_status: 'linked', account_is_active: true, is_available: true, is_archived: false}]}},
+  {id: 3, ozon: {listings: [{id: 103, account_id: 11, marketplace_code: 'ozon', link_status: 'linked', account_is_active: true, is_available: true, is_archived: false}]}},
+  {id: 1, ozon: {listings: [{id: 101, account_id: 11, marketplace_code: 'ozon', link_status: 'linked', account_is_active: true, is_available: true, is_archived: false}]}},
 ];
+// A returned feed page may contain unselected rows, in another order.
 assert.equal(returnedApp.workspaceReturnOzonUpdateMatches(returnedRows, [1, 2]), true);
-returnedRows[1].ozon.listings[0].id = 999;
+returnedRows[0].ozon.listings[0].id = 999;
 assert.equal(returnedApp.workspaceReturnOzonUpdateMatches(returnedRows, [1, 2]), false);
+returnedRows[0].ozon.listings[0].id = 102;
+assert.equal(returnedApp.workspaceReturnOzonUpdateMatches(
+  returnedRows.filter(row => row.id !== 2), [1, 2],
+), false, 'a missing selected row fails closed');
+assert.equal(returnedApp.workspaceReturnOzonUpdateMatches(
+  returnedRows.concat([JSON.parse(JSON.stringify(returnedRows[2]))]), [1, 2],
+), false, 'duplicate feed rows fail closed');
 
 const twoHundred = Array.from({length: 200}, (_, index) => index + 1);
 assert.ok(helpers.storeWorkspaceReturn({
