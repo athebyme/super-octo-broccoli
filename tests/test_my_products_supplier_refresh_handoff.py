@@ -233,7 +233,7 @@ function setSupplierOutcome(app, data, ids) {
 
 function remount(importBatch, search, supplierRefreshBatch = null, supplierRefreshBatchInvalid = false) {
   boot.importBatch = importBatch;
-  boot.batchKind = 'import';
+  boot.batchKind = importBatch === null ? null : 'import';
   boot.supplierRefreshBatch = supplierRefreshBatch;
   boot.supplierRefreshBatchInvalid = supplierRefreshBatchInvalid;
   fakeWindow.location.search = search;
@@ -657,7 +657,7 @@ async function finishSupplierRefresh(data, ids) {
   assert.match(templateText, /<dialog ref="supplierRefreshDialog" class="mp-supplier-refresh-dialog"/);
   assert.match(templateText, /aria-labelledby="mp-supplier-refresh-dialog-title"/);
   assert.match(templateText, /Данные на площадках не меняются/);
-  assert.match(templateText, /filename='my-products-beta\.css', v='20261121-supplier-refresh-review-r40'/);
+  assert.match(templateText, /filename='my-products-beta\.css', v='20261122-supplier-updated-batch-cta-r46'/);
   assert.match(templateText, /filename='my-products-beta\.js', v='20261122-supplier-refreshed-bulk-r46'/);
   assert.match(templateText, /filename='common-product-content\.js', v='20261121-price-result-return-r41'/);
   assert.match(commonTemplateText, /filename='common-product-content\.js', v='20261121-common-content-workspace-return-r36'/);
@@ -704,7 +704,7 @@ async function finishSupplierRefresh(data, ids) {
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(stored.get(receiptKey), nextReceipt,
     'only the verified updated result receipt is stored, as a raw token');
-  assert.equal(postResult.app.supplierRefreshResult.resumeWarning, '');
+  assert.equal(postResult.app.supplierRefreshResult.resumeWarning, undefined);
 
   const oversizedReceipt = makeApp();
   setSupplierOutcome(oversizedReceipt.app, {
