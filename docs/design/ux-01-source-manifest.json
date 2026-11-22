@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-22T16:06:59.327370+00:00",
+  "generated_at": "2026-11-22T16:15:45.296474+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -2817,7 +2817,7 @@
     },
     {
       "path": "static/supplier-catalog-workspace.css",
-      "sha256": "81511e1393caade3ebb6f6c982ea641f1bbd15b63014be8aef28026df2c76cb9"
+      "sha256": "85a7ea5a8d681207fd36970badaca3b2e4788d83c531b4bae2e0724aae7d090b"
     },
     {
       "path": "static/supplier-feed-freshness.css",
@@ -3529,7 +3529,7 @@
     },
     {
       "path": "templates/supplier_catalog.html",
-      "sha256": "065163092f831f28c36aea59a266a84b569c1a506bb42b18e8f991004452e05a"
+      "sha256": "0491befe6aa81b04a6016859651557c20b045652cc25ed8eabdd2f466f50c07a"
     },
     {
       "path": "templates/supplier_catalog_product_detail.html",
@@ -3537,11 +3537,11 @@
     },
     {
       "path": "templates/supplier_catalog_products.html",
-      "sha256": "da749d97193f1fcd7d2fa50d8dfc10ce3861f2ccac4a3e329a292d786ad3c430"
+      "sha256": "06e7c17f74890480ecca31d5722006f52a11e6d6a5fc26f6e308b82818a0b9dd"
     },
     {
       "path": "templates/supplier_catalog_update_review.html",
-      "sha256": "91533e509a27470b1f049f187eb677c44ce6a55b2dbb656cde9739ab11f04b2b"
+      "sha256": "c264254ce2992511b97e9723dcd30fcc2b663934570514478d761353908b2e52"
     },
     {
       "path": "templates/supplier_updates.html",
@@ -4885,7 +4885,7 @@
     },
     {
       "path": "tests/test_supplier_catalog_bulk_import_selection.py",
-      "sha256": "fcedf74adfbae05288d1a58e0a45a9a5349907445ca240e90ea25ff6a87c68ea"
+      "sha256": "d64cae8c1475a8328e153d7ead031162570a1899179809fa617a63d142d4d58a"
     },
     {
       "path": "tests/test_supplier_catalog_enrichment.py",
@@ -5197,7 +5197,7 @@
     },
     {
       "path": "tests/ux01/supplier_filtered_import_browser.py",
-      "sha256": "620429ce4f28ebe8263a1f367d0330925bd86191c41d78ad660f6fa2e0de5894"
+      "sha256": "d0d61fcdfbf1ee1bec28cbf19c1f3591c864564705147c706be97fdc5da08ef5"
     },
     {
       "path": "tests/ux01/wb_edit_browser.py",
@@ -5212,5 +5212,5 @@
       "sha256": "41d04281515c9a4bd495df742fa1a24e924ea3a509e73752771bd2da8764ee1f"
     }
   ],
-  "aggregate_sha256": "7586de41b46cd34b802da5fe2cf55551dbd1225507768849812e0cf6f74b1be2"
+  "aggregate_sha256": "04abf642b4e82659d0f4d8e4432391a8b66eedf0827c457a83c52f9e549a8351"
 }
