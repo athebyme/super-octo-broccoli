@@ -28,7 +28,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.ux01 import journey_browser as fixture
-from tests.ux01.bulk_action_controls import invoke_workspace_action
+from tests.ux01.bulk_action_controls import invoke_workspace_action, workspace_action_launcher
 from models import (
     ImportedProduct,
     PricingSettings,
@@ -975,17 +975,50 @@ def run():
             assert selected_after_one is not None and len(selected_after_one) == 49
             assert set(selected_after_one) < persisted_product_ids
             assert len(product_feed_reads) == 1 and facet_reads == []
-            invoke_workspace_action(page, "ozon")
+            create_launcher = workspace_action_launcher(page, "create")
+            assert invoke_workspace_action(page, "ozon") == 2
             ozon_dialog = page.locator('dialog[aria-labelledby="mp-ozon-dialog-title"]')
             ozon_dialog.wait_for(state="visible")
             assert page.locator("#mp-ozon-dialog-title").inner_text().startswith("Подготовить 49 ")
-            assert page.locator("#mp-ozon-account").input_value()
-            assert not page.locator(".mp-ozon-confirm input").is_checked()
-            assert page.get_by_role("button", name="Подготовить черновики").is_disabled()
+            preparation_account = ozon_dialog.locator("[data-ozon-preparation-account]")
+            assert preparation_account.count() == 1 and preparation_account.is_visible()
+            assert preparation_account.inner_text().strip() == fixture.OZON_ACCOUNT_LABEL
+            assert ozon_dialog.locator("#mp-ozon-account").count() == 0
+            assert ozon_dialog.locator(".mp-ozon-confirm").count() == 0
+            assert ozon_dialog.locator('input[type="checkbox"], select').count() == 0
+            page.wait_for_function("document.activeElement?.id === 'mp-ozon-dialog-title'")
+            assert ozon_dialog.locator("#mp-ozon-dialog-title").evaluate(
+                "element => element === document.activeElement",
+            )
+            assert page.get_by_role("button", name="Подготовить черновики").is_enabled()
             assert len(posts) == 1 and fixture.REPORT["provider_attempts"] == 0
             assert len(product_feed_reads) == 1 and facet_reads == []
+
+            page.keyboard.press("Escape")
+            ozon_dialog.wait_for(state="hidden")
+            assert create_launcher.evaluate("element => element === document.activeElement")
+            assert page.evaluate("""() => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                return proxy ? proxy.selected.slice() : null;
+            }""") == selected_after_one
+            assert len(posts) == 1 and fixture.REPORT["provider_attempts"] == 0
+
+            assert invoke_workspace_action(page, "ozon") == 2
+            ozon_dialog.wait_for(state="visible")
+            preparation_account = ozon_dialog.locator("[data-ozon-preparation-account]")
+            assert preparation_account.inner_text().strip() == fixture.OZON_ACCOUNT_LABEL
+            assert ozon_dialog.locator("#mp-ozon-account").count() == 0
+            assert ozon_dialog.locator(".mp-ozon-confirm").count() == 0
+            page.wait_for_function("document.activeElement?.id === 'mp-ozon-dialog-title'")
+            assert page.get_by_role("button", name="Подготовить черновики").is_enabled()
             page.get_by_role("button", name="Вернуться", exact=True).click()
             ozon_dialog.wait_for(state="hidden")
+            assert create_launcher.evaluate("element => element === document.activeElement")
+            assert page.evaluate("""() => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                return proxy ? proxy.selected.slice() : null;
+            }""") == selected_after_one
+            assert len(posts) == 1 and fixture.REPORT["provider_attempts"] == 0
             checks.append("explicit_import_selection_can_review_49_for_ozon_without_confirming_a_write")
 
             page.reload(wait_until="domcontentloaded")

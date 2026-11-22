@@ -1909,22 +1909,75 @@ def run():
 
         open_products(page)
         page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
-        pick_action(page, "Подготовить для Ozon")
+        create_launcher = workspace_action_launcher(page, "create")
+        selection_before_ozon_prepare = selected_browser_state(page)
+        assert selection_before_ozon_prepare == {
+            "selected": [fixture_ids["manual_id"]], "ozonIds": [fixture_ids["manual_id"]],
+        }
+        ozon_prepare_posts_before = sum(
+            post["path"] == LOCAL_OZON_PREPARE for post in posts
+        )
+        assert invoke_workspace_action(page, "ozon") == 2
         dialog = page.locator('dialog[aria-labelledby="mp-ozon-dialog-title"]')
-        dialog.wait_for()
-        assert dialog.get_by_label("Магазин Ozon").input_value() == str(fixture.FIXTURE["account_id"])
+        dialog.wait_for(state="visible")
+        account_value = dialog.locator("[data-ozon-preparation-account]")
+        assert account_value.count() == 1 and account_value.is_visible()
+        assert account_value.inner_text().strip() == fixture.OZON_ACCOUNT_LABEL
+        assert dialog.locator("#mp-ozon-account").count() == 0
+        assert dialog.locator(".mp-ozon-confirm").count() == 0
+        assert dialog.locator('input[type="checkbox"], select').count() == 0
+        page.wait_for_function("document.activeElement?.id === 'mp-ozon-dialog-title'")
+        assert dialog.locator("#mp-ozon-dialog-title").evaluate(
+            "element => element === document.activeElement",
+        )
         prepare = dialog.get_by_role("button", name="Подготовить черновики")
-        assert prepare.is_disabled()
-        dialog.get_by_role("checkbox").check()
+        assert prepare.is_enabled()
+        assert selected_browser_state(page) == selection_before_ozon_prepare
+        assert sum(post["path"] == LOCAL_OZON_PREPARE for post in posts) == ozon_prepare_posts_before
+
+        page.keyboard.press("Escape")
+        dialog.wait_for(state="hidden")
+        assert create_launcher.evaluate("element => element === document.activeElement")
+        assert selected_browser_state(page) == selection_before_ozon_prepare
+        assert sum(post["path"] == LOCAL_OZON_PREPARE for post in posts) == ozon_prepare_posts_before
+
+        assert invoke_workspace_action(page, "ozon") == 2
+        dialog.wait_for(state="visible")
+        account_value = dialog.locator("[data-ozon-preparation-account]")
+        assert account_value.inner_text().strip() == fixture.OZON_ACCOUNT_LABEL
+        assert dialog.locator("#mp-ozon-account").count() == 0
+        assert dialog.locator(".mp-ozon-confirm").count() == 0
+        page.wait_for_function("document.activeElement?.id === 'mp-ozon-dialog-title'")
+        assert dialog.get_by_role("button", name="Подготовить черновики").is_enabled()
+        dialog.get_by_role("button", name="Вернуться", exact=True).click()
+        dialog.wait_for(state="hidden")
+        assert create_launcher.evaluate("element => element === document.activeElement")
+        assert selected_browser_state(page) == selection_before_ozon_prepare
+        assert sum(post["path"] == LOCAL_OZON_PREPARE for post in posts) == ozon_prepare_posts_before
+
+        assert invoke_workspace_action(page, "ozon") == 2
+        dialog.wait_for(state="visible")
+        account_value = dialog.locator("[data-ozon-preparation-account]")
+        assert account_value.inner_text().strip() == fixture.OZON_ACCOUNT_LABEL
+        assert dialog.locator("#mp-ozon-account").count() == 0
+        assert dialog.locator(".mp-ozon-confirm").count() == 0
+        page.wait_for_function("document.activeElement?.id === 'mp-ozon-dialog-title'")
+        prepare = dialog.get_by_role("button", name="Подготовить черновики")
+        assert prepare.is_enabled()
         with page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_OZON_PREPARE
                                   and response.request.method == "POST") as completed:
             prepare.click()
         assert completed.value.status == 202
         prepared = posts[0]
         assert prepared["path"] == LOCAL_OZON_PREPARE
+        assert set(prepared["body"]) == {
+            "account_id", "imported_product_ids", "request_key", "confirm_prepare",
+        }
         assert prepared["body"]["imported_product_ids"] == [fixture_ids["manual_id"]]
         assert prepared["body"]["account_id"] == fixture.FIXTURE["account_id"]
+        assert re.fullmatch(r"[a-f0-9]{32}", prepared["body"]["request_key"])
         assert prepared["body"]["confirm_prepare"] is True and "confirm_write" not in prepared["body"]
+        assert sum(post["path"] == LOCAL_OZON_PREPARE for post in posts) == ozon_prepare_posts_before + 1
         job_path = completed.value.headers["location"]
         assert re.fullmatch(r"/marketplaces/ozon/uploads/ozon-upload-[0-9a-f]{32}", job_path)
         page.wait_for_url(fixture.BASE + job_path, wait_until="domcontentloaded")
@@ -2459,14 +2512,23 @@ def run():
         posts_before_handoff = len(posts)
         refresh_cta.click()
         refresh_dialog = page.locator('dialog[aria-labelledby="mp-ozon-dialog-title"]')
-        refresh_dialog.wait_for()
-        assert refresh_dialog.get_by_label("Магазин Ozon").input_value() == str(fixture.FIXTURE["account_id"])
+        refresh_dialog.wait_for(state="visible")
+        refresh_account_value = refresh_dialog.locator("[data-ozon-preparation-account]")
+        assert refresh_account_value.count() == 1 and refresh_account_value.is_visible()
+        assert refresh_account_value.inner_text().strip() == fixture.OZON_ACCOUNT_LABEL
+        assert refresh_dialog.locator("#mp-ozon-account").count() == 0
+        assert refresh_dialog.locator(".mp-ozon-confirm").count() == 0
+        assert refresh_dialog.locator('input[type="checkbox"], select').count() == 0
+        page.wait_for_function("document.activeElement?.id === 'mp-ozon-dialog-title'")
+        assert refresh_dialog.locator("#mp-ozon-dialog-title").evaluate(
+            "element => element === document.activeElement",
+        )
         assert selected_browser_state(page) == {
             "selected": [fixture_ids["manual_id"]], "ozonIds": [fixture_ids["local_id"]],
         }
         assert len(posts) == posts_before_handoff, posts
         prepare = refresh_dialog.get_by_role("button", name="Подготовить черновики")
-        assert prepare.is_disabled()
+        assert prepare.is_enabled()
         refresh_dialog.get_by_role("button", name="Вернуться").click()
         assert not refresh_dialog.is_visible()
         assert len(posts) == posts_before_handoff, posts
@@ -2476,11 +2538,14 @@ def run():
         assert refresh_cta.evaluate("element => element === document.activeElement")
 
         refresh_cta.click()
-        refresh_dialog.wait_for()
+        refresh_dialog.wait_for(state="visible")
+        refresh_account_value = refresh_dialog.locator("[data-ozon-preparation-account]")
+        assert refresh_account_value.inner_text().strip() == fixture.OZON_ACCOUNT_LABEL
+        assert refresh_dialog.locator("#mp-ozon-account").count() == 0
+        assert refresh_dialog.locator(".mp-ozon-confirm").count() == 0
         prepare = refresh_dialog.get_by_role("button", name="Подготовить черновики")
-        assert prepare.is_disabled()
-        refresh_dialog.get_by_role("checkbox").check()
         assert prepare.is_enabled()
+        assert len(posts) == posts_before_handoff, posts
         with page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_OZON_PREPARE
                                   and response.request.method == "POST") as refreshed_prepare:
             prepare.click()
@@ -2867,12 +2932,19 @@ def run():
         partial_post_count = len(posts)
         partial_cta.click()
         partial_dialog = mobile_page.locator('dialog[aria-labelledby="mp-ozon-dialog-title"]')
-        partial_dialog.wait_for()
-        assert partial_dialog.get_by_label("Магазин Ozon").input_value() == str(fixture.FIXTURE["account_id"])
+        partial_dialog.wait_for(state="visible")
+        partial_account_value = partial_dialog.locator("[data-ozon-preparation-account]")
+        assert partial_account_value.count() == 1 and partial_account_value.is_visible()
+        assert partial_account_value.inner_text().strip() == fixture.OZON_ACCOUNT_LABEL
+        assert partial_dialog.locator("#mp-ozon-account").count() == 0
+        assert partial_dialog.locator(".mp-ozon-confirm").count() == 0
+        assert partial_dialog.locator('input[type="checkbox"], select').count() == 0
+        mobile_page.wait_for_function("document.activeElement?.id === 'mp-ozon-dialog-title'")
         assert selected_browser_state(mobile_page) == {
             "selected": [fixture_ids["manual_id"]], "ozonIds": [fixture_ids["local_id"]],
         }
         assert len(posts) == partial_post_count, posts
+        assert partial_dialog.get_by_role("button", name="Подготовить черновики").is_enabled()
         partial_dialog.get_by_role("button", name="Вернуться").click()
         assert not partial_dialog.is_visible()
         assert selected_browser_state(mobile_page) == {

@@ -90,12 +90,19 @@ requests.sessions.Session.request = forbid_network
 socket.create_connection = forbid_network
 
 from seller_platform import app
-from models import MarketplaceProductDraft, SellerSupplier, Supplier, SupplierProduct, db
+from models import (
+    MarketplaceProductDraft, SellerMarketplaceAccount, SellerSupplier,
+    Supplier, SupplierProduct, db,
+)
 from services.ozon_bulk_upload import OzonBulkUploadService
 from tests.ozon_release.seed import PASSWORD, PHOTO, USERNAME, seed
 
 app.config.update(TESTING=True, WTF_CSRF_ENABLED=True, SESSION_COOKIE_SECURE=False)
 FIXTURE = seed(app)
+with app.app_context():
+    ozon_account = db.session.get(SellerMarketplaceAccount, FIXTURE["account_id"])
+    assert ozon_account is not None
+    OZON_ACCOUNT_LABEL = ozon_account.label
 with app.app_context():
     supplier = Supplier(
         name="UX Synthetic Supplier",
@@ -1296,8 +1303,13 @@ def run():
         if SOURCE == "worktree":
             page.locator("#my-products-app:not([v-cloak])").wait_for()
             page.locator(".mp-row").first.wait_for()
-            assert page.locator("#mp-ozon-account").count() == 1
-            assert page.locator(".mp-ozon-confirm").count() == 1
+            preparation_dialog = page.locator('dialog[aria-labelledby="mp-ozon-dialog-title"]')
+            assert preparation_dialog.count() == 1
+            assert preparation_dialog.locator("#mp-ozon-account").count() == 0
+            assert preparation_dialog.locator(".mp-ozon-confirm").count() == 0
+            preparation_account = preparation_dialog.locator("[data-ozon-preparation-account]")
+            assert preparation_account.count() == 1
+            assert preparation_account.inner_text().strip() == OZON_ACCOUNT_LABEL
             assert page.locator(".mp-open[href*='wb-preview']").count() >= 1
             REPORT["checks"].append("beta_internal_page_keeps_existing_channel_actions")
 
