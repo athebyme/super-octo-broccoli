@@ -1068,6 +1068,16 @@ def _wb_edit_browser_report() -> dict:
                 "direct_history_count": 1,
                 "sizes_and_sku_preserved": True,
             })
+        elif check["name"] == "single_edit_form_core_fields_match_persisted_values_before_targeted_characteristic_save":
+            check.update({
+                "core_fields": ["brand", "description", "title", "vendor_code"],
+                "persisted_null_fields": ["brand", "description"],
+                "legacy_whitespace_fields": ["title"],
+                "initial_form_matches_persisted": True,
+                "pre_submit_core_fields_untouched": True,
+                "initial_mismatch_fields": [],
+                "pre_submit_changed_fields": [],
+            })
         elif check["name"] == "single_edit_uses_cached_country_weight_multi_schema_and_read_only_sku":
             check.update({
                 "subject_id": 5880,
@@ -1095,6 +1105,18 @@ def _wb_edit_browser_report() -> dict:
         "requested_fields": ["characteristics"],
         "core_fields_requested": [],
         "core_fields_changed": [],
+        "fake_provider_core_before": {
+            "vendor_code": "PD-000",
+            "title": "  Pipedream Synthetic Product 000  ",
+            "description": None,
+            "brand": None,
+        },
+        "fake_provider_core_after": {
+            "vendor_code": "PD-000",
+            "title": "  Pipedream Synthetic Product 000  ",
+            "description": None,
+            "brand": None,
+        },
         "characteristic_ids": [202],
         "characteristics": [
             {"id": 202, "value": ["Россия"]},
@@ -1140,31 +1162,64 @@ def _wb_edit_browser_report() -> dict:
                     "sku": "SYNTHETIC-WB-SKU-000",
                     "direct_history_count": 1,
                     "history_changed_fields": ["characteristics"],
+                    "local_core_values": {
+                        "vendor_code": "PD-000",
+                        "title": "  Pipedream Synthetic Product 000  ",
+                        "description": None,
+                        "brand": None,
+                    },
+                    "history_before_core_values": {
+                        "vendor_code": "PD-000",
+                        "title": "  Pipedream Synthetic Product 000  ",
+                        "description": None,
+                        "brand": None,
+                    },
+                    "history_after_core_values": {
+                        "vendor_code": "PD-000",
+                        "title": "  Pipedream Synthetic Product 000  ",
+                        "description": None,
+                        "brand": None,
+                    },
                 },
             },
             "core_form_alignment": {
                 "persisted_core_values": {
-                    "vendor_code": "SYNTHETIC-VENDOR-000",
-                    "title": "Pipedream Synthetic Product 000",
-                    "description": "Synthetic description",
-                    "brand": "Synthetic reviewed brand",
+                    "vendor_code": "PD-000",
+                    "title": "  Pipedream Synthetic Product 000  ",
+                    "description": None,
+                    "brand": None,
+                },
+                "expected_form_values": {
+                    "vendor_code": "PD-000",
+                    "title": "  Pipedream Synthetic Product 000  ",
+                    "description": "",
+                    "brand": "",
                 },
                 "initial_form_values": {
-                    "vendor_code": "SYNTHETIC-VENDOR-000",
-                    "title": "Pipedream Synthetic Product 000",
-                    "description": "Synthetic description",
-                    "brand": "Synthetic reviewed brand",
+                    "vendor_code": "PD-000",
+                    "title": "  Pipedream Synthetic Product 000  ",
+                    "description": "",
+                    "brand": "",
                 },
                 "initial_mismatch_fields": [],
-                "aligned_form_values": {
-                    "vendor_code": "SYNTHETIC-VENDOR-000",
-                    "title": "Pipedream Synthetic Product 000",
-                    "description": "Synthetic description",
-                    "brand": "Synthetic reviewed brand",
+                "pre_submit_form_values": {
+                    "vendor_code": "PD-000",
+                    "title": "  Pipedream Synthetic Product 000  ",
+                    "description": "",
+                    "brand": "",
                 },
+                "pre_submit_changed_fields": [],
                 "exact_before_characteristic_submit": True,
             },
             "reopen": {
+                "core_form_values": {
+                    "vendor_code": "PD-000",
+                    "title": "  Pipedream Synthetic Product 000  ",
+                    "description": "",
+                    "brand": "",
+                },
+                "persisted_null_fields": ["brand", "description"],
+                "legacy_whitespace_title_preserved": True,
                 "country": "Россия",
                 "weight_grams": 125,
                 "materials": ["Пластик", "Металл"],
@@ -2776,6 +2831,22 @@ class Ux01RunnerContractTest(unittest.TestCase):
                 "target_channel"] = "Ozon"
             invalid_reports.append(("saved form reports wrong provider channel", wrong_saved_channel,
                                     "wb_single_edit_form_and_history_evidence_incomplete"))
+
+            initial_null_render_mismatch = copy.deepcopy(report)
+            alignment = initial_null_render_mismatch[
+                "single_edit_observations"
+            ]["core_form_alignment"]
+            alignment["initial_form_values"]["description"] = "None"
+            alignment["pre_submit_form_values"]["description"] = "None"
+            alignment["initial_mismatch_fields"] = ["description"]
+            # Even a later synthetic normalization cannot erase what the
+            # seller actually saw before submitting the characteristic edit.
+            alignment["aligned_form_values"] = dict(alignment["expected_form_values"])
+            invalid_reports.append((
+                "initial null rendered as literal None is rejected despite later alignment",
+                initial_null_render_mismatch,
+                "wb_single_edit_core_form_alignment_incomplete",
+            ))
 
             wrong_save_check_payload = copy.deepcopy(report)
             next(row for row in wrong_save_check_payload["checks"]

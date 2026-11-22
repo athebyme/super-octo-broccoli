@@ -1126,11 +1126,23 @@ def _wb_edit_protocol_issues(data: dict) -> list[str]:
 
     if type(data.get("fake_wb_single_write_calls")) is not int or data.get("fake_wb_single_write_calls") != 1:
         issues.append("wb_single_edit_write_count_unexpected")
+    expected_stored_core = {
+        "vendor_code": "PD-000",
+        "title": "  Pipedream Synthetic Product 000  ",
+        "description": None,
+        "brand": None,
+    }
+    expected_form_core = {
+        field: value if isinstance(value, str) else ""
+        for field, value in expected_stored_core.items()
+    }
     expected_request = {
         "nm_id": 900000,
         "requested_fields": ["characteristics"],
         "core_fields_requested": [],
         "core_fields_changed": [],
+        "fake_provider_core_before": expected_stored_core,
+        "fake_provider_core_after": expected_stored_core,
         "characteristic_ids": [202],
         "characteristics": [
             {"id": 202, "value": ["Россия"]},
@@ -1185,6 +1197,9 @@ def _wb_edit_protocol_issues(data: dict) -> list[str]:
         and form_post.get("required_missing_id") == 500
         and form_post.get("required_missing_value") == ""
         and form_post.get("required_missing_omitted_from_patch") is True
+        and readback.get("local_core_values") == expected_stored_core
+        and readback.get("history_before_core_values") == expected_stored_core
+        and readback.get("history_after_core_values") == expected_stored_core
     ):
         issues.append("wb_single_edit_form_and_history_evidence_incomplete")
 
@@ -1321,21 +1336,52 @@ def _wb_edit_protocol_issues(data: dict) -> list[str]:
 
     alignment = observations.get("core_form_alignment") if isinstance(observations, dict) else None
     core_fields = {"vendor_code", "title", "description", "brand"}
+    persisted_core_values = (
+        alignment.get("persisted_core_values")
+        if isinstance(alignment, dict) else None
+    )
+    expected_form_values = (
+        alignment.get("expected_form_values")
+        if isinstance(alignment, dict) else None
+    )
+    initial_form_values = (
+        alignment.get("initial_form_values")
+        if isinstance(alignment, dict) else None
+    )
+    pre_submit_form_values = (
+        alignment.get("pre_submit_form_values")
+        if isinstance(alignment, dict) else None
+    )
+    normalization_matches = persisted_core_values == expected_stored_core
+    alignment_checks = [
+        row for row in checks
+        if isinstance(row, dict)
+        and row.get("name") == "single_edit_form_core_fields_match_persisted_values_before_targeted_characteristic_save"
+    ] if isinstance(checks, list) else []
     if not (
         isinstance(alignment, dict)
-        and isinstance(alignment.get("persisted_core_values"), dict)
-        and set(alignment["persisted_core_values"]) == core_fields
-        and isinstance(alignment.get("initial_form_values"), dict)
-        and set(alignment["initial_form_values"]) == core_fields
-        and isinstance(alignment.get("aligned_form_values"), dict)
-        and set(alignment["aligned_form_values"]) == core_fields
-        and alignment["aligned_form_values"] == alignment["persisted_core_values"]
-        and alignment.get("initial_mismatch_fields") == sorted(
-            field for field in core_fields
-            if alignment["initial_form_values"].get(field)
-            != alignment["persisted_core_values"].get(field)
-        )
+        and isinstance(persisted_core_values, dict)
+        and set(persisted_core_values) == core_fields
+        and normalization_matches
+        and isinstance(expected_form_values, dict)
+        and set(expected_form_values) == core_fields
+        and expected_form_values == expected_form_core
+        and isinstance(initial_form_values, dict)
+        and set(initial_form_values) == core_fields
+        and initial_form_values == expected_form_values
+        and isinstance(pre_submit_form_values, dict)
+        and set(pre_submit_form_values) == core_fields
+        and pre_submit_form_values == initial_form_values
+        and alignment.get("initial_mismatch_fields") == []
+        and alignment.get("pre_submit_changed_fields") == []
         and alignment.get("exact_before_characteristic_submit") is True
+        and len(alignment_checks) == 1
+        and alignment_checks[0].get("persisted_null_fields") == ["brand", "description"]
+        and alignment_checks[0].get("legacy_whitespace_fields") == ["title"]
+        and alignment_checks[0].get("initial_form_matches_persisted") is True
+        and alignment_checks[0].get("pre_submit_core_fields_untouched") is True
+        and alignment_checks[0].get("initial_mismatch_fields") == []
+        and alignment_checks[0].get("pre_submit_changed_fields") == []
     ):
         issues.append("wb_single_edit_core_form_alignment_incomplete")
 
@@ -1347,6 +1393,9 @@ def _wb_edit_protocol_issues(data: dict) -> list[str]:
         and reopen.get("materials") == ["Пластик", "Металл"]
         and reopen.get("present_empty_field_preserved") is True
         and reopen.get("sku_read_only") is True
+        and reopen.get("core_form_values") == expected_form_core
+        and reopen.get("persisted_null_fields") == ["brand", "description"]
+        and reopen.get("legacy_whitespace_title_preserved") is True
     ):
         issues.append("wb_single_edit_reopen_evidence_incomplete")
 

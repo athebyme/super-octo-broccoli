@@ -466,9 +466,9 @@ class FakeWBClient:
                 "nmID": nm_id,
                 "subjectID": int(product.subject_id or 0),
                 "vendorCode": product.vendor_code or "",
-                "title": product.title or "",
-                "brand": product.brand or "",
-                "description": product.description or "",
+                "title": product.title,
+                "brand": product.brand,
+                "description": product.description,
                 "sizes": json.loads(product.sizes_json or "[]"),
                 "characteristics": json.loads(product.characteristics_json or "[]"),
             }
@@ -586,6 +586,20 @@ class FakeWBClient:
             "requested_fields": requested_fields,
             "core_fields_requested": core_fields_requested,
             "core_fields_changed": core_fields_changed,
+            "fake_provider_core_before": {
+                field: before.get(provider_field)
+                for field, provider_field in (
+                    ("vendor_code", "vendorCode"), ("title", "title"),
+                    ("description", "description"), ("brand", "brand"),
+                )
+            },
+            "fake_provider_core_after": {
+                field: after.get(provider_field)
+                for field, provider_field in (
+                    ("vendor_code", "vendorCode"), ("title", "title"),
+                    ("description", "description"), ("brand", "brand"),
+                )
+            },
             "characteristic_ids": [int(item["id"]) for item in patch],
             "characteristics": [
                 {"id": int(item["id"]), "value": item["value"]}
@@ -751,8 +765,9 @@ def assert_single_edit_local_state(
         assert json.loads(product.sizes_json) == expected_sizes
         assert product.nm_id == 900000
         assert product.vendor_code == "PD-000"
-        assert product.title == "Pipedream Synthetic Product 000"
-        assert product.brand == "Synthetic reviewed brand"
+        assert product.title == "  Pipedream Synthetic Product 000  "
+        assert product.brand is None
+        assert product.description is None
 
         direct_history = CardEditHistory.query.filter_by(
             product_id=product.id,
@@ -780,15 +795,35 @@ def assert_single_edit_local_state(
                 506: [],
             }
             assert after_by_id == expected_values
+            assert history.snapshot_before["title"] == product.title
+            assert history.snapshot_after["title"] == product.title
+            assert history.snapshot_before["brand"] is None
+            assert history.snapshot_after["brand"] is None
+            assert history.snapshot_before["description"] is None
+            assert history.snapshot_after["description"] is None
         return {
             "characteristic_ids": sorted(by_id),
             "size_count": len(expected_sizes),
             "sku": expected_sizes[0]["skus"][0],
+            "local_core_values": {
+                "vendor_code": product.vendor_code,
+                "title": product.title,
+                "description": product.description,
+                "brand": product.brand,
+            },
             "direct_history_count": len(direct_history),
             "history_changed_fields": (
                 list(direct_history[0].changed_fields)
                 if direct_history else []
             ),
+            "history_before_core_values": ({
+                field: direct_history[0].snapshot_before.get(field)
+                for field in ("vendor_code", "title", "description", "brand")
+            } if direct_history else None),
+            "history_after_core_values": ({
+                field: direct_history[0].snapshot_after.get(field)
+                for field in ("vendor_code", "title", "description", "brand")
+            } if direct_history else None),
         }
 
 
@@ -2792,6 +2827,19 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             )
             interaction("single_review_confirm_reaches_only_fake_provider_boundary")
 
+            # Isolate legacy core values after the earlier bulk scenario. A
+            # characteristic-only edit must preserve nullable values and the
+            # exact stored title without asking the seller to repair the form.
+            with seller_app.app_context():
+                single_product = Product.query.filter_by(
+                    id=fixture["product_id"], seller_id=fixture["seller_id"],
+                ).one()
+                single_product.vendor_code = "PD-000"
+                single_product.title = "  Pipedream Synthetic Product 000  "
+                single_product.description = None
+                single_product.brand = None
+                db.session.commit()
+
             single_edit_path = f"/products/{fixture['product_id']}/edit"
             page.goto(BASE + single_edit_path, wait_until="domcontentloaded")
             assert_keyboard_focus(page, "single_product_edit")
@@ -3282,11 +3330,15 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
                     id=fixture["product_id"], seller_id=fixture["seller_id"],
                 ).one()
                 persisted_core_values = {
-                    "vendor_code": persisted_product.vendor_code or "",
-                    "title": persisted_product.title or "",
-                    "description": persisted_product.description or "",
-                    "brand": persisted_product.brand or "",
+                    "vendor_code": persisted_product.vendor_code,
+                    "title": persisted_product.title,
+                    "description": persisted_product.description,
+                    "brand": persisted_product.brand,
                 }
+            expected_form_values = {
+                field: value if isinstance(value, str) else ""
+                for field, value in persisted_core_values.items()
+            }
             core_form_locators = {
                 "vendor_code": single_form.locator("#vendor_code"),
                 "title": single_form.locator("#title"),
@@ -3299,33 +3351,28 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             }
             initial_core_mismatches = sorted(
                 field for field, value in initial_core_form_values.items()
-                if value != persisted_core_values[field]
+                if value != expected_form_values[field]
             )
-            # Keep this scenario a characteristic-only save. A previous bulk
-            # review changed the persisted brand, so explicitly align every
-            # visible core field to the current seller-owned readback before
-            # submitting the normal form. This catches stale UI values instead
-            # of allowing them to become accidental provider updates.
-            for field, locator in core_form_locators.items():
-                locator.fill(persisted_core_values[field])
-            aligned_core_form_values = {
-                field: locator.input_value()
-                for field, locator in core_form_locators.items()
+            assert persisted_core_values == {
+                "vendor_code": "PD-000",
+                "title": "  Pipedream Synthetic Product 000  ",
+                "description": None,
+                "brand": None,
+            }, persisted_core_values
+            assert initial_core_form_values == expected_form_values, {
+                "expected": expected_form_values,
+                "actual": initial_core_form_values,
             }
-            assert aligned_core_form_values == persisted_core_values
+            assert initial_core_mismatches == [], initial_core_mismatches
             REPORT["single_edit_observations"]["core_form_alignment"] = {
                 "persisted_core_values": persisted_core_values,
+                "expected_form_values": expected_form_values,
                 "initial_form_values": initial_core_form_values,
                 "initial_mismatch_fields": initial_core_mismatches,
-                "aligned_form_values": aligned_core_form_values,
+                "pre_submit_form_values": None,
+                "pre_submit_changed_fields": None,
                 "exact_before_characteristic_submit": True,
             }
-            check(
-                "single_edit_form_core_fields_match_persisted_values_before_targeted_characteristic_save",
-                core_fields=sorted(persisted_core_values),
-                pre_alignment_mismatch_fields=initial_core_mismatches,
-                post_alignment_exact=True,
-            )
             footer_clearance_check = capture_single_edit_footer_clearance(
                 page,
                 single_edit_post_requests=single_edit_post_requests,
@@ -3334,6 +3381,36 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             )
             REPORT["checks"].append(footer_clearance_check)
             assert footer_clearance_check["status"] == "passed", footer_clearance_check
+            pre_submit_core_form_values = {
+                field: locator.input_value()
+                for field, locator in core_form_locators.items()
+            }
+            pre_submit_core_changes = sorted(
+                field for field, value in pre_submit_core_form_values.items()
+                if value != initial_core_form_values[field]
+            )
+            assert pre_submit_core_form_values == initial_core_form_values, {
+                "initial": initial_core_form_values,
+                "before_submit": pre_submit_core_form_values,
+            }
+            assert pre_submit_core_changes == [], pre_submit_core_changes
+            REPORT["single_edit_observations"]["core_form_alignment"].update({
+                "pre_submit_form_values": pre_submit_core_form_values,
+                "pre_submit_changed_fields": pre_submit_core_changes,
+            })
+            check(
+                "single_edit_form_core_fields_match_persisted_values_before_targeted_characteristic_save",
+                core_fields=sorted(persisted_core_values),
+                persisted_null_fields=sorted(
+                    field for field, value in persisted_core_values.items()
+                    if value is None
+                ),
+                legacy_whitespace_fields=["title"],
+                initial_form_matches_persisted=True,
+                pre_submit_core_fields_untouched=True,
+                initial_mismatch_fields=initial_core_mismatches,
+                pre_submit_changed_fields=pre_submit_core_changes,
+            )
             single_path = f"/products/{fixture['product_id']}/edit"
             with page.expect_response(
                 lambda response: response.request.method == "POST"
@@ -3419,6 +3496,16 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             interaction("single_characteristic_edit_uses_real_csrf_form_and_fake_provider_boundary")
 
             page.goto(BASE + f"/products/{fixture['product_id']}/edit", wait_until="domcontentloaded")
+            reopened_core_form_values = {
+                "vendor_code": page.locator("#vendor_code").input_value(),
+                "title": page.locator("#title").input_value(),
+                "description": page.locator("#description").input_value(),
+                "brand": page.locator("#brand").input_value(),
+            }
+            assert reopened_core_form_values == expected_form_values, {
+                "expected": expected_form_values,
+                "actual": reopened_core_form_values,
+            }
             assert page.locator("#char_202").input_value() == "Россия"
             assert page.locator("#char_303").input_value() == "125"
             assert page.locator("#char_404 option:checked").evaluate_all(
@@ -3429,6 +3516,12 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             assert "SYNTHETIC-WB-SKU-000" in page.locator("body").inner_text()
             assert page.locator('input[name="sku"], input[name="sizes_json"]').count() == 0
             REPORT["single_edit_observations"]["reopen"] = {
+                "core_form_values": reopened_core_form_values,
+                "persisted_null_fields": ["brand", "description"],
+                "legacy_whitespace_title_preserved": (
+                    reopened_core_form_values["title"]
+                    == "  Pipedream Synthetic Product 000  "
+                ),
                 "country": page.locator("#char_202").input_value(),
                 "weight_grams": int(page.locator("#char_303").input_value()),
                 "materials": page.locator("#char_404 option:checked").evaluate_all(
@@ -3440,6 +3533,9 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             }
             check(
                 "single_edit_reopens_exact_saved_values_with_sizes_and_sku_read_only",
+                core_form_values=reopened_core_form_values,
+                persisted_null_fields=["brand", "description"],
+                legacy_whitespace_title_preserved=True,
                 reopened_country="Россия",
                 reopened_weight_grams=125,
                 reopened_materials=["Пластик", "Металл"],
