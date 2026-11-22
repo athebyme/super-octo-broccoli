@@ -3,11 +3,15 @@
 from unittest.mock import Mock
 
 import pytest
+import requests
 
 from models import (
+    BackgroundJob,
     MarketplaceListingLinkEvent,
     MarketplaceOperation,
     MarketplaceProductDraft,
+    OzonBulkUploadItem,
+    OzonBulkUploadRun,
     db,
 )
 from services.marketplace_drafts import (
@@ -212,6 +216,99 @@ def test_preview_accepts_exact_200_item_scope_and_keeps_order(case):
     assert result["listing_ids"] == ordered
     assert [row["listing_id"] for row in result["rows"]] == ordered
     assert all(row["status"] == "ready" for row in result["rows"])
+
+
+def test_apply_creates_exact_200_item_scope_without_provider_or_queue_work(
+    case,
+    monkeypatch,
+):
+    listing_products = {}
+    listing_ids = []
+    for index in range(Batch.MAX_ITEMS):
+        product, target = listing(case, f"batch-max-apply-{index:03d}")
+        listing_products[target.id] = product.id
+        listing_ids.append(target.id)
+    ordered = list(reversed(listing_ids))
+    provider_request = Mock(
+        side_effect=AssertionError("Provider HTTP is forbidden in this test")
+    )
+    http_request = Mock(
+        side_effect=AssertionError("Provider or supplier HTTP is forbidden in this test")
+    )
+    monkeypatch.setattr(OzonSellerAPIClient, "request", provider_request)
+    monkeypatch.setattr(requests.sessions.Session, "request", http_request)
+    links_before = {
+        target.id: (
+            target.imported_product_id,
+            target.link_status,
+            target.link_source,
+            target.link_version,
+            target.linked_at,
+            target.link_evidence_json,
+        )
+        for target in case.marketplace.listings.filter_by(
+            seller_id=case.seller1_id,
+            account_id=case.account1.id,
+        ).all()
+    }
+
+    preview = Batch.preview(
+        seller_id=case.seller1_id,
+        account_id=case.account1.id,
+        listing_ids=ordered,
+    )
+    result = Batch.apply(
+        seller_id=case.seller1_id,
+        account_id=case.account1.id,
+        listing_ids=ordered,
+        expected_digest=preview["digest"],
+    )
+
+    assert preview["listing_ids"] == ordered
+    assert [row["listing_id"] for row in preview["rows"]] == ordered
+    assert all(row["status"] == "ready" for row in preview["rows"])
+    assert result["listing_ids"] == ordered
+    assert [row["listing_id"] for row in result["rows"]] == ordered
+    assert all(row["status"] == "created" for row in result["rows"])
+    draft_ids = [row["draft_id"] for row in result["rows"]]
+    assert len(draft_ids) == Batch.MAX_ITEMS
+    assert len(set(draft_ids)) == Batch.MAX_ITEMS
+    drafts_by_id = {
+        draft.id: draft
+        for draft in MarketplaceProductDraft.query.filter(
+            MarketplaceProductDraft.id.in_(draft_ids),
+            MarketplaceProductDraft.seller_id == case.seller1_id,
+            MarketplaceProductDraft.account_id == case.account1.id,
+        ).all()
+    }
+    assert set(drafts_by_id) == set(draft_ids)
+    for row, listing_id in zip(result["rows"], ordered):
+        draft = drafts_by_id[row["draft_id"]]
+        assert draft.published_listing_id == listing_id
+        assert draft.imported_product_id == listing_products[listing_id]
+        assert draft.account_id == case.account1.id
+    links_after = {
+        target.id: (
+            target.imported_product_id,
+            target.link_status,
+            target.link_source,
+            target.link_version,
+            target.linked_at,
+            target.link_evidence_json,
+        )
+        for target in case.marketplace.listings.filter_by(
+            seller_id=case.seller1_id,
+            account_id=case.account1.id,
+        ).all()
+    }
+    assert links_after == links_before
+    assert MarketplaceListingLinkEvent.query.count() == 0
+    assert MarketplaceOperation.query.count() == 0
+    assert BackgroundJob.query.count() == 0
+    assert OzonBulkUploadRun.query.count() == 0
+    assert OzonBulkUploadItem.query.count() == 0
+    provider_request.assert_not_called()
+    http_request.assert_not_called()
 
 
 def test_apply_rejects_listing_drift_before_any_write(case):
