@@ -706,7 +706,9 @@ def run():
         apply_button = supplier_card.locator(".sc-card-secondary")
         assert apply_button.is_visible()
         assert apply_button.inner_text() == "Проверить локальные изменения"
-        assert "Сначала проверить локальные изменения" in apply_button.get_attribute("title")
+        assert "Сначала сравнить сохранённые данные с локальными карточками." in (
+            apply_button.get_attribute("title")
+        )
         all_review_form = apply_button.locator("xpath=ancestor::form")
         assert all_review_form.get_attribute("action") == SUPPLIER_REVIEW_PATH
         initial_all_scope = all_review_form.evaluate("""form => {
