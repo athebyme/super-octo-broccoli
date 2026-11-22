@@ -58,7 +58,7 @@
             <div class="our-photo"><draft-photo v-if="imageUrl(row)" :src="imageUrl(row)" :source-id="row.imported_product_id" :alt="row.title"></draft-photo><span v-else>Нет фото</span></div>
             <div class="our-card-main">
                 <div class="our-badges"><span>{{ row.action === 'update' ? 'Полное обновление' : 'Новая карточка' }}</span><span :class="row.selectable ? 'our-ready' : 'our-blocked'">{{ row.selectable ? 'Готова к выбору' : 'Нужны исправления' }}</span></div>
-                <h2><a :href="editorUrl(row)" :aria-label="'Открыть черновик для проверки или исправления: ' + row.title">{{ row.title }}</a></h2>
+                <h2><a :href="editorUrl(row)" :aria-label="'Открыть черновик ' + row.title">{{ row.title }}</a></h2>
                 <p class="our-meta">Артикул {{ row.offer_id }} · версия {{ row.version }} · товар № {{ row.imported_product_id }}</p>
                 <p class="our-meta">{{ row.type_name || 'Тип Ozon не выбран' }}<span v-if="row.external_category_id"> · категория {{ row.external_category_id }}</span></p>
                 <div class="our-facts"><span><strong>Цена продавца:</strong> {{ sellerPrice(row) }}</span><span v-if="oldPrice(row)"><strong>До скидок:</strong> {{ oldPrice(row) }}</span><span><strong>Упаковка:</strong> {{ packageLabel(row) }}</span><span v-if="Number.isSafeInteger(row.photos_count)"><strong>Фото в составе:</strong> {{ row.photos_count }}</span></div>
@@ -94,7 +94,6 @@
 </section>
 <noscript>
     <section class="our our-noscript" aria-labelledby="our-noscript-title">
-        {% if reviewed_result_url %}<a class="our-back" href="{{ reviewed_result_url }}"><span aria-hidden="true">←</span> К результату отправки</a>{% endif %}
         {% set dimension_units = {'MILLIMETERS':'мм', 'CENTIMETERS':'см', 'INCHES':'дюйм'} %}
         {% set weight_units = {'GRAMS':'г', 'KILOGRAMS':'кг', 'POUNDS':'фунт'} %}
         <h2 id="our-noscript-title">Проверка карточек без JavaScript</h2>

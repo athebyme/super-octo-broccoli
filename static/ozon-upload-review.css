@@ -1,5 +1,6 @@
 .our { --our-ink:var(--text); --our-muted:var(--text-secondary); --our-line:var(--border); max-width:1180px; margin:0 auto; padding:24px 20px 70px; color:var(--our-ink); }
 .our-boot { max-width:1180px; margin:25px auto; padding:20px; color:var(--text-secondary); }
+body:has(#our-noscript-title) #our-boot-fallback { display:none; }
 .our[v-cloak], .our [v-cloak] { display:none; }
 .our-header { max-width:850px; }
 .our-back { display:inline-flex; min-height:44px; align-items:center; margin-bottom:7px; color:var(--accent-text); text-decoration:underline; text-underline-offset:3px; font-size:13px; }
