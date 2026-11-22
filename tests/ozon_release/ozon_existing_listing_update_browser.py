@@ -61,7 +61,7 @@ listing_ids = fixture["listing_ids"][:2]
 bulk_ready_id = fixture["listing_ids"][2]
 bulk_unlinked_id = fixture["listing_ids"][3]
 bulk_listing_ids = {listing_ids[0], bulk_ready_id, bulk_unlinked_id}
-bulk_catalog = "/marketplaces/listings/beta?" + urlencode({
+bulk_catalog = "/marketplaces/listings/?" + urlencode({
     "marketplace": "ozon", "account_id": fixture["account_id"],
     "status": "active", "per_page": 2, "search": "R47 набор",
 })
@@ -260,14 +260,17 @@ def exercise_catalog_batch(page):
     page.goto(base + bulk_catalog)
     catalog = page.locator("#marketplace-catalog-app:not([v-cloak])")
     catalog.wait_for()
+    by_listing = catalog.get_by_role("button", name="По площадкам", exact=True)
+    if not by_listing.is_visible():
+        catalog.get_by_role("button", name="Фильтры", exact=True).click()
+    by_listing.press("Enter")
     toggle = catalog.locator("[data-listing-update-toggle]")
-    toggle.press("Enter")
     checks = catalog.locator("[data-listing-update-select]")
     checks.first.wait_for()
     assert checks.count() == 2
+    toggle.press("Space")
     for candidate in checks.all():
         listing_id = int(candidate.get_attribute("data-listing-update-select"))
-        candidate.press("Space")
         assert candidate.is_checked()
         bulk_state["selected"].append(listing_id)
 
@@ -296,6 +299,7 @@ def exercise_catalog_batch(page):
     dialog = page.locator("dialog[open]")
     confirm = dialog.locator("[data-listing-update-confirm]")
     confirm.wait_for()
+    assert confirm.is_disabled()
     preview_text = dialog.inner_text()
     assert "Ozon CI 0" in preview_text
     assert all(f"CI-{number:03}" in preview_text for number in (0, 2, 3))
@@ -308,6 +312,8 @@ def exercise_catalog_batch(page):
 
     preview_action.click()
     confirm.wait_for()
+    dialog.get_by_role("checkbox").check()
+    assert confirm.is_enabled()
     sizes = []
     for theme in ("light", "dark"):
         page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
@@ -321,6 +327,11 @@ def exercise_catalog_batch(page):
     confirm.click()
     editor_link = page.locator("[data-listing-update-editor]")
     editor_link.wait_for()
+    page.wait_for_function("document.activeElement?.matches('.mcat-update-report h3')")
+    assert dialog.locator(".mcat-update-review").count() == 0
+    editor_link_size = editor_link.bounding_box()
+    assert editor_link_size and editor_link_size["height"] >= 44
+    assert editor_link_size["y"] >= 0 and editor_link_size["y"] + editor_link_size["height"] <= 850
     assert bulk_state["preview"] == 2 and bulk_state["apply"] == 1
     report = bulk_state["report"]
     existing = int(saved_urls[listing_ids[0]].split("/")[-1])
@@ -351,11 +362,14 @@ def exercise_catalog_batch(page):
     assert urlsplit(page.url).path == urlsplit(bulk_catalog).path
     expected_query = parse_qs(urlsplit(bulk_catalog).query)
     assert {name: return_query.get(name) for name in expected_query} == expected_query
+    checks.first.wait_for()
+    assert all(selected.is_checked() for selected in checks.all())
     assert batch_snapshots() == after
     REPORT["bulk_update"] = {
         "selected": len(bulk_state["selected"]), "created": 1, "existing": 1, "blocked": 1,
         "preview_requests": bulk_state["preview"], "confirm_requests": bulk_state["apply"],
         "layouts": sizes, "catalog_scope_preserved": True, "operation_delta": 0,
+        "focused_result": True, "editor_visible_without_scroll": True, "duplicate_preview_hidden": True,
     }
     REPORT["checks"].append("catalog_selected_update_reuses_guarded_drafts_and_preserves_filtered_return")
 
