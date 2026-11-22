@@ -1812,6 +1812,8 @@ class SupplierRefreshHandoffRouteTest(unittest.TestCase):
         })
 
     def test_supplier_refresh_post_without_verified_updates_returns_null_batch(self):
+        from routes.suppliers import _load_supplier_refresh_receipt
+
         result = SimpleNamespace(
             imported=0,
             skipped=1,
@@ -1827,16 +1829,58 @@ class SupplierRefreshHandoffRouteTest(unittest.TestCase):
         with self._auth(), patch(
             'routes.suppliers.SupplierService.update_imported_products',
             return_value=result,
-        ):
+        ) as update:
             response = self.client.post(
                 '/my-products/refresh-from-supplier',
                 json={'product_ids': [self.first_id]},
             )
+        update.assert_called_once_with(self.seller_id, [self.first_id])
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertIn('updated_batch', payload)
         self.assertIsNone(payload['updated_batch'])
-        self.assertNotIn('resume_receipt', payload)
+        self.assertIsInstance(payload['resume_receipt'], str)
+        self.assertEqual(_load_supplier_refresh_receipt(
+            payload['resume_receipt'],
+            user_id=self.user.id,
+            seller_id=self.seller_id,
+        ), {
+            'ids': [self.first_id],
+            'statuses': ['skipped'],
+            'wb_targets': [],
+        })
+
+        with self._auth(), patch(
+            'routes.suppliers.SupplierService.update_imported_products',
+        ) as update, patch(
+            'routes.suppliers.SupplierService.preview_imported_products',
+        ) as preview:
+            resumed = self.client.get(
+                '/api/my-products/supplier-refresh-result',
+                headers={'X-Supplier-Refresh-Receipt': payload['resume_receipt']},
+            )
+        update.assert_not_called()
+        preview.assert_not_called()
+        self.assertEqual(resumed.status_code, 200)
+        self.assertIn('no-store', resumed.headers['Cache-Control'])
+        resumed_payload = resumed.get_json()
+        self.assertEqual(resumed_payload['status'], 'completed')
+        self.assertEqual(resumed_payload['requested'], 1)
+        self.assertEqual(resumed_payload['updated'], 0)
+        self.assertEqual(resumed_payload['skipped'], 1)
+        self.assertEqual(resumed_payload['errors'], 0)
+        self.assertEqual(resumed_payload['items'], [{
+            'product_id': self.first_id,
+            'status': 'skipped',
+            'reason': 'no_supplier_link',
+        }])
+        self.assertEqual(resumed_payload['labels'], [{
+            'productId': self.first_id,
+            'label': 'First selected product · handoff-first',
+        }])
+        self.assertEqual(resumed_payload['wb_targets'], [])
+        self.assertEqual(resumed_payload['wb_ready'], 0)
+        self.assertIsNone(resumed_payload['updated_batch'])
 
     def test_supplier_refresh_result_batch_rejects_scope_expiry_and_row_drift(self):
         from models import ImportedProduct, db
