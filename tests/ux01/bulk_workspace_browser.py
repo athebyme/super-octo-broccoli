@@ -18,6 +18,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.ux01 import journey_browser as fixture
+from tests.ux01.bulk_action_controls import invoke_workspace_action, workspace_action_launcher
 from models import (
     BackgroundJob, EnrichmentJob, ImportedProduct, PriceChangeBatch,
     PriceChangeItem, Product, Seller, SupplierProduct, db,
@@ -275,11 +276,22 @@ def refresh_wb_button(page, count=1):
     return page.get_by_role("button", name=f"Проверить характеристики WB ({count})")
 
 
+BULK_ACTION_KEYS = {
+    "Создать карточки WB": "push_wb",
+    "Подготовить для Ozon": "ozon",
+    "Обновить из поставщика": "refresh_supplier",
+    "Изменить общий контент": "common_content",
+    "Изменить карточки WB": "wb_edit",
+    "Изменить цены WB": "wb_prices",
+    "Изменить цены Ozon": "ozon_prices",
+    "Изменить карточки Ozon": "ozon_workspace_update",
+}
+
+
 def pick_action(page, name):
-    page.get_by_role("button", name="Что сделать").click()
-    action = page.get_by_role("menuitem", name=name)
-    assert action.is_enabled(), name
-    action.click()
+    key = BULK_ACTION_KEYS.get(name)
+    assert key, f"No intent route mapped for {name!r}"
+    return invoke_workspace_action(page, key)
 
 
 def feed_matches(response, expected):
@@ -327,11 +339,9 @@ def is_supplier_refresh_preview(response):
 
 def open_supplier_refresh_preview(page, expected_ids, preview_posts):
     """Open the real no-provider review and keep its signed token only in RAM."""
-    page.get_by_role("button", name="Что сделать").click()
-    action = page.get_by_role("menuitem", name="Обновить из поставщика")
-    assert action.is_enabled()
     with page.expect_response(is_supplier_refresh_preview) as response_info:
-        action.click()
+        action_steps = invoke_workspace_action(page, "refresh_supplier")
+    assert action_steps == 1, "supplier refresh must be a one-click preview action"
     response = response_info.value
     assert response.status == 200
     preview = response.json()
@@ -787,25 +797,43 @@ def run():
             page.on("pageerror", lambda error: errors.append(str(error)))
             open_products(page)
             assert urlsplit(page.get_by_role("link", name="Импортировать товары").get_attribute("href")).path == "/supplier-catalog"
+            other_sections = page.locator(".mp-head-more summary")
+            other_sections.click()
             ozon_prices = page.get_by_role("link", name="Ценовые заявки Ozon").get_attribute("href")
             assert parse_qs(urlsplit(ozon_prices).query) == {
                 "proposal_kind": ["price"], "status": ["pending_review"],
                 "account_id": [str(fixture.FIXTURE["account_id"])],
             }
+            other_sections.click()
             page.get_by_role("checkbox", name=f"Выбрать {MAIN_TITLE}").check()
-            primary = page.get_by_role("button", name="Что сделать")
-            primary.focus()
-            primary.press("ArrowDown")
-            menu = page.get_by_role("menu")
-            menu.locator("button:focus").wait_for()
-            assert page.get_by_role("menuitem", name="Изменить общий контент").is_enabled()
-            assert page.get_by_role("menuitem", name="Изменить карточки WB").is_enabled()
-            assert page.get_by_role("menuitem", name="Изменить цены WB").is_enabled()
+            cards = workspace_action_launcher(page, "cards")
+            assert cards.get_attribute("data-bulk-direct-action") is None
+            cards.focus()
+            cards.press("Enter")
+            card_choices = page.locator("#mp-bulk-panel-cards")
+            card_choices.wait_for()
+            common_option = card_choices.locator('[data-bulk-action-key="common_content"]')
+            wb_option = card_choices.locator('[data-bulk-action-key="wb_edit"]')
+            assert common_option.is_enabled()
+            assert wb_option.is_enabled()
+            common_bounds = common_option.bounding_box()
+            assert common_bounds and common_bounds["height"] >= 44, common_bounds
+            choice_keys = card_choices.locator("[data-bulk-action-key]").evaluate_all(
+                "items => items.map(item => item.dataset.bulkActionKey)"
+            )
+            assert len(choice_keys) >= 2 and set(choice_keys) <= {
+                "common_content", "wb_edit", "ozon_workspace_update",
+            }, choice_keys
+            cards.press("Tab")
+            assert common_option.evaluate("element => element === document.activeElement")
             verify_bounds(page)
+            choices_bounds = card_choices.bounding_box()
+            assert choices_bounds and choices_bounds["x"] >= 0 \
+                and choices_bounds["x"] + choices_bounds["width"] <= width, choices_bounds
             screenshot = OUTPUT / f"selected-{theme}-{width}.png"
             page.screenshot(path=screenshot, animations="disabled")
-            menu.locator("button:focus").press("Escape")
-            assert primary.evaluate("element => element === document.activeElement")
+            common_option.press("Escape")
+            assert cards.evaluate("element => element === document.activeElement")
             more = page.locator(".mp-more-actions summary")
             more.press("Enter")
             secondary = page.locator(".mp-more-actions-menu")
@@ -813,13 +841,23 @@ def run():
             bounds = secondary.bounding_box()
             assert bounds and bounds["x"] >= 0 and bounds["x"] + bounds["width"] <= width, bounds
             if width <= 390:
-                assert primary.bounding_box()["height"] >= 44 and more.bounding_box()["height"] >= 44
-            primary.press("ArrowDown")
-            menu.locator("button:focus").wait_for()
+                launchers = page.locator("[data-bulk-action-group]").evaluate_all(
+                    "items => items.map(item => { const r = item.getBoundingClientRect(); return {w:r.width,h:r.height,left:r.left,right:r.right}; })"
+                )
+                assert len(launchers) == 4 and all(
+                    bounds["w"] >= 44 and bounds["h"] >= 44 and
+                    bounds["left"] >= 0 and bounds["right"] <= width
+                    for bounds in launchers
+                ), launchers
+                assert more.bounding_box()["height"] >= 44
+            cards.press("Enter")
+            card_choices.wait_for()
             assert not more.evaluate("element => element.parentElement.open")
+            cards.press("Escape")
+            assert cards.evaluate("element => element === document.activeElement")
             layouts.append({"width": width, "theme": theme, "screenshot": screenshot.name})
             context.close()
-        checks.append("action_menu_keyboard_and_secondary_overlay_fit_all_layouts")
+        checks.append("intent_choice_keyboard_escape_focus_and_secondary_overlay_fit_all_layouts")
 
         # Hand the exact ordered workspace selection to the native WB editor,
         # then return through its signed same-tab URL and restore those marks.
@@ -1177,13 +1215,16 @@ def run():
         assert selected_browser_state(page) == {
             "selected": [fixture_ids["local_id"]], "ozonIds": [],
         }
-        pick_action(page, "Изменить цены WB")
+        price_intent_steps = pick_action(page, "Изменить цены WB")
+        assert price_intent_steps == 1, \
+            "a WB-only linked selection must open prices directly without a destination menu"
         page.wait_for_url(lambda value: (
             urlsplit(str(value)).path == "/prices/change"
             and re.fullmatch(r"workspace-return=[a-f0-9]{32}", urlsplit(str(value)).fragment)
         ))
         price_url = urlsplit(page.url)
         nonce_hash = price_url.fragment
+        checks.append("sole_wb_price_intent_dispatches_without_choice_menu")
         assert parse_qs(price_url.query)["product_ids"] == [str(fixture_ids["wb_id"])]
         assert page.evaluate("""([owner, importedId, productId, search]) => {
             const capsule = window.SellerHubCommonContent.workspaceReturnFromHash(
@@ -1299,7 +1340,8 @@ def run():
                 const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
                 return proxy && !proxy.loading && proxy.selected.join(',') === String(id);
             }""", arg=fixture_ids["local_id"])
-            pick_action(page, "Изменить цены WB")
+            assert pick_action(page, "Изменить цены WB") == 1, \
+                "WB-only price selections should dispatch in one click"
             page.wait_for_url(lambda value: (
                 urlsplit(str(value)).path == "/prices/change"
                 and re.fullmatch(r"workspace-return=[a-f0-9]{32}", urlsplit(str(value)).fragment)

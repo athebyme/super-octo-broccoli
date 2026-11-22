@@ -189,6 +189,7 @@ from models import (
 from routes.common_product_content import register_common_product_content_routes
 from services.common_product_content import CommonProductContentService, MAX_TITLE
 from tests.ozon_release.seed import PASSWORD, PHOTO, USERNAME, seed
+from tests.ux01.bulk_action_controls import invoke_workspace_action
 
 
 if "common_product_content" not in app.blueprints:
@@ -1761,8 +1762,7 @@ def _run_bulk_50_case(page) -> None:
     assert beta_catalog_state(page)["selected"] == product_ids
     with page.expect_response(lambda response: urlsplit(response.url).path == "/my-products/common-content"
                               and response.request.method == "GET") as common_handoff:
-        page.get_by_role("button", name="Что сделать").click()
-        page.get_by_role("menuitem", name="Изменить общий контент").click()
+        assert invoke_workspace_action(page, "common_content") == 1
     assert common_handoff.value.status == 200
     page.wait_for_url(lambda value: _common_editor_url_matches(value, product_ids, with_return_nonce=True))
     page.locator("#common-content-editor").wait_for(state="visible")
@@ -2073,8 +2073,7 @@ def _run_bulk_50_case(page) -> None:
 
     # A single row leaving the captured search scope invalidates the whole
     # selection; no partial selection should be restored.
-    page.get_by_role("button", name="Что сделать").click()
-    page.get_by_role("menuitem", name="Изменить общий контент").click()
+    assert invoke_workspace_action(page, "common_content") == 1
     page.wait_for_url(lambda value: _common_editor_url_matches(
         value, product_ids, with_return_nonce=True,
     ))
@@ -2927,10 +2926,7 @@ def run():
         boxes.nth(1).check()
         ordinary_selection = beta_catalog_state(page)["selected"]
         assert set(ordinary_selection) == set(product_ids) and len(ordinary_selection) == 2
-        page.get_by_role("button", name="Что сделать").click()
-        action = page.get_by_role("menuitem", name="Изменить общий контент")
-        assert action.is_enabled()
-        action.click()
+        assert invoke_workspace_action(page, "common_content") in (1, 2)
         page.wait_for_url(lambda value: _common_editor_url_matches(
             value, ordinary_selection, with_return_nonce=True,
         ))
