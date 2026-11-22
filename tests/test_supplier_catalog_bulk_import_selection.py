@@ -299,7 +299,7 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
             f'BulkChoice free {index:03d}' for index in range(55)
         } | {'BulkChoice already imported', 'BulkChoice stale update'}
         self.assertTrue(all(title in review_html for title in rendered_titles))
-        self.assertIn('Выбрано 55 из 57 по текущему фильтру.', review_html)
+        self.assertIn('Выбрано 55 из 57', review_html)
         self.assertIn('(55)', review_html)
         self.assertIn('55 выбрано', review_html)
         self.assertNotIn('ID каталога:', review_html)
@@ -311,7 +311,7 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         self.assertNotIn('BulkChoice not parsed', review_html)
         self.assertNotIn('BulkChoice out of stock', review_html)
         self.assertNotIn('BulkChoice from other source', review_html)
-        self.assertIn('Отменить массовый выбор', review_html)
+        self.assertIn('Снять выбор', review_html)
 
         state = review_page.root_state or ''
         match = re.search(r'importSelected:\s*(\[.*?\]),\s*updateSelected:', state)
@@ -405,8 +405,8 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
             'page': ['1'], 'search': ['FilteredUpdate'],
             'show_imported': ['1'],
             'stock_status': ['all'], 'wb_filter': ['not_on_wb'],
-            'ai_filter': ['ai_parsed'], 'intent': ['updates'],
-            'updates_only': ['1'], 'select_all': ['updates'],
+            'ai_filter': ['ai_parsed'], 'updates_only': ['1'],
+            'select_all': ['updates'],
         })
 
         review_path = f'{normal_path}&select_all=updates'
@@ -436,7 +436,7 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         )
         self.assertEqual(json.loads(selected_import_match.group(1)), [])
         self.assertIn(
-            'Выбрано 55 из 55 позиций с обновлениями по текущему фильтру.',
+            'Выбрано 55 из 55',
             review_html,
         )
         self.assertIn('update_product_ids', review_html)

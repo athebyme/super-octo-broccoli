@@ -28,6 +28,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.ux01 import journey_browser as fixture
+from tests.ux01.bulk_action_controls import invoke_workspace_action
 from models import (
     ImportedProduct,
     PricingSettings,
@@ -702,9 +703,9 @@ def run():
         assert card_times.nth(1).get_attribute("datetime") == "2026-09-22T11:45:00Z"
         assert card_times.nth(1).inner_text() == "22.09.2026 11:45 UTC"
         assert "Автообновление включено" in card_freshness.inner_text()
-        apply_button = supplier_card.locator(".sc-update-btn")
+        apply_button = supplier_card.locator(".sc-card-secondary")
         assert apply_button.is_visible()
-        assert apply_button.inner_text() == "Проверить обновления (1)"
+        assert apply_button.inner_text() == "Проверить локальные изменения"
         assert "Сначала проверить локальные изменения" in apply_button.get_attribute("title")
         all_review_form = apply_button.locator("xpath=ancestor::form")
         assert all_review_form.get_attribute("action") == SUPPLIER_REVIEW_PATH
@@ -769,7 +770,7 @@ def run():
         checks.append(
             "supplier_feed_freshness_separates_catalog_price_and_all_update_opens_review_before_write",
         )
-        cards = page.locator(".grid > div.p-4")
+        cards = page.locator(".sc-product-grid > .sc-product-tile")
         assert cards.count() == 50, cards.count()
         with fixture.app.app_context():
             assert ImportedProduct.query.count() == fixture_ids["imported_before"]
@@ -778,7 +779,7 @@ def run():
         )
         assert standard_checks.count() == 0, standard_checks.count()
         all_filter_link = page.get_by_role(
-            "link", name="Проверить все товары текущего фильтра (53)",
+            "link", name="Выбрать все 53 по фильтру", exact=True,
         )
         href = all_filter_link.get_attribute("href")
         assert href
@@ -812,13 +813,13 @@ def run():
         review_text = page.locator(
             '[data-supplier-products] [aria-live="polite"] strong',
         ).inner_text()
-        assert review_text == "Выбрано 53 из 53 по текущему фильтру.", review_text
+        assert review_text == "Выбрано 53 из 53", review_text
         for excluded_id in fixture_ids["excluded_ids"]:
             assert excluded_id not in rendered_ids, excluded_id
         assert page.get_by_text("R28 Mass batch out of stock", exact=True).count() == 0
         assert page.get_by_text("R28 Mass batch not parsed", exact=True).count() == 0
         assert page.get_by_text("R28 Mass batch from other supplier", exact=True).count() == 0
-        assert page.get_by_role("link", name="Отменить массовый выбор").count() == 1
+        assert page.get_by_role("link", name="Снять выбор", exact=True).count() == 1
         checks.append("all_filtered_result_checks_exact_53_current_supplier_rows_and_excludes_other_matches")
 
         excluded_ids = set(rendered_ids[:3])
@@ -829,7 +830,7 @@ def run():
         review_text = page.locator(
             '[data-supplier-products] [aria-live="polite"] strong',
         ).inner_text()
-        assert review_text == "Выбрано 50 из 53 по текущему фильтру.", review_text
+        assert review_text == "Выбрано 50 из 53", review_text
 
         selected_ids = set(rendered_ids) - excluded_ids
         submitted = page.evaluate("""() => ({
@@ -954,8 +955,7 @@ def run():
             assert selected_after_one is not None and len(selected_after_one) == 49
             assert set(selected_after_one) < persisted_product_ids
             assert len(product_feed_reads) == 1 and facet_reads == []
-            page.get_by_role("button", name="Что сделать").click()
-            page.get_by_role("menuitem", name="Подготовить для Ozon", exact=False).click()
+            invoke_workspace_action(page, "ozon")
             ozon_dialog = page.locator('dialog[aria-labelledby="mp-ozon-dialog-title"]')
             ozon_dialog.wait_for(state="visible")
             assert page.locator("#mp-ozon-dialog-title").inner_text().startswith("Подготовить 49 ")
@@ -1065,17 +1065,7 @@ def run():
             return proxy ? proxy.selected.slice() : null;
         }""")
         assert selected_before_create == wb_selected_ids
-        page.get_by_role("button", name="Что сделать").click()
-        wb_create_action = page.get_by_role(
-            "menuitem", name="Создать карточки WB",
-        )
-        wb_create_action.wait_for(state="visible")
-        assert wb_create_action.is_enabled(), "WB create must be enabled for the two retained rows"
-        assert wb_create_action.locator(".shk-actions-item-label").inner_text() == "Создать карточки WB"
-        assert wb_create_action.locator(".shk-actions-item-hint").inner_text() == (
-            "для 2 товаров, ещё не связанных с WB"
-        ), "action hint must name the exact two-row WB create scope"
-        wb_create_action.click()
+        invoke_workspace_action(page, "push_wb")
         confirmation = page.get_by_role("alertdialog")
         confirmation.wait_for(state="visible")
         confirmation_scroll_y = page.evaluate("() => window.scrollY")
@@ -1379,7 +1369,7 @@ def run():
         )
         assert oversized_response and oversized_response.status == 200
         page.wait_for_load_state("networkidle")
-        assert page.locator(".grid > div.p-4").count() == 50
+        assert page.locator(".sc-product-grid > .sc-product-tile").count() == 50
         oversized_checks = page.locator(
             'input[form="supplier-import-form"][name="product_ids"]',
         )
@@ -1472,6 +1462,8 @@ def run():
         # One checked source ID remains exact through review and explicit confirm.
         selected_filters = dict(FILTERS)
         selected_filters["search"] = review_fixture["selected_source_external_id"]
+        selected_filters["intent"] = "updates"
+        selected_filters["updates_only"] = "1"
         selected_source_path = "/supplier-catalog/{}/products?{}".format(
             fixture_ids["supplier_id"], urlencode(selected_filters),
         )
@@ -1543,8 +1535,8 @@ def run():
         card = page.locator(".sc-card").filter(has=page.locator(
             f'a[href="/supplier-catalog/{fixture_ids["supplier_id"]}/products"]',
         ))
-        all_button = card.locator(".sc-update-btn")
-        assert re.fullmatch(r"Проверить обновления \(\d+\)", all_button.inner_text())
+        all_button = card.locator(".sc-card-secondary")
+        assert all_button.inner_text() == "Проверить локальные изменения"
         with fixture.app.app_context():
             current_copy = db.session.get(ImportedProduct, review_fixture["current_copy_id"])
             unlinked_copy = db.session.get(ImportedProduct, review_fixture["unlinked_copy_id"])
@@ -1578,7 +1570,9 @@ def run():
         details = page.locator("[data-supplier-review-row]")
         rendered_details = details.count()
         assert 0 < rendered_details <= 50
-        assert page.get_by_text(re.compile(rf"Показаны первые 50 из {requested} локальных карточек")).count() == 1
+        assert page.get_by_text(
+            re.compile(rf"Показаны первые 50 из {requested} карточек"),
+        ).count() == 1
         rendered_ids = details.evaluate_all(
             "rows => rows.map(row => Number(row.dataset.localProductId))",
         )
@@ -1640,12 +1634,11 @@ def run():
             "page": "1",
             "search": "R52 Filtered update",
             "show_imported": "1",
-            "updates_only": "1",
             "stock_status": "in_stock",
             "wb_filter": "not_on_wb",
             "ai_filter": "ai_parsed",
         }
-        filtered_update_path = "/supplier-catalog/{}/products?{}".format(
+        filtered_import_path = "/supplier-catalog/{}/products?{}".format(
             fixture_ids["supplier_id"], urlencode(filtered_update_filters),
         )
         filtered_catalog_path = (
@@ -1653,13 +1646,44 @@ def run():
         )
         page.set_viewport_size({"width": 320, "height": 900})
         filtered_page_response = page.goto(
-            fixture.BASE + filtered_update_path,
+            fixture.BASE + filtered_import_path,
             wait_until="domcontentloaded",
         )
         assert filtered_page_response and filtered_page_response.status == 200
         page.wait_for_load_state("networkidle")
         filtered_source_ids = filtered_update_fixture["source_ids"]
         unimported_source_id = str(filtered_update_fixture["unimported_source_id"])
+        assert page.locator(
+            'input[form="supplier-update-form"][name="update_product_ids"]',
+        ).count() == 0, "import intent must not expose update selections"
+        updates_tab = page.get_by_role("link", name="Обновления", exact=True)
+        assert updates_tab.is_visible()
+        updates_href = urlsplit(updates_tab.get_attribute("href"))
+        assert updates_href.path == (
+            f"/supplier-catalog/{fixture_ids['supplier_id']}/products"
+        )
+        switched_filters = {
+            **filtered_update_filters,
+            "intent": "updates",
+            "updates_only": "1",
+        }
+        switched_query = parse_qs(updates_href.query, keep_blank_values=True)
+        assert switched_query == {
+            key: [value] for key, value in switched_filters.items()
+        }
+        with page.expect_response(
+            lambda response: urlsplit(response.url).path == updates_href.path
+            and response.request.method == "GET"
+            and parse_qs(urlsplit(response.url).query, keep_blank_values=True)
+            == switched_query,
+        ) as updates_mode_response:
+            updates_tab.click()
+        assert updates_mode_response.value.status == 200
+        page.wait_for_load_state("networkidle")
+        assert parse_qs(
+            urlsplit(page.url).query, keep_blank_values=True,
+        ) == switched_query
+        filtered_update_filters = switched_filters
         ordinary_update_inputs = page.locator(
             'input[form="supplier-update-form"][name="update_product_ids"]',
         )
@@ -1678,7 +1702,7 @@ def run():
         assert filtered_update_link.count() == 1
         assert filtered_update_link.is_visible()
         assert filtered_update_link.inner_text().strip() == (
-            "Выбрать обновления по фильтру (55)"
+            "Выбрать 55 обновлений по фильтру"
         )
         filtered_link_geometry = filtered_update_link.evaluate("""element => {
             const rect = element.getBoundingClientRect();
@@ -1699,8 +1723,12 @@ def run():
             f"/supplier-catalog/{fixture_ids['supplier_id']}/products"
         )
         filtered_select_query = parse_qs(filtered_select_href.query, keep_blank_values=True)
+        select_filter_scope = {
+            key: value for key, value in filtered_update_filters.items()
+            if key != "intent"
+        }
         assert filtered_select_query == {
-            **{key: [value] for key, value in filtered_update_filters.items()},
+            **{key: [value] for key, value in select_filter_scope.items()},
             "select_all": ["updates"],
         }
 
@@ -1742,7 +1770,7 @@ def run():
         assert selection_screenshot_geometry["scroll"] <= 321
         assert selection_screenshot_geometry["checkedUpdateCount"] == 55
         selection_status = page.locator('[role="status"] strong').filter(
-            has_text="Выбрано 55 из 55 позиций с обновлениями по текущему фильтру.",
+            has_text="Выбрано 55 из 55",
         )
         selection_status.evaluate("""element => {
             const status = element.closest('[role="status"]');
@@ -1892,7 +1920,7 @@ def run():
             f"rendered={filtered_detail_ids[-1]!r}"
         )
         assert page.get_by_text(
-            "Показаны первые 50 из 55 локальных карточек.",
+            "Показаны первые 50 из 55 карточек",
             exact=False,
         ).count() == 1
         assert page.locator(
@@ -2225,14 +2253,11 @@ def run():
         with fixture.app.app_context():
             assert handoff_snapshot() == handoff_before
 
-        page.get_by_role("button", name="Что сделать", exact=True).click()
         with page.expect_response(
             lambda r: urlsplit(r.url).path == SUPPLIER_REFRESH_PREVIEW_PATH
             and r.request.method == "POST",
         ) as preview_response:
-            page.get_by_role(
-                "menuitem", name=re.compile("Обновить из поставщика"),
-            ).click()
+            invoke_workspace_action(page, "refresh_supplier")
         assert preview_response.value.status == 200
         review_dialog = page.locator(
             'dialog[aria-labelledby="mp-supplier-refresh-dialog-title"]',
