@@ -998,7 +998,7 @@
                                                 class="px-3 py-1 text-xs rounded-md transition"
                                                 :class="String(selectedCategory) === String(category.subject_id) ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'">
                                             <span x-text="category.name"></span>
-                                            <span class="ml-1 font-semibold" x-text="`${category.count} карточек`"></span>
+                                            <span class="ml-1 font-semibold" x-text="category.count"></span>
                                         </button>
                                     </template>
                                 </div>
@@ -1280,7 +1280,7 @@
                                                         class="px-3 py-1 text-xs rounded-md transition"
                                                         :class="String(selectedCategory) === String(category.subject_id) ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'">
                                                     <span x-text="category.name"></span>
-                                                    <span class="ml-1 font-semibold" x-text="`${category.count} карточек`"></span>
+                                                    <span class="ml-1 font-semibold" x-text="category.count"></span>
                                                 </button>
                                             </template>
                                         </div>
