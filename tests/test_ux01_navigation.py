@@ -30,7 +30,10 @@ class _NavigationParser(HTMLParser):
         classes = set((attributes.get("class") or "").split())
         if tag == "button" and "seller-workspace-group-toggle" in classes:
             self.groups.append(attributes)
-        if tag == "a" and "seller-workspace-sublink" in classes:
+        if tag == "a" and (
+            "seller-workspace-sublink" in classes
+            or "seller-workspace-primary-link" in classes
+        ):
             self.links.append((attributes, ""))
             self._current_link = len(self.links) - 1
 
@@ -61,7 +64,7 @@ class SellerWorkspaceNavigationTest(unittest.TestCase):
         )
 
         cls.endpoint_cases = {
-            "seller_my_products_beta": ("products", "Мои товары"),
+            "seller_my_products_beta": ("", "Мои товары"),
             "supplier_catalog_product_detail": ("products", "Каталог поставщиков"),
             "supplier_catalog_export": ("products", "Каталог поставщиков"),
             "marketplace_listings.detail": ("products", "Карточки кабинетов"),
@@ -131,7 +134,7 @@ class SellerWorkspaceNavigationTest(unittest.TestCase):
                     active_links,
                 )
 
-    def test_all_eight_groups_start_with_only_the_current_group_expanded(self):
+    def test_primary_products_link_is_direct_and_advanced_tools_are_separate(self):
         body, parser = self._render("seller_my_products_beta")
         self.assertEqual(
             [button["id"] for button in parser.groups],
@@ -146,12 +149,33 @@ class SellerWorkspaceNavigationTest(unittest.TestCase):
                 "seller-workspace-toggle-promotion",
             ],
         )
-        self.assertIn('data-active-group="products"', body)
+        self.assertIn('data-active-group=""', body)
+        primary_links = [
+            (attributes, text.strip())
+            for attributes, text in parser.links
+            if "seller-workspace-primary-link" in attributes.get("class", "").split()
+        ]
+        self.assertEqual(len(primary_links), 1)
+        self.assertEqual(primary_links[0][1], "Мои товары")
+        self.assertEqual(primary_links[0][0].get("href"), "/synthetic/seller_my_products_beta")
+        self.assertEqual(primary_links[0][0].get("aria-current"), "page")
+        self.assertIn('aria-label="Другие инструменты товаров"', body)
         for label in (
             "Обзор", "Товары", "Цены", "Операции", "Общение", "Аналитика",
             "Конкуренты", "Продвижение",
         ):
             self.assertIn(label, body)
+
+        tools_body, tools_nav = self._render("marketplace_drafts.detail")
+        self.assertIn('data-active-group="products"', tools_body)
+        tool_toggles = [
+            attributes for attributes in tools_nav.groups
+            if attributes.get("id") == "seller-workspace-toggle-products"
+        ]
+        self.assertEqual(len(tool_toggles), 1)
+        self.assertIn("is-current", tool_toggles[0].get("class", "").split())
+        self.assertTrue(any(text == "Черновики Ozon" for _attrs, text in tools_nav.links))
+        self.assertFalse(any(text == "Автопубликация" for _attrs, text in tools_nav.links))
 
     def test_exact_account_health_link_requires_a_selected_account(self):
         path = "/case/settings-health"
@@ -178,6 +202,7 @@ class SellerWorkspaceNavigationTest(unittest.TestCase):
                 "templates/my_products_beta.html",
                 "templates/partials/seller_workspace_nav.html",
                 "templates/partials/seller_workspace_utility.html",
+                "templates/partials/seller_workspace_settings_nav.html",
             )
         )
         endpoint = re.compile(r"url_for\(['\"]([^'\"]+)")
