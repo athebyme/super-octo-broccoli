@@ -359,12 +359,12 @@ class MyProductsOzonPriceHandoffTest(unittest.TestCase):
         script = r"""
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const plain=value=>JSON.parse(JSON.stringify(value));
-const assigned=[],returns=[],calls=[],returnNonce='0123456789abcdef0123456789abcdef';
+const assigned=[],returns=[],calls=[],returnNonce='0123456789abcdef0123456789abcdef',historyState={keep:'state'};
 const location={origin:'https://seller.test',href:'https://seller.test/my-products/beta',pathname:'/my-products/beta',search:'',hash:'',assign(value){assigned.push(value);}};
-let historyTarget='',feedData;
+let historyTarget='',historyStateArgument,feedData;
 let component;
 const session=new Map();
-const context={window:{location,history:{state:null,replaceState(_state,_title,url){historyTarget=url;}},
+const context={window:{location,history:{state:historyState,replaceState(state,_title,url){historyStateArgument=state;historyTarget=url;}},
  SellerHubCommonContent:{storeWorkspaceReturn(payload){returns.push(payload);return returnNonce;}},
  shVue:{bootstrapData(){return {workspaceOwner:'7:9',wbConnected:true,ozonEnabled:false,ozonAccounts:[],
    urls:{feed:'/api/my-products',workspace:'/my-products/beta',wbPriceChange:'/prices/change'}};},mount(_selector,options){component=options;}}},
@@ -435,6 +435,28 @@ async function flush(){await new Promise(resolve=>setImmediate(resolve));}
  assert.equal(app.supplierRefreshResult.updatedBatch,'signed-resumed-result-token',
    'receipt return restores the updated-only batch token with the mixed result');
  assert.equal(app.supplierRefreshCanSelectUpdated,true);
+
+ location.search='?import_batch=signed-updated-result-token';
+ location.hash='#supplier-refresh-result';
+ app._supplierRefreshReturnAnchor=true;
+ historyTarget='';historyStateArgument=null;
+ app.hideSupplierRefreshResult();
+ assert.equal(app.supplierRefreshResult,null,'hiding clears the saved mixed result');
+ assert.equal(app._supplierRefreshReturnAnchor,false);
+ assert.equal(historyTarget,'/my-products/beta?import_batch=signed-updated-result-token',
+   'hide removes only the supplier result anchor and preserves path/query');
+ assert.equal(historyStateArgument,historyState,'hide preserves the current history state object');
+
+ const directReturn=appFor(exactFeed);
+ directReturn._supplierRefreshReturnAnchor=true;
+ await directReturn.restoreSupplierRefreshResult();
+ assert.match(directReturn.supplierRefreshResumeNote,/истёк или недоступен/,
+   'direct return without a stored receipt still explains that the saved result is unavailable');
+
+ location.hash='#unrelated-section';historyTarget='';
+ app.supplierRefreshResult=result;
+ app.hideSupplierRefreshResult();
+ assert.equal(historyTarget,'','hiding leaves unrelated anchors untouched');
 
  calls.length=0;historyTarget='';
  const bad=appFor({...exactFeed,batch_kind:'import',items:rows.slice().reverse()});

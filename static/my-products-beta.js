@@ -2278,7 +2278,20 @@
                 this.supplierRefreshResumeNote = '';
                 this.supplierRefreshResumeRetry = false;
             },
-            hideSupplierRefreshResult: function () { this.clearSupplierRefreshResult(); },
+            hideSupplierRefreshResult: function () {
+                this.clearSupplierRefreshResult();
+                this._supplierRefreshReturnAnchor = false;
+                if (window.location && window.location.hash === '#supplier-refresh-result' &&
+                    window.history && typeof window.history.replaceState === 'function') {
+                    try {
+                        window.history.replaceState(
+                            window.history.state,
+                            '',
+                            window.location.pathname + window.location.search,
+                        );
+                    } catch (_) {}
+                }
+            },
             restoreSupplierRefreshResult: function () {
                 if ((this.importBatchMode && !this.supplierRefreshResultBatchMode) ||
                     this.supplierRefreshBatchMode) return false;
