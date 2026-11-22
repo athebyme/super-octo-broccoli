@@ -215,6 +215,7 @@ try:
             expect(direct_price).to_be_focused()
             expect(selection).to_be_checked()
             expect(unrelated).to_be_checked()
+            context.unroute_all(behavior="wait")
             context.close()
         browser.close()
 

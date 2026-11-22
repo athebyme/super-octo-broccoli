@@ -91,6 +91,7 @@ with sync_playwright() as playwright:
                 expect(page.locator(f'[data-bulk-action-group="{group}"]')).to_be_visible()
             checkbox.uncheck()
             report["layouts"].append({"width": width, "theme": theme, "screenshot": snapshot, "row_width": cols["right"] - cols["left"]})
+            context.unroute_all(behavior="wait")
             context.close()
     browser.close()
 assert not report["javascript_errors"]
