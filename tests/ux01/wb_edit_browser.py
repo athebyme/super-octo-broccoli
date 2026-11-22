@@ -2834,6 +2834,10 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
                 single_product = Product.query.filter_by(
                     id=fixture["product_id"], seller_id=fixture["seller_id"],
                 ).one()
+                pre_single_core_values = {
+                    field: getattr(single_product, field)
+                    for field in ("title", "brand", "description")
+                }
                 single_product.vendor_code = "PD-000"
                 single_product.title = "  Pipedream Synthetic Product 000  "
                 single_product.description = None
@@ -3779,6 +3783,17 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             }
             no_profile_context.close()
             interaction("isolated_foreign_and_no_profile_sessions_are_denied_before_provider")
+
+            # Restore the synthetic core values changed for the nullable-value
+            # scenario so the later, separate 50-row brand filter still sees
+            # the same fixture set it did before the single-edit checks.
+            with seller_app.app_context():
+                single_product = Product.query.filter_by(
+                    id=fixture["product_id"], seller_id=fixture["seller_id"],
+                ).one()
+                for field, value in pre_single_core_values.items():
+                    setattr(single_product, field, value)
+                db.session.commit()
 
             # Filter change resets the stored exact set rather than expanding
             # it silently. Then all-filtered is a separate explicit action;
