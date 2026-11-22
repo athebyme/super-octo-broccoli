@@ -29,6 +29,8 @@
     var LISTING_UPDATE_MAX = 200;
     var LISTING_UPDATE_PREVIEW_TIMEOUT_MS = 15000;
     var LISTING_UPDATE_APPLY_TIMEOUT_MS = 45000;
+    var LISTING_UPDATE_PREVIEW_TIMEOUT_MESSAGE = 'Проверка точного списка заняла слишком много времени. Выбор сохранён; перечитайте список перед подтверждением.';
+    var LISTING_UPDATE_APPLY_TIMEOUT_MESSAGE = 'Ответ на локальное сохранение не пришёл за 45 секунд. Результат неизвестен; проверьте выбранный список заново.';
     var LISTING_UPDATE_STORAGE_KEY = 'mcat-ozon-update-selection-v1';
     function activeJob(job) { return !!job && ['pending', 'running'].includes(job.status); }
     function saved(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
@@ -711,7 +713,7 @@
                     });
                     var data = await response.json();
                     if (timedOut) {
-                        throw new Error('Проверка точного списка заняла слишком много времени. Выбор сохранён; перечитайте список перед подтверждением.');
+                        throw new Error(LISTING_UPDATE_PREVIEW_TIMEOUT_MESSAGE);
                     }
                     if (!response.ok || !data || data.success !== true ||
                         !validListingUpdatePreview(data.preview, snapshot)) {
@@ -730,19 +732,13 @@
                     });
                     return true;
                 } catch (error) {
-                    if (timedOut) {
-                        if (this._listingUpdateRevision === revision) {
-                            this.listingUpdate.phase = 'read_failed';
-                            this.listingUpdate.preview = null;
-                            this.listingUpdate.error = 'Проверка точного списка заняла слишком много времени. Выбор сохранён; перечитайте список перед подтверждением.';
-                        }
-                        return false;
-                    }
-                    if (error && error.name === 'AbortError') return false;
+                    if (error && error.name === 'AbortError' && !timedOut) return false;
                     if (this._listingUpdateRevision === revision) {
                         this.listingUpdate.phase = 'read_failed';
                         this.listingUpdate.preview = null;
-                        this.listingUpdate.error = error && typeof error.message === 'string'
+                        this.listingUpdate.error = timedOut
+                            ? LISTING_UPDATE_PREVIEW_TIMEOUT_MESSAGE
+                            : error && typeof error.message === 'string'
                             ? error.message.slice(0, 300)
                             : 'Не удалось проверить список. Выбор сохранён; прочитайте список ещё раз.';
                     }
@@ -855,7 +851,7 @@
                     });
                     var data = await response.json();
                     if (timedOut) {
-                        throw new Error('Ответ на локальное сохранение не пришёл за 45 секунд. Результат неизвестен; проверьте выбранный список заново.');
+                        throw new Error(LISTING_UPDATE_APPLY_TIMEOUT_MESSAGE);
                     }
                     if (!response.ok || !data || data.success !== true ||
                         !validListingUpdateReport(data.report, snapshot)) {
@@ -879,7 +875,7 @@
                     if (this._listingUpdateRevision === revision) {
                         this.listingUpdate.phase = 'apply_uncertain';
                         this.listingUpdate.error = timedOut
-                            ? 'Ответ на локальное сохранение не пришёл за 45 секунд. Результат неизвестен; проверьте выбранный список заново.'
+                            ? LISTING_UPDATE_APPLY_TIMEOUT_MESSAGE
                             : error && typeof error.message === 'string'
                             ? error.message.slice(0, 300)
                             : 'Не удалось подтвердить результат. Перечитайте выбранный список перед новым подтверждением.';
