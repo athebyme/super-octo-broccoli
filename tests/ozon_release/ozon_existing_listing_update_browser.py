@@ -58,6 +58,7 @@ from routes.suppliers import _issue_supplier_import_batch_token
 from seller_platform import app
 from services.ozon_bulk_repair import decode_compact_draft_ids, encode_compact_draft_ids
 from services.ozon_review_navigation import OzonReviewNavigation
+from services.marketplace_drafts import MarketplaceDraftService
 from tests.ozon_release.seed import PHOTO, PASSWORD, USERNAME, seed
 
 
@@ -153,10 +154,6 @@ with app.app_context():
             "width": 20, "height": 3, "depth": 30, "weight": 250,
             "dimension_unit": "CENTIMETERS", "weight_unit": "GRAMS",
         }
-        if listing_id == signed_workspace_listing_ids[signed_workspace_selected_count - 1]:
-            # Existing-update baseline must also lack weight; otherwise the
-            # live-card fallback would fill the source omission in review.
-            listing_dimensions.pop("weight")
         listing.dimensions_json = json.dumps(listing_dimensions)
         listing.barcodes_json = json.dumps(["4600000000001"])
         listing.price_summary_json = json.dumps({
@@ -185,6 +182,27 @@ with app.app_context():
         imported_product_ids=signed_workspace_source_ids,
     )
     assert signed_import_batch
+    signed_workspace_existing_listing_id = (
+        signed_workspace_listing_ids[signed_workspace_selected_count - 1]
+    )
+    # Mint the exact linked draft while its safe live snapshot is complete,
+    # then give the saved draft a synthetic zero weight to expose a real
+    # physical-fact issue without weakening listing readiness.
+    existing_context = MarketplaceDraftService.existing_listing_update_draft_context(
+        seller_id=fixture["seller_id"],
+        listing_id=signed_workspace_existing_listing_id,
+    )
+    signed_workspace_existing_draft = MarketplaceDraftService.create_draft(
+        seller_id=fixture["seller_id"],
+        account_id=fixture["account_id"],
+        imported_product_id=source_ids[signed_workspace_existing_listing_id],
+        expected_existing_listing=existing_context["expected_existing_listing"],
+    )
+    existing_dimensions = json.loads(signed_workspace_existing_draft.dimensions_json)
+    existing_dimensions["weight"] = "0"
+    signed_workspace_existing_draft.dimensions_json = json.dumps(existing_dimensions)
+    db.session.commit()
+    signed_workspace_existing_draft_id = signed_workspace_existing_draft.id
     initial_draft_count = MarketplaceProductDraft.query.count()
     original_links = {
         listing.id: (listing.imported_product_id, listing.link_version)
@@ -222,6 +240,7 @@ signed_workspace_state = {
     "token": None, "confirm_token": None, "return_to": None,
     "listing_ids": signed_workspace_listing_ids[:signed_workspace_selected_count],
     "source_ids": signed_workspace_source_ids[:signed_workspace_selected_count],
+    "existing_draft_id": signed_workspace_existing_draft_id,
     "import_batch": signed_import_batch,
     "feed_reads": [], "review_api_reads": [], "report": None,
     "catalog_reads": [],
@@ -432,9 +451,23 @@ def bridge(route):
             assert preview["listing_ids"] == state["listing_ids"]
             assert preview["account_id"] == fixture["account_id"]
             assert preview["account_label"] == "Ozon CI 0"
-            assert {row["listing_id"]: row["status"] for row in preview["rows"]} == {
-                listing_id: "ready" for listing_id in state["listing_ids"]
-            }
+            expected_preview_statuses = (
+                ["ready"] * (len(state["listing_ids"]) - 1) + ["existing"]
+                if state.get("existing_draft_id") else
+                ["ready"] * len(state["listing_ids"])
+            )
+            observed_preview = [
+                {
+                    "listing_id": row.get("listing_id"),
+                    "status": row.get("status"),
+                    "message": row.get("message"),
+                }
+                for row in preview["rows"]
+            ]
+            assert [row["status"] for row in preview["rows"]] == expected_preview_statuses, observed_preview
+            if state.get("existing_draft_id"):
+                assert preview["rows"][-1]["listing_id"] == state["listing_ids"][-1]
+                assert preview["rows"][-1]["draft_id"] == state["existing_draft_id"]
             state["preview"] += 1
             state["confirm_token"] = preview["token"]
         elif method == "POST" and path == bulk_preview_path:
@@ -470,7 +503,22 @@ def bridge(route):
             report = result["report"]
             assert report["listing_ids"] == state["listing_ids"]
             assert report["account_id"] == fixture["account_id"]
-            assert [row["status"] for row in report["rows"]] == ["created"] * len(state["listing_ids"])
+            expected_apply_statuses = (
+                ["created"] * (len(state["listing_ids"]) - 1) + ["existing"]
+                if state.get("existing_draft_id") else
+                ["created"] * len(state["listing_ids"])
+            )
+            observed_apply = [
+                {
+                    "listing_id": row.get("listing_id"),
+                    "status": row.get("status"),
+                    "message": row.get("message"),
+                }
+                for row in report["rows"]
+            ]
+            assert [row["status"] for row in report["rows"]] == expected_apply_statuses, observed_apply
+            if state.get("existing_draft_id"):
+                assert report["rows"][-1]["draft_id"] == state["existing_draft_id"]
             editor_url = urlsplit(report["editor_url"])
             assert editor_url.path == "/marketplaces/ozon/uploads/selection/repair"
             editor_query = parse_qs(editor_url.query)
@@ -957,10 +1005,16 @@ def exercise_signed_import_review_return(page):
     editor_link = preview_dialog.locator("[data-listing-update-editor]")
     editor_link.wait_for()
     assert state["apply"] == 1
-    assert [row["status"] for row in state["report"]["rows"]] == ["created"] * 21
+    assert [row["status"] for row in state["report"]["rows"]] == [
+        "created"
+    ] * 20 + ["existing"]
+    assert state["report"]["rows"][-1]["draft_id"] == signed_workspace_existing_draft_id
     draft_ids = [row["draft_id"] for row in state["report"]["rows"]]
+    assert len(draft_ids) == 21
+    assert draft_ids[-1] == signed_workspace_existing_draft_id
     after_prepare = batch_snapshots()
-    assert after_prepare["drafts"].keys() - before["drafts"].keys() == set(draft_ids)
+    assert after_prepare["drafts"].keys() - before["drafts"].keys() == set(draft_ids[:20])
+    assert after_prepare["drafts"][signed_workspace_existing_draft_id] == before["drafts"][signed_workspace_existing_draft_id]
     assert {key: after_prepare[key] for key in before if key != "drafts"} == {
         key: before[key] for key in before if key != "drafts"
     }
@@ -1009,7 +1063,14 @@ def exercise_signed_import_review_return(page):
         "page": 1, "per_page": 20, "pages": 2, "total": 21,
     }
     assert [row["draft_id"] for row in review_one["items"]] == draft_ids[:20]
-    assert all(row["selectable"] for row in review_one["items"])
+    assert all(any(
+        issue.get("code") == "publication_disabled" for issue in row["errors"]
+    ) for row in review_one["items"])
+    assert all(not any(
+        issue.get("code") == "physical_fact_required"
+        and issue.get("field") == "dimensions.weight"
+        for issue in row["errors"]
+    ) for row in review_one["items"])
     assert review_one["publication_enabled"] is False
     review_return_link = page.locator("a[data-review-workspace-return]")
     assert review_return_link.count() == 1
@@ -1256,6 +1317,10 @@ def exercise_signed_import_review_return(page):
         "selected_source_count": len(state["source_ids"]),
         "selected_listing_count": len(state["listing_ids"]),
         "draft_count": len(draft_ids),
+        "drafts_created": 20,
+        "preexisting_draft_id": signed_workspace_existing_draft_id,
+        "preview_statuses": ["ready"] * 20 + ["existing"],
+        "apply_statuses": ["created"] * 20 + ["existing"],
         "draft_ids_in_compact_selection": decode_compact_draft_ids(compact_selection),
         "review": {
             "account_id": fixture["account_id"],
@@ -1263,6 +1328,8 @@ def exercise_signed_import_review_return(page):
             "workspace_owner_api_absent": True,
             "page_count": 2,
             "page_one_rows": len(review_one["items"]),
+            "page_one_no_weight_issue": True,
+            "page_one_selection_blocked_by_publication_switch": True,
             "page_two_rows": len(review_two["items"]),
             "compact_scope_canonical_in_html_and_api": True,
             "page_two_issue_draft_id": issue_row["draft_id"],
@@ -1381,7 +1448,7 @@ def test_browser():
 try:
     test_browser()
     with app.app_context():
-        assert MarketplaceProductDraft.query.count() == initial_draft_count + 5 + 21
+        assert MarketplaceProductDraft.query.count() == initial_draft_count + 5 + 20
         for listing_id, draft_id in REPORT["local_saves"]:
             draft = db.session.get(MarketplaceProductDraft, draft_id)
             assert draft.seller_id == fixture["seller_id"]
