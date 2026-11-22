@@ -583,12 +583,23 @@ def check_wb_create_selection_continuity(
         assert terminal['replayed'] is True and terminal['cancel_requested'] is False
         assert terminal['result_counts'] == {'processed': 1, 'succeeded': 0, 'failed': 1}
         assert terminal_payload['job_uid'] == terminal['job_uid']
-        terminal_job = page.locator('.shk-job[role="status"]')
-        expect(terminal_job).to_be_visible()
-        expect(terminal_job.locator('.shk-job-title')).to_have_text('Завершено с ошибками')
-        expect(terminal_job.locator('.shk-job-stat.is-danger')).to_have_text('С ошибкой: 1')
-        assert terminal_job.locator('.shk-job-stat.is-ok').count() == 0
-        assert 'Готово' not in terminal_job.inner_text()
+        terminal_result = page.locator(
+            '[data-wb-create-receipt][data-wb-create-state="terminal_result"]',
+        )
+        expect(terminal_result).to_be_visible()
+        expect(terminal_result).to_contain_text('не созданы: 1')
+        terminal_copy = terminal_result.inner_text()
+        assert not re.search(r'успешно:\s*[1-9]\d*', terminal_copy, flags=re.IGNORECASE)
+        assert 'Готово' not in terminal_copy
+        assert page.locator('.shk-job').count() == 0
+        terminal_view = page.evaluate("""() => {
+            const proxy = document.querySelector('#my-products-app')._vnode.component.proxy;
+            return proxy.wbCreateTerminalResult;
+        }""")
+        assert terminal_view == {
+            'status': 'completed', 'total': 1,
+            'counts': {'processed': 1, 'succeeded': 0, 'failed': 1},
+        }
         assert state['wb_worker_errors'] == []
         assert state['wb_worker_product_ids'] == [selected]
         assert state['wb_posts'][-1]['status'] == 409 and len(state['wb_posts']) == 3
@@ -601,6 +612,8 @@ def check_wb_create_selection_continuity(
         assert all(read['status'] == 200 for read in signed_refreshes)
         assert signed_refreshes[-1]['ids'] == selected
         assert signed_refreshes[-1]['batch_count'] == len(selected)
+        terminal_screenshot = 'wb-create-terminal-failure-light-1440.png'
+        page.screenshot(path=artifacts / terminal_screenshot)
         second = check_inline_ozon_preparation(
             page, selected, navigations, account_id=second_account_id,
             account_label=second_account_label, choose_account=True,
@@ -622,6 +635,7 @@ def check_wb_create_selection_continuity(
             'explicit_terminal_read_count': terminal_read_attempts,
             'terminal_refresh_restored_exact_signed_feed': True,
             'screenshot': screenshot_name,
+            'terminal_screenshot': terminal_screenshot,
             'wb_keyed_post_count_including_overlap': len(state['wb_posts']),
             'wb_worker_invocation_count': len(state['wb_worker_product_ids']),
             'wb_terminal_status': terminal['status'],
