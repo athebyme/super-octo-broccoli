@@ -10,6 +10,7 @@ import re
 import sys
 import time
 from urllib.parse import parse_qs, urlsplit
+from unittest.mock import patch
 
 from playwright.sync_api import sync_playwright
 
@@ -408,6 +409,8 @@ def run():
         })
     refresh_response_override = None
     refresh_response_status = 200
+    refresh_failure_ids = set()
+    refresh_failure_injections = []
 
     def bridge(route):
         nonlocal refresh_response_override, refresh_response_status
@@ -665,6 +668,25 @@ def run():
                 refresh_response_status = 200
                 route.fulfill(status=response_status, content_type="application/json",
                               body=json.dumps(response_body))
+            elif parsed.path == LOCAL_REFRESH and refresh_failure_ids:
+                # Fail one exact local service row inside its savepoint. Keep
+                # the real review/apply/result routes so the response carries
+                # the server-signed receipt; no provider client is involved.
+                from services import supplier_service
+
+                original_update = supplier_service._update_imported_from_supplier
+
+                def fail_selected_local_row(imported_product, supplier_product):
+                    if imported_product.id in refresh_failure_ids:
+                        refresh_failure_injections.append(imported_product.id)
+                        raise RuntimeError("synthetic isolated browser row failure")
+                    return original_update(imported_product, supplier_product)
+
+                with patch(
+                    "services.supplier_service._update_imported_from_supplier",
+                    side_effect=fail_selected_local_row,
+                ):
+                    route.fulfill(response=route.fetch(max_redirects=0))
             else:
                 route.fulfill(response=route.fetch(max_redirects=0))
             return
@@ -2526,12 +2548,194 @@ def run():
         assert rejected_result.get_by_text(REFRESHED_TITLE, exact=False).count() == 0
         verify_bounds(mobile_page)
         checks.append("supplier_refresh_rejected_result_has_count_and_one_refresh_action")
+
+        # Exercise a real terminal zero-update result. The local service gets
+        # one synthetic row-write failure inside its normal savepoint, then
+        # issues the usual signed receipt. No provider or channel API is used.
+        failure_target_id = fixture_ids["local_id"]
+        with fixture.app.app_context():
+            failure_source = db.session.get(SupplierProduct, fixture_ids["refresh_source_id"])
+            source_before_failure = (failure_source.title, failure_source.content_revision)
+            failure_source.title = "Источник для синтетической ошибки R51"
+            failure_source.content_revision += 1
+            db.session.commit()
+
+        mobile_page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").check()
+        assert selected_browser_state(mobile_page) == {
+            "selected": [failure_target_id], "ozonIds": [],
+        }
+        failure_dialog, failure_preview = open_supplier_refresh_preview(
+            mobile_page, [failure_target_id], refresh_preview_posts,
+        )
+        assert (failure_preview["requested"], failure_preview["eligible"],
+                failure_preview["changed"], failure_preview["skipped"]) == (1, 1, 1, 0)
+
+        mobile_result_requests = []
+
+        def record_mobile_result_request(browser_request):
+            parsed = urlsplit(browser_request.url)
+            if browser_request.method == "GET" and parsed.path == LOCAL_REFRESH_RESULT:
+                mobile_result_requests.append(browser_request.headers.get(
+                    "x-supplier-refresh-receipt",
+                ))
+
+        mobile_page.on("request", record_mobile_result_request)
+        refresh_posts_before_zero_update = sum(post["path"] == LOCAL_REFRESH for post in posts)
+        posts_before_zero_update = len(posts)
+        wb_review_posts_before_zero_update = sum(
+            post["path"] == LOCAL_WB_ENRICH_REVIEW for post in posts
+        )
+        ozon_prepare_posts_before_zero_update = sum(
+            post["path"] == LOCAL_OZON_PREPARE for post in posts
+        )
+        wb_start_posts_before_zero_update = len(wb_enrich_start_posts)
+        provider_attempts_before_zero_update = fixture.REPORT["provider_attempts"]
+        unexpected_external_before_zero_update = len(fixture.REPORT["unexpected_external_requests"])
+        refresh_failure_ids.add(failure_target_id)
+        with mobile_page.expect_response(
+            lambda response: urlsplit(response.url).path == LOCAL_REFRESH
+            and response.request.method == "POST",
+        ) as zero_update_response:
+            failure_dialog.get_by_role("button", name="Обновить", exact=True).click()
+        refresh_failure_ids.clear()
+        assert zero_update_response.value.status == 200
+        zero_update_data = zero_update_response.value.json()
+        assert zero_update_data["success"] is True
+        assert (zero_update_data["requested"], zero_update_data["updated"],
+                zero_update_data["skipped"], zero_update_data["errors"]) == (1, 0, 0, 1)
+        assert zero_update_data["items"] == [{
+            "product_id": failure_target_id,
+            "status": "error",
+            "reason": "update_failed",
+        }]
+        assert zero_update_data["updated_batch"] is None
+        assert zero_update_data["wb_ready"] == 0 and zero_update_data["wb_targets"] == []
+        zero_update_receipt = zero_update_data.get("resume_receipt")
+        assert isinstance(zero_update_receipt, str) and 0 < len(zero_update_receipt) <= 7500
+        assert refresh_failure_injections == [failure_target_id]
+
+        zero_update_result = mobile_page.locator(".mp-refresh-result")
+        zero_update_result.get_by_role(
+            "heading", name="Обновление завершено с ошибками", exact=True,
+        ).wait_for()
+        zero_update_result.get_by_text("В запросе товаров: 1.", exact=False).wait_for()
+        assert [value.strip() for value in zero_update_result.locator(
+            ".mp-refresh-result-counts dd",
+        ).all_text_contents()] == ["0", "0", "1"]
+        zero_update_result.get_by_text("Карточки и итог (1)", exact=True).click()
+        zero_update_row = zero_update_result.locator(".mp-refresh-result-item.is-danger")
+        zero_update_row.get_by_text(REFRESHED_TITLE, exact=False).wait_for()
+        zero_update_row.get_by_text(
+            "Не удалось сохранить данные. Откройте карточку и проверьте её.", exact=True,
+        ).wait_for()
+        zero_update_open_card = zero_update_row.get_by_role("link", name="Открыть карточку")
+        assert zero_update_open_card.count() == 1
+        zero_update_open_card_href = zero_update_open_card.get_attribute("href") or ""
+        zero_update_href = urlsplit(zero_update_open_card_href)
+        assert zero_update_href.path == "/my-products/common-content"
+        assert parse_qs(zero_update_href.query) == {"product_id": [str(failure_target_id)]}
+        assert zero_update_result.get_by_role("button", name=re.compile(r"^Подготовить для Ozon")).count() == 0
+        assert zero_update_result.get_by_role("button", name=re.compile(r"^Проверить характеристики WB")).count() == 0
+        assert zero_update_result.get_by_role("button", name=re.compile(r"^Выбрать обновлённые товары")).count() == 0
+        assert mobile_page.evaluate(
+            "key => sessionStorage.getItem(key)", resume_key,
+        ) == zero_update_receipt
+        assert sum(post["path"] == LOCAL_REFRESH for post in posts) == refresh_posts_before_zero_update + 1
+        assert posts[posts_before_zero_update:] == [{
+            "path": LOCAL_REFRESH,
+            "body": {"product_ids": [failure_target_id]},
+        }]
+        with fixture.app.app_context():
+            failure_source = db.session.get(SupplierProduct, fixture_ids["refresh_source_id"])
+            failure_source.title, failure_source.content_revision = source_before_failure
+            db.session.commit()
+
+        zero_update_page_url = mobile_page.url
+        zero_update_route = urlsplit(zero_update_page_url)
+        assert zero_update_route.path == "/my-products/beta"
+        with mobile_page.expect_response(
+            lambda response: is_supplier_refresh_result(response)
+            and response.request.headers.get("x-supplier-refresh-receipt") == zero_update_receipt,
+        ) as zero_update_resumed:
+            mobile_page.reload(wait_until="domcontentloaded")
+        assert zero_update_resumed.value.status == 200
+        zero_update_resumed_data = zero_update_resumed.value.json()
+        assert (zero_update_resumed_data["requested"], zero_update_resumed_data["updated"],
+                zero_update_resumed_data["skipped"], zero_update_resumed_data["errors"]) == (1, 0, 0, 1)
+        assert zero_update_resumed_data["items"] == zero_update_data["items"]
+        assert [item["productId"] for item in zero_update_resumed_data["labels"]] == [failure_target_id]
+        assert mobile_page.url == zero_update_page_url
+        restored_zero_update = mobile_page.locator(".mp-refresh-result")
+        restored_zero_update.get_by_role(
+            "heading", name="Сохранённый итог обновления из поставщика", exact=True,
+        ).wait_for()
+        restored_zero_update.get_by_text("В запросе товаров: 1.", exact=False).wait_for()
+        restored_zero_update.get_by_text("Карточки и итог (1)", exact=True).click()
+        restored_error_row = restored_zero_update.locator(".mp-refresh-result-item.is-danger")
+        restored_error_row.get_by_text(REFRESHED_TITLE, exact=False).wait_for()
+        restored_error_row.get_by_text(
+            "Не удалось сохранить данные. Откройте карточку и проверьте её.", exact=True,
+        ).wait_for()
+        restored_open_card = restored_error_row.get_by_role("link", name="Открыть карточку")
+        assert restored_open_card.get_attribute("href") == zero_update_open_card_href
+        assert restored_zero_update.get_by_role("button", name=re.compile(r"^Подготовить для Ozon")).count() == 0
+        assert restored_zero_update.get_by_role("button", name=re.compile(r"^Проверить характеристики WB")).count() == 0
+        assert restored_zero_update.get_by_role("button", name=re.compile(r"^Выбрать обновлённые товары")).count() == 0
+        assert mobile_page.evaluate(
+            "key => sessionStorage.getItem(key)", resume_key,
+        ) == zero_update_receipt
+        assert mobile_result_requests == [zero_update_receipt]
+        assert sum(post["path"] == LOCAL_REFRESH for post in posts) == refresh_posts_before_zero_update + 1
+        assert len(posts) == posts_before_zero_update + 1
+        assert sum(post["path"] == LOCAL_WB_ENRICH_REVIEW for post in posts) == wb_review_posts_before_zero_update
+        assert sum(post["path"] == LOCAL_OZON_PREPARE for post in posts) == ozon_prepare_posts_before_zero_update
+        assert len(wb_enrich_start_posts) == wb_start_posts_before_zero_update
+        assert fixture.REPORT["provider_attempts"] == provider_attempts_before_zero_update == 0
+        assert len(fixture.REPORT["unexpected_external_requests"]) == unexpected_external_before_zero_update == 0
+        verify_bounds(mobile_page)
+        zero_update_screenshot = OUTPUT / "supplier-refresh-zero-updates-error-dark-320.png"
+        mobile_page.screenshot(path=zero_update_screenshot, animations="disabled")
+        supplier_refresh_zero_update_report = {
+            "product_ids": [failure_target_id],
+            "requested": zero_update_data["requested"],
+            "updated": zero_update_data["updated"],
+            "skipped": zero_update_data["skipped"],
+            "errors": zero_update_data["errors"],
+            "refresh_apply_posts": sum(post["path"] == LOCAL_REFRESH for post in posts)
+                - refresh_posts_before_zero_update,
+            "restore_result_gets": len(mobile_result_requests),
+            "wb_handoff_posts": (
+                sum(post["path"] == LOCAL_WB_ENRICH_REVIEW for post in posts)
+                - wb_review_posts_before_zero_update
+                + len(wb_enrich_start_posts) - wb_start_posts_before_zero_update
+            ),
+            "ozon_handoff_posts": (
+                sum(post["path"] == LOCAL_OZON_PREPARE for post in posts)
+                - ozon_prepare_posts_before_zero_update
+            ),
+            "provider_attempts": (
+                fixture.REPORT["provider_attempts"] - provider_attempts_before_zero_update
+            ),
+            "screenshot": zero_update_screenshot.name,
+        }
+        assert supplier_refresh_zero_update_report["refresh_apply_posts"] == 1
+        assert supplier_refresh_zero_update_report["restore_result_gets"] == 1
+        assert supplier_refresh_zero_update_report["wb_handoff_posts"] == 0
+        assert supplier_refresh_zero_update_report["ozon_handoff_posts"] == 0
+        assert supplier_refresh_zero_update_report["provider_attempts"] == 0
+        checks.append("supplier_refresh_zero_update_error_keeps_signed_result_on_reload_without_handoff")
         mobile_context.close()
 
         assert not fixture.REPORT["unexpected_http"] and not fixture.REPORT["unexpected_external_requests"]
         assert fixture.REPORT["provider_attempts"] == 0
         browser.close()
-    result = {"status": "passed", "layouts": layouts, "checks": checks, "provider_attempts": 0}
+    result = {
+        "status": "passed",
+        "layouts": layouts,
+        "checks": checks,
+        "provider_attempts": 0,
+        "supplier_refresh_zero_update": supplier_refresh_zero_update_report,
+    }
     (OUTPUT / "report.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(result, ensure_ascii=False))
 

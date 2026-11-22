@@ -542,7 +542,9 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
         payload = response.get_json()
         self.assertTrue(payload['success'])
         self.assertEqual(payload['status'], 'completed_with_errors')
-        self.assertNotIn('resume_receipt', payload)
+        token = payload.get('resume_receipt')
+        self.assertIsInstance(token, str)
+        self.assertIsNone(payload['updated_batch'])
         self.assertEqual(
             (payload['requested'], payload['updated'], payload['skipped'], payload['errors']),
             (2, 0, 0, 2),
@@ -555,6 +557,151 @@ class SupplierBulkExactRefreshTest(unittest.TestCase):
             ],
         )
         self.assertNotIn('private failure detail', response.get_data(as_text=True))
+
+        first.title = 'Current first title'
+        first.external_vendor_code = 'CURRENT-FIRST'
+        second.title = 'Current second title'
+        second.external_vendor_code = 'CURRENT-SECOND'
+        self.db.session.commit()
+
+        statements = []
+
+        def observe_sql(_connection, _cursor, statement, _parameters, _context, _executemany):
+            statements.append(statement.lstrip().split(None, 1)[0].upper())
+
+        event.listen(self.engine, 'before_cursor_execute', observe_sql)
+        try:
+            recovered = self._get(
+                '/api/my-products/supplier-refresh-result',
+                headers={'X-Supplier-Refresh-Receipt': token},
+            )
+            replayed = self._get(
+                '/api/my-products/supplier-refresh-result',
+                headers={'X-Supplier-Refresh-Receipt': token},
+            )
+        finally:
+            event.remove(self.engine, 'before_cursor_execute', observe_sql)
+
+        self.assertEqual(recovered.status_code, 200)
+        self.assertEqual(replayed.status_code, 200)
+        self.assertIn('no-store', recovered.headers['Cache-Control'])
+        self.assertIn('no-store', replayed.headers['Cache-Control'])
+        self.assertEqual({statement for statement in statements}, {'SELECT'})
+        recovered_payload = recovered.get_json()
+        self.assertEqual(replayed.get_json(), recovered_payload)
+        self.assertEqual(
+            (recovered_payload['success'], recovered_payload['status'],
+             recovered_payload['requested'], recovered_payload['updated'],
+             recovered_payload['skipped'], recovered_payload['errors']),
+            (True, 'completed_with_errors', 2, 0, 0, 2),
+        )
+        self.assertEqual(recovered_payload['items'], [
+            {'product_id': first.id, 'status': 'error', 'reason': 'update_failed'},
+            {'product_id': second.id, 'status': 'error', 'reason': 'update_failed'},
+        ])
+        self.assertEqual(recovered_payload['labels'], [
+            {'productId': first.id, 'label': 'Current first title · CURRENT-FIRST'},
+            {'productId': second.id, 'label': 'Current second title · CURRENT-SECOND'},
+        ])
+        self.assertEqual(recovered_payload['wb_ready'], 0)
+        self.assertEqual(recovered_payload['wb_targets'], [])
+        self.assertEqual(recovered_payload['wb_unavailable'], 0)
+        self.assertIsNone(recovered_payload['updated_batch'])
+        self.assertNotIn('private failure detail', recovered.get_data(as_text=True))
+
+    def test_all_skipped_result_recovers_exactly_without_writes(self):
+        first = self._copy(None, title='First unlinked')
+        second = self._copy(None, title='Second unlinked')
+        self.db.session.commit()
+
+        response = self._post(
+            '/my-products/refresh-from-supplier',
+            json={'product_ids': [first.id, second.id]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload['success'])
+        self.assertEqual(payload['status'], 'completed')
+        self.assertIsInstance(payload.get('resume_receipt'), str)
+        self.assertIsNone(payload['updated_batch'])
+        self.assertEqual(
+            (payload['requested'], payload['updated'], payload['skipped'], payload['errors']),
+            (2, 0, 2, 0),
+        )
+        token = payload['resume_receipt']
+
+        first.title = 'Current skipped first'
+        first.external_id = 'CURRENT-SKIPPED-FIRST'
+        second.title = 'Current skipped second'
+        second.external_id = 'CURRENT-SKIPPED-SECOND'
+        self.db.session.commit()
+
+        statements = []
+
+        def observe_sql(_connection, _cursor, statement, _parameters, _context, _executemany):
+            statements.append(statement.lstrip().split(None, 1)[0].upper())
+
+        event.listen(self.engine, 'before_cursor_execute', observe_sql)
+        try:
+            recovered = self._get(
+                '/api/my-products/supplier-refresh-result',
+                headers={'X-Supplier-Refresh-Receipt': token},
+            )
+        finally:
+            event.remove(self.engine, 'before_cursor_execute', observe_sql)
+
+        self.assertEqual(recovered.status_code, 200)
+        self.assertIn('no-store', recovered.headers['Cache-Control'])
+        self.assertEqual({statement for statement in statements}, {'SELECT'})
+        recovered_payload = recovered.get_json()
+        self.assertEqual(
+            (recovered_payload['success'], recovered_payload['status'],
+             recovered_payload['requested'], recovered_payload['updated'],
+             recovered_payload['skipped'], recovered_payload['errors']),
+            (True, 'completed', 2, 0, 2, 0),
+        )
+        self.assertEqual(recovered_payload['items'], [
+            {'product_id': first.id, 'status': 'skipped', 'reason': 'no_supplier_link'},
+            {'product_id': second.id, 'status': 'skipped', 'reason': 'no_supplier_link'},
+        ])
+        self.assertEqual(recovered_payload['labels'], [
+            {
+                'productId': first.id,
+                'label': 'Current skipped first · CURRENT-SKIPPED-FIRST',
+            },
+            {
+                'productId': second.id,
+                'label': 'Current skipped second · CURRENT-SKIPPED-SECOND',
+            },
+        ])
+        self.assertEqual(recovered_payload['wb_ready'], 0)
+        self.assertEqual(recovered_payload['wb_targets'], [])
+        self.assertEqual(recovered_payload['wb_unavailable'], 0)
+        self.assertIsNone(recovered_payload['updated_batch'])
+
+    def test_supplier_refresh_receipt_rejects_wb_target_for_non_updated_row(self):
+        from routes.suppliers import _issue_supplier_refresh_receipt
+
+        token = _issue_supplier_refresh_receipt(
+            user_id=self.user.id,
+            seller_id=self.seller.id,
+            requested_ids=[101, 102],
+            requested=2,
+            updated=1,
+            skipped=0,
+            errors=1,
+            item_results=[
+                {'product_id': 101, 'status': 'updated', 'reason': None},
+                {'product_id': 102, 'status': 'error', 'reason': 'update_failed'},
+            ],
+            wb_targets=[{
+                'imported_product_id': 102,
+                'product_id': 987_654_323,
+            }],
+        )
+
+        self.assertIsNone(token)
 
     def test_supplier_refresh_receipt_resumes_mixed_result_without_writes(self):
         good_source = self._source(

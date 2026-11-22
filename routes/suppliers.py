@@ -949,7 +949,6 @@ def _validated_supplier_refresh_receipt_subset(ids, statuses, wb_pairs):
             or status not in SUPPLIER_REFRESH_STATUS_REASONS
             for status in statuses
         )
-        or statuses.count('updated') < 1
         or not isinstance(wb_pairs, list)
         or len(wb_pairs) > statuses.count('updated')
     ):
@@ -1004,7 +1003,6 @@ def _issue_supplier_refresh_receipt(
     if (
         type(requested) is not int or requested != len(ids)
         or any(type(value) is not int or value < 0 for value in (updated, skipped, errors))
-        or updated < 1
         or updated + skipped + errors != requested
         or not isinstance(item_results, list)
         or len(item_results) != requested
@@ -5965,6 +5963,7 @@ def register_supplier_routes(app):
                         seller_id=seller.id,
                         updated_product_ids=updated_ids,
                     )
+                    if updated_ids else None
                 )
             response = jsonify(response_payload)
             if receipt:
