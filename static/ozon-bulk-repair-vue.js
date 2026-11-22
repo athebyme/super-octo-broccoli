@@ -79,7 +79,7 @@
             const prefix = 'row_'+row.draft_id+'_';
             form.append('selected_draft_id',String(row.draft_id));
             for (const [key,value] of Object.entries({draft_version:row.draft_version,imported_product_id:row.imported_product_id,
-                action:sourcePrepare || draftSelection ? 'ИСПРАВИТЬ' : row.action,product_type_id:row.product_type_id || '',save_mapping:row.save_mapping ? '1':'0'})) form.append(prefix+key,asText(value));
+                action:sourcePrepare || draftSelection ? 'ИСПРАВИТЬ' : row.action,product_type_id:row.product_type_id || '',save_mapping:!draftSelection && row.save_mapping ? '1':'0'})) form.append(prefix+key,asText(value));
             fixed.forEach(key => form.append(prefix+key,asText(row[key])));
             const typeChanged = row.product_type_id !== row.base.product_type_id;
             if (row.cleanup_candidates.length && row.schema_cleanup && !typeChanged) form.append(prefix+'schema_cleanup','1');
@@ -372,7 +372,7 @@
                 applyType() {
                     if(!this.typeChoice || this.locked)return;
                     for(const row of this.rows.filter(r=>this.typeIds.includes(r.draft_id))) {
-                        row.product_type_id=this.typeChoice.id;row.product_type_name=this.typeChoice.name;row.save_mapping=this.rememberType;row.schema_cleanup=false;row.error='';
+                        row.product_type_id=this.typeChoice.id;row.product_type_name=this.typeChoice.name;row.save_mapping=draftSelection ? false : this.rememberType;row.schema_cleanup=false;row.error='';
                     }
                     this.notice='Новый тип выбран в форме. Сохраните его, затем заполните требования новой категории.';this.close();
                 },

@@ -87,7 +87,7 @@
                     <legend class="sr-only">Поля {{ row.title }}</legend>
                     <div class="orb-editor-heading"><div><span class="orb-label">Тип товара Ozon</span><strong>{{ row.product_type_name || 'Ещё не выбран' }}</strong></div><button type="button" class="orb-link" @click="openType([row])">Выбрать тип</button></div>
                     <p v-if="changedType(row)" class="orb-inline-warning">Тип изменён только в форме. Сохраните его, затем заполните требования новой категории. Прежние характеристики будут заменены данными новой схемы.</p>
-                    <label class="orb-check"><input type="checkbox" v-model="row.save_mapping" @change="noteChange(row)">Запомнить этот тип для исходной категории «{{ row.group_name }}»</label>
+                    <label v-if="!draftSelection" class="orb-check"><input type="checkbox" v-model="row.save_mapping" @change="noteChange(row)">Запомнить этот тип для исходной категории «{{ row.group_name }}»</label>
                     <label v-if="!sourcePrepare && !draftSelection" class="orb-action"><span class="orb-label">Действие с карточкой</span><select class="sh-input" v-model="row.action" @change="noteChange(row)"><option value="ИСПРАВИТЬ">Исправить черновик</option><option value="ИСКЛЮЧИТЬ">Исключить из повтора этой загрузки</option></select></label>
                     <p v-if="!sourcePrepare && !draftSelection && row.action==='ИСКЛЮЧИТЬ'" class="orb-help">Товар и черновик сохранятся. Остальные правки этой строки не будут записаны при исключении.</p>
                     <template v-else>
@@ -153,7 +153,7 @@
                 <p>Новый тип: <strong>{{ typeChoice.name }}</strong></p><p class="orb-help">{{ typeChoice.category_path }}</p>
                 <p class="orb-inline-warning">Будут заменены характеристики прежней схемы и очищены составные группы выбранных карточек. Доступные значения нового типа подставляются только из подтверждённых исходных сведений.</p>
                 <ul class="orb-review-list"><li v-for="row in rows.filter(r=>typeIds.includes(r.draft_id))" :key="row.draft_id"><strong>{{ row.title }}</strong><span>{{ row.product_type_name || 'Без типа' }} → {{ typeChoice.name }}</span><small>В сохранённом черновике: {{ row.type_change_impact.attributes }} характеристик, {{ row.type_change_impact.complex_groups }} составных групп.</small></li></ul>
-                <label class="orb-check"><input type="checkbox" v-model="rememberType">Запомнить тип для исходных категорий показанных карточек</label>
+                <label v-if="!draftSelection" class="orb-check"><input type="checkbox" v-model="rememberType">Запомнить тип для исходных категорий показанных карточек</label>
                 <div class="orb-dialog-actions"><button type="button" class="sh-btn sh-btn--secondary" @click="typeChoice=null;search()">Выбрать другой</button><button type="button" class="sh-btn sh-btn--primary" :disabled="locked || !typeIds.length" @click="applyType">Применить тип в форме</button></div>
             </template>
             <template v-else>

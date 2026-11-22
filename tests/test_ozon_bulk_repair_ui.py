@@ -149,7 +149,10 @@ const response=data=>({status:200,ok:true,redirected:false,json:async()=>({...da
  assert.equal(core.validEditor(config.editor,config),true);
  const wrongScope=editor();wrongScope.scope_key='b'.repeat(64);assert.equal(core.validEditor(wrongScope,config),false,'readback requires the same stable scope digest');
  const wrongMode=editor();wrongMode.mode='source_prepare';assert.equal(core.validEditor(wrongMode,config),false,'readback requires selection mode');
- const payload=core.serialize(value.rows,'csrf',false,true);assert.equal(payload.get('confirm_local'),'1');
+ const mappingProbe={...value.rows[0],save_mapping:true};
+ const payload=core.serialize([mappingProbe],'csrf',false,true);assert.equal(payload.get('confirm_local'),'1');
+ assert.equal(payload.get('row_1_save_mapping'),'0','selected-draft saves cannot update shared category rules');
+ assert.equal(core.serialize([mappingProbe],'csrf',false,false).get('row_1_save_mapping'),'1','legacy saves retain their existing mapping control');
  assert.equal(payload.get('row_1_action'),'ИСПРАВИТЬ');
  let receiptFocused=false;value.$refs.receipt={isConnected:true,focus(){receiptFocused=true;},scrollIntoView(){}};
  value.rows[0].price_rub='120';value.reviewSave();assert.equal(value.review[0].action,'ИСПРАВИТЬ');
@@ -180,3 +183,4 @@ const response=data=>({status:200,ok:true,redirected:false,json:async()=>({...da
     assert 'data-draft-selection-review' in template
     assert "'Обработано черновиков: '" in template
     assert 'Изменено: {{ report.updated }}' in template
+    assert template.count('v-if="!draftSelection" class="orb-check"') == 2
