@@ -10,6 +10,9 @@ from sqlalchemy import event
 
 from tests import test_marketplace_publications as fixtures
 from models import (
+    BackgroundJob,
+    ImportedProduct,
+    Marketplace,
     MarketplaceOperation,
     MarketplaceProductDraft,
     OzonBulkUploadItem,
@@ -20,7 +23,12 @@ from models import (
 )
 from services.ozon_api_client import OzonSellerAPIClient
 from services.ozon_bulk_repair import OzonBulkRepairService as Repair
-from services.ozon_bulk_upload import OzonBulkUploadService as Upload, OzonBulkUploadConflict
+from services.ozon_bulk_upload import (
+    OzonBulkUploadConflict,
+    OzonBulkUploadNotFound,
+    OzonBulkUploadService as Upload,
+    OzonBulkUploadValidationError,
+)
 from services.marketplace_drafts import MarketplaceDraftService
 from routes.ozon_bulk_uploads import register_ozon_bulk_upload_routes
 
@@ -63,6 +71,36 @@ def form(row, *, action='ИСПРАВИТЬ', **updates):
 
 
 def url(case):return '/marketplaces/ozon/uploads/'+case.job.job_uid+'/repair'
+
+
+def selection(case, draft_ids):
+    return {'account_id':case.account.id,'draft_ids':list(draft_ids)}
+
+
+def selection_row(row, **updates):
+    values = {
+        key: row[key]
+        for key in Repair.EDITABLE_FIXED
+        if key != 'action'
+    }
+    values['action'] = 'ИСПРАВИТЬ'
+    for field in row['attributes']:
+        if field['editable']:
+            values['attribute:'+field['external_id']] = field['value']
+            values['attribute_value_id:'+field['external_id']] = (
+                field['dictionary_value_id']
+            )
+    values.update(updates)
+    return {
+        'draft_id':row['draft_id'],
+        'expected_version':row['draft_version'],
+        'imported_product_id':row['imported_product_id'],
+        'action':'ИСПРАВИТЬ',
+        'product_type_id':row['product_type_id'],
+        'save_mapping':False,
+        'schema_cleanup':row['schema_cleanup'],
+        'values':values,
+    }
 
 
 def source_prepare_case(case, *, active=False):
@@ -488,3 +526,346 @@ def test_source_prepare_active_reviewed_child_blocks_exact_draft(case):
     assert editor['blocked_review_items'][0]['title']
     assert editor['blocked_review_items'][0]['message']
     assert MarketplaceOperation.query.count() == 0
+
+
+def test_draft_selection_editor_is_exact_ordered_local_scope(case):
+    other = fixtures.BulkEnqueueTest._second_draft(
+        case,
+        offer_id='selection-order-second',
+    )
+    scope = selection(case, [other.id, case.draft.id])
+    jobs_before = BackgroundJob.query.count()
+    runs_before = OzonBulkUploadRun.query.count()
+    items_before = OzonBulkUploadItem.query.count()
+    operations_before = MarketplaceOperation.query.count()
+    legacy_result_before = case.job.result_data
+
+    editor = Repair.editor_document(seller_id=case.seller.id, selection=scope)
+    replay = Repair.editor_document(seller_id=case.seller.id, selection=scope)
+    reversed_editor = Repair.editor_document(
+        seller_id=case.seller.id,
+        selection=selection(case, [case.draft.id, other.id]),
+    )
+
+    row_ids = [
+        row['draft_id']
+        for group in editor['groups']
+        for row in group['rows']
+    ]
+    assert editor['mode'] == 'draft_selection'
+    assert editor['account_id'] == case.account.id
+    assert editor['account_label'] == case.account.label
+    assert editor['review_draft_ids'] == [other.id, case.draft.id]
+    assert row_ids == [other.id, case.draft.id]
+    assert editor['total'] == 2
+    assert 'job_uid' not in editor
+    assert re.fullmatch(r'[0-9a-f]{64}', editor['scope_key'])
+    assert replay['scope_key'] == editor['scope_key']
+    assert reversed_editor['scope_key'] != editor['scope_key']
+    assert BackgroundJob.query.count() == jobs_before
+    assert OzonBulkUploadRun.query.count() == runs_before
+    assert OzonBulkUploadItem.query.count() == items_before
+    assert MarketplaceOperation.query.count() == operations_before
+    assert case.job.result_data == legacy_result_before
+    with pytest.raises(OzonBulkUploadValidationError):
+        Repair.editor_document(
+            seller_id=case.seller.id,
+            job_uid=case.job.job_uid,
+            selection=scope,
+        )
+    with pytest.raises(OzonBulkUploadValidationError):
+        Repair.editor_document(seller_id=case.seller.id)
+
+
+def test_draft_selection_rejects_foreign_mixed_archived_and_oversized_scope(case):
+    foreign_account = SellerMarketplaceAccount(
+        seller_id=case.foreign_seller.id,
+        marketplace_id=case.marketplace.id,
+        external_account_id='foreign-selection-account',
+        label='Foreign synthetic Ozon',
+        is_active=True,
+        connection_status='connected',
+        settings_json='{}',
+    )
+    foreign_source = ImportedProduct(
+        seller_id=case.foreign_seller.id,
+        external_id='foreign-selection-source',
+        external_vendor_code='foreign-selection-offer',
+        source_type='synthetic',
+        title='Foreign synthetic product',
+    )
+    db.session.add_all([foreign_account, foreign_source])
+    db.session.flush()
+    foreign_draft = MarketplaceProductDraft(
+        seller_id=case.foreign_seller.id,
+        marketplace_id=case.marketplace.id,
+        account_id=foreign_account.id,
+        imported_product_id=foreign_source.id,
+        product_type_id=case.product_type.id,
+        offer_id='foreign-selection-offer',
+        source_fact_hash='f' * 64,
+        content_json='{}',
+        attributes_json='[]',
+        complex_attributes_json='[]',
+        media_json='{}',
+        dimensions_json='{}',
+        barcodes_json='[]',
+        commercial_json='{}',
+    )
+    second_account = SellerMarketplaceAccount(
+        seller_id=case.seller.id,
+        marketplace_id=case.marketplace.id,
+        external_account_id='same-seller-other-selection-account',
+        label='Second synthetic Ozon',
+        is_active=True,
+        connection_status='connected',
+        settings_json='{}',
+    )
+    db.session.add_all([foreign_draft, second_account])
+    db.session.flush()
+    other_account_draft = fixtures.BulkEnqueueTest._second_draft(
+        case,
+        offer_id='other-account-selection-draft',
+    )
+    other_account_draft.account_id = second_account.id
+    db.session.commit()
+
+    with pytest.raises(OzonBulkUploadNotFound):
+        Repair.editor_document(
+            seller_id=case.seller.id,
+            selection=selection(case, [case.draft.id, foreign_draft.id]),
+        )
+    with pytest.raises(OzonBulkUploadNotFound):
+        Repair.editor_document(
+            seller_id=case.seller.id,
+            selection=selection(
+                case,
+                [case.draft.id, other_account_draft.id],
+            ),
+        )
+    other_marketplace = Marketplace(
+        name='Wildberries',
+        code='wb',
+        adapter_code='wildberries',
+        is_active=True,
+    )
+    db.session.add(other_marketplace)
+    db.session.flush()
+    other_marketplace_account = SellerMarketplaceAccount(
+        seller_id=case.seller.id,
+        marketplace_id=other_marketplace.id,
+        external_account_id='selection-non-ozon-account',
+        label='Non-Ozon synthetic account',
+        is_active=True,
+        connection_status='connected',
+        settings_json='{}',
+    )
+    db.session.add(other_marketplace_account)
+    db.session.commit()
+    with pytest.raises(OzonBulkUploadNotFound):
+        Repair.editor_document(
+            seller_id=case.seller.id,
+            selection={
+                'account_id':other_marketplace_account.id,
+                'draft_ids':[case.draft.id],
+            },
+        )
+    with pytest.raises(OzonBulkUploadValidationError):
+        Repair.editor_document(
+            seller_id=case.seller.id,
+            selection=selection(case, list(range(1, Repair.MAX_ROWS + 2))),
+        )
+
+    case.draft.status = 'archived'
+    db.session.commit()
+    with pytest.raises(OzonBulkUploadConflict):
+        Repair.editor_document(
+            seller_id=case.seller.id,
+            selection=selection(case, [case.draft.id]),
+        )
+    assert MarketplaceOperation.query.count() == 0
+
+
+def test_draft_selection_type_and_dictionary_search_are_local_and_read_only(case):
+    scope = selection(case, [case.draft.id])
+    before_version = case.draft.version
+    before_validation = case.draft.validation_result_json
+
+    types = Repair.search_product_types(
+        seller_id=case.seller.id,
+        selection=scope,
+        query='Тип',
+    )
+    dictionary = Repair.search_dictionary_values(
+        seller_id=case.seller.id,
+        selection=scope,
+        draft_id=case.draft.id,
+        external_attribute_id='22232',
+        query='330499',
+    )
+
+    assert any(item['id'] == case.product_type.id for item in types)
+    assert dictionary['items'] == [{'id':'1001','value':'3304990000'}]
+    assert case.draft.version == before_version
+    assert case.draft.validation_result_json == before_validation
+    assert OzonBulkUploadRun.query.count() == 0
+    assert OzonBulkUploadItem.query.count() == 0
+    assert MarketplaceOperation.query.count() == 0
+
+
+def test_draft_selection_marks_active_reviewed_draft_as_blocked(case):
+    Upload.accept_reviewed_publish(
+        seller_id=case.seller.id,
+        account_id=case.account.id,
+        draft_ids=[case.draft.id],
+        expected_versions={str(case.draft.id):case.draft.version},
+        request_key='selected-draft-active-review-0001',
+        created_by_user_id=case.user.id,
+    )
+
+    editor = Repair.editor_document(
+        seller_id=case.seller.id,
+        selection=selection(case, [case.draft.id]),
+    )
+
+    assert editor['mode'] == 'draft_selection'
+    assert editor['review_draft_ids'] == []
+    assert editor['groups'] == []
+    assert editor['total'] == 0
+    assert [row['draft_id'] for row in editor['blocked_review_items']] == [
+        case.draft.id,
+    ]
+    assert editor['blocked_review_items'][0]['title']
+    assert editor['blocked_review_items'][0]['message']
+    assert MarketplaceOperation.query.count() == 0
+
+
+def test_draft_selection_local_edit_revalidates_and_never_touches_runs(case, monkeypatch):
+    scope = selection(case, [case.draft.id])
+    editor = Repair.editor_document(seller_id=case.seller.id, selection=scope)
+    row = editor['groups'][0]['rows'][0]
+    edit = selection_row(
+        row,
+        description='Сохранено только в выбранном локальном черновике.',
+        **{
+            'attribute:22232':'3304990000',
+            'attribute_value_id:22232':'1001',
+        },
+    )
+    jobs_before = BackgroundJob.query.count()
+    runs_before = OzonBulkUploadRun.query.count()
+    items_before = OzonBulkUploadItem.query.count()
+    legacy_result_before = case.job.result_data
+    monkeypatch.setattr(
+        MarketplaceDraftService,
+        '_build_validation_result',
+        case._ready_validation,
+    )
+
+    report = Repair.apply_editor_rows(
+        seller_id=case.seller.id,
+        selection=scope,
+        rows=[edit],
+        corrected_by_user_id=case.user.id,
+    )
+
+    draft = db.session.get(MarketplaceProductDraft, case.draft.id)
+    attributes = json.loads(draft.attributes_json)
+    assert report['mode'] == 'draft_selection'
+    assert report['scope_key'] == editor['scope_key']
+    assert report['total'] == report['updated'] == report['ready_to_retry'] == 1
+    assert report['failed'] == report['excluded'] == 0
+    assert json.loads(draft.content_json)['description'] == (
+        'Сохранено только в выбранном локальном черновике.'
+    )
+    assert {
+        'attribute_id':'22232',
+        'complex_id':'0',
+        'values':[{'dictionary_value_id':'1001','value':'3304990000'}],
+    } in attributes
+    assert BackgroundJob.query.count() == jobs_before
+    assert OzonBulkUploadRun.query.count() == runs_before
+    assert OzonBulkUploadItem.query.count() == items_before
+    assert case.job.result_data == legacy_result_before
+    assert MarketplaceOperation.query.count() == 0
+
+
+def test_draft_selection_stale_version_and_new_operation_hold_do_not_write(case, monkeypatch):
+    scope = selection(case, [case.draft.id])
+    editor = Repair.editor_document(seller_id=case.seller.id, selection=scope)
+    row = editor['groups'][0]['rows'][0]
+    stale_edit = selection_row(
+        row,
+        description='Старая версия не должна сохраниться.',
+    )
+    original_content = case.draft.content_json
+    case.draft.version += 1
+    db.session.commit()
+    current_version = case.draft.version
+    monkeypatch.setattr(
+        MarketplaceDraftService,
+        '_build_validation_result',
+        case._ready_validation,
+    )
+    stale_report = Repair.apply_editor_rows(
+        seller_id=case.seller.id,
+        selection=scope,
+        rows=[stale_edit],
+        corrected_by_user_id=case.user.id,
+    )
+    assert stale_report['failed'] == 1
+    db.session.refresh(case.draft)
+    assert case.draft.version == current_version
+    assert case.draft.content_json == original_content
+    assert OzonBulkUploadRun.query.count() == 0
+    assert OzonBulkUploadItem.query.count() == 0
+    assert MarketplaceOperation.query.count() == 0
+
+    fresh_editor = Repair.editor_document(
+        seller_id=case.seller.id,
+        selection=scope,
+    )
+    fresh_row = fresh_editor['groups'][0]['rows'][0]
+    fresh_edit = selection_row(
+        fresh_row,
+        description='Операция уже удерживает этот черновик.',
+    )
+
+    def acquire_then_hold(account_id):
+        db.session.add(MarketplaceOperation(
+            seller_id=case.seller.id,
+            marketplace_id=case.marketplace.id,
+            account_id=account_id,
+            draft_id=case.draft.id,
+            operation_kind='product_update',
+            status='queued',
+            idempotency_key='selection-hold-operation',
+            request_fingerprint='b' * 64,
+            contract_version='selection-hold-v1',
+            request_summary_json='{}',
+        ))
+        db.session.commit()
+        return object()
+
+    monkeypatch.setattr(
+        'services.ozon_bulk_repair.try_account_operation_lock',
+        acquire_then_hold,
+    )
+    monkeypatch.setattr(
+        'services.ozon_bulk_repair.release_account_operation_lock',
+        lambda _claim: None,
+    )
+    held_report = Repair.apply_editor_rows(
+        seller_id=case.seller.id,
+        selection=scope,
+        rows=[fresh_edit],
+        corrected_by_user_id=case.user.id,
+    )
+
+    db.session.refresh(case.draft)
+    assert held_report['failed'] == 1
+    assert 'занят' in held_report['rows'][0]['message'].lower()
+    assert case.draft.version == current_version
+    assert case.draft.content_json == original_content
+    assert OzonBulkUploadRun.query.count() == 0
+    assert OzonBulkUploadItem.query.count() == 0
