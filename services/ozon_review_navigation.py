@@ -9,6 +9,11 @@ from typing import Any, Optional
 from flask import current_app, url_for
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from services.ozon_bulk_repair import (
+    decode_compact_draft_ids,
+    encode_compact_draft_ids,
+)
+from services.ozon_bulk_upload import OzonBulkUploadValidationError
 from services.ozon_upload_review import OzonUploadReviewService
 
 
@@ -88,15 +93,34 @@ class OzonReviewNavigation:
             and (not isinstance(result_uid, str) or not cls._RUN_UID.fullmatch(result_uid))
         ) or (parent_uid is not None and result_uid is not None):
             return None
-        return {
-            "v": 1,
+        common = {
             "user_id": user_id,
             "seller_id": seller_id,
             "account_id": account_id,
-            "draft_ids": draft_ids,
             "page": page,
             "parent_prepare_job_uid": parent_uid,
             "result_job_uid": result_uid,
+        }
+        if "workspace_selection" in review:
+            compact_ids = review.get("workspace_selection")
+            try:
+                decoded_ids = decode_compact_draft_ids(compact_ids)
+            except OzonBulkUploadValidationError:
+                return None
+            if (
+                encode_compact_draft_ids(decoded_ids) != compact_ids
+                or decoded_ids != draft_ids
+            ):
+                return None
+            return {
+                "v": 2,
+                **common,
+                "workspace_selection": compact_ids,
+            }
+        return {
+            "v": 1,
+            **common,
+            "draft_ids": draft_ids,
         }
 
     @classmethod
@@ -156,20 +180,36 @@ class OzonReviewNavigation:
             )
         except (BadSignature, SignatureExpired, TypeError, ValueError):
             return None
-        if not isinstance(payload, dict) or set(payload) != {
-            "v", "user_id", "seller_id", "account_id", "draft_ids", "page",
-            "parent_prepare_job_uid", "result_job_uid",
-        }:
+        if not isinstance(payload, dict):
             return None
-        ids = cls._ordered_ids(payload.get("draft_ids"))
+        version = payload.get("v")
+        common_keys = {
+            "v", "user_id", "seller_id", "account_id", "page",
+            "parent_prepare_job_uid", "result_job_uid",
+        }
+        if version == 1 and type(version) is int:
+            if set(payload) != common_keys | {"draft_ids"}:
+                return None
+            ids = cls._ordered_ids(payload.get("draft_ids"))
+        elif version == 2 and type(version) is int:
+            if set(payload) != common_keys | {"workspace_selection"}:
+                return None
+            compact_ids = payload.get("workspace_selection")
+            try:
+                decoded_ids = decode_compact_draft_ids(compact_ids)
+            except OzonBulkUploadValidationError:
+                return None
+            if encode_compact_draft_ids(decoded_ids) != compact_ids:
+                return None
+            ids = decoded_ids
+        else:
+            return None
         page = payload.get("page")
         account_id = payload.get("account_id")
         parent_uid = payload.get("parent_prepare_job_uid")
         result_uid = payload.get("result_job_uid")
         if (
-            payload.get("v") != 1
-            or type(payload.get("v")) is not int
-            or payload.get("user_id") != user_id
+            payload.get("user_id") != user_id
             or type(payload.get("user_id")) is not int
             or payload.get("seller_id") != seller_id
             or type(payload.get("seller_id")) is not int
@@ -187,6 +227,20 @@ class OzonReviewNavigation:
         ):
             return None
         return payload
+
+    @classmethod
+    def _payload_ids(cls, payload: dict) -> Optional[list[int]]:
+        if payload.get("v") == 1:
+            return cls._ordered_ids(payload.get("draft_ids"))
+        if payload.get("v") == 2:
+            try:
+                ids = decode_compact_draft_ids(payload.get("workspace_selection"))
+            except OzonBulkUploadValidationError:
+                return None
+            if encode_compact_draft_ids(ids) != payload.get("workspace_selection"):
+                return None
+            return ids
+        return None
 
     @staticmethod
     def _bounded_focus_value(value: Any, *, maximum: int) -> Optional[str]:
@@ -215,22 +269,24 @@ class OzonReviewNavigation:
         payload = cls._load_payload(
             token, user_id=user_id, seller_id=seller_id,
         )
+        payload_ids = cls._payload_ids(payload) if payload is not None else None
         if (
             payload is None
+            or payload_ids is None
             or not cls._positive(draft_id)
             or not cls._positive(draft_account_id)
             or draft_account_id != payload["account_id"]
-            or draft_id not in payload["draft_ids"][
+            or draft_id not in payload_ids[
                 (payload["page"] - 1) * cls.PAGE_SIZE:
                 payload["page"] * cls.PAGE_SIZE
             ]
         ):
             return None
-        query = {
-            "account_id": payload["account_id"],
-            "draft_ids": ",".join(str(value) for value in payload["draft_ids"]),
-            "page": payload["page"],
-        }
+        query = {"account_id": payload["account_id"], "page": payload["page"]}
+        if payload["v"] == 2:
+            query["workspace_selection"] = payload["workspace_selection"]
+        else:
+            query["draft_ids"] = ",".join(str(value) for value in payload_ids)
         if payload["parent_prepare_job_uid"] is not None:
             query["parent_prepare_job_uid"] = payload["parent_prepare_job_uid"]
         if payload["result_job_uid"] is not None:

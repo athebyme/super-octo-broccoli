@@ -12,6 +12,10 @@ from sqlalchemy import event
 from models import db
 from routes.marketplace_drafts import register_marketplace_draft_routes
 from routes.ozon_bulk_uploads import register_ozon_bulk_upload_routes
+from services.ozon_bulk_repair import (
+    decode_compact_draft_ids,
+    encode_compact_draft_ids,
+)
 from services.ozon_review_navigation import OzonReviewNavigation
 from tests.test_marketplace_publications import OzonPublicationFixture
 
@@ -121,6 +125,61 @@ class OzonReviewNavigationServiceTest(unittest.TestCase):
         query = parse_qs(urlsplit(navigation["url"]).query)
         self.assertEqual(query["draft_ids"], [",".join(map(str, ids))])
         self.assertEqual(query["page"], ["10"])
+
+    def test_v2_compact_scope_preserves_order_and_page_membership(self):
+        ids = list(range(1001, 1046))
+        compact = encode_compact_draft_ids(ids)
+        document = review_document(ids, page=2)
+        document["workspace_selection"] = compact
+        token = self.issue(document)
+
+        navigation = self.resolve(token, ids[25])
+        query = parse_qs(urlsplit(navigation["url"]).query)
+
+        self.assertEqual(query["account_id"], ["41"])
+        self.assertEqual(query["workspace_selection"], [compact])
+        self.assertEqual(decode_compact_draft_ids(query["workspace_selection"][0]), ids)
+        self.assertEqual(query["page"], ["2"])
+        self.assertNotIn("draft_ids", query)
+        self.assertIsNone(self.resolve(token, ids[5]))
+
+    def test_v2_compact_scope_keeps_200_high_ids_bounded(self):
+        ids = [2**63 - index for index in range(1, 201)]
+        compact = encode_compact_draft_ids(ids)
+        document = review_document(ids, page=10)
+        document["workspace_selection"] = compact
+        token = self.issue(document)
+
+        self.assertIsNotNone(token)
+        self.assertLessEqual(len(token), OzonReviewNavigation.MAX_TOKEN_CHARS)
+        navigation = self.resolve(token, ids[-1])
+        query = parse_qs(urlsplit(navigation["url"]).query)
+        self.assertEqual(query["workspace_selection"], [compact])
+        self.assertEqual(query["page"], ["10"])
+        self.assertNotIn("draft_ids", query)
+
+    def test_v2_malformed_or_mismatched_compact_scope_fails_closed(self):
+        ids = [1101, 1102]
+        mismatched = review_document(ids)
+        mismatched["workspace_selection"] = encode_compact_draft_ids([1102, 1101])
+        malformed = review_document(ids)
+        malformed["workspace_selection"] = "not-a-canonical-scope"
+
+        self.assertIsNone(self.issue(mismatched))
+        self.assertIsNone(self.issue(malformed))
+
+        malformed_payload = {
+            "v": 2,
+            "user_id": 7,
+            "seller_id": 9,
+            "account_id": 41,
+            "workspace_selection": "not-a-canonical-scope",
+            "page": 1,
+            "parent_prepare_job_uid": None,
+            "result_job_uid": None,
+        }
+        malformed_token = OzonReviewNavigation._serializer().dumps(malformed_payload)
+        self.assertIsNone(self.resolve(malformed_token, 1101))
 
     def test_same_account_draft_outside_the_signed_page_is_not_a_return_target(self):
         ids = list(range(1, 22))
@@ -258,6 +317,41 @@ class OzonReviewNavigationRouteTest(OzonPublicationFixture, unittest.TestCase):
         )
         self.assertEqual(json_response.status_code, 200, json_response.get_json())
         self.assertNotIn("review_return_token", json_response.json["review"])
+
+    def test_compact_review_publishes_canonical_scope_and_html_only_owner(self):
+        compact = encode_compact_draft_ids([self.draft.id])
+        path = (
+            f"/marketplaces/ozon/uploads/review?account_id={self.account.id}"
+            f"&workspace_selection={compact}"
+        )
+        with patch("routes.ozon_bulk_uploads.render_template", return_value="review") as render:
+            html = self.client.get(path, headers={"Accept": "text/html"})
+        self.assertEqual(html.status_code, 200)
+        html_review = render.call_args.kwargs["review"]
+        self.assertEqual(html_review["workspace_selection"], compact)
+        self.assertEqual(
+            html_review["workspace_owner"],
+            f"{self.user.id}:{self.seller.id}",
+        )
+        token = html_review["review_return_token"]
+        with self.app.test_request_context("/"):
+            navigation = OzonReviewNavigation.resolve_navigation(
+                token,
+                user_id=self.user.id,
+                seller_id=self.seller.id,
+                draft_id=self.draft.id,
+                draft_account_id=self.account.id,
+            )
+        query = parse_qs(urlsplit(navigation["url"]).query)
+        self.assertEqual(query["workspace_selection"], [compact])
+        self.assertNotIn("draft_ids", query)
+
+        json_response = self.client.get(path, headers={"Accept": "application/json"})
+        self.assertEqual(json_response.status_code, 200, json_response.get_json())
+        json_review = json_response.json["review"]
+        self.assertEqual(json_review["workspace_selection"], compact)
+        self.assertNotIn("workspace_owner", json_review)
+        self.assertNotIn("review_return_token", json_review)
 
     def test_editor_passes_valid_return_and_bounded_focus_hint_to_vue_and_classic(self):
         token = self._token()

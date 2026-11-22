@@ -1578,7 +1578,8 @@ def review():
             raise OzonBulkUploadValidationError(
                 "Укажите только один точный список черновиков"
             )
-        if _WORKSPACE_SELECTION_QUERY_KEY in request.args:
+        workspace_selection_requested = _WORKSPACE_SELECTION_QUERY_KEY in request.args
+        if workspace_selection_requested:
             draft_ids = decode_compact_draft_ids(
                 request.args[_WORKSPACE_SELECTION_QUERY_KEY]
             )
@@ -1615,11 +1616,26 @@ def review():
             parent_prepare_job_uid=parent_uid,
             **recovery_scope,
         )
+        if workspace_selection_requested:
+            document["workspace_selection"] = encode_compact_draft_ids(draft_ids)
         document["csrf_token"] = generate_csrf()
         if as_json:
             response = jsonify({"success": True, "review": document})
         else:
             from services.ozon_review_navigation import OzonReviewNavigation
+
+            if workspace_selection_requested:
+                review_user_id = getattr(current_user, "id", None)
+                if (
+                    type(review_user_id) is not int
+                    or review_user_id <= 0
+                    or type(seller_id) is not int
+                    or seller_id <= 0
+                ):
+                    raise OzonBulkUploadValidationError(
+                        "Не удалось определить владельца проверки черновиков"
+                    )
+                document["workspace_owner"] = f"{review_user_id}:{seller_id}"
 
             review_return_token = OzonReviewNavigation.issue_token(
                 document,
