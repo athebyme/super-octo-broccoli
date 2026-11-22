@@ -10,6 +10,7 @@
 
 <script type="application/json" id="mp-bootstrap">{{ {
     'wbConnected': wb_connected,
+    'wbAccountId': (current_user.seller.wb_seller_id|string)|trim if current_user.seller.wb_seller_id else none,
     'ozonEnabled': ozon_enabled,
     'ozonAccounts': ozon_accounts,
     'suppliers': suppliers_payload,
@@ -32,6 +33,8 @@
         'deleteBulk': url_for('seller_delete_imported_products_bulk'),
         'enrichBulk': url_for('products_enrich_bulk'),
         'wbPreviewBase': '/my-products/',
+        'wbSelectionResolve': url_for('products_selection_resolve'),
+        'wbBulkEdit': url_for('products_bulk_edit'),
         'supplierCatalog': url_for('supplier_catalog'),
         'wbPriceChange': url_for('prices.prices_change'),
         'ozonCommercial': url_for('marketplace_commercial.index'),
@@ -467,6 +470,6 @@
 
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
-<script src="{{ url_for('static', filename='common-product-content.js', v='20261122-ozon-prepare-return-r48') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-supplier-refresh-terminal-result-r51') }}"></script>
+<script src="{{ url_for('static', filename='common-product-content.js', v='20261122-wb-bulk-return-r55') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-wb-bulk-from-workspace-r55') }}"></script>
 {% endblock %}

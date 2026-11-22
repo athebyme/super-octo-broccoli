@@ -33,6 +33,8 @@ LOCAL_REFRESH_RESULT = "/api/my-products/supplier-refresh-result"
 LOCAL_OZON_PREPARE = "/marketplaces/ozon/uploads/"
 LOCAL_WB_ENRICH_REVIEW = "/products/enrich-bulk"
 LOCAL_WB_ENRICH_START = "/api/products/enrich-bulk/start"
+LOCAL_WB_SELECTION_RESOLVE = "/products/selection/resolve"
+LOCAL_WB_BULK_EDIT = "/products/bulk-edit"
 LOCAL_SUPPLIER_IMPORT = "/supplier-catalog/import"
 LOCAL_PRICE_CREATE = "/prices/create-batch"
 LOCAL_PRICE_PREVIEW = "/prices/api/preview"
@@ -372,6 +374,11 @@ def run():
     refresh_preview_posts = []
     refresh_apply_tokens = []
     wb_enrich_start_posts = []
+    wb_bulk_edit_resolver_posts = []
+    wb_bulk_edit_resolver_results = []
+    wb_bulk_edit_editor_posts = []
+    wb_bulk_edit_expected = {"source_ids": None, "wb_ids": None}
+    wb_bulk_edit_handoff = None
     price_create_posts = []
     price_create_receipts = []
     price_create_attempts = []
@@ -487,6 +494,62 @@ def run():
                     route.fulfill(status=204, body=b"")
                     return
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "POST":
+            if parsed.path == LOCAL_WB_SELECTION_RESOLVE:
+                body = request.post_data_json
+                if not isinstance(body, dict) or body.get("mode") != "workspace":
+                    route.fulfill(response=route.fetch(max_redirects=0))
+                    return
+                expected_source_ids = wb_bulk_edit_expected["source_ids"]
+                expected_wb_ids = wb_bulk_edit_expected["wb_ids"]
+                assert isinstance(body, dict) and set(body) == {
+                    "mode", "ids", "wb_ids", "return_to",
+                }, body
+                assert body["mode"] == "workspace"
+                assert body["ids"] == expected_source_ids, body
+                assert body["wb_ids"] == expected_wb_ids, body
+                return_parts = urlsplit(body["return_to"])
+                assert return_parts.path == "/my-products/beta"
+                assert return_parts.query == ""
+                assert re.fullmatch(r"workspace-return=[a-f0-9]{32}", return_parts.fragment)
+                wb_bulk_edit_resolver_posts.append({
+                    "ids": body["ids"],
+                    "wb_ids": body["wb_ids"],
+                    "return_to": body["return_to"],
+                })
+                response = route.fetch(max_redirects=0)
+                assert response.status == 200, (response.status, response.text()[:300])
+                resolved = response.json()
+                assert resolved.get("marketplace") == "wb"
+                assert resolved.get("count") == len(expected_wb_ids)
+                assert resolved.get("ids") == expected_wb_ids, resolved
+                selection_token = resolved.get("selection_token")
+                assert isinstance(selection_token, str) and 0 < len(selection_token) <= 24 * 1024
+                wb_bulk_edit_resolver_results.append({
+                    "status": response.status,
+                    "count": resolved["count"],
+                    "ids": resolved["ids"],
+                    "selection_token_length": len(selection_token),
+                })
+                route.fulfill(response=response)
+                return
+            if parsed.path == LOCAL_WB_BULK_EDIT:
+                values = parse_qs(request.post_data or "", keep_blank_values=True)
+                assert set(values) == {"csrf_token", "selection_token"}, values.keys()
+                assert len(values["csrf_token"]) == 1 and values["csrf_token"][0]
+                assert len(values["selection_token"]) == 1
+                token = values["selection_token"][0]
+                assert token and len(token) <= 24 * 1024
+                response = route.fetch(max_redirects=0)
+                assert response.status == 200, (response.status, response.text()[:300])
+                assert "Массовое редактирование" in response.text()
+                wb_bulk_edit_editor_posts.append({
+                    "status": response.status,
+                    "field_names": sorted(values),
+                    "selection_token_present": True,
+                    "selection_token_length": len(token),
+                })
+                route.fulfill(response=response)
+                return
             if parsed.path == LOCAL_PRICE_PREVIEW:
                 body = request.post_data_json
                 if not isinstance(body, dict) or set(body) != {
@@ -726,6 +789,7 @@ def run():
             menu = page.get_by_role("menu")
             menu.locator("button:focus").wait_for()
             assert page.get_by_role("menuitem", name="Изменить общий контент").is_enabled()
+            assert page.get_by_role("menuitem", name="Изменить карточки WB").is_enabled()
             assert page.get_by_role("menuitem", name="Изменить цены WB").is_enabled()
             verify_bounds(page)
             screenshot = OUTPUT / f"selected-{theme}-{width}.png"
@@ -746,6 +810,163 @@ def run():
             layouts.append({"width": width, "theme": theme, "screenshot": screenshot.name})
             context.close()
         checks.append("action_menu_keyboard_and_secondary_overlay_fit_all_layouts")
+
+        # Hand the exact ordered workspace selection to the native WB editor,
+        # then return through its signed same-tab URL and restore those marks.
+        wb_context = browser.new_context(viewport={"width": 320, "height": 900})
+        wb_context.add_cookies([fixture.synthetic_login_cookie()])
+        wb_context.route("**/*", bridge)
+        wb_page = wb_context.new_page()
+        wb_page.on("pageerror", lambda error: errors.append(str(error)))
+        open_products(wb_page)
+        source_owner = wb_page.evaluate(
+            "JSON.parse(document.querySelector('#mp-bootstrap').textContent).workspaceOwner",
+        )
+        search_input = wb_page.get_by_placeholder("Название, бренд или артикул")
+        with wb_page.expect_response(lambda response: feed_matches(response, {
+                "search": "Сравнение цен WB",
+        })) as wb_handoff_filtered:
+            search_input.fill("Сравнение цен WB")
+        assert wb_handoff_filtered.value.status == 200
+        with wb_page.expect_response(lambda response: feed_matches(response, {
+                "search": "Сравнение цен WB", "sort": "title",
+        })) as wb_handoff_sorted:
+            wb_page.get_by_label("Сортировка").select_option("title")
+        assert wb_handoff_sorted.value.status == 200
+        expected_workspace_ids = [
+            fixture_ids["preview_local_ids"][2],
+            fixture_ids["preview_local_ids"][0],
+        ]
+        expected_editor_ids = [
+            fixture_ids["preview_wb_ids"][2],
+            fixture_ids["preview_wb_ids"][0],
+        ]
+        wb_bulk_edit_expected.update({
+            "source_ids": expected_workspace_ids,
+            "wb_ids": expected_editor_ids,
+        })
+        for index in (2, 0):
+            wb_page.get_by_role(
+                "checkbox", name=f"Выбрать {fixture_ids['preview_titles'][index]}", exact=True,
+            ).check()
+        assert selected_browser_state(wb_page)["selected"] == expected_workspace_ids
+        provider_attempts_before_handoff = fixture.REPORT["provider_attempts"]
+        posts_before_handoff = len(posts)
+        handoff_watch = begin_domain_write_watch()
+        try:
+            with wb_page.expect_response(
+                lambda response: urlsplit(response.url).path == LOCAL_WB_SELECTION_RESOLVE
+                and response.request.method == "POST",
+                timeout=10000,
+            ) as wb_resolved:
+                pick_action(wb_page, "Изменить карточки WB")
+            assert wb_resolved.value.status == 200
+            wb_page.wait_for_url(
+                lambda value: urlsplit(str(value)).path == LOCAL_WB_BULK_EDIT,
+                wait_until="domcontentloaded",
+            )
+            wb_page.get_by_role("heading", name="Массовое редактирование", exact=True).wait_for()
+            assert "2 товаров" in wb_page.locator("body").inner_text()
+            resolver = wb_bulk_edit_resolver_posts[-1]
+            resolver_result = wb_bulk_edit_resolver_results[-1]
+            return_parts = urlsplit(resolver["return_to"])
+            return_hash = "#" + return_parts.fragment
+            capsule_key = "seller-hub-common-content-workspace-return-v1"
+            capsule = wb_page.evaluate(
+                "key => JSON.parse(sessionStorage.getItem(key))", capsule_key,
+            )
+            assert capsule["v"] == 5
+            assert capsule["owner"] == source_owner
+            assert capsule["batch"] is None
+            assert capsule["selectionIds"] == expected_workspace_ids
+            assert capsule["wbEditTarget"] == {
+                "accountId": None,
+                "productIds": expected_editor_ids,
+            }
+            assert capsule["nonce"] == return_parts.fragment.split("=", 1)[1]
+            assert wb_bulk_edit_editor_posts[-1]["field_names"] == [
+                "csrf_token", "selection_token",
+            ]
+            assert wb_bulk_edit_editor_posts[-1]["selection_token_present"] is True
+            editor_return = wb_page.locator(f'nav a[href="{resolver["return_to"]}"]')
+            assert editor_return.count() == 1
+            verify_bounds(wb_page)
+            editor_screenshot = OUTPUT / "wb-bulk-from-workspace-editor-320.png"
+            wb_page.screenshot(path=editor_screenshot, animations="disabled")
+        finally:
+            handoff_writes = end_domain_write_watch(handoff_watch)
+        assert handoff_writes == [], handoff_writes
+        assert len(posts) == posts_before_handoff
+        assert fixture.REPORT["provider_attempts"] == provider_attempts_before_handoff == 0
+        return_watch = begin_domain_write_watch()
+        try:
+            with wb_page.expect_response(lambda response: feed_matches(response, {
+                    "search": "Сравнение цен WB", "sort": "title", "per_page": "50",
+            })) as wb_handoff_returned:
+                with wb_page.expect_navigation(wait_until="domcontentloaded"):
+                    editor_return.click()
+            assert wb_handoff_returned.value.status == 200
+        finally:
+            return_writes = end_domain_write_watch(return_watch)
+        wb_page.wait_for_url(lambda value: urlsplit(str(value)).path == "/my-products/beta")
+        wb_page.wait_for_function("""({ids, search}) => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy && !proxy.loading && proxy.filters.search === search &&
+                proxy.filters.sort === 'title' && proxy.selected.join(',') === ids.join(',');
+        }""", arg={"ids": expected_workspace_ids, "search": "Сравнение цен WB"})
+        assert urlsplit(wb_page.url).fragment == return_parts.fragment
+        assert selected_browser_state(wb_page)["selected"] == expected_workspace_ids
+        restored_scope = wb_page.evaluate("""() => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy ? {
+                search: proxy.filters.search,
+                sort: proxy.filters.sort,
+                selected: proxy.selected.slice(),
+            } : null;
+        }""")
+        assert restored_scope == {
+            "search": "Сравнение цен WB",
+            "sort": "title",
+            "selected": expected_workspace_ids,
+        }
+        restored_rows = wb_page.locator(
+            ".mp-list article.mp-row input[type=checkbox]:checked",
+        ).evaluate_all("boxes => boxes.map(box => Number(box.value))")
+        assert set(restored_rows) == set(expected_workspace_ids)
+        assert len(restored_rows) == len(expected_workspace_ids)
+        assert wb_page.evaluate("key => sessionStorage.getItem(key)", capsule_key) is None
+        assert return_writes == [], return_writes
+        assert fixture.REPORT["provider_attempts"] == provider_attempts_before_handoff == 0
+        verify_bounds(wb_page)
+        returned_screenshot = OUTPUT / "wb-bulk-from-workspace-returned-320.png"
+        wb_page.screenshot(path=returned_screenshot, animations="disabled")
+        wb_bulk_edit_handoff = {
+            "selected_workspace_rows": len(expected_workspace_ids),
+            "exact_mapped_editor_rows": resolver_result["count"],
+            "resolver_calls": len(wb_bulk_edit_resolver_posts),
+            "editor_open_posts": len(wb_bulk_edit_editor_posts),
+            "restored_selected_rows": len(restored_rows),
+            "ordered_mapping_matches": resolver_result["ids"] == expected_editor_ids,
+            "return_scope_restored": restored_scope == {
+                "search": "Сравнение цен WB",
+                "sort": "title",
+                "selected": expected_workspace_ids,
+            } and urlsplit(wb_page.url).fragment == return_parts.fragment,
+            "editor_form_fields": wb_bulk_edit_editor_posts[-1]["field_names"],
+            "local_db_write_statements": len(handoff_writes) + len(return_writes),
+            "apply_posts": 0,
+            "provider_attempts": fixture.REPORT["provider_attempts"] - provider_attempts_before_handoff,
+            "screenshots": [editor_screenshot.name, returned_screenshot.name],
+        }
+        assert wb_bulk_edit_handoff["resolver_calls"] == 1
+        assert wb_bulk_edit_handoff["editor_open_posts"] == 1
+        assert wb_bulk_edit_handoff["ordered_mapping_matches"] is True
+        assert wb_bulk_edit_handoff["restored_selected_rows"] == len(expected_workspace_ids)
+        assert wb_bulk_edit_handoff["local_db_write_statements"] == 0
+        assert wb_bulk_edit_handoff["apply_posts"] == 0
+        assert wb_bulk_edit_handoff["provider_attempts"] == 0
+        checks.append("wb_workspace_exact_order_handoff_opens_review_and_restores_exact_selection")
+        wb_context.close()
 
         context = browser.new_context(viewport={"width": 320, "height": 900})
         context.add_cookies([fixture.synthetic_login_cookie()])
@@ -2741,6 +2962,7 @@ def run():
         "layouts": layouts,
         "checks": checks,
         "provider_attempts": 0,
+        "wb_bulk_edit_handoff": wb_bulk_edit_handoff,
         "supplier_refresh_zero_update": supplier_refresh_zero_update_report,
     }
     (OUTPUT / "report.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")

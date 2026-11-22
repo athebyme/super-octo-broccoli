@@ -601,7 +601,7 @@ class MyProductsOzonPriceHandoffTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
         template = (ROOT / 'templates' / 'my_products_beta.html').read_text()
-        self.assertIn("v='20261122-ozon-prepare-return-r48'", template)
+        self.assertIn("v='20261122-wb-bulk-from-workspace-r55'", template)
         self.assertIn("filename='common-product-content.js'", template)
 
     def test_template_keeps_normal_price_entry_and_uses_read_only_get_target(self):

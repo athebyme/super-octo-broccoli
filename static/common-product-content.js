@@ -17,6 +17,10 @@
         'v', 'nonce', 'owner', 'expiresAt', 'prepareTarget', 'prepareJobUid',
         'selectionIds', 'scope', 'batch',
     ];
+    var WORKSPACE_RETURN_V5_CAPSULE_KEYS = [
+        'v', 'nonce', 'owner', 'expiresAt', 'wbEditTarget',
+        'selectionIds', 'scope', 'batch',
+    ];
 
     function workspaceReturnNow(options) {
         if (options && typeof options.now === 'function') return options.now();
@@ -121,6 +125,26 @@
         return typeof value === 'string' && /^ozon-upload-[a-f0-9]{32}$/.test(value);
     }
 
+    function workspaceReturnWbEditTargetValid(target) {
+        if (!workspaceReturnPlainObject(target)) return false;
+        var keys = Object.keys(target).sort();
+        var accountIdValid = target.accountId === null || (
+            typeof target.accountId === 'string' &&
+            target.accountId.length > 0 && target.accountId.length <= 100 &&
+            target.accountId.trim() === target.accountId &&
+            !/[\u0000-\u001f\u007f]/.test(target.accountId)
+        );
+        return keys.length === 2 && keys[0] === 'accountId' && keys[1] === 'productIds' &&
+            accountIdValid && workspaceReturnIdList(target.productIds, 200);
+    }
+
+    function workspaceReturnWbEditTargetsEqual(left, right) {
+        return workspaceReturnWbEditTargetValid(left) &&
+            workspaceReturnWbEditTargetValid(right) &&
+            left.accountId === right.accountId &&
+            workspaceReturnSameOrderedIds(left.productIds, right.productIds);
+    }
+
     function workspaceReturnPriceResult(result) {
         if (!workspaceReturnPlainObject(result)) return null;
         var keys = Object.keys(result).sort().join(',');
@@ -159,7 +183,8 @@
             var expectedKeys = capsule.v === 1 ? WORKSPACE_RETURN_V1_CAPSULE_KEYS :
                 capsule.v === 2 ? WORKSPACE_RETURN_V2_CAPSULE_KEYS :
                     capsule.v === 3 ? WORKSPACE_RETURN_V3_CAPSULE_KEYS :
-                        capsule.v === 4 ? WORKSPACE_RETURN_V4_CAPSULE_KEYS : null;
+                        capsule.v === 4 ? WORKSPACE_RETURN_V4_CAPSULE_KEYS :
+                            capsule.v === 5 ? WORKSPACE_RETURN_V5_CAPSULE_KEYS : null;
             if (!expectedKeys || Object.keys(capsule).length !== expectedKeys.length ||
                 !expectedKeys.every(function (key) {
                     return Object.prototype.hasOwnProperty.call(capsule, key);
@@ -183,6 +208,10 @@
                 return workspaceReturnPrepareTargetValid(capsule.prepareTarget) &&
                     (capsule.prepareJobUid === null ||
                         workspaceReturnPrepareJobUidValid(capsule.prepareJobUid));
+            }
+            if (capsule.v === 5) {
+                return workspaceReturnWbEditTargetValid(capsule.wbEditTarget) &&
+                    capsule.selectionIds.length === capsule.wbEditTarget.productIds.length;
             }
             if (!workspaceReturnPriceTargetValid(capsule.priceTarget) ||
                 capsule.selectionIds.length !== capsule.priceTarget.ids.length) return false;
@@ -208,9 +237,12 @@
         var hasPriceTarget = Object.prototype.hasOwnProperty.call(payload, 'priceTarget');
         var hasPriceResult = Object.prototype.hasOwnProperty.call(payload, 'priceResult');
         var hasPrepareTarget = Object.prototype.hasOwnProperty.call(payload, 'prepareTarget');
-        if (hasPrepareTarget && (hasEditorIds || hasPriceTarget || hasPriceResult)) return null;
+        var hasWbEditTarget = Object.prototype.hasOwnProperty.call(payload, 'wbEditTarget');
+        if (hasPrepareTarget && (hasEditorIds || hasPriceTarget || hasPriceResult || hasWbEditTarget)) return null;
+        if (hasWbEditTarget && (hasEditorIds || hasPriceTarget || hasPriceResult)) return null;
         if (hasPriceTarget && !workspaceReturnPriceTargetValid(payload.priceTarget)) return null;
         if (hasPrepareTarget && !workspaceReturnPrepareTargetValid(payload.prepareTarget)) return null;
+        if (hasWbEditTarget && !workspaceReturnWbEditTargetValid(payload.wbEditTarget)) return null;
         var capsule = {
             v: 1,
             nonce: nonce,
@@ -234,6 +266,14 @@
                 productIds: payload.prepareTarget.productIds.slice(),
             };
             capsule.prepareJobUid = null;
+        }
+        if (hasWbEditTarget) {
+            capsule.v = 5;
+            delete capsule.editorIds;
+            capsule.wbEditTarget = {
+                accountId: payload.wbEditTarget.accountId,
+                productIds: payload.wbEditTarget.productIds.slice(),
+            };
         }
         if (!workspaceReturnCapsuleValid(capsule)) return null;
         return workspaceReturnWrite(capsule, options) ? nonce : null;
@@ -295,6 +335,7 @@
         if (!capsule || capsule.nonce !== match[1]) return null;
         var hasEditorIds = Object.prototype.hasOwnProperty.call(options, 'editorIds');
         var hasPriceTarget = Object.prototype.hasOwnProperty.call(options, 'priceTarget');
+        var hasWbEditTarget = Object.prototype.hasOwnProperty.call(options, 'wbEditTarget');
         var now = workspaceReturnNow(options);
         if (!Number.isSafeInteger(now) || now < 0 ||
             !Number.isSafeInteger(now + WORKSPACE_RETURN_TTL_MS) ||
@@ -302,14 +343,22 @@
             capsule.expiresAt > now + WORKSPACE_RETURN_TTL_MS ||
             capsule.owner !== options.owner ||
             (hasEditorIds && hasPriceTarget) ||
+            (hasWbEditTarget && (hasEditorIds || hasPriceTarget)) ||
             (hasEditorIds && !workspaceReturnIdList(options.editorIds, 50)) ||
             (hasPriceTarget && !workspaceReturnPriceTargetValid(options.priceTarget)) ||
+            (hasWbEditTarget && !workspaceReturnWbEditTargetValid(options.wbEditTarget)) ||
             (hasEditorIds &&
                 (capsule.v !== 1 ||
                     !workspaceReturnSameOrderedIds(capsule.editorIds, options.editorIds))) ||
             (hasPriceTarget &&
-                (capsule.v === 1 ||
+                (capsule.v === 1 || capsule.v === 5 ||
                     !workspaceReturnPriceTargetsEqual(capsule.priceTarget, options.priceTarget)))) {
+            consumeWorkspaceReturn(match[1], options);
+            return null;
+        }
+        if (hasWbEditTarget &&
+            (capsule.v !== 5 ||
+                !workspaceReturnWbEditTargetsEqual(capsule.wbEditTarget, options.wbEditTarget))) {
             consumeWorkspaceReturn(match[1], options);
             return null;
         }

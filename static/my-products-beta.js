@@ -154,6 +154,39 @@
             left.every(function (id, index) { return id === right[index]; });
     }
 
+    function normalizedWbAccountId(value) {
+        if (value === null) return null;
+        if (typeof value !== 'string') return undefined;
+        var normalized = value.trim();
+        return normalized || null;
+    }
+
+    var wbAccountIdFromBootstrap = Object.prototype.hasOwnProperty.call(boot, 'wbAccountId')
+        ? normalizedWbAccountId(boot.wbAccountId)
+        : undefined;
+
+    function orderedWbProductIds(items, selectionIds) {
+        if (!Array.isArray(items) || !Array.isArray(selectionIds) ||
+            !selectionIds.length || selectionIds.length > MAX_BULK_SELECTION ||
+            new Set(selectionIds).size !== selectionIds.length) return null;
+        var byId = new Map();
+        for (var index = 0; index < items.length; index += 1) {
+            var item = items[index];
+            if (!item || !Number.isSafeInteger(item.id) || item.id <= 0 || byId.has(item.id)) return null;
+            byId.set(item.id, item);
+        }
+        if (byId.size < selectionIds.length ||
+            selectionIds.some(function (id) { return !byId.has(id); })) return null;
+        return exactWbProductIds(selectionIds.map(function (id) { return byId.get(id); }));
+    }
+
+    function validWbWorkspaceSelectionResponse(data, expectedProductIds) {
+        return !!data && typeof data.selection_token === 'string' &&
+            data.selection_token.length > 0 && data.selection_token.length <= 24 * 1024 &&
+            data.marketplace === 'wb' && data.count === expectedProductIds.length &&
+            sameOrderedIds(data.ids, expectedProductIds);
+    }
+
     function storePriceWorkspaceReturn(app, priceTarget, selectionIds, scope) {
         if (!scope || !Array.isArray(selectionIds)) return null;
         var helpers = window.SellerHubCommonContent || {};
@@ -192,6 +225,28 @@
         }
     }
 
+    function storeWbEditWorkspaceReturn(app, productIds, selectionIds, scope) {
+        if (!scope || wbAccountIdFromBootstrap === undefined ||
+            !Array.isArray(productIds) || !Array.isArray(selectionIds) ||
+            productIds.length !== selectionIds.length) return null;
+        var helpers = window.SellerHubCommonContent || {};
+        if (typeof helpers.storeWorkspaceReturn !== 'function') return null;
+        try {
+            return helpers.storeWorkspaceReturn({
+                owner: boot.workspaceOwner,
+                wbEditTarget: {
+                    accountId: wbAccountIdFromBootstrap,
+                    productIds: productIds.slice(),
+                },
+                selectionIds: selectionIds.slice(),
+                scope: scope,
+                batch: app.importBatchMode ? app.importBatch : null,
+            });
+        } catch (_) {
+            return null;
+        }
+    }
+
     function bindOzonPreparationWorkspaceReturn(pending, jobUid) {
         var hash = workspaceReturnHash(pending && pending.workspace_return_nonce);
         var helpers = window.SellerHubCommonContent || {};
@@ -216,6 +271,17 @@
         return typeof nonce === 'string' && /^[a-f0-9]{32}$/.test(nonce)
             ? '#workspace-return=' + nonce
             : '';
+    }
+
+    function wbWorkspaceReturnUrl(app, nonce) {
+        if (!app || (nonce !== null && nonce !== undefined && !workspaceReturnHash(nonce))) return '';
+        var query = new URLSearchParams();
+        if (app.importBatchMode) {
+            if (!validSupplierUpdatedBatchToken(app.importBatch)) return '';
+            query.set('import_batch', app.importBatch);
+        }
+        return '/my-products/beta' + (query.toString() ? '?' + query.toString() : '') +
+            (nonce ? workspaceReturnHash(nonce) : '');
     }
 
     function orderedProductIds(items) {
@@ -774,6 +840,9 @@
             var savedOzon = readOzonPending();
             return {
                 wbConnected: !!boot.wbConnected,
+                wbAccountId: wbAccountIdFromBootstrap,
+                wbAccountKnown: wbAccountIdFromBootstrap !== undefined,
+                wbEditBusy: false,
                 ozonEnabled: !!boot.ozonEnabled,
                 ozonAccounts: boot.ozonAccounts || [],
                 suppliers: boot.suppliers || [],
@@ -915,6 +984,9 @@
                 var wbIds = exactWbProductIds(chosen);
                 var withUpdates = chosen.filter(function (i) { return i.has_supplier_update; }).length;
                 var underLimit = chosen.length <= MAX_BULK_SELECTION;
+                var workspaceCurrent = !this.loading && !this.loadingMore && !this.selectAllLoading &&
+                    this.itemsScope === this.feedScopeKey() &&
+                    (this.searchInput || '').trim().slice(0, 200) === this.filters.search;
                 return [{
                     title: 'Основные действия',
                     items: [
@@ -961,6 +1033,29 @@
                                 ? 'за один раз можно открыть не больше 50 товаров'
                                 : 'изменит данные в Seller Hub; карточки площадок не обновятся',
                             disabled: !chosen.length || chosen.length > 50,
+                        },
+                        {
+                            key: 'wb_edit',
+                            label: 'Изменить карточки WB',
+                            hint: !chosen.length
+                                ? 'выберите опубликованные карточки WB'
+                                : !underLimit
+                                    ? 'за один запуск можно выбрать не больше 200 товаров'
+                                    : !this.wbConnected
+                                        ? 'подключите кабинет Wildberries'
+                                        : !this.wbAccountKnown
+                                            ? 'не удалось проверить аккаунт WB; обновите страницу'
+                                            : !workspaceCurrent
+                                                ? 'дождитесь загрузки списка, затем повторите действие'
+                                            : chosen.some(function (item) { return !item.wb; })
+                                                ? 'снимите товары без опубликованной карточки WB'
+                                                : !wbIds
+                                                    ? 'у части выбора нет точного ID карточки WB'
+                                                    : this.wbEditBusy
+                                                        ? 'проверяем точный состав выбранных карточек…'
+                                                        : 'откроется проверка изменений для выбранных карточек WB',
+                            disabled: !chosen.length || !underLimit || !this.wbConnected ||
+                                !this.wbAccountKnown || !workspaceCurrent || !wbIds || this.wbEditBusy,
                         },
                         {
                             key: 'wb_prices',
@@ -1084,6 +1179,10 @@
             selected: {
                 deep: true,
                 handler: function (next) {
+                    if (this._wbEditHandoff &&
+                        !sameOrderedIds(next, this._wbEditHandoff.selectionIds)) {
+                        this.invalidateWbEditHandoff();
+                    }
                     if (this._selectAllAbort &&
                         !sameOrderedIds(next, this._selectAllSelectionSnapshot)) {
                         this.cancelFilteredSelect();
@@ -1115,6 +1214,7 @@
             if (!this.importBatchMode && !this.supplierRefreshBatchMode) this.loadFacets();
         },
         beforeUnmount: function () {
+            this.invalidateWbEditHandoff();
             this.stopJobTracking();
             if (this._abort) this._abort.abort();
             if (this._loadMoreAbort) this._loadMoreAbort.abort();
@@ -1125,6 +1225,14 @@
         },
 
         methods: {
+            invalidateWbEditHandoff: function (expectedHandoff) {
+                var handoff = this._wbEditHandoff;
+                if (!handoff || (expectedHandoff && handoff !== expectedHandoff)) return;
+                this._wbEditHandoff = null;
+                if (handoff.abort) handoff.abort.abort();
+                if (handoff.returnNonce) this.consumeWorkspaceReturn(handoff.returnNonce);
+                this.wbEditBusy = false;
+            },
             selectUpdatedSupplierBatch: function () {
                 var result = this.supplierRefreshResult;
                 var token = result && result.updatedBatch;
@@ -1214,6 +1322,17 @@
                         this.filters.sort === scope.sort &&
                         (this.searchInput || '').trim().slice(0, 200) === scope.search;
             },
+            workspaceReturnWbEditMatches: function (items, selectionIds) {
+                var capsule = workspaceReturnCapsule;
+                if (!capsule || capsule.v !== 5) return true;
+                if (!this.wbAccountKnown ||
+                    capsule.wbEditTarget.accountId !== this.wbAccountId ||
+                    !sameOrderedIds(selectionIds, capsule.selectionIds)) return false;
+                return sameOrderedIds(
+                    orderedWbProductIds(items, selectionIds),
+                    capsule.wbEditTarget.productIds,
+                );
+            },
             buildWorkspaceReturnScope: function () {
                 if (this.loading || this.itemsScope !== this.feedScopeKey() ||
                     (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) return null;
@@ -1230,6 +1349,144 @@
                 };
                 return validWorkspaceReturnScope(scope) &&
                     (!this.importBatchMode || defaultWorkspaceReturnScope(scope)) ? scope : null;
+            },
+            wbEditSelectionIsCurrent: function (handoff) {
+                if (!handoff || this._wbEditHandoff !== handoff ||
+                    !handoff.abort || handoff.abort.signal.aborted ||
+                    this.loading || this.loadingMore || this.selectAllLoading ||
+                    this._feedRevision !== handoff.feedRevision ||
+                    this.feedScopeKey() !== handoff.scopeKey ||
+                    this.itemsScope !== handoff.scopeKey ||
+                    !sameOrderedIds(this.selected, handoff.selectionIds) ||
+                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search ||
+                    !this.wbAccountKnown || this.wbAccountId !== handoff.accountId ||
+                    JSON.stringify(this.buildWorkspaceReturnScope()) !==
+                        JSON.stringify(handoff.returnScope)) return false;
+                return sameOrderedIds(
+                    orderedWbProductIds(this.items, handoff.selectionIds),
+                    handoff.productIds,
+                );
+            },
+            openWbBulkEdit: function (selectionIds) {
+                if (this._wbEditHandoff) this.invalidateWbEditHandoff();
+                var productIds = orderedWbProductIds(this.items, selectionIds);
+                if (!this.wbConnected || !this.wbAccountKnown) {
+                    this.error = 'Подключите кабинет Wildberries и обновите список перед изменением карточек.';
+                    return false;
+                }
+                if (!productIds || !sameOrderedIds(this.selected, selectionIds) ||
+                    selectionIds.length > MAX_BULK_SELECTION ||
+                    this.loading || this.loadingMore || this.selectAllLoading ||
+                    this.itemsScope !== this.feedScopeKey() ||
+                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) {
+                    this.error = 'Выбор должен содержать только опубликованные карточки WB. Обновите список и отметьте товары заново.';
+                    return false;
+                }
+                var scope = this.buildWorkspaceReturnScope();
+                if (!scope) {
+                    this.error = 'Не удалось сохранить условия списка. Дождитесь загрузки и повторите действие.';
+                    return false;
+                }
+                var nonce = storeWbEditWorkspaceReturn(this, productIds, selectionIds, scope);
+                var hasReturnCapsule = !!workspaceReturnHash(nonce);
+                var returnTo = wbWorkspaceReturnUrl(this, hasReturnCapsule ? nonce : null);
+                if (!returnTo) {
+                    if (hasReturnCapsule) this.consumeWorkspaceReturn(nonce);
+                    this.error = 'Не удалось подготовить безопасную ссылку возврата. Обновите страницу и повторите действие.';
+                    return false;
+                }
+                if (!this.urls.wbSelectionResolve || !this.urls.wbBulkEdit) {
+                    this.consumeWorkspaceReturn(nonce);
+                    this.error = 'Не удалось открыть проверку выбора WB. Обновите страницу и повторите действие.';
+                    return false;
+                }
+
+                var handoff = {
+                    selectionIds: selectionIds.slice(),
+                    productIds: productIds.slice(),
+                    scopeKey: this.feedScopeKey(),
+                    returnScope: scope,
+                    feedRevision: this._feedRevision || 0,
+                    accountId: this.wbAccountId,
+                    returnNonce: hasReturnCapsule ? nonce : null,
+                    abort: new AbortController(),
+                    submitted: false,
+                };
+                this._wbEditHandoff = handoff;
+                this.wbEditBusy = true;
+                this.error = '';
+                var request;
+                try {
+                    request = this.$api.post(this.urls.wbSelectionResolve, {
+                        mode: 'workspace',
+                        ids: handoff.selectionIds.slice(),
+                        wb_ids: handoff.productIds.slice(),
+                        return_to: returnTo,
+                    }, { signal: handoff.abort.signal });
+                } catch (err) {
+                    request = Promise.reject(err);
+                }
+                var self = this;
+                return Promise.resolve(request).then(function (data) {
+                    if (!self.wbEditSelectionIsCurrent(handoff)) {
+                        self.invalidateWbEditHandoff(handoff);
+                        return false;
+                    }
+                    if (!validWbWorkspaceSelectionResponse(data, handoff.productIds)) {
+                        self.error = 'Проверенный WB-набор не совпал с выбором. Обновите список и отметьте товары заново.';
+                        return false;
+                    }
+                    self._wbEditHandoff = null;
+                    self.wbEditBusy = false;
+                    handoff.submitted = self.postWbSelectionTokenForm(data.selection_token);
+                    if (!handoff.submitted) self.consumeWorkspaceReturn(handoff.returnNonce);
+                    return handoff.submitted;
+                }).catch(function (err) {
+                    if (!self.wbEditSelectionIsCurrent(handoff)) {
+                        self.invalidateWbEditHandoff(handoff);
+                        return false;
+                    }
+                    self.error = err && err.status === 409
+                        ? 'Состав выбора или связь с WB изменилась. Обновите список и отметьте карточки заново.'
+                        : err && err.status === 403
+                            ? 'У этого аккаунта нет доступа к выбранным карточкам Wildberries.'
+                            : 'Не удалось проверить точный выбор WB. Повторите действие со свежим списком.';
+                    return false;
+                }).finally(function () {
+                    if (self._wbEditHandoff === handoff) {
+                        self._wbEditHandoff = null;
+                        self.wbEditBusy = false;
+                        if (handoff.returnNonce) self.consumeWorkspaceReturn(handoff.returnNonce);
+                    }
+                });
+            },
+            postWbSelectionTokenForm: function (selectionToken) {
+                var csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+                if (!this.urls.wbBulkEdit || typeof selectionToken !== 'string' ||
+                    !selectionToken || selectionToken.length > 24 * 1024) {
+                    this.error = 'Не удалось открыть редактор WB с проверенным выбором. Обновите страницу и повторите действие.';
+                    return false;
+                }
+                if (!csrf) {
+                    this.error = 'Защита формы недоступна. Обновите страницу и повторите действие.';
+                    return false;
+                }
+                var form = document.createElement('form');
+                form.method = 'post';
+                form.action = this.urls.wbBulkEdit;
+                [
+                    ['csrf_token', csrf],
+                    ['selection_token', selectionToken],
+                ].forEach(function (entry) {
+                    var input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = entry[0];
+                    input.value = entry[1];
+                    form.appendChild(input);
+                });
+                document.body.appendChild(form);
+                form.submit();
+                return true;
             },
             navigateCommonContent: function (editorIds, selectionIds) {
                 var scope = this.buildWorkspaceReturnScope();
@@ -1305,6 +1562,7 @@
             },
             load: function () {
                 var self = this;
+                this.invalidateWbEditHandoff();
                 this.cancelSupplierRefreshReview({ restoreFocus: false });
                 var workspaceReturn = this.workspaceReturnPending ? workspaceReturnCapsule : null;
                 if (workspaceReturn && !this.workspaceReturnScopeMatches(workspaceReturn.scope)) {
@@ -1373,7 +1631,9 @@
                                 self.itemsScope = scope;
                                 if (batchIds && workspaceReturn.selectionIds.every(function (id) {
                                     return batchIds.indexOf(id) !== -1;
-                                })) {
+                                }) && self.workspaceReturnWbEditMatches(
+                                    data.items, workspaceReturn.selectionIds,
+                                )) {
                                     self.selected = workspaceReturn.selectionIds.slice();
                                 } else {
                                     self.workspaceReturnChanged();
@@ -1400,7 +1660,9 @@
                             });
                             if (workspaceReturn.selectionIds.every(function (id) {
                                 return returnedPage.ids.indexOf(id) !== -1;
-                            })) {
+                            }) && self.workspaceReturnWbEditMatches(
+                                data.items, workspaceReturn.selectionIds,
+                            )) {
                                 self.selected = workspaceReturn.selectionIds.slice();
                             } else {
                                 self.workspaceReturnChanged();
@@ -1905,6 +2167,14 @@
                         return;
                     }
                     this.navigateCommonContent(productIds, selectionIds);
+                    return;
+                }
+                if (action.key === 'wb_edit') {
+                    if (!selectionIds.length || selectionIds.length > MAX_BULK_SELECTION) {
+                        this.error = 'Для изменения карточек WB выберите от 1 до 200 товаров.';
+                        return;
+                    }
+                    this.openWbBulkEdit(selectionIds);
                     return;
                 }
                 if (action.key === 'wb_prices') {

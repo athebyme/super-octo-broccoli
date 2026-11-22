@@ -452,6 +452,96 @@ assert.equal(storeWorkspaceReturn(pricePayload, {storage: storage(), crypto: {},
     assert result.returncode == 0, result.stderr
 
 
+def test_wb_edit_workspace_return_binds_nullable_account_and_ordered_ids():
+    node = shutil.which("node")
+    assert node, "Node is required to verify the WB workspace return capsule"
+    script = r"""
+const assert = require('node:assert/strict');
+const {
+  storeWorkspaceReturn, workspaceReturnFromHash, WORKSPACE_RETURN_SESSION_KEY,
+} = require('./static/common-product-content.js');
+function storage() {
+  const values = new Map();
+  return {
+    values,
+    getItem(key) { return values.has(key) ? values.get(key) : null; },
+    setItem(key, value) { values.set(key, String(value)); },
+    removeItem(key) { values.delete(key); },
+  };
+}
+let randomByte = 0;
+const crypto = {getRandomValues(bytes) {
+  for (let i = 0; i < bytes.length; i += 1) bytes[i] = (randomByte + i) & 255;
+  randomByte += 16;
+  return bytes;
+}};
+const owner = '7:9';
+const wbEditTarget = {accountId: null, productIds: [4402, 4401]};
+const payload = {
+  owner, wbEditTarget, selectionIds: [12, 11],
+  scope: {
+    activeTab: '', search: 'Pipedream', supplier: '', has_photos: '',
+    stock: '', sort: 'title', visibleCount: 50,
+  },
+  batch: 'signed.import-batch_token',
+};
+const saved = storage();
+const options = {storage: saved, crypto, now: 1800000000000};
+const nonce = storeWorkspaceReturn(payload, options);
+assert.match(nonce, /^[a-f0-9]{32}$/);
+const capsule = JSON.parse(saved.getItem(WORKSPACE_RETURN_SESSION_KEY));
+assert.equal(capsule.v, 5);
+assert.equal(Object.hasOwn(capsule, 'editorIds'), false,
+  'WB edit has its own typed purpose instead of using the 50-ID common-content purpose');
+assert.deepEqual(capsule.wbEditTarget, wbEditTarget);
+assert.deepEqual(capsule.selectionIds, payload.selectionIds);
+assert.equal(capsule.batch, payload.batch);
+assert.deepEqual(workspaceReturnFromHash('#workspace-return=' + nonce, {
+  ...options, owner, wbEditTarget,
+}), capsule, 'the return page checks account and exact ordered WB IDs');
+
+for (const mismatch of [
+  {accountId: 'new-wb-account', productIds: [4402, 4401]},
+  {accountId: null, productIds: [4401, 4402]},
+  {accountId: null, productIds: [4402]},
+]) {
+  const copy = storage();
+  const copyNonce = storeWorkspaceReturn(payload, {...options, storage: copy});
+  assert.equal(workspaceReturnFromHash('#workspace-return=' + copyNonce, {
+    ...options, storage: copy, owner, wbEditTarget: mismatch,
+  }), null, 'a changed WB account, order, or count clears the exact return capsule');
+  assert.equal(copy.getItem(WORKSPACE_RETURN_SESSION_KEY), null);
+}
+
+for (const invalid of [
+  {accountId: '', productIds: [1]},
+  {accountId: ' account ', productIds: [1]},
+  {accountId: 'x'.repeat(101), productIds: [1]},
+  {accountId: null, productIds: [1, 1]},
+  {accountId: null, productIds: Array.from({length: 201}, (_, i) => i + 1)},
+  {accountId: null, productIds: [1], ignored: true},
+]) {
+  assert.equal(storeWorkspaceReturn({...payload, wbEditTarget: invalid}, options), null);
+}
+assert.equal(storeWorkspaceReturn({...payload, selectionIds: [12]}, options), null,
+  'the capsule requires one linked WB product per source selection');
+const namedAccountNonce = storeWorkspaceReturn({...payload, wbEditTarget: {
+  accountId: 'synthetic-account', productIds: [4402, 4401],
+}}, {...options, storage: storage()});
+assert.match(namedAccountNonce, /^[a-f0-9]{32}$/,
+  'a configured WB account ID is also retained exactly');
+"""
+    result = subprocess.run(
+        [node, "-e", script],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_ozon_preparation_workspace_return_binds_exact_job_and_source_scope():
     node = shutil.which("node")
     assert node, "Node is required to verify the Ozon preparation return helper"
