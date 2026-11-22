@@ -1741,6 +1741,16 @@ def run():
         assert selection_screenshot_geometry["viewport"] == 320
         assert selection_screenshot_geometry["scroll"] <= 321
         assert selection_screenshot_geometry["checkedUpdateCount"] == 55
+        selection_status = page.locator('[role="status"] strong').filter(
+            has_text="Выбрано 55 из 55 позиций с обновлениями по текущему фильтру.",
+        )
+        selection_status.evaluate("""element => {
+            const status = element.closest('[role="status"]');
+            if (!status) throw new Error('filtered update selection status is missing');
+            // The mobile header is fixed at 56px; leave a small gap below it.
+            status.style.scrollMarginTop = '72px';
+            status.scrollIntoView({block: 'start', inline: 'nearest'});
+        }""")
         page.screenshot(
             path=REPORT_PATH.parent / update_selection_screenshot,
             animations="disabled",
