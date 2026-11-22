@@ -658,7 +658,7 @@ async function finishSupplierRefresh(data, ids) {
   assert.match(templateText, /aria-labelledby="mp-supplier-refresh-dialog-title"/);
   assert.match(templateText, /Данные на площадках не меняются/);
   assert.match(templateText, /filename='my-products-beta\.css', v='20261121-supplier-refresh-review-r40'/);
-  assert.match(templateText, /filename='my-products-beta\.js', v='20261122-supplier-catalog-review-r44'/);
+  assert.match(templateText, /filename='my-products-beta\.js', v='20261122-supplier-refreshed-bulk-r46'/);
   assert.match(templateText, /filename='common-product-content\.js', v='20261121-price-result-return-r41'/);
   assert.match(commonTemplateText, /filename='common-product-content\.js', v='20261121-common-content-workspace-return-r36'/);
   assert.match(stylesheetText, /\.mp-refresh-result\s*\{[^}]*scroll-margin-top:\s*72px/s);
@@ -1537,6 +1537,87 @@ class SupplierRefreshHandoffRouteTest(unittest.TestCase):
         self.assertEqual(regular_feed.get_json()['batch_kind'], 'import')
         self.assertEqual(regular_page.status_code, 200)
         self.assertEqual(render.call_args.kwargs['batch_kind'], 'import')
+
+    def test_supplier_refresh_result_batch_reads_more_than_one_feed_page_exactly(self):
+        from sqlalchemy import event
+        from models import ImportedProduct, db
+        from routes.suppliers import SupplierService
+
+        rows = [
+            ImportedProduct(
+                seller_id=self.seller_id,
+                supplier_id=self.supplier_id,
+                external_id=f'result-batch-{index}',
+                source_type='synthetic',
+                title=f'Result batch product {index}',
+                import_status='validated',
+            )
+            for index in range(51)
+        ]
+        db.session.add_all(rows)
+        db.session.flush()
+        ordered_ids = [row.id for row in reversed(rows)]
+        db.session.commit()
+        result = SimpleNamespace(
+            imported=len(ordered_ids),
+            skipped=0,
+            errors=0,
+            total_requested=len(ordered_ids),
+            item_results=[
+                {'product_id': product_id, 'status': 'updated', 'reason': None}
+                for product_id in ordered_ids
+            ],
+            success=True,
+        )
+        with self._auth(), patch(
+            'routes.suppliers.SupplierService.update_imported_products',
+            return_value=result,
+        ) as refresh:
+            post = self.client.post(
+                '/my-products/refresh-from-supplier',
+                json={'product_ids': ordered_ids},
+            )
+        self.assertEqual(post.status_code, 200)
+        refresh.assert_called_once_with(self.seller_id, ordered_ids)
+        batch_token = post.get_json()['updated_batch']
+        self.assertIsInstance(batch_token, str)
+
+        writes = []
+
+        def capture_write(_conn, _cursor, statement, _parameters, _context, _many):
+            if statement.lstrip().upper().startswith(
+                ('INSERT', 'UPDATE', 'DELETE', 'REPLACE'),
+            ):
+                writes.append(statement)
+
+        event.listen(self.engine, 'before_cursor_execute', capture_write)
+        try:
+            with self._auth(), patch.object(
+                SupplierService, 'update_imported_products',
+            ) as refresh, patch.object(
+                SupplierService, 'preview_imported_products',
+            ) as preview:
+                response = self.client.get('/api/my-products?' + urlencode({
+                    'import_batch': batch_token,
+                }))
+            refresh.assert_not_called()
+            preview.assert_not_called()
+        finally:
+            event.remove(self.engine, 'before_cursor_execute', capture_write)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(writes, [], 'opening the exact result batch is read-only')
+        payload = response.get_json()
+        self.assertEqual(payload['batch_kind'], 'supplier_refresh_result')
+        self.assertEqual(payload['import_batch_count'], 51)
+        self.assertEqual([item['id'] for item in payload['items']], ordered_ids)
+        self.assertEqual(payload['pagination'], {
+            'page': 1,
+            'per_page': 200,
+            'pages': 1,
+            'total': 51,
+            'has_next': False,
+        })
 
     def test_supplier_refresh_post_without_verified_updates_returns_null_batch(self):
         result = SimpleNamespace(
