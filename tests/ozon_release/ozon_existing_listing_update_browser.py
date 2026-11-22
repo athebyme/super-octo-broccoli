@@ -1200,7 +1200,9 @@ def exercise_signed_import_review_return(page):
     returned_version = local_save_report["rows"][0]["version"]
     assert returned_version > expected_target["version"]
     assert returned_version == state["local_save_post"]["saved_version"]
-    assert local_save_report["rows"][0]["status"] in {"ready_to_retry", "needs_input"}
+    receipt_status = local_save_report["rows"][0]["status"]
+    assert receipt_status in {"ready_to_retry", "needs_input"}
+    assert state["local_save_post"]["status"] == receipt_status
     receipt = repair_editor.get_by_role("region", name="Результат сохранения")
     receipt.wait_for()
     review_link = receipt.locator("a[data-draft-selection-review]")
@@ -1224,13 +1226,19 @@ def exercise_signed_import_review_return(page):
     assert version_delta > 0
     assert saved_target["imported_product_id"] == expected_target["imported_product_id"]
     assert saved_target["published_listing_id"] == expected_target["published_listing_id"]
-    assert {
-        key: value for key, value in saved_target.items()
-        if key not in {"version", "content_json"}
-    } == {
-        key: value for key, value in expected_target.items()
-        if key not in {"version", "content_json"}
-    }
+    revalidated_fields = {"version", "content_json", "status", "validation_status"}
+    changed_fields = sorted(
+        key for key in saved_target
+        if key not in revalidated_fields
+        and saved_target[key] != expected_target[key]
+    )
+    assert not changed_fields, f"unexpected changed draft fields: {changed_fields}"
+    if receipt_status == "ready_to_retry":
+        assert saved_target["status"] == "ready"
+        assert saved_target["validation_status"] == "valid"
+    else:
+        assert saved_target["status"] in {"blocked", "needs_category"}
+        assert saved_target["validation_status"] == "invalid"
     before_content = json.loads(expected_target["content_json"])
     after_content = json.loads(saved_target["content_json"])
     assert after_content["description"] == target_description
