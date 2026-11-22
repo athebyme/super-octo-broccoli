@@ -452,6 +452,182 @@ assert.equal(storeWorkspaceReturn(pricePayload, {storage: storage(), crypto: {},
     assert result.returncode == 0, result.stderr
 
 
+def test_ozon_preparation_workspace_return_binds_exact_job_and_source_scope():
+    node = shutil.which("node")
+    assert node, "Node is required to verify the Ozon preparation return helper"
+    script = r"""
+const assert = require('node:assert/strict');
+const {
+    storeWorkspaceReturn, workspaceReturnFromHash,
+    bindOzonPreparationWorkspaceResult, ozonPreparationWorkspaceReturnHref,
+    WORKSPACE_RETURN_SESSION_KEY,
+} = require('./static/common-product-content.js');
+
+function storage() {
+    const values = new Map();
+    return {
+        values,
+        getItem(key) { return values.has(key) ? values.get(key) : null; },
+        setItem(key, value) { values.set(key, String(value)); },
+        removeItem(key) { values.delete(key); },
+    };
+}
+let randomByte = 0;
+const crypto = { getRandomValues(bytes) {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = (randomByte + i) & 255;
+    randomByte += 16;
+    return bytes;
+} };
+const now = 1800000000000;
+const owner = '41:9';
+const jobUid = 'ozon-upload-' + 'a'.repeat(32);
+const otherJobUid = 'ozon-upload-' + 'b'.repeat(32);
+const prepareTarget = {accountId: 32, productIds: [301, 7, 22]};
+const payload = {
+    owner,
+    prepareTarget,
+    selectionIds: [],
+    scope: {tab: 'all', search: 'крем', sort: 'title', page: 4},
+    batch: 'signed-import-batch-token',
+};
+const saved = storage();
+const options = {storage: saved, crypto, now};
+const nonce = storeWorkspaceReturn(payload, options);
+assert.match(nonce, /^[a-f0-9]{32}$/);
+const hash = '#workspace-return=' + nonce;
+const pending = JSON.parse(saved.getItem(WORKSPACE_RETURN_SESSION_KEY));
+assert.equal(pending.v, 4);
+assert.equal(pending.prepareJobUid, null);
+assert.deepEqual(pending.prepareTarget, prepareTarget);
+assert.deepEqual(pending.selectionIds, payload.selectionIds,
+    'empty original selection is preserved independently from the exact prep target');
+assert.deepEqual(pending.scope, payload.scope);
+assert.equal(pending.batch, payload.batch);
+assert.equal(workspaceReturnFromHash(hash, {...options, owner}).nonce, nonce,
+    'My Products can read v4 capsules with the regular owner and nonce check');
+assert.equal(globalThis.SellerHubCommonContent.bindOzonPreparationWorkspaceResult,
+    bindOzonPreparationWorkspaceResult);
+assert.equal(globalThis.SellerHubCommonContent.ozonPreparationWorkspaceReturnHref,
+    ozonPreparationWorkspaceReturnHref);
+
+const beforeInvalidBinding = saved.getItem(WORKSPACE_RETURN_SESSION_KEY);
+for (const invalid of [
+    {owner, prepareTarget, jobUid: 'wrong-shape'},
+    {owner: '55:4', prepareTarget, jobUid},
+    {owner, prepareTarget: {accountId: 33, productIds: [301, 7, 22]}, jobUid},
+    {owner, prepareTarget: {accountId: 32, productIds: [7, 301, 22]}, jobUid},
+]) {
+    assert.equal(bindOzonPreparationWorkspaceResult(hash, invalid, options), '');
+    assert.equal(saved.getItem(WORKSPACE_RETURN_SESSION_KEY), beforeInvalidBinding,
+        'a bad binding attempt must not consume or alter the valid pending capsule');
+}
+assert.equal(bindOzonPreparationWorkspaceResult(hash, {
+    owner, prepareTarget, jobUid,
+}, options), hash);
+const bound = JSON.parse(saved.getItem(WORKSPACE_RETURN_SESSION_KEY));
+assert.equal(bound.v, 4);
+assert.equal(bound.prepareJobUid, jobUid);
+assert.equal(bound.expiresAt, pending.expiresAt, 'binding never extends the existing TTL');
+assert.deepEqual(bound.prepareTarget, pending.prepareTarget);
+assert.deepEqual(bound.selectionIds, pending.selectionIds);
+assert.deepEqual(bound.scope, pending.scope);
+assert.equal(bound.batch, pending.batch);
+assert.equal(bindOzonPreparationWorkspaceResult(hash, {
+    owner, prepareTarget, jobUid,
+}, options), hash, 'same exact result binding is idempotent');
+const afterValidBinding = saved.getItem(WORKSPACE_RETURN_SESSION_KEY);
+assert.equal(bindOzonPreparationWorkspaceResult(hash, {
+    owner, prepareTarget, jobUid: otherJobUid,
+}, options), '', 'a different result job cannot rebind the capsule');
+assert.equal(saved.getItem(WORKSPACE_RETURN_SESSION_KEY), afterValidBinding);
+
+const returnPayload = {
+    workspaceUrl: '/my-products/beta', owner, accountId: 32,
+    productIds: [301, 7, 22], jobUid,
+};
+const href = '/my-products/beta?import_batch=' + payload.batch + hash;
+assert.equal(ozonPreparationWorkspaceReturnHref(
+    returnPayload, options,
+), href);
+
+const boundCapsuleBytes = saved.getItem(WORKSPACE_RETURN_SESSION_KEY);
+for (const invalid of [
+    {...returnPayload, jobUid: otherJobUid},
+    {...returnPayload, owner: '55:4'},
+    {...returnPayload, accountId: 33},
+    {...returnPayload, productIds: [7, 301, 22]},
+    {...returnPayload, productIds: [301, 7]},
+    {...returnPayload, workspaceUrl: 'https://outside.test/my-products/beta'},
+]) {
+    assert.equal(ozonPreparationWorkspaceReturnHref(invalid, options), '');
+    assert.equal(saved.getItem(WORKSPACE_RETURN_SESSION_KEY), boundCapsuleBytes,
+        'a different history job or foreign target must not consume the valid capsule');
+}
+assert.equal(ozonPreparationWorkspaceReturnHref(returnPayload, options), href,
+    'a detail/history page without a URL hash can restore its exact bound capsule');
+assert.equal(ozonPreparationWorkspaceReturnHref(returnPayload, {
+    ...options, hash, now: bound.expiresAt,
+}), '', 'expired capsules cannot produce a restoration link');
+assert.equal(saved.getItem(WORKSPACE_RETURN_SESSION_KEY), boundCapsuleBytes,
+    'expiry fallback is non-destructive to the stored slot');
+
+const unboundStorage = storage();
+const unboundNonce = storeWorkspaceReturn(payload, {...options, storage: unboundStorage});
+const unboundHash = '#workspace-return=' + unboundNonce;
+assert.equal(ozonPreparationWorkspaceReturnHref(returnPayload, {
+    ...options, storage: unboundStorage, hash: unboundHash,
+}), '', 'an unbound preparation has no result return link');
+assert.ok(unboundStorage.getItem(WORKSPACE_RETURN_SESSION_KEY),
+    'an unbound scope remains available for the real result binding');
+
+const maxTarget = {
+    accountId: 32,
+    productIds: Array.from({length: 200}, (_, index) => 1000 + index),
+};
+const maxStorage = storage();
+const maxOptions = {...options, storage: maxStorage};
+const maxNonce = storeWorkspaceReturn({
+    owner, prepareTarget: maxTarget, selectionIds: [], scope: {}, batch: null,
+}, maxOptions);
+assert.match(maxNonce, /^[a-f0-9]{32}$/);
+const maxHash = '#workspace-return=' + maxNonce;
+assert.equal(bindOzonPreparationWorkspaceResult(maxHash, {
+    owner, prepareTarget: maxTarget, jobUid,
+}, maxOptions), maxHash);
+assert.equal(ozonPreparationWorkspaceReturnHref({
+    workspaceUrl: '/my-products/beta', owner,
+    accountId: 32, productIds: maxTarget.productIds, jobUid,
+}, maxOptions), '/my-products/beta' + maxHash);
+for (const invalidTarget of [
+    {accountId: 32, productIds: []},
+    {accountId: 32, productIds: [1, 1]},
+    {accountId: 32, productIds: [true]},
+    {accountId: 32, productIds: Array.from({length: 201}, (_, index) => index + 1)},
+    {accountId: 0, productIds: [1]},
+    {accountId: 32, productIds: [1], ignored: true},
+]) {
+    assert.equal(storeWorkspaceReturn({
+        owner, prepareTarget: invalidTarget, selectionIds: [], scope: {}, batch: null,
+    }, options), null);
+}
+assert.equal(storeWorkspaceReturn({
+    ...payload, editorIds: [7],
+}, options), null, 'preparation target is exclusive with editor targets');
+assert.equal(storeWorkspaceReturn({
+    ...payload, priceTarget: {channel: 'wb', accountId: null, ids: [7]},
+}, options), null, 'preparation target is exclusive with price targets');
+"""
+    result = subprocess.run(
+        [node, "-e", script],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_production_editor_handlers_restore_native_focus_after_dom_replacement():
     node = shutil.which("node")
     assert node, "Node is required to exercise the production editor event handlers"

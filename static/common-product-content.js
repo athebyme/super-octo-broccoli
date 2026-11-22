@@ -13,6 +13,10 @@
         'v', 'nonce', 'owner', 'expiresAt', 'priceTarget', 'selectionIds', 'scope', 'batch',
     ];
     var WORKSPACE_RETURN_V3_CAPSULE_KEYS = WORKSPACE_RETURN_V2_CAPSULE_KEYS.concat('priceResult');
+    var WORKSPACE_RETURN_V4_CAPSULE_KEYS = [
+        'v', 'nonce', 'owner', 'expiresAt', 'prepareTarget', 'prepareJobUid',
+        'selectionIds', 'scope', 'batch',
+    ];
 
     function workspaceReturnNow(options) {
         if (options && typeof options.now === 'function') return options.now();
@@ -98,6 +102,25 @@
             workspaceReturnSameOrderedIds(left.ids, right.ids);
     }
 
+    function workspaceReturnPrepareTargetValid(target) {
+        if (!workspaceReturnPlainObject(target)) return false;
+        var keys = Object.keys(target).sort();
+        return keys.length === 2 && keys[0] === 'accountId' && keys[1] === 'productIds' &&
+            Number.isSafeInteger(target.accountId) && target.accountId > 0 &&
+            workspaceReturnIdList(target.productIds, 200);
+    }
+
+    function workspaceReturnPrepareTargetsEqual(left, right) {
+        return workspaceReturnPrepareTargetValid(left) &&
+            workspaceReturnPrepareTargetValid(right) &&
+            left.accountId === right.accountId &&
+            workspaceReturnSameOrderedIds(left.productIds, right.productIds);
+    }
+
+    function workspaceReturnPrepareJobUidValid(value) {
+        return typeof value === 'string' && /^ozon-upload-[a-f0-9]{32}$/.test(value);
+    }
+
     function workspaceReturnPriceResult(result) {
         if (!workspaceReturnPlainObject(result)) return null;
         var keys = Object.keys(result).sort().join(',');
@@ -135,7 +158,8 @@
             if (!workspaceReturnPlainObject(capsule)) return false;
             var expectedKeys = capsule.v === 1 ? WORKSPACE_RETURN_V1_CAPSULE_KEYS :
                 capsule.v === 2 ? WORKSPACE_RETURN_V2_CAPSULE_KEYS :
-                    capsule.v === 3 ? WORKSPACE_RETURN_V3_CAPSULE_KEYS : null;
+                    capsule.v === 3 ? WORKSPACE_RETURN_V3_CAPSULE_KEYS :
+                        capsule.v === 4 ? WORKSPACE_RETURN_V4_CAPSULE_KEYS : null;
             if (!expectedKeys || Object.keys(capsule).length !== expectedKeys.length ||
                 !expectedKeys.every(function (key) {
                     return Object.prototype.hasOwnProperty.call(capsule, key);
@@ -155,6 +179,11 @@
                 ));
             if (!commonValid) return false;
             if (capsule.v === 1) return workspaceReturnIdList(capsule.editorIds, 50);
+            if (capsule.v === 4) {
+                return workspaceReturnPrepareTargetValid(capsule.prepareTarget) &&
+                    (capsule.prepareJobUid === null ||
+                        workspaceReturnPrepareJobUidValid(capsule.prepareJobUid));
+            }
             if (!workspaceReturnPriceTargetValid(capsule.priceTarget) ||
                 capsule.selectionIds.length !== capsule.priceTarget.ids.length) return false;
             if (capsule.v === 2) return true;
@@ -175,8 +204,13 @@
         if (!Number.isSafeInteger(expiresAt)) return null;
         var nonce = workspaceReturnNonce(options);
         if (!nonce || !/^[a-f0-9]{32}$/.test(nonce)) return null;
+        var hasEditorIds = Object.prototype.hasOwnProperty.call(payload, 'editorIds');
         var hasPriceTarget = Object.prototype.hasOwnProperty.call(payload, 'priceTarget');
+        var hasPriceResult = Object.prototype.hasOwnProperty.call(payload, 'priceResult');
+        var hasPrepareTarget = Object.prototype.hasOwnProperty.call(payload, 'prepareTarget');
+        if (hasPrepareTarget && (hasEditorIds || hasPriceTarget || hasPriceResult)) return null;
         if (hasPriceTarget && !workspaceReturnPriceTargetValid(payload.priceTarget)) return null;
+        if (hasPrepareTarget && !workspaceReturnPrepareTargetValid(payload.prepareTarget)) return null;
         var capsule = {
             v: 1,
             nonce: nonce,
@@ -191,6 +225,15 @@
             capsule.v = 2;
             delete capsule.editorIds;
             capsule.priceTarget = payload.priceTarget;
+        }
+        if (hasPrepareTarget) {
+            capsule.v = 4;
+            delete capsule.editorIds;
+            capsule.prepareTarget = {
+                accountId: payload.prepareTarget.accountId,
+                productIds: payload.prepareTarget.productIds.slice(),
+            };
+            capsule.prepareJobUid = null;
         }
         if (!workspaceReturnCapsuleValid(capsule)) return null;
         return workspaceReturnWrite(capsule, options) ? nonce : null;
@@ -273,6 +316,26 @@
         return capsule;
     }
 
+    function workspaceReturnReadForOwner(owner, options) {
+        if (!workspaceReturnOwnerValid(owner)) return null;
+        var capsule = workspaceReturnReadStored(workspaceReturnStorage(options));
+        if (!capsule || capsule.owner !== owner) return null;
+        var now = workspaceReturnNow(options);
+        if (!Number.isSafeInteger(now) || now < 0 ||
+            !Number.isSafeInteger(now + WORKSPACE_RETURN_TTL_MS) ||
+            capsule.expiresAt <= now ||
+            capsule.expiresAt > now + WORKSPACE_RETURN_TTL_MS) return null;
+        return capsule;
+    }
+
+    function workspaceReturnReadForExactHash(hash, owner, options) {
+        if (typeof hash !== 'string' || hash.length > 64) return null;
+        var match = hash.match(/^#workspace-return=([a-f0-9]{32})$/);
+        if (!match) return null;
+        var capsule = workspaceReturnReadForOwner(owner, options);
+        return capsule && capsule.nonce === match[1] ? capsule : null;
+    }
+
     function priceWorkspaceReturnHref(hash, payload, options) {
         if (!workspaceReturnPlainObject(payload) || payload.workspaceUrl !== '/my-products/beta' ||
             !workspaceReturnOwnerValid(payload.owner)) return '';
@@ -304,6 +367,39 @@
         var capsule = workspaceReturnFromHash(hash, Object.assign({}, options || {}, { owner: payload.owner }));
         return capsule && capsule.v === 3 && workspaceReturnResultsEqual(capsule.priceResult, result)
             ? workspaceReturnHref(capsule) : '';
+    }
+
+    function bindOzonPreparationWorkspaceResult(hash, payload, options) {
+        if (!workspaceReturnPlainObject(payload) ||
+            !workspaceReturnOwnerValid(payload.owner) ||
+            !workspaceReturnPrepareTargetValid(payload.prepareTarget) ||
+            !workspaceReturnPrepareJobUidValid(payload.jobUid)) return '';
+        var capsule = workspaceReturnReadForExactHash(hash, payload.owner, options);
+        if (!capsule || capsule.v !== 4 ||
+            !workspaceReturnPrepareTargetsEqual(capsule.prepareTarget, payload.prepareTarget) ||
+            (capsule.prepareJobUid !== null && capsule.prepareJobUid !== payload.jobUid)) {
+            return '';
+        }
+        if (capsule.prepareJobUid === payload.jobUid) return hash;
+        capsule.prepareJobUid = payload.jobUid;
+        return workspaceReturnWrite(capsule, options) ? hash : '';
+    }
+
+    function ozonPreparationWorkspaceReturnHref(payload, options) {
+        if (!workspaceReturnPlainObject(payload) ||
+            payload.workspaceUrl !== '/my-products/beta' ||
+            !workspaceReturnOwnerValid(payload.owner) ||
+            !workspaceReturnPrepareJobUidValid(payload.jobUid)) return '';
+        var target = {
+            accountId: payload.accountId,
+            productIds: payload.productIds,
+        };
+        if (!workspaceReturnPrepareTargetValid(target)) return '';
+        var capsule = workspaceReturnReadForOwner(payload.owner, options);
+        if (!capsule || capsule.v !== 4 ||
+            capsule.prepareJobUid !== payload.jobUid ||
+            !workspaceReturnPrepareTargetsEqual(capsule.prepareTarget, target)) return '';
+        return workspaceReturnHref(capsule);
     }
 
     function workspaceReturnHref(returnCapsule) {
@@ -390,6 +486,8 @@
             priceWorkspaceReturnHref: priceWorkspaceReturnHref,
             bindPriceWorkspaceResult: bindPriceWorkspaceResult,
             priceResultWorkspaceReturnHref: priceResultWorkspaceReturnHref,
+            bindOzonPreparationWorkspaceResult: bindOzonPreparationWorkspaceResult,
+            ozonPreparationWorkspaceReturnHref: ozonPreparationWorkspaceReturnHref,
             consumeWorkspaceReturn: consumeWorkspaceReturn,
             WORKSPACE_RETURN_SESSION_KEY: WORKSPACE_RETURN_SESSION_KEY,
             selectionUrl: selectionUrl,
@@ -406,6 +504,8 @@
         global.SellerHubCommonContent.priceWorkspaceReturnHref = priceWorkspaceReturnHref;
         global.SellerHubCommonContent.bindPriceWorkspaceResult = bindPriceWorkspaceResult;
         global.SellerHubCommonContent.priceResultWorkspaceReturnHref = priceResultWorkspaceReturnHref;
+        global.SellerHubCommonContent.bindOzonPreparationWorkspaceResult = bindOzonPreparationWorkspaceResult;
+        global.SellerHubCommonContent.ozonPreparationWorkspaceReturnHref = ozonPreparationWorkspaceReturnHref;
         global.SellerHubCommonContent.consumeWorkspaceReturn = consumeWorkspaceReturn;
         global.SellerHubCommonContent.selectionUrl = selectionUrl;
         global.SellerHubCommonContent.serializeFieldChange = serializeFieldChange;
