@@ -626,6 +626,7 @@ def local_post_allowlist(fixture: dict[str, int]) -> frozenset[str]:
     return frozenset({
         "/login",
         "/products/selection/resolve",
+        "/api/characteristics/multi-category",
         "/products/bulk-edit",
         f"/products/{product_id}/edit",
         f"/products/{foreign_product_id}/edit",
@@ -2294,7 +2295,16 @@ def assert_review_summary(page, *, changed: str, skipped: str = "0") -> None:
     assert "Изменится" in cards and changed in cards, cards
     assert "Пропущено" in cards and skipped in cards, cards
     assert "Ошибки" in cards and "0" in cards, cards
-    assert "Предпросмотр" in page.content() and "не отправляет данные в WB" in page.content()
+    assert "Предпросмотр" in page.content() and "не отправляет изменения в Wildberries" in page.content()
+
+
+def assert_bulk_selected_count(page, count: int) -> None:
+    summary = page.locator("p").filter(
+        has_text="Для характеристик выберите категорию",
+    )
+    assert summary.count() == 1, "Expected the bulk editor's selected-count summary"
+    count_badge = summary.locator("span").first.inner_text()
+    assert f"{count} выбрано" in " ".join(count_badge.split()), count_badge
 
 
 def click_next_product_page(page, *, sort: str, expected_page: int = 2) -> None:
@@ -2562,6 +2572,178 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
                 unmapped_status=category_probe["Unmapped synthetic category"]["status"],
             )
 
+            # Exercise the actual mixed-category bulk editor with a normal
+            # two-row selection. Only the selected Wildberries category may
+            # appear in the preview; the other category remains an explicit
+            # skip and preview must not cross the fake provider boundary.
+            two_subject_context = browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                service_workers="block",
+            )
+            two_subject_context.route(
+                "**/*",
+                lambda route: bridge(
+                    route,
+                    assets=assets,
+                    origin=origin,
+                    allowed_local_posts=allowed_local_posts,
+                ),
+            )
+            two_subject_page = two_subject_context.new_page()
+            two_subject_page.set_default_timeout(15000)
+            two_subject_page.on("pageerror", lambda error: REPORT["javascript_errors"].append(str(error)))
+            two_subject_page.on("response", record_http_response)
+            try:
+                two_subject_login = authenticate_isolated_browser_session(
+                    two_subject_page,
+                    username=USERNAME,
+                    next_path="/products",
+                )
+                assert two_subject_login == {
+                    "status": 200,
+                    "path": "/products",
+                    "redirected": True,
+                }, two_subject_login
+                two_subject_page.goto(
+                    BASE + "/products?sort=title&order=asc&page=1&per_page=100",
+                    wait_until="domcontentloaded",
+                )
+                selected_subject_ids = [
+                    fixture["product_id"],
+                    fixture["male_subject_product_id"],
+                ]
+                visible_product_ids = {
+                    int(value)
+                    for value in two_subject_page.locator(".product-checkbox").evaluate_all(
+                        "inputs => inputs.map(input => input.value)",
+                    )
+                }
+                assert set(selected_subject_ids) <= visible_product_ids, {
+                    "selected": selected_subject_ids,
+                    "visible": sorted(visible_product_ids),
+                }
+                for product_id in selected_subject_ids:
+                    two_subject_page.locator(
+                        f'.product-checkbox[value="{product_id}"]',
+                    ).check()
+                two_subject_page.wait_for_function(
+                    "() => document.querySelector('#selectedCount')?.textContent?.trim() === '2'",
+                    timeout=5000,
+                )
+                exact_selected_ids = two_subject_page.locator(
+                    '#bulkActionForm input[name="product_ids"]',
+                ).evaluate_all("inputs => inputs.map(input => Number(input.value))")
+                assert sorted(exact_selected_ids) == sorted(selected_subject_ids), exact_selected_ids
+                two_subject_page.get_by_role(
+                    "button", name="Редактировать", exact=True,
+                ).click()
+                two_subject_page.wait_for_url("**/products/bulk-edit")
+                assert_bulk_selected_count(two_subject_page, 2)
+                two_subject_page.locator(
+                    'input[name="operation"][value="update_characteristic"]',
+                ).check()
+                assert "В выборе 2 товаров из нескольких категорий." in two_subject_page.locator("body").inner_text()
+                other_category_buttons = two_subject_page.get_by_role("button").filter(
+                    has_text="Мастурбаторы мужские",
+                )
+                assert other_category_buttons.count() == 1
+                selected_category_buttons = two_subject_page.get_by_role("button").filter(
+                    has_text="Свечи эротик",
+                )
+                assert selected_category_buttons.count() == 1
+                category_button = selected_category_buttons.first
+                # Ignore the initial blank-category schema read triggered by
+                # opening this operation; wait for the exact user choice.
+                with two_subject_page.expect_response(
+                    lambda response: (
+                        response.request.method == "POST"
+                        and urlsplit(response.url).path == "/api/characteristics/multi-category"
+                        and json.loads(response.request.post_data or "{}").get("subject_ids") == [5880]
+                    ),
+                    timeout=5000,
+                ) as category_schema_response:
+                    category_button.click()
+                assert category_schema_response.value.status == 200
+                category_schema_request = json.loads(
+                    category_schema_response.value.request.post_data or "{}",
+                )
+                assert sorted(category_schema_request.get("product_ids", [])) == sorted(selected_subject_ids)
+                assert category_schema_request.get("subject_ids") == [5880]
+                selected_category_copy = two_subject_page.locator("body").inner_text()
+                assert (
+                    "Категория Свечи эротик: 1 из 2 выбранных товаров. "
+                    "Другие категории не изменятся."
+                ) in selected_category_copy
+
+                characteristic_select = two_subject_page.locator(
+                    'select[x-model="addingCharId"]:visible',
+                )
+                assert characteristic_select.count() == 1
+                characteristic_select.select_option("101")
+                value_field = two_subject_page.locator(
+                    'div[x-show="addingChar"] input[placeholder="Введите значение"]:visible',
+                )
+                assert value_field.count() == 1
+                value_field.fill("Mixed category preview only")
+                two_subject_page.get_by_role(
+                    "button", name="Добавить к изменениям", exact=True,
+                ).click()
+
+                fake_clients_before_preview = REPORT["fake_wb_client_instances"]
+                fake_writes_before_preview = REPORT["fake_wb_write_calls"]
+                with two_subject_page.expect_response(
+                    lambda response: response.request.method == "POST"
+                    and urlsplit(response.url).path == "/products/bulk-edit",
+                    timeout=5000,
+                ) as two_subject_preview_response:
+                    two_subject_page.locator(
+                        'form[action="/products/bulk-edit"] button[type="submit"]:visible',
+                    ).click()
+                assert two_subject_preview_response.value.status == 200
+                two_subject_page.wait_for_selector("section[aria-label='Сводка предпросмотра']")
+                two_subject_counts = two_subject_page.locator(
+                    "section[aria-label='Сводка предпросмотра'] div.sh-card",
+                ).evaluate_all("""cards => Object.fromEntries(cards.map(card => [
+                    card.querySelector('p.text-xs').textContent.trim(),
+                    Number(card.querySelector('p.text-2xl').textContent.trim()),
+                ]))""")
+                assert two_subject_counts == {
+                    "Выбрано": 2,
+                    "Подходит для операции": 1,
+                    "Изменится": 1,
+                    "Пропущено": 1,
+                    "Ошибки": 0,
+                }, two_subject_counts
+                assert "Для этой категории подходят 1 из 2 выбранных карточек." in two_subject_page.locator("body").inner_text()
+                assert two_subject_page.locator("section.sh-card--flush tbody tr").count() == 1
+                skipped_section = two_subject_page.locator("details.sh-card").filter(
+                    has_text="Пропущено: 1",
+                )
+                assert skipped_section.count() == 1
+                skipped_section.locator("summary").click()
+                skipped_text = skipped_section.inner_text()
+                assert "MALE-SUBJECT-FIXTURE" in skipped_text
+                assert "Карточка относится к другой категории Wildberries" in skipped_text
+                assert "subjectID" not in skipped_text
+                assert REPORT["fake_wb_client_instances"] == fake_clients_before_preview
+                assert REPORT["fake_wb_write_calls"] == fake_writes_before_preview
+                check(
+                    "mixed_subject_bulk_preview_uses_exact_selection_and_skips_other_category",
+                    selected_ids=sorted(selected_subject_ids),
+                    category_ids=category_schema_request.get("subject_ids"),
+                    counts=two_subject_counts,
+                    skip_reason="Карточка относится к другой категории Wildberries",
+                    fake_provider_writes_before_confirmation=0,
+                )
+                interaction(
+                    "two_product_mixed_category_preview_selects_one_category_without_writes",
+                    selected=2,
+                    eligible=1,
+                    skipped=1,
+                )
+            finally:
+                two_subject_context.close()
+
             page.get_by_role("button", name="Редактировать", exact=True).click()
             page.wait_for_url("**/products/bulk-edit")
             account_summary = page.locator("p.uppercase.tracking-wide")
@@ -2571,8 +2753,8 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             account_summary_text = " ".join(account_summary.inner_text().casefold().split())
             assert account_summary_text.startswith("аккаунт: wb edit synthetic shop"), account_summary_text
             assert "wb account wb-edit-account-synthetic" in account_summary_text, account_summary_text
-            assert account_summary_text.endswith("канал: wildberries"), account_summary_text
-            assert "50 товаров" in page.locator("body").inner_text()
+            assert account_summary_text.endswith("маркетплейс: wildberries"), account_summary_text
+            assert_bulk_selected_count(page, 50)
             assert "Pipedream" in page.locator("body").inner_text()
             assert_keyboard_focus(page, "bulk_editor")
             schema_race_observations = assert_bulk_schema_load_races(page)
@@ -2702,7 +2884,7 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             assert sorted(restored_selection_ids) == expected_selection_ids
             page.get_by_role("button", name="Редактировать", exact=True).click()
             page.wait_for_url("**/products/bulk-edit")
-            assert "50 товаров" in page.locator("body").inner_text()
+            assert_bulk_selected_count(page, 50)
             assert REPORT["fake_wb_client_instances"] == REPORT["fake_wb_write_calls"] == 0
             check("restored_filter_allows_exact_50_to_reopen_through_ui", selected=50)
             interaction("restored_filter_reopens_exact_50_product_selection_through_ui")
@@ -2860,11 +3042,12 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             page.goto(BASE + single_edit_path, wait_until="domcontentloaded")
             assert_keyboard_focus(page, "single_product_edit")
             characteristics_panel = page.locator("section[aria-labelledby='wb-characteristics-title']")
-            assert "subjectID 5880" in characteristics_panel.inner_text()
+            assert "Свечи эротик" in characteristics_panel.inner_text()
+            assert "subjectID 5880" not in characteristics_panel.inner_text()
             assert "4 заполнено · 31 в схеме" in characteristics_panel.inner_text()
             assert page.locator("#char_202").count() == 0
             assert page.locator("#char_303").get_attribute("type") == "number"
-            assert "(г)" in page.locator('label[for="char_303"]').inner_text()
+            assert "Единица: г" in page.locator('label[for="char_303"]').inner_text()
             assert page.locator("#char_404").get_attribute("multiple") is not None
             assert page.locator("#char_404 option").count() == 3
             assert page.locator("#char_303").input_value() == "125"
@@ -2876,6 +3059,10 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             assert page.locator("#char_506").input_value() == ""
             assert "Сохранено" in page.locator('label[for="char_506"]').inner_text()
             assert "SYNTHETIC-WB-SKU-000" in page.locator("body").inner_text()
+            assert page.get_by_text("Размеры и штрихкоды", exact=False).count() == 1
+            assert page.get_by_role(
+                "columnheader", name="ID размера Wildberries", exact=True,
+            ).count() == 1
             assert page.locator('input[name="sku"], input[name="sizes_json"]').count() == 0
 
             legacy_details = characteristics_panel.locator("details")
@@ -3648,8 +3835,8 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             page.goto(unmapped_url, wait_until="domcontentloaded")
             assert_keyboard_focus(page, "unmapped_product_edit")
             unmapped_panel = page.locator("section[aria-labelledby='wb-characteristics-title']")
-            assert "subjectID отсутствует" in unmapped_panel.inner_text()
-            assert "Редактирование характеристик недоступно" in unmapped_panel.inner_text()
+            assert "Категория Wildberries не подтверждена" in unmapped_panel.inner_text()
+            assert "Характеристики недоступны без актуального локального справочника Wildberries." in unmapped_panel.inner_text()
             assert page.locator('input[name^="char_"], select[name^="char_"], textarea[name^="char_"]').count() == 0
             unmapped_panel.locator("summary").click()
             assert "Stale prior-subject field" in unmapped_panel.inner_text()
@@ -3964,7 +4151,7 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             )
             mixed_page.get_by_role("button", name="Редактировать", exact=True).click()
             mixed_page.wait_for_url("**/products/bulk-edit")
-            assert "50 товаров" in mixed_page.locator("body").inner_text()
+            assert_bulk_selected_count(mixed_page, 50)
             mixed_page.locator('input[name="operation"][value="update_brand"]').check()
             mixed_page.locator("#value_brand").fill("Mixed Reviewed Brand")
             mixed_fake_baseline = {
