@@ -7,6 +7,7 @@ import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from html.parser import HTMLParser
 from unittest.mock import patch
 
 from flask import Flask
@@ -1329,23 +1330,100 @@ class WBBulkReviewReplayTest(unittest.TestCase):
         self.assertNotIn('name="sizes_json"', html)
         self.assertNotIn('name="sku"', html)
 
-    def test_product_edit_validates_country_weight_and_multi_value_patch(self):
+    def test_product_edit_get_renders_nullable_core_fields_as_blank(self):
+        with self.app.app_context():
+            from models import Product
+
+            product = Product.query.filter_by(
+                id=self.product_id, seller_id=self.seller_id,
+            ).one()
+            product.vendor_code = None
+            product.title = None
+            product.brand = None
+            product.description = None
+            self.db.session.commit()
+
+        response = self._client().get(f'/products/{self.product_id}/edit')
+        self.assertEqual(response.status_code, 200)
+
+        class CoreFieldParser(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.input_values = {}
+                self.description_parts = []
+                self.in_description = False
+
+            def handle_starttag(self, tag, attrs):
+                attributes = dict(attrs)
+                if tag == 'input' and attributes.get('id') in {
+                    'vendor_code', 'title', 'brand',
+                }:
+                    self.input_values[attributes['id']] = attributes.get('value', '')
+                if tag == 'textarea' and attributes.get('id') == 'description':
+                    self.in_description = True
+
+            def handle_data(self, data):
+                if self.in_description:
+                    self.description_parts.append(data)
+
+            def handle_endtag(self, tag):
+                if tag == 'textarea' and self.in_description:
+                    self.in_description = False
+
+        parser = CoreFieldParser()
+        parser.feed(response.get_data(as_text=True))
+        self.assertEqual(
+            parser.input_values,
+            {'vendor_code': '', 'title': '', 'brand': ''},
+        )
+        self.assertEqual(''.join(parser.description_parts).strip(), '')
+
+    def test_product_edit_validates_typed_patch_and_preserves_untouched_core_values(self):
         from models import CardEditHistory, Product
         from services.wb_edit_review import product_characteristics_form
 
+        legacy_values = {
+            'vendor_code': '  SYNTHETIC-9741  ',
+            'title': '  Synthetic WB product  ',
+            'brand': '  Pipedream  ',
+            'description': '  Legacy\n description  ',
+        }
         with self.app.app_context():
             product = Product.query.filter_by(
                 id=self.product_id, seller_id=self.seller_id,
             ).one()
+            for field, value in legacy_values.items():
+                setattr(product, field, value)
             revision = product_characteristics_form(product)['schema_revision']['revision']
+            self.db.session.commit()
 
         patch_payload = [
+            ('vendor_code', legacy_values['vendor_code']),
+            ('title', legacy_values['title']),
+            ('brand', legacy_values['brand']),
+            ('description', '  Legacy\r\n description  '),
             ('schema_revision', revision),
             ('char_202', 'Россия'),
             ('char_303', '125'),
             ('char_404', 'Хлопок\nЛён'),
         ]
-        fake_state = {'writes': 0, 'callbacks': 0}
+        fake_state = {
+            'writes': 0,
+            'callbacks': 0,
+            'updates': [],
+            'card': {
+                'nmID': 9741,
+                'subjectID': 5880,
+                'vendorCode': legacy_values['vendor_code'],
+                'title': legacy_values['title'],
+                'brand': legacy_values['brand'],
+                'description': legacy_values['description'],
+                'sizes': [{'techSize': 'S', 'skus': ['synthetic-size-sku']}],
+                'characteristics': [
+                    {'id': 101, 'name': 'Synthetic free-text field', 'value': ['old']},
+                ],
+            },
+        }
 
         class FakeWBClient:
             def __init__(self, *_args, **_kwargs):
@@ -1361,30 +1439,29 @@ class WBBulkReviewReplayTest(unittest.TestCase):
                 self, nm_id, updates, *, snapshot_context, before_send_callback, **_kwargs,
             ):
                 assert nm_id == 9741
-                changes = {item['id']: item['value'] for item in updates['characteristics']}
-                assert changes[202] == ['Россия']
-                assert changes[303] == 125
-                assert changes[404] == ['Хлопок', 'Лён']
-                before = {
-                    'nmID': 9741,
-                    'subjectID': 5880,
-                    'vendorCode': 'SYNTHETIC-9741',
-                    'title': 'Synthetic WB product',
-                    'brand': 'Pipedream',
-                    'description': '',
-                    'sizes': [{'techSize': 'S', 'skus': ['synthetic-size-sku']}],
-                    'characteristics': [
-                        {'id': 101, 'name': 'Synthetic free-text field', 'value': ['old']},
-                    ],
-                }
+                fake_state['updates'].append(copy.deepcopy(updates))
+                before = copy.deepcopy(fake_state['card'])
                 snapshot_context['before'] = copy.deepcopy(before)
-                before_send_callback({'before': before})
-                fake_state['callbacks'] += 1
+                if before_send_callback is not None:
+                    before_send_callback({'before': before})
+                    fake_state['callbacks'] += 1
                 after = copy.deepcopy(before)
-                after['characteristics'].extend([
-                    {'id': char_id, 'value': value}
-                    for char_id, value in changes.items()
-                ])
+                for key in ('vendorCode', 'title', 'brand', 'description'):
+                    if key in updates:
+                        after[key] = updates[key]
+                if 'characteristics' in updates:
+                    changes = {
+                        item['id']: item['value']
+                        for item in updates['characteristics']
+                    }
+                    assert changes[202] == ['Россия']
+                    assert changes[303] == 125
+                    assert changes[404] == ['Хлопок', 'Лён']
+                    after['characteristics'].extend([
+                        {'id': char_id, 'value': value}
+                        for char_id, value in changes.items()
+                    ])
+                fake_state['card'] = after
                 snapshot_context['after'] = after
                 fake_state['writes'] += 1
 
@@ -1393,10 +1470,36 @@ class WBBulkReviewReplayTest(unittest.TestCase):
                 f'/products/{self.product_id}/edit',
                 data=MultiDict(patch_payload),
             )
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(set(fake_state['updates'][0]), {'characteristics'})
+
+            explicit_edit_response = self._client().post(
+                f'/products/{self.product_id}/edit',
+                data=MultiDict([
+                    ('vendor_code', legacy_values['vendor_code']),
+                    ('title', 'Explicit nonempty title'),
+                    ('brand', legacy_values['brand']),
+                    ('description', '  Updated first line\r\nsecond line  '),
+                    ('schema_revision', revision),
+                ]),
+            )
+        self.assertEqual(explicit_edit_response.status_code, 302)
+        self.assertEqual(
+            fake_state['updates'][1],
+            {
+                'title': 'Explicit nonempty title',
+                'description': 'Updated first line\r\nsecond line',
+            },
+        )
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(fake_state, {'writes': 1, 'callbacks': 1})
+        self.assertEqual(fake_state['writes'], 2)
+        self.assertEqual(fake_state['callbacks'], 1)
         with self.app.app_context():
             product = Product.query.filter_by(id=self.product_id).one()
+            self.assertEqual(product.vendor_code, legacy_values['vendor_code'])
+            self.assertEqual(product.title, 'Explicit nonempty title')
+            self.assertEqual(product.brand, legacy_values['brand'])
+            self.assertEqual(product.description, 'Updated first line\r\nsecond line')
             characteristics = json.loads(product.characteristics_json)
             changed = {row['id']: row['value'] for row in characteristics}
             self.assertEqual(changed[202], ['Россия'])
@@ -1404,8 +1507,10 @@ class WBBulkReviewReplayTest(unittest.TestCase):
             self.assertEqual(changed[404], ['Хлопок', 'Лён'])
             history = CardEditHistory.query.filter_by(
                 product_id=self.product_id, seller_id=self.seller_id,
-            ).one()
-            self.assertEqual(history.changed_fields, ['characteristics'])
+            ).order_by(CardEditHistory.id.asc()).all()
+            self.assertEqual(len(history), 2)
+            self.assertEqual(history[0].changed_fields, ['characteristics'])
+            self.assertEqual(history[1].changed_fields, ['title', 'description'])
 
     def test_product_edit_stale_schema_fails_before_provider_boundary(self):
         from models import MarketplaceCategory, MarketplaceCategoryCharacteristic, Product

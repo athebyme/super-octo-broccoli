@@ -225,7 +225,7 @@
                     <input type="text"
                            name="vendor_code"
                            id="vendor_code"
-                           value="{{ product.vendor_code }}"
+                           value="{{ product.vendor_code or '' }}"
                            @focus="focused = true"
                            @blur="focused = false"
                            class="w-full px-4 py-2.5 border rounded-lg transition-all duration-200"
@@ -253,7 +253,7 @@
                     <input type="text"
                            name="title"
                            id="title"
-                           value="{{ product.title }}"
+                           value="{{ product.title or '' }}"
                            maxlength="60"
                            @input="titleLength = $event.target.value.length"
                            @focus="focused = true"
@@ -296,7 +296,7 @@
                     <input type="text"
                            name="brand"
                            id="brand"
-                           value="{{ product.brand }}"
+                           value="{{ product.brand or '' }}"
                            @focus="focused = true"
                            @blur="focused = false"
                            class="w-full px-4 py-2.5 border rounded-lg transition-all duration-200"
@@ -331,7 +331,7 @@
                               :class="[
                                   focused ? 'ring-2' : '',
                                   descLength > 5000 ? 'border-red-500 ring-red-500/20' : (focused ? 'border-indigo-500 ring-indigo-500/20' : 'border-gray-300 hover:border-gray-400')
-                              ]">{{ product.description }}</textarea>
+                              ]">{{ product.description or '' }}</textarea>
                     <div class="mt-2 flex items-center justify-between">
                         <div class="h-1.5 flex-1 bg-gray-200 rounded-full overflow-hidden mr-4">
                             <div class="h-full transition-all duration-300 rounded-full"

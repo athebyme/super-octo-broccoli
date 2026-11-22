@@ -3058,18 +3058,27 @@ def product_edit(product_id):
             title = request.form.get('title', '').strip()
             description = request.form.get('description', '').strip()
             brand = request.form.get('brand', '').strip()
+            existing_description = (product.description or '').strip()
+            description_comparison = description.replace('\r\n', '\n').replace('\r', '\n')
+            existing_description_comparison = (
+                existing_description.replace('\r\n', '\n').replace('\r', '\n')
+            )
 
             characteristic_patch = prepare_single_product_characteristic_patch(
                 product, request.form,
             )
             updates = {}
-            if vendor_code and vendor_code != product.vendor_code:
+            # The form is normalized on submission. Compare with the same
+            # normalization so an untouched legacy value with outer
+            # whitespace is not silently rewritten during a characteristic
+            # edit. Empty submissions remain non-destructive.
+            if vendor_code and vendor_code != (product.vendor_code or '').strip():
                 updates['vendorCode'] = vendor_code
-            if title and title != product.title:
+            if title and title != (product.title or '').strip():
                 updates['title'] = title
-            if description and description != product.description:
+            if description and description_comparison != existing_description_comparison:
                 updates['description'] = description
-            if brand and brand != product.brand:
+            if brand and brand != (product.brand or '').strip():
                 updates['brand'] = brand
             if characteristic_patch:
                 updates['characteristics'] = characteristic_patch
