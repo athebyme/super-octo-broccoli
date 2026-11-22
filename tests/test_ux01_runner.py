@@ -304,7 +304,7 @@ def _workspace_browser_report() -> dict:
                 "name": "legacy_sidebar_keyboard_activation_reaches_exact_routes",
                 "status": "passed", "origin": origin, "method": "GET",
                 "path": "/products/merge", "http_status": 200,
-                "activation": "Tab+Enter", "label": "Объединить карточки WB",
+                "activation": "Tab+Enter", "label": "Объединение карточек WB",
                 "page_heading": "Объединение карточек WB",
             },
             {
@@ -353,7 +353,7 @@ def _workspace_browser_report() -> dict:
                 "name": "wb_only_tool_labels_and_image_lab_source_are_distinct",
                 "status": "passed", "origin": origin, "method": "GET",
                 "path": "/image-lab", "http_status": 200, "page_heading": "Фотостудия",
-                "wb_tool_heading": "Инструменты Wildberries",
+                "wb_tool_heading": "Товары и поставщики",
                 "wb_merge_href_path": "/products/merge",
                 "ozon_listings_href_path": "/marketplaces/listings/",
                 "ozon_listings_query": {"account_id": account_id},
@@ -1704,6 +1704,11 @@ class Ux01RunnerContractTest(unittest.TestCase):
             invalid_reports.append(("non-loopback origin", wrong_origin,
                                     "workspace_legacy_sidebar_route_receipt_invalid"))
 
+            wrong_sidebar_label = copy.deepcopy(report)
+            wrong_sidebar_label["legacy_action_checks"][0]["label"] = "Объединить карточки WB"
+            invalid_reports.append(("stale sidebar label", wrong_sidebar_label,
+                                    "workspace_legacy_sidebar_route_receipt_invalid"))
+
             wrong_product_scope = copy.deepcopy(report)
             wrong_product_scope["legacy_action_checks"][2]["actions"][1]["path"] = (
                 "/products/999999/enrich"
@@ -1750,6 +1755,13 @@ class Ux01RunnerContractTest(unittest.TestCase):
             wrong_account["legacy_action_checks"][3]["downstream_account_query"]["account_id"] = 78
             invalid_reports.append(("account context changed", wrong_account,
                                     "workspace_account_context_route_receipt_invalid"))
+
+            wrong_wb_tool_heading = copy.deepcopy(report)
+            wrong_wb_tool_heading["legacy_action_checks"][4]["wb_tool_heading"] = (
+                "Инструменты Wildberries"
+            )
+            invalid_reports.append(("stale WB tool heading", wrong_wb_tool_heading,
+                                    "workspace_wb_ozon_tool_scope_receipt_invalid"))
 
             missing_known_photo_binding = copy.deepcopy(report)
             missing_known_photo_binding["image_lab_fake_reads"][0]["fake_photo_sha256"] = "b" * 64

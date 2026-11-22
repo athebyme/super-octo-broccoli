@@ -184,6 +184,7 @@ class MarketplaceReadinessTest(unittest.TestCase):
         endpoint_names = set()
         for relative_path in (
             "templates/base.html",
+            "templates/partials/seller_workspace_nav.html",
             "templates/marketplace_readiness.html",
         ):
             endpoint_names.update(re.findall(

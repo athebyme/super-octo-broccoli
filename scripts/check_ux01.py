@@ -2409,7 +2409,7 @@ def _workspace_legacy_action_protocol_issues(data: dict) -> list[str]:
     if not (
         _route_receipt_valid(sidebar, "/products/merge", "Объединение карточек WB")
         and sidebar.get("activation") == "Tab+Enter"
-        and sidebar.get("label") == "Объединить карточки WB"
+        and sidebar.get("label") == "Объединение карточек WB"
     ):
         issues.append("workspace_legacy_sidebar_route_receipt_invalid")
 
@@ -2529,7 +2529,7 @@ def _workspace_legacy_action_protocol_issues(data: dict) -> list[str]:
         _route_receipt_valid(tools, "/image-lab")
         and tools.get("image_lab_page_heading") == "Фотостудия"
         and tools.get("ozon_listing_page_heading") == "Каталог маркетплейсов"
-        and tools.get("wb_tool_heading") == "Инструменты Wildberries"
+        and tools.get("wb_tool_heading") == "Товары и поставщики"
         and tools.get("wb_merge_href_path") == "/products/merge"
         and tools.get("ozon_listings_href_path") == "/marketplaces/listings/"
         and isinstance(tools.get("ozon_listings_query"), dict)

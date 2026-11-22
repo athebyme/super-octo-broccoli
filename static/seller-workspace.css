@@ -108,11 +108,10 @@
 .seller-workspace-alt-heading {
     margin: 10px 8px 3px;
     color: var(--text-sidebar-muted);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 600;
     letter-spacing: .06em;
     line-height: 1.4;
-    text-transform: uppercase;
 }
 
 .seller-workspace-alt-link {
@@ -395,5 +394,14 @@
 
     .seller-workspace-quality-channel {
         width: 100%;
+    }
+}
+
+@media (max-width: 639px) {
+    .seller-workspace-root-link,
+    .seller-workspace-alt-summary,
+    .seller-workspace-utility-link,
+    .seller-workspace-alt-link {
+        min-height: 44px;
     }
 }
