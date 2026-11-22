@@ -2229,6 +2229,12 @@ def run_review_editor_navigation_journey(page):
     page.wait_for_url("**/marketplaces/ozon/uploads/review?*")
     review_root = page.locator("#ozon-upload-review:not([v-cloak])")
     review_root.wait_for()
+    review_header = page.locator("section.our > header.our-header")
+    review_guide = review_header.locator(
+        ".preparation-journey--compact[aria-label='Этапы подготовки']"
+    )
+    guide_disclosure = review_guide.locator("details.preparation-journey-path")
+    guide_summary = guide_disclosure.locator("summary")
     initial_review = page.evaluate(
         "() => JSON.parse(document.querySelector('#our-bootstrap').textContent).review"
     )
@@ -2241,6 +2247,136 @@ def run_review_editor_navigation_journey(page):
     }
     assert initial_review.get("review_return_token")
     assert [row["draft_id"] for row in initial_review["items"]] == draft_ids
+
+    # The review has one concise SSR header; scoped route guidance remains in
+    # one closed disclosure and can be opened and closed before choosing rows.
+    assert review_header.locator("#our-title").inner_text() == "Проверка перед отправкой"
+    header_text = review_header.inner_text()
+    assert initial_review["account_label"] in header_text
+    assert f"Карточек в наборе: {len(draft_ids)}" in header_text
+    assert "страница 1 из 1" in header_text
+    assert initial_review["checked_at"] in header_text
+    assert review_header.locator("a.our-back").get_attribute("href") == (
+        f"/marketplaces/ozon/uploads/{job_uid}"
+    )
+    assert guide_summary.inner_text().strip() == "Этапы подготовки"
+    assert guide_disclosure.get_attribute("open") is None
+    assert review_root.locator(".our-list input[type='checkbox']:checked").count() == 0
+
+    with app.test_request_context("/"):
+        from flask import url_for
+        expected_guide_links = {
+            "Источник поставщика": url_for("supplier_catalog"),
+            "Внутренний товар": url_for(
+                "seller_my_products", account_id=account_id,
+            ),
+            "Черновик Ozon": url_for(
+                "marketplace_drafts.index", account_id=account_id,
+            ),
+            "Результат операции": url_for(
+                "ozon_bulk_uploads.detail", job_uid=job_uid,
+            ),
+            "Карточка Ozon": url_for(
+                "marketplace_listings.index", marketplace="ozon",
+                account_id=account_id,
+            ),
+        }
+    guide_summary.focus()
+    page.keyboard.press("Enter")
+    assert guide_disclosure.get_attribute("open") is not None
+    actual_guide_links = {}
+    for step in review_guide.locator("li").all():
+        label = step.locator("strong").inner_text().strip()
+        link = step.locator("a")
+        if label in expected_guide_links:
+            assert link.count() == 1, (label, link.count())
+            actual_guide_links[label] = link.get_attribute("href")
+        elif label == "Свежая проверка":
+            assert link.count() == 0 and step.get_attribute("aria-current") == "step"
+        elif label == "Отдельная отправка":
+            assert link.count() == 0 and step.get_attribute("aria-disabled") == "true"
+    assert actual_guide_links == expected_guide_links, (
+        actual_guide_links, expected_guide_links,
+    )
+    first_guide_link = review_guide.locator("ol a").first
+    page.keyboard.press("Tab")
+    assert first_guide_link.evaluate("el => document.activeElement === el")
+    assert first_guide_link.evaluate("el => el.matches(':focus-visible')")
+    guide_summary.focus()
+    page.keyboard.press("Enter")
+    assert guide_disclosure.get_attribute("open") is None
+    page.evaluate("() => { document.activeElement?.blur(); window.scrollTo(0, 0); }")
+
+    compact_measurement = page.evaluate("""() => {
+        const rect = selector => {
+            const element = document.querySelector(selector);
+            if (!element) return null;
+            const box = element.getBoundingClientRect();
+            return {top:box.top, bottom:box.bottom, left:box.left, right:box.right,
+                width:box.width, height:box.height};
+        };
+        return {
+            viewport:{width:innerWidth,height:innerHeight},
+            document:{width:document.documentElement.clientWidth,
+                scrollWidth:document.documentElement.scrollWidth},
+            toolbar:rect('#ozon-upload-review .our-toolbar'),
+            firstCard:rect('#ozon-upload-review .our-card'),
+            firstCardTitle:rect('#ozon-upload-review .our-card h2 a'),
+            scrollY:window.scrollY,
+            detailsOpen:document.querySelectorAll(
+                '.our-header .preparation-journey--compact details[open]').length,
+        };
+    }""")
+    toolbar_action = review_root.get_by_role(
+        "button", name="Проверить выбранные", exact=True,
+    )
+    review_all_action = review_root.get_by_role(
+        "button", name="Проверить все готовые", exact=True,
+    )
+    first_card_title = review_root.locator(".our-card h2 a").first
+    toolbar_box = review_root.locator(".our-toolbar").bounding_box()
+    action_box = toolbar_action.bounding_box()
+    all_ready_box = review_all_action.bounding_box()
+    first_card_box = review_root.locator(".our-card").first.bounding_box()
+    first_card_title_box = first_card_title.bounding_box()
+    assert toolbar_box and 0 <= toolbar_box["y"] < 780
+    assert toolbar_box["y"] + toolbar_box["height"] <= 780
+    assert action_box and 0 <= action_box["y"] < 780
+    assert action_box["y"] + action_box["height"] <= 780
+    assert all_ready_box and 0 <= all_ready_box["y"] < 780
+    assert all_ready_box["y"] + all_ready_box["height"] <= 780
+    assert first_card_box and first_card_box["y"] < 780
+    assert first_card_title_box and 0 <= first_card_title_box["y"] < 780
+    assert first_card_title_box["y"] + first_card_title_box["height"] <= 780
+    assert compact_measurement["document"]["scrollWidth"] <= compact_measurement["document"]["width"]
+    assert compact_measurement["detailsOpen"] == 0
+    assert compact_measurement["scrollY"] == 0
+    assert review_root.locator(".our-card").count() == len(draft_ids)
+    generic_links = []
+    ordered_titles = [
+        titles["unchanged_first"], titles["weight_issue"], titles["unchanged_last"],
+    ]
+    for draft_id, title, card in zip(
+        draft_ids, ordered_titles, review_root.locator(".our-card").all(),
+    ):
+        title_link = card.locator("h2 > a")
+        assert title_link.count() == 1, draft_id
+        assert card.locator(".our-card-link").count() == 0, draft_id
+        assert title_link.inner_text().strip() == title, draft_id
+        assert title_link.get_attribute("aria-label") == "Открыть черновик " + title
+        assert title_link.evaluate("""el => {
+            const style = getComputedStyle(el), rect = el.getBoundingClientRect();
+            return style.textDecorationLine.includes('underline') && rect.height >= 44;
+        }"""), draft_id
+        title_parts = urlsplit(title_link.get_attribute("href"))
+        title_query = parse_qs(title_parts.query)
+        assert title_parts.path == f"/marketplaces/drafts/{draft_id}"
+        assert title_query.get("review_return") == [initial_review["review_return_token"]]
+        assert not title_query.get("focus_code") and not title_query.get("focus_field")
+        generic_links.append(title_link.get_attribute("href"))
+
+    compact_screenshot = OUT / "ozon-review-compact-header-320.png"
+    page.screenshot(path=str(compact_screenshot), animations="disabled")
     review_rows = {row["draft_id"]: row for row in initial_review["items"]}
     assert all(review_rows[draft_id]["selectable"] for draft_id in unchanged_ids)
     issue_row = review_rows[issue_draft_id]
@@ -2266,6 +2402,8 @@ def run_review_editor_navigation_journey(page):
 
     issue_card = page.locator(".our-card").filter(has_text=titles["weight_issue"])
     issue_links = issue_card.locator("a[data-review-issue-link]")
+    issue_link_count = issue_links.count()
+    assert issue_link_count >= 1
     issue_link = None
     issue_href = None
     for index in range(issue_links.count()):
@@ -2490,7 +2628,39 @@ def run_review_editor_navigation_journey(page):
         "provider_attempts": report["provider_attempts"],
         "provider_dispatch_calls": report["provider_dispatch_calls"],
         "mobile_viewport": {"width": 320, "height": 780},
-        "screenshots": [issue_screenshot.name, return_screenshot.name],
+        "compact_initial": {
+            "header_title": "Проверка перед отправкой",
+            "account_label": initial_review["account_label"],
+            "draft_count": len(draft_ids),
+            "page": [initial_review["pagination"]["page"], initial_review["pagination"]["pages"]],
+            "checked_at": initial_review["checked_at"],
+            "guide_label": guide_summary.inner_text().strip(),
+            "guide_opened_and_closed_with_keyboard": True,
+            "guide_links": actual_guide_links,
+            "generic_editor_links": len(generic_links),
+            "issue_links": issue_link_count,
+            "toolbar_actions_visible": {
+                "check_selected": bool(
+                    action_box and 0 <= action_box["y"] < 780
+                    and action_box["y"] + action_box["height"] <= 780
+                ),
+                "check_all_ready": bool(
+                    all_ready_box and 0 <= all_ready_box["y"] < 780
+                    and all_ready_box["y"] + all_ready_box["height"] <= 780
+                ),
+            },
+            "first_card_visible": bool(first_card_box and first_card_box["y"] < 780),
+            "first_card_title_visible": bool(
+                first_card_title_box and 0 <= first_card_title_box["y"] < 780
+            ),
+            "no_horizontal_overflow": (
+                compact_measurement["document"]["scrollWidth"]
+                <= compact_measurement["document"]["width"]
+            ),
+            "geometry": compact_measurement,
+            "screenshot": compact_screenshot.name,
+        },
+        "screenshots": [issue_screenshot.name, return_screenshot.name, compact_screenshot.name],
     }
     passed("review_issue_editor_returns_to_exact_fresh_batch_without_automatic_publication")
 

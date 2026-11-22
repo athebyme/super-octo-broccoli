@@ -233,6 +233,11 @@ with app.test_request_context("/"):
         ).replace("/api/review", "/review"),
         "upload_history": url_for("ozon_bulk_uploads.index", account_id=FIXTURE["account_id"]),
         "upload_result": url_for("ozon_bulk_uploads.detail", job_uid=FIXTURE["run_uid"]),
+        "listing_index_ozon": url_for(
+            "marketplace_listings.index",
+            marketplace="ozon",
+            account_id=FIXTURE["account_id"],
+        ),
         "listing_vue": url_for("marketplace_listings.view", listing_id=FIXTURE["listing_ids"][0]),
         "listing_classic": url_for("marketplace_listings.detail", listing_id=FIXTURE["listing_ids"][0]),
     }
@@ -343,10 +348,18 @@ def journey_assertions(page, name: str, current: str, account_id: int | None = N
     section = page.locator("section.preparation-journey")
     section.wait_for()
     text = section.inner_text()
-    assert "Канал:" in text and "Ozon" in text, (name, text)
-    assert "Дальше:" in text, (name, text)
-    assert "Объект:" in text, (name, text)
-    assert section.locator("h2").inner_text().startswith("Сейчас:"), (name, text)
+    compact_review = name == "review"
+    if compact_review:
+        assert section.get_attribute("aria-label") == "Этапы подготовки", (name, text)
+        assert section.locator(".preparation-journey-head").count() == 0, (name, text)
+        assert section.locator(".preparation-journey-context").count() == 0, (name, text)
+        assert section.locator("h2").count() == 0, (name, text)
+        assert section.locator("summary").inner_text().strip() == "Этапы подготовки", (name, text)
+    else:
+        assert "Канал:" in text and "Ozon" in text, (name, text)
+        assert "Дальше:" in text, (name, text)
+        assert "Объект:" in text, (name, text)
+        assert section.locator("h2").inner_text().startswith("Сейчас:"), (name, text)
     assert section.locator("details").count() == 1
     assert section.locator("details[open]").count() == 0
     assert section.locator("li[aria-current=step]").count() == 1
@@ -362,11 +375,32 @@ def journey_assertions(page, name: str, current: str, account_id: int | None = N
     assert section.locator("li.is-complete").count() == 0
     for href in section.locator("a").evaluate_all("items => items.map(item => item.getAttribute('href'))"):
         assert href and href.startswith("/") and not href.startswith("//"), (name, href)
+    if compact_review:
+        expected_links = {
+            "Источник поставщика": PAGE_PATHS["supplier_catalog"],
+            "Внутренний товар": PAGE_PATHS["internal_ozon"],
+            "Черновик Ozon": PAGE_PATHS["drafts_vue"],
+            "Результат операции": PAGE_PATHS["upload_history"],
+            "Карточка Ozon": PAGE_PATHS["listing_index_ozon"],
+        }
+        actual_links = {}
+        for step in section.locator("li").all():
+            label = step.locator("strong").inner_text().strip()
+            link = step.locator("a")
+            if label in expected_links:
+                assert link.count() == 1, (name, label)
+                actual_links[label] = link.get_attribute("href")
+            elif label == "Свежая проверка":
+                assert link.count() == 0 and step.get_attribute("aria-current") == "step", (name, label)
+            elif label == "Отдельная отправка":
+                assert link.count() == 0 and step.get_attribute("aria-disabled") == "true", (name, label)
+        assert actual_links == expected_links, (name, actual_links, expected_links)
     if account_id is not None and current != "Внутренний товар":
         internal_href = section.locator("li").filter(has_text="Внутренний товар").locator("a").get_attribute("href")
         assert internal_href, (name, "internal step must remain a link")
         assert parse_qs(urlsplit(internal_href).query).get("account_id") == [str(account_id)], (name, internal_href)
-    section.locator("summary").focus()
+    summary = section.locator("summary")
+    summary.focus()
     page.keyboard.press("Enter")
     assert section.locator("details[open]").count() == 1, name
     assert section.locator("li").count() == 7, name
@@ -397,9 +431,82 @@ def journey_assertions(page, name: str, current: str, account_id: int | None = N
     assert focus["contrast"] is not None and focus["contrast"] >= 3, (name, focus)
     targets = section.evaluate("el => ({summary:el.querySelector('summary').getBoundingClientRect().height,links:Array.from(el.querySelectorAll('ol a')).map(a=>a.getBoundingClientRect().height)})")
     assert targets["summary"] >= 44 and all(height >= 44 for height in targets["links"]), (name, targets)
-    REPORT["interactions"].append({"name": name + "_disclosure_and_keyboard_focus", "focus": focus})
-    REPORT["checks"].append(name + "_seven_steps_and_current_next")
+    closed_with_keyboard = False
+    if compact_review:
+        summary.focus()
+        page.keyboard.press("Enter")
+        assert section.locator("details[open]").count() == 0, name
+        closed_with_keyboard = True
+    REPORT["interactions"].append({
+        "name": name + "_disclosure_and_keyboard_focus",
+        "focus": focus,
+        "opened_with_keyboard": True,
+        "closed_with_keyboard": closed_with_keyboard,
+    })
+    check_name = name + ("_compact_steps_and_exact_links" if compact_review else "_seven_steps_and_current_next")
+    REPORT["checks"].append(check_name)
     return section
+
+
+def no_javascript_review_assertions(browser):
+    """Keep the compact route guide and classic review form available without JS."""
+    context = browser.new_context(
+        user_agent="SellerHubUX01JourneyNoJS/1.0",
+        viewport={"width": 320, "height": 780},
+        timezone_id="Europe/Moscow",
+        java_script_enabled=False,
+        service_workers="block",
+    )
+    context.add_cookies([synthetic_login_cookie()])
+    context.route("**/*", bridge)
+    page = context.new_page()
+    try:
+        response = page.goto(BASE + PAGE_PATHS["review"], wait_until="domcontentloaded")
+        assert response and response.status == 200, (
+            "review_no_javascript", response.status if response else None,
+        )
+        page.wait_for_load_state("networkidle")
+        page.locator("#our-noscript-title").wait_for()
+        assert page.locator("#our-noscript-title").is_visible()
+        assert not page.locator("#our-boot-fallback").is_visible()
+        assert page.locator(".our-header a.our-back").count() == 1
+        guide = page.locator(
+            ".our-header .preparation-journey--compact[aria-label='Этапы подготовки']"
+        )
+        guide_summary = guide.locator("details.preparation-journey-path > summary")
+        assert guide_summary.is_visible()
+        assert guide_summary.inner_text().strip() == "Этапы подготовки"
+        assert guide.locator("details[open]").count() == 0
+        guide_summary.focus()
+        page.keyboard.press("Enter")
+        assert guide.locator("details[open]").count() == 1
+        assert guide.locator("li").count() == 7
+        guide_summary.focus()
+        page.keyboard.press("Enter")
+        assert guide.locator("details[open]").count() == 0
+
+        review = json.loads(page.locator("#our-bootstrap").text_content())["review"]
+        with app.test_request_context("/"):
+            from flask import url_for
+            expected_classic_href = url_for(
+                "marketplace_drafts.classic_detail",
+                draft_id=review["draft_ids"][0],
+                review_return=review["review_return_token"],
+            )
+        classic_link = page.locator(".our-noscript .our-card a").first
+        assert classic_link.is_visible()
+        assert classic_link.get_attribute("href") == expected_classic_href
+        assert page.locator(".our-noscript form").is_visible()
+        REPORT["pages"].append({
+            "name": "review_no_javascript",
+            "path": urlsplit(PAGE_PATHS["review"]).path,
+            "status": response.status,
+        })
+        REPORT["checks"].append(
+            "review_no_javascript_keeps_one_guide_disclosure_and_exact_classic_return"
+        )
+    finally:
+        context.close()
 
 
 def geometry(page, name: str, width: int, theme: str):
@@ -987,6 +1094,10 @@ def run():
                         for width in (390, 1024):
                             text_200(page, name, width, theme)
             assert all(row["actual_theme"] == row["theme"] for row in REPORT["geometry"]), REPORT["geometry"]
+
+            # The static header and classic form remain usable when scripts
+            # are disabled; the boot placeholder must not obscure that form.
+            no_javascript_review_assertions(browser)
 
             # A separate four-case receipt keeps this new classic content
             # probe distinct from the established journey layout matrix.
