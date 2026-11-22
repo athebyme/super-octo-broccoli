@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import threading
 import time
 import traceback
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -53,6 +54,7 @@ SUPPLIER_REFRESH_HANDOFF_PATH = "/my-products/refresh-from-supplier/review"
 SUPPLIER_REFRESH_PREVIEW_PATH = "/api/my-products/supplier-refresh-preview"
 SUPPLIER_REFRESH_APPLY_PATH = "/my-products/refresh-from-supplier"
 WB_CREATE_PATH = "/my-products/push-to-wb-bulk"
+WB_CREATE_RESULT_PATH = "/my-products/push-to-wb-bulk/result"
 JOB_STATUS_PREFIX = "/api/jobs/"
 FILTERS = {
     "search": "R28 Mass batch",
@@ -478,6 +480,7 @@ def run():
     supplier_refresh_apply_posts = []
     supplier_refresh_apply_responses = []
     wb_create_posts = []
+    wb_create_result_reads = []
     product_feed_reads = []
     facet_reads = []
     document_requests = []
@@ -562,6 +565,31 @@ def run():
                     })
                 route.fulfill(response=response)
                 return
+            if parsed.path == WB_CREATE_RESULT_PATH:
+                assert not parsed.query, "WB receipt key must not appear in the query string"
+                request_key = request.headers.get("x-wb-create-key")
+                assert request_key and re.fullmatch(r"[a-f0-9]{32}", request_key)
+                try:
+                    response = route.fetch(max_redirects=0)
+                except Exception:
+                    raise AssertionError("local WB create receipt read failed") from None
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = None
+                wb_create_result_reads.append({
+                    "sequence": next_event(),
+                    "request_key": request_key,
+                    "query_keys": tuple(sorted(parse_qs(parsed.query, keep_blank_values=True))),
+                    "status": response.status,
+                    "payload": payload,
+                })
+                if response.status >= 400:
+                    fixture.REPORT["unexpected_http"].append({
+                        "path": parsed.path, "status": response.status,
+                    })
+                route.fulfill(response=response)
+                return
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "POST":
             assert parsed.path in {
                 IMPORT_PATH,
@@ -609,6 +637,8 @@ def run():
                 else:
                     supplier_refresh_apply_posts.append({"path": parsed.path, "body": body})
             else:
+                assert not parsed.query, "WB create request must not carry a scope in the URL"
+                assert request.headers.get("accept") == "application/json"
                 assert "application/json" in (request.headers.get("content-type") or "")
                 assert request.headers.get("x-csrftoken"), "WB create POST must carry CSRF"
                 try:
@@ -621,6 +651,19 @@ def run():
                     "body": body,
                 })
             response = route.fetch(max_redirects=0)
+            if parsed.path == WB_CREATE_PATH:
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = None
+                wb_create_posts[-1].update({
+                    "status": response.status,
+                    "payload": payload,
+                })
+                if response.status >= 400:
+                    fixture.REPORT["unexpected_http"].append({
+                        "path": parsed.path, "status": response.status,
+                    })
             if parsed.path == SUPPLIER_REFRESH_HANDOFF_PATH:
                 supplier_handoff_responses.append({
                     "status": response.status,
@@ -1268,6 +1311,9 @@ def run():
         from services.wb_product_importer import WBProductImporter
 
         fake_wb_calls = []
+        wb_worker_started = threading.Event()
+        wb_worker_release = threading.Event()
+        wb_worker_returned = threading.Event()
         original_batch_import = WBProductImporter.batch_import_products_to_wb
 
         def deterministic_wb_batch_import(self, imported_products, progress_callback=None):
@@ -1308,9 +1354,15 @@ def run():
                 "readiness": checks_by_product,
                 "outcomes": outcomes,
             })
-            if progress_callback:
-                progress_callback("done", {"items": outcomes})
-            return outcomes
+            wb_worker_started.set()
+            try:
+                if not wb_worker_release.wait(20):
+                    raise RuntimeError("synthetic WB worker release timed out")
+                if progress_callback:
+                    progress_callback("done", {"items": outcomes})
+                return outcomes
+            finally:
+                wb_worker_returned.set()
 
         WBProductImporter.batch_import_products_to_wb = deterministic_wb_batch_import
         try:
@@ -1318,7 +1370,6 @@ def run():
                 "button", name="Создать карточки", exact=True,
             )
             assert create_button.is_enabled()
-            status_reads_before_create = len(job_status_reads)
             feed_reads_before_create = len(product_feed_reads)
             facet_reads_before_create = len(facet_reads)
             with page.expect_response(
@@ -1327,113 +1378,138 @@ def run():
             ) as created:
                 create_button.click()
             create_response = created.value
-            assert create_response.status == 200, (
-                "normal WB create action must queue a BackgroundJob",
+            assert create_response.status == 202, (
+                "new WB create action must return one accepted keyed receipt",
                 create_response.status,
             )
             confirmation.wait_for(state="hidden")
             create_payload = create_response.json()
-            assert isinstance(create_payload, dict) and create_payload.get("success") is True
+            assert isinstance(create_payload, dict) and set(create_payload) == {
+                "success", "job_uid", "total", "product_ids", "status", "replayed",
+                "worker_exited", "cancel_requested", "result_counts",
+            }
+            assert create_payload.get("success") is True
             job_uid = create_payload.get("job_uid")
             assert isinstance(job_uid, str) and re.fullmatch(
-                r"bulk_wb_[0-9a-f]{12}", job_uid,
+                r"bulk_wb_[0-9a-f]{56}", job_uid,
             ), "WB create response must identify the actual durable job"
+            assert create_payload["total"] == len(wb_selected_ids) == 2
+            assert create_payload["product_ids"] == wb_selected_ids
+            assert create_payload["status"] in {"pending", "running"}
+            assert create_payload["replayed"] is False
+            assert create_payload["worker_exited"] is False
+            assert create_payload["cancel_requested"] is False
+            assert create_payload["result_counts"] is None
             assert page.get_by_role("alertdialog").count() == 0
-            assert len(wb_create_posts) == 1, wb_create_posts
+            assert len(wb_create_posts) == 1, {
+                "count": len(wb_create_posts),
+                "paths": [entry.get("path") for entry in wb_create_posts],
+            }
             create_post = wb_create_posts[0]
             assert create_post["path"] == WB_CREATE_PATH
-            assert set(create_post["body"]) == {"product_ids"}
+            assert create_post["status"] == 202
+            assert create_post["payload"] == create_payload
+            assert set(create_post["body"]) == {"product_ids", "request_key"}
             assert create_post["body"]["product_ids"] == wb_selected_ids
             assert set(create_post["body"]["product_ids"]) <= persisted_product_ids
+            request_key = create_post["body"]["request_key"]
+            assert isinstance(request_key, str) and re.fullmatch(r"[a-f0-9]{32}", request_key)
             checks.append("signed_import_batch_posts_one_exact_two_product_wb_create_request")
 
-            job_panel = page.locator(".shk-job")
-            job_panel.wait_for(state="visible")
-            page.evaluate("""() => new Promise(resolve =>
-                requestAnimationFrame(() => requestAnimationFrame(resolve)))""")
-            job_position_before_screenshot = page.evaluate("""() => {
-                const panel = document.querySelector('.shk-job');
-                const mobileHeader = document.querySelector('.mobile-header');
-                if (!panel || !mobileHeader) return null;
-                const panelRect = panel.getBoundingClientRect();
-                const headerRect = mobileHeader.getBoundingClientRect();
-                const panelStyle = getComputedStyle(panel);
-                return {
-                    focused: document.activeElement === panel,
-                    outlineStyle: panelStyle.outlineStyle,
-                    outlineWidth: parseFloat(panelStyle.outlineWidth) || 0,
-                    scrollY: window.scrollY,
-                    panelTop: panelRect.top,
-                    panelBottom: panelRect.bottom,
-                    panelLeft: panelRect.left,
-                    panelRight: panelRect.right,
-                    headerBottom: headerRect.bottom,
-                    headerPosition: getComputedStyle(mobileHeader).position,
-                    viewportWidth: document.documentElement.clientWidth,
-                    viewportHeight: window.innerHeight,
-                };
+            receipt = page.locator("[data-wb-create-receipt]")
+            receipt.wait_for(state="visible")
+            page.wait_for_function("""() => {
+                const receipt = document.querySelector('[data-wb-create-receipt]');
+                return receipt && receipt.dataset.wbCreateState === 'accepted';
             }""")
+            worker_deadline = time.monotonic() + 10
+            while not wb_worker_started.is_set() and time.monotonic() < worker_deadline:
+                page.wait_for_timeout(25)
+            assert wb_worker_started.is_set(), "real WB worker did not enter the synthetic importer"
+            with fixture.app.app_context():
+                from models import BackgroundJob
 
-            expected_status_path = JOB_STATUS_PREFIX + job_uid
-            terminal_status_values = {"completed", "completed_with_errors", "failed", "cancelled"}
-            deadline = time.monotonic() + 15
-            terminal_status_read = None
-            while time.monotonic() < deadline:
-                matching_reads = [
-                    read for read in job_status_reads
-                    if read["path"] == expected_status_path and read["status"] == 200
-                    and isinstance(read["payload"], dict)
-                    and read["payload"].get("status") in terminal_status_values
-                ]
-                if matching_reads:
-                    terminal_status_read = matching_reads[-1]
-                    break
-                page.wait_for_timeout(50)
-            assert terminal_status_read is not None, (
-                "browser did not observe a terminal raw BackgroundJob status GET",
-                job_status_reads[status_reads_before_create:],
-            )
-            assert terminal_status_read["method"] == "GET"
-            assert terminal_status_read["sequence"] > create_post["sequence"]
-            assert terminal_status_read["payload"]["status"] == "completed"
-            page.evaluate("""() => new Promise(resolve =>
-                requestAnimationFrame(() => requestAnimationFrame(resolve)))""")
-            terminal_screenshot = "supplier-filtered-import-wb-create-terminal-dark-320.png"
-            page.locator(".shk-job").screenshot(
-                path=REPORT_PATH.parent / terminal_screenshot,
-                animations="disabled",
-            )
+                accepted_job = BackgroundJob.query.filter_by(
+                    job_uid=job_uid,
+                    seller_id=fixture.FIXTURE["seller_id"],
+                ).one()
+                assert accepted_job.status == "running"
+                assert accepted_job.total == 2 and accepted_job.processed == 0
+                assert accepted_job.get_progress()["product_ids"] == wb_selected_ids
 
-            terminal_payload = terminal_status_read["payload"]
-            terminal_progress = terminal_payload.get("progress")
-            terminal_result = terminal_payload.get("result")
-            assert terminal_payload.get("job_type") == "bulk_wb_import"
-            assert terminal_payload.get("total") == 2
-            assert terminal_payload.get("processed") == 2
-            assert terminal_payload.get("succeeded") == 1
-            assert terminal_payload.get("failed_count") == 1
-            assert isinstance(terminal_progress, dict)
-            assert terminal_progress.get("product_ids") == wb_selected_ids
-            progress_items = terminal_progress.get("items")
-            assert isinstance(progress_items, list) and len(progress_items) == 2
-            assert [item.get("product_id") for item in progress_items] == wb_selected_ids
-            assert [item.get("status") for item in progress_items] == ["success", "failed"]
-            assert progress_items[1].get("error") == "Synthetic WB rejected this fixture card"
-            assert isinstance(terminal_result, dict)
-            assert terminal_result.get("total") == 2
-            assert terminal_result.get("imported") == 1
-            assert terminal_result.get("failed") == 1
-            assert terminal_result.get("errors") == [
-                "{}: Synthetic WB rejected this fixture card".format(
-                    progress_items[1].get("title", ""),
-                ),
+            with page.expect_response(
+                lambda response: urlsplit(response.url).path == WB_CREATE_RESULT_PATH
+                and response.request.method == "GET",
+            ) as active_result_read:
+                page.locator("[data-wb-create-reconcile]").click()
+            active_response = active_result_read.value
+            assert active_response.status == 200
+            active_payload = active_response.json()
+            assert set(active_payload) == {
+                "success", "job_uid", "total", "product_ids", "status", "replayed",
+                "worker_exited", "cancel_requested", "result_counts",
+            }
+            assert active_payload["success"] is True
+            assert active_payload["job_uid"] == job_uid
+            assert active_payload["total"] == 2 and active_payload["product_ids"] == wb_selected_ids
+            assert active_payload["status"] == "running" and active_payload["replayed"] is True
+            assert active_payload["worker_exited"] is False
+            assert active_payload["cancel_requested"] is False
+            assert active_payload["result_counts"] is None
+            active_read = next(
+                read for read in reversed(wb_create_result_reads)
+                if read["request_key"] == request_key and read["payload"] == active_payload
+            )
+            assert active_read["query_keys"] == () and active_read["status"] == 200
+            assert len(wb_create_posts) == 1 and len(fake_wb_calls) == 1
+            assert page.get_by_role("alertdialog").count() == 0
+            checks.append("accepted_wb_create_is_read_only_by_exact_typed_key_receipt")
+
+            wb_worker_release.set()
+            worker_return_deadline = time.monotonic() + 10
+            while not wb_worker_returned.is_set() and time.monotonic() < worker_return_deadline:
+                page.wait_for_timeout(25)
+            assert wb_worker_returned.is_set(), "synthetic WB worker did not return"
+
+            page.wait_for_function("""() => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                const receipt = document.querySelector('[data-wb-create-receipt]');
+                return proxy && !proxy.loading && !proxy.wbCreatePending &&
+                    proxy.wbCreateTerminalResult?.status === 'completed' &&
+                    receipt && receipt.dataset.wbCreateState === 'terminal_result';
+            }""", timeout=20000)
+            terminal_reads = [
+                read for read in wb_create_result_reads
+                if read["request_key"] == request_key and read["status"] == 200
+                and isinstance(read["payload"], dict)
+                and read["payload"].get("worker_exited") is True
+                and read["payload"].get("status") == "completed"
             ]
+            assert terminal_reads, (
+                "browser did not observe the terminal typed WB receipt",
+                [read["status"] for read in wb_create_result_reads],
+            )
+            terminal_receipt_read = terminal_reads[-1]
+            terminal_payload = terminal_receipt_read["payload"]
+            assert set(terminal_payload) == {
+                "success", "job_uid", "total", "product_ids", "status", "replayed",
+                "worker_exited", "cancel_requested", "result_counts",
+            }
+            assert terminal_payload["job_uid"] == job_uid
+            assert terminal_payload["total"] == 2 and terminal_payload["product_ids"] == wb_selected_ids
+            assert terminal_payload["status"] == "completed"
+            assert terminal_payload["replayed"] is True and terminal_payload["worker_exited"] is True
+            assert terminal_payload["cancel_requested"] is False
+            assert terminal_payload["result_counts"] == {
+                "processed": 2, "succeeded": 1, "failed": 1,
+            }
+            assert terminal_receipt_read["query_keys"] == ()
+            assert terminal_receipt_read["sequence"] > active_read["sequence"]
+
             assert len(fake_wb_calls) == 1
             assert fake_wb_calls[0]["product_ids"] == wb_selected_ids
             assert all(item["is_ready"] and item["can_push"] for item in fake_wb_calls[0]["readiness"])
             with fixture.app.app_context():
-                from models import BackgroundJob
-
                 job = BackgroundJob.query.filter_by(
                     job_uid=job_uid,
                     seller_id=fixture.FIXTURE["seller_id"],
@@ -1445,42 +1521,74 @@ def run():
                 assert [row["product_id"] for row in job.get_progress()["items"]] == wb_selected_ids
                 assert job.get_result()["imported"] == 1 and job.get_result()["failed"] == 1
 
-            terminal_title = page.locator(".shk-job-title")
-            terminal_title.wait_for(state="visible")
-            assert terminal_title.inner_text() == "Завершено с ошибками"
-            assert job_position_before_screenshot is not None
-            assert job_position_before_screenshot["focused"], job_position_before_screenshot
-            assert job_position_before_screenshot["outlineStyle"] != "none"
-            assert job_position_before_screenshot["outlineWidth"] >= 2, job_position_before_screenshot
-            assert job_position_before_screenshot["headerPosition"] == "fixed"
-            assert job_position_before_screenshot["panelTop"] >= job_position_before_screenshot["headerBottom"]
-            assert job_position_before_screenshot["panelBottom"] <= job_position_before_screenshot["viewportHeight"]
-            assert job_position_before_screenshot["panelLeft"] >= 0
-            assert job_position_before_screenshot["panelRight"] <= job_position_before_screenshot["viewportWidth"]
-            assert job_position_before_screenshot["scrollY"] < confirmation_scroll_y, (
-                "accepted create should bring the result panel into view from the deep batch position",
-                job_position_before_screenshot,
+            page.evaluate("""() => new Promise(resolve =>
+                requestAnimationFrame(() => requestAnimationFrame(resolve)))""")
+            terminal_screenshot = "supplier-filtered-import-wb-create-terminal-dark-320.png"
+            receipt = page.locator("[data-wb-create-receipt]")
+            receipt.screenshot(
+                path=REPORT_PATH.parent / terminal_screenshot,
+                animations="disabled",
             )
-            checks.append("accepted_create_focuses_and_reveals_progress_below_fixed_mobile_header")
-            assert job_panel.get_by_text("2 из 2", exact=True).count() == 1
-            assert job_panel.locator(".shk-job-stat.is-ok").inner_text() == "Успешно: 1"
-            assert job_panel.locator(".shk-job-stat.is-danger").inner_text() == "С ошибкой: 1"
-            close_button = page.get_by_role("button", name="Скрыть итог задачи")
-            assert close_button.count() == 1 and close_button.is_visible()
-            close_geometry = close_button.evaluate("""element => {
+            assert receipt.get_attribute("role") == "status"
+            assert receipt.get_attribute("aria-live") == "polite"
+            receipt_text = receipt.inner_text()
+            assert "Локальная задача создания карточек завершилась" in receipt_text
+            assert "В Seller Hub обработано: 2 из 2" in receipt_text
+            assert "успешно: 1" in receipt_text
+            assert "не созданы: 1" in receipt_text
+            receipt_position = receipt.evaluate("""element => {
                 const rect = element.getBoundingClientRect();
-                return {width: rect.width, height: rect.height};
+                const header = document.querySelector('.mobile-header');
+                const headerRect = header && header.getBoundingClientRect();
+                const active = document.activeElement;
+                const activeRect = active && active.getBoundingClientRect();
+                return {
+                    scrollY: window.scrollY,
+                    top: rect.top,
+                    bottom: rect.bottom,
+                    left: rect.left,
+                    right: rect.right,
+                    headerBottom: headerRect ? headerRect.bottom : 0,
+                    headerPosition: header ? getComputedStyle(header).position : '',
+                    viewportWidth: document.documentElement.clientWidth,
+                    viewportHeight: window.innerHeight,
+                    activeConnected: !!active && active.isConnected,
+                    activeVisible: !!activeRect && activeRect.bottom > 0 &&
+                        activeRect.top < window.innerHeight,
+                    activeInDialog: !!active && !!active.closest('[role="alertdialog"]'),
+                };
             }""")
-            assert close_geometry["width"] >= 44 and close_geometry["height"] >= 44, close_geometry
+            assert receipt_position["headerPosition"] == "fixed", receipt_position
+            assert receipt_position["top"] >= receipt_position["headerBottom"], receipt_position
+            assert receipt_position["bottom"] <= receipt_position["viewportHeight"], receipt_position
+            assert receipt_position["left"] >= 0
+            assert receipt_position["right"] <= receipt_position["viewportWidth"]
+            assert receipt_position["activeConnected"] and receipt_position["activeVisible"]
+            assert not receipt_position["activeInDialog"]
+            assert receipt_position["scrollY"] < confirmation_scroll_y, (
+                "accepted create should reveal its live receipt from the deep batch position",
+                receipt_position,
+            )
+            checks.append("accepted_create_reveals_live_receipt_below_fixed_mobile_header")
+            checks.append("typed_terminal_receipt_renders_one_success_and_one_distinct_failure")
+
             viewport_geometry = page.evaluate("""() => ({
                 width: document.documentElement.clientWidth,
                 scrollWidth: document.documentElement.scrollWidth,
             })""")
             assert viewport_geometry["width"] == 320
             assert viewport_geometry["scrollWidth"] <= viewport_geometry["width"] + 1
+            dismiss_button = receipt.locator("[data-wb-create-dismiss]")
+            assert dismiss_button.count() == 1 and dismiss_button.is_visible()
+            dismiss_geometry = dismiss_button.evaluate("""element => {
+                const rect = element.getBoundingClientRect();
+                return {width: rect.width, height: rect.height};
+            }""")
+            assert dismiss_geometry["width"] >= 44 and dismiss_geometry["height"] >= 44, dismiss_geometry
+            dismiss_button.focus()
+            page.keyboard.press("Shift+Tab")
             page.keyboard.press("Tab")
-            close_button.focus()
-            close_focus = close_button.evaluate("""element => {
+            dismiss_focus = dismiss_button.evaluate("""element => {
                 const style = getComputedStyle(element);
                 return {
                     focused: document.activeElement === element,
@@ -1489,21 +1597,20 @@ def run():
                     outlineWidth: parseFloat(style.outlineWidth) || 0,
                 };
             }""")
-            assert close_focus["focused"] and close_focus["focusVisible"], close_focus
-            assert close_focus["outlineStyle"] != "none" and close_focus["outlineWidth"] >= 2, close_focus
-            checks.append("raw_terminal_job_read_renders_one_success_and_one_distinct_failure")
-            checks.append("320px_terminal_close_target_is_44px_keyboard_visible_and_overflow_free")
+            assert dismiss_focus["focused"] and dismiss_focus["focusVisible"], dismiss_focus
+            assert dismiss_focus["outlineStyle"] != "none" and dismiss_focus["outlineWidth"] >= 2, dismiss_focus
+            checks.append("320px_terminal_receipt_dismiss_is_44px_keyboard_visible_and_overflow_free")
 
             refresh_deadline = time.monotonic() + 5
             while time.monotonic() < refresh_deadline and not any(
-                read["sequence"] > terminal_status_read["sequence"]
+                read["sequence"] > terminal_receipt_read["sequence"]
                 and read["batch_tokens"] == (batch_token,)
                 for read in product_feed_reads
             ):
                 page.wait_for_timeout(50)
             refreshed_reads = [
                 read for read in product_feed_reads
-                if read["sequence"] > terminal_status_read["sequence"]
+                if read["sequence"] > terminal_receipt_read["sequence"]
                 and read["batch_tokens"] == (batch_token,)
             ]
             assert refreshed_reads, "terminal result must refresh the signed import-batch product list"
@@ -1517,32 +1624,35 @@ def run():
                 "terminal import-batch refresh must stay exact and avoid global facets",
             )
             assert page.locator(".mp-list > .mp-row").count() == 50
-            checks.append("terminal_job_refreshes_the_same_exact_signed_batch_product_list")
+            checks.append("terminal_receipt_refreshes_the_same_exact_signed_batch_product_list")
 
-            observed_status_get_count = sum(
-                1 for read in job_status_reads if read["path"] == expected_status_path
-            )
+            assert not any(
+                read["path"] == JOB_STATUS_PREFIX + job_uid for read in job_status_reads
+            ), "keyed create finality must come from the typed key receipt, not generic job polling"
+            observed_receipt_get_count = len(wb_create_result_reads)
             page.wait_for_timeout(2700)
-            assert sum(
-                1 for read in job_status_reads if read["path"] == expected_status_path
-            ) == observed_status_get_count, "terminal polling must stop after the raw completed status"
+            assert len(wb_create_result_reads) == observed_receipt_get_count, (
+                "terminal typed receipt must stop polling after the exact completed status"
+            )
             assert len(wb_create_posts) == 1, "terminal UI must not resubmit WB creation"
-            close_button.click()
-            job_panel.wait_for(state="hidden")
-            assert page.locator(".shk-job").count() == 0
+            dismiss_button.click()
+            receipt.wait_for(state="hidden")
+            assert page.locator("[data-wb-create-receipt]").count() == 0
             assert len(wb_create_posts) == 1
-            checks.append("terminal_job_stops_polling_after_2_5s_and_closes_without_a_retry_or_resubmit")
+            checks.append("terminal_receipt_stops_polling_and_hides_without_retry_or_resubmit")
 
             wb_create_report = {
                 "selected_count": len(wb_selected_ids),
-                "terminal_raw_status": terminal_payload["status"],
-                "succeeded_count": terminal_payload["succeeded"],
-                "failed_count": terminal_payload["failed_count"],
+                "terminal_status": terminal_payload["status"],
+                "succeeded_count": terminal_payload["result_counts"]["succeeded"],
+                "failed_count": terminal_payload["result_counts"]["failed"],
                 "screenshot": terminal_screenshot,
                 "physical_post_count": len(wb_create_posts),
-                "status_get_count": observed_status_get_count,
+                "typed_receipt_get_count": observed_receipt_get_count,
+                "worker_invocation_count": len(fake_wb_calls),
             }
         finally:
+            wb_worker_release.set()
             WBProductImporter.batch_import_products_to_wb = original_batch_import
 
         oversized_path = "/supplier-catalog/{}/products?{}".format(

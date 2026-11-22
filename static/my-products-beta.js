@@ -1211,6 +1211,7 @@
                 ozonSessionEnded: false,
                 wbCreatePending: savedWbCreate.pending,
                 wbCreateTerminalResult: null,
+                wbCreateReceiptFocusSet: false,
                 wbCreateStorageProblem: savedWbCreate.storageProblem,
                 wbCreateBusy: false,
                 wbCreateReading: false,
@@ -1519,12 +1520,18 @@
                     return Object.assign({}, definition, { actions: actions });
                 });
             },
-            inlineSupplierImportBatch: function () {
+            verifiedSignedImportBatch: function () {
                 return this.importBatchMode && this.importBatchKind === 'import' &&
-                    !this.supplierRefreshResultBatchMode &&
-                    !!this.inlineSupplierImportToken && this.inlineSupplierImportToken === this.importBatch &&
+                    !this.supplierRefreshBatchMode && !this.supplierRefreshResultBatchMode &&
+                    !this.importBatchInvalid &&
+                    typeof this.workspaceOwner === 'string' && this.workspaceOwner.length > 0 &&
+                    typeof this.importBatch === 'string' && SIGNED_IMPORT_BATCH.test(this.importBatch) &&
                     this.importBatchSelectionVerified && !this.loading && !this.loadingMore &&
                     this.itemsScope === this.feedScopeKey();
+            },
+            inlineSupplierImportBatch: function () {
+                return this.verifiedSignedImportBatch &&
+                    !!this.inlineSupplierImportToken && this.inlineSupplierImportToken === this.importBatch;
             },
             wbCreatePendingForCurrentOwner: function () {
                 return !!this.wbCreatePending && this.wbCreatePending.owner === this.workspaceOwner;
@@ -4059,7 +4066,7 @@
                 this.confirm.busy = true;
 
                 if (key === 'push_wb' && this.importBatchMode && this.importBatchKind === 'import') {
-                    if (!this.inlineSupplierImportBatch || this.wbCreateStorageProblem || this.wbCreatePending) {
+                    if (!this.verifiedSignedImportBatch || this.wbCreateStorageProblem || this.wbCreatePending) {
                         this.confirm.open = false;
                         this.error = 'Сначала подтвердите точный состав этого импорта и проверьте незавершённый запуск WB.';
                         this.finishConfirmAction();
@@ -4178,7 +4185,7 @@
                     !this.importBatchInvalid;
             },
             wbCreateFeedContains: function (ids) {
-                if (!validWbCreateIds(ids, true) || !this.inlineSupplierImportToken &&
+                if (!validWbCreateIds(ids, true) || !this.verifiedSignedImportBatch &&
                     !this.wbCreatePendingMatchesCurrentBatch(this.wbCreatePending)) return false;
                 var feedIds = orderedProductIds(this.items);
                 return !!feedIds && ids.every(function (id) { return feedIds.indexOf(id) !== -1; });
@@ -4194,7 +4201,7 @@
                 return true;
             },
             startInlineWbCreate: function (productIds, selectionIds) {
-                if (!this.inlineSupplierImportBatch || this.wbCreateStorageProblem || this.wbCreatePending ||
+                if (!this.verifiedSignedImportBatch || this.wbCreateStorageProblem || this.wbCreatePending ||
                     !Array.isArray(productIds) || !validWbCreateIds(productIds, false) ||
                     !validWbCreateIds(selectionIds, false) || !sameOrderedIds(this.selected, selectionIds) ||
                     productIds.some((id) => selectionIds.indexOf(id) === -1) ||
@@ -4236,6 +4243,7 @@
                 }
                 this.wbCreatePending = pending;
                 this.wbCreateTerminalResult = null;
+                this.wbCreateReceiptFocusSet = false;
                 this.wbCreateStorageProblem = false;
                 this.wbCreateRetrySameKey = false;
                 this.wbCreateError = '';
@@ -4380,6 +4388,7 @@
                 this.wbCreateReadError = '';
                 this.jobTitle = 'Итог локальной задачи WB';
                 this.job = null;
+                this.revealWbCreateReceipt();
                 if (terminal) {
                     this.stopWbCreateReceiptTracking();
                     if (this.wbCreatePendingMatchesCurrentBatch(next) && !this.loading) this.load();
@@ -4389,6 +4398,26 @@
                     this.stopWbCreateReceiptTracking();
                 }
                 return true;
+            },
+            revealWbCreateReceipt: function () {
+                if (this.wbCreateReceiptFocusSet) return;
+                this.wbCreateReceiptFocusSet = true;
+                this.$nextTick(function () {
+                    var receipt = document.querySelector('[data-wb-create-receipt]');
+                    if (!receipt) return;
+                    receipt.setAttribute('tabindex', '-1');
+                    receipt.focus({ preventScroll: true });
+                    var rect = receipt.getBoundingClientRect();
+                    var header = document.querySelector('.mobile-header');
+                    var headerStyle = header ? window.getComputedStyle(header) : null;
+                    var headerBottom = header && headerStyle && headerStyle.position === 'fixed'
+                        ? header.getBoundingClientRect().bottom : 0;
+                    var topInset = Math.max(0, headerBottom) + 12;
+                    if (rect.top < topInset || rect.bottom > window.innerHeight) {
+                        var targetTop = Math.max(0, window.scrollY + rect.top - topInset);
+                        window.scrollTo({ top: targetTop, behavior: 'instant' });
+                    }
+                });
             },
             checkWbCreateResult: function (quiet) {
                 var pending = this.wbCreatePending;
