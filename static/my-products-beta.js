@@ -1659,7 +1659,9 @@
                 this.searchInput = '';
                 this.filters = { search: '', supplier: '', has_photos: '', stock: '', sort: '' };
                 this.error = '';
-                this.load();
+                // Replacing filters triggers the deep watcher, which performs
+                // the one ordinary feed read after the signed batch is cleared.
+                // Calling load here as well starts a duplicate request.
                 this.loadFacets();
                 return true;
             },

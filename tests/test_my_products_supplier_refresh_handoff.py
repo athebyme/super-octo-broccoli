@@ -1202,6 +1202,39 @@ async function finishSupplierRefresh(data, ids) {
   assert.equal(normal.getCalls.length, 2, 'ordinary workspace still loads feed and facets');
   assert.ok(normal.getCalls.every(call => call.params === null || !Object.hasOwn(call.params, 'import_batch')));
 
+  const clearBatchDefinition = remount('valid-receipt', '?import_batch=valid-receipt');
+  const clearBatchApp = Object.assign(clearBatchDefinition.data(), clearBatchDefinition.methods);
+  let clearBatchFeedCalls = 0;
+  let clearBatchFacetCalls = 0;
+  clearBatchApp.load = function () { clearBatchFeedCalls += 1; };
+  clearBatchApp.loadFacets = function () { clearBatchFacetCalls += 1; };
+  let clearBatchFilters = clearBatchApp.filters;
+  Object.defineProperty(clearBatchApp, 'filters', {
+    configurable: true,
+    get() { return clearBatchFilters; },
+    set(value) {
+      clearBatchFilters = value;
+      clearBatchDefinition.watch.filters.handler.call(clearBatchApp);
+    },
+  });
+  fakeWindow.location.pathname = '/my-products/beta';
+  fakeWindow.history = {
+    state: {},
+    replaceState(state, _title, url) {
+      this.state = state;
+      fakeWindow.location.pathname = url;
+    },
+  };
+  assert.equal(clearBatchApp.importBatchMode, true);
+  assert.equal(clearBatchApp.clearImportBatch(), true);
+  assert.equal(clearBatchApp.importBatchMode, false);
+  assert.equal(clearBatchFeedCalls, 1,
+    'clearing the signed batch relies on its filter watcher for exactly one ordinary feed read');
+  assert.equal(clearBatchFacetCalls, 1, 'clearing the signed batch still refreshes facets once');
+  delete fakeWindow.history;
+  delete fakeWindow.location.pathname;
+  remount(null, '');
+
   const supplierToken = 'signed-classic-refresh-selection';
   const supplierPage = {
     success: true,
@@ -1293,6 +1326,7 @@ async function finishSupplierRefresh(data, ids) {
     'invalid_or_stale_import_receipts_clear_rows_and_never_fall_back_to_global_feed',
     'classic_supplier_refresh_handoff_preselects_exact_order_without_preview_until_click',
     'invalid_supplier_refresh_handoff_never_falls_back_to_global_feed',
+    'clearing_signed_import_batch_uses_one_watched_feed_read_and_one_facet_read',
     'ordinary_workspace_keeps_its_existing_feed_and_facets',
   ]}));
 })().catch(error => { console.error(error.stack || String(error)); process.exitCode = 1; });
