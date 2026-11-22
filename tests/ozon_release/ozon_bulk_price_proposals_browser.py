@@ -17,7 +17,7 @@ from cryptography.fernet import Fernet
 import requests
 from playwright.sync_api import sync_playwright
 from werkzeug.serving import make_server
-from tests.ux01.bulk_action_controls import invoke_workspace_action
+from tests.ux01.bulk_action_controls import invoke_legacy_price_action
 
 OUT = Path(os.environ.get("OZON_BROWSER_ARTIFACTS", "/artifacts"))
 OUT.mkdir(parents=True, exist_ok=True)
@@ -716,7 +716,7 @@ try:
 
         page.on("framenavigated", capture_authorized_navigation)
         with page.expect_navigation(wait_until="domcontentloaded") as source_handoff_navigation:
-            invoke_workspace_action(page, "ozon_prices")
+            invoke_legacy_price_action(page, "ozon_prices", account_id=account_id)
         source_handoff_response = source_handoff_navigation.value
         assert source_handoff_response and source_handoff_response.status == 200
         assert source_handoff_response.request.method == "GET"
@@ -761,6 +761,7 @@ try:
                 capsule.priceTarget.ids.length === 1 && capsule.priceTarget.ids[0] === expectedListing &&
                 capsule.scope.search === 'Тестовый товар для подготовки' && capsule.scope.sort === 'title';
         }""", [source_owner, account_id, listing_ids[0], fixture["source_id"], price_hash])
+        passed("native_price_drawer_advanced_route_keeps_exact_ozon_store")
         page.screenshot(path=OUT / "ozon-workspace-return-authorized-320.png", animations="disabled")
         assert report["postcounts"] == {
             "/marketplaces/commercial/price-proposals/bulk-preview": 2,
@@ -957,7 +958,7 @@ try:
 
         page.on("framenavigated", capture_saved_authorized_navigation)
         with page.expect_navigation(wait_until="domcontentloaded") as saved_handoff_navigation:
-            invoke_workspace_action(page, "ozon_prices")
+            invoke_legacy_price_action(page, "ozon_prices", account_id=account_id)
         saved_handoff_response = saved_handoff_navigation.value
         assert saved_handoff_response and saved_handoff_response.status == 200
         assert saved_handoff_response.request.method == "GET"
@@ -1118,7 +1119,7 @@ try:
 
         page.on("framenavigated", capture_multi_authorized_navigation)
         with page.expect_navigation(wait_until="domcontentloaded") as multi_handoff_navigation:
-            invoke_workspace_action(page, "ozon_prices")
+            invoke_legacy_price_action(page, "ozon_prices", account_id=account_id)
         multi_handoff_response = multi_handoff_navigation.value
         assert multi_handoff_response and multi_handoff_response.status == 200
         assert multi_handoff_response.request.method == "GET"

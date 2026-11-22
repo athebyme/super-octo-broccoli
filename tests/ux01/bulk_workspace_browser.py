@@ -18,7 +18,11 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.ux01 import journey_browser as fixture
-from tests.ux01.bulk_action_controls import invoke_workspace_action, workspace_action_launcher
+from tests.ux01.bulk_action_controls import (
+    invoke_legacy_price_action,
+    invoke_workspace_action,
+    workspace_action_launcher,
+)
 from models import (
     BackgroundJob, EnrichmentJob, ImportedProduct, PriceChangeBatch,
     PriceChangeItem, Product, Seller, SupplierProduct, db,
@@ -291,6 +295,8 @@ BULK_ACTION_KEYS = {
 def pick_action(page, name):
     key = BULK_ACTION_KEYS.get(name)
     assert key, f"No intent route mapped for {name!r}"
+    if key in {"wb_prices", "ozon_prices"}:
+        return invoke_legacy_price_action(page, key)
     return invoke_workspace_action(page, key)
 
 
@@ -1323,6 +1329,7 @@ def run():
         nonce_hash = price_url.fragment
         checks.append("sole_wb_price_intent_dispatches_without_choice_menu")
         assert parse_qs(price_url.query)["product_ids"] == [str(fixture_ids["wb_id"])]
+        checks.append("native_price_drawer_advanced_route_keeps_exact_wb_handoff")
         assert page.evaluate("""([owner, importedId, productId, search]) => {
             const capsule = window.SellerHubCommonContent.workspaceReturnFromHash(
                 window.location.hash, {owner}
