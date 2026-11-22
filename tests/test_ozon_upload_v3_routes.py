@@ -1,6 +1,9 @@
 """Two-step upload HTTP consent, request recovery and read-only fresh review."""
 import json
 import ast
+import re
+import shutil
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,10 +11,11 @@ import unittest
 from urllib.parse import parse_qs, urlencode, urlsplit
 from unittest.mock import patch
 
+from jinja2 import ChoiceLoader, DictLoader, FileSystemLoader
 from sqlalchemy import event
 from werkzeug.datastructures import MultiDict
 
-from models import BackgroundJob, MarketplaceOperation, OzonBulkUploadItem, OzonBulkUploadRun, db
+from models import BackgroundJob, ImportedProduct, MarketplaceOperation, OzonBulkUploadItem, OzonBulkUploadRun, db
 from routes.marketplace_drafts import register_marketplace_draft_routes
 from routes.ozon_bulk_uploads import register_ozon_bulk_upload_routes
 from services.ozon_bulk_repair import OzonBulkRepairService
@@ -68,6 +72,123 @@ class OzonUploadV3RoutesTest(OzonPublicationFixture, unittest.TestCase):
         self.assertEqual((BackgroundJob.query.count(), OzonBulkUploadRun.query.count(),
                           OzonBulkUploadItem.query.count(), MarketplaceOperation.query.count()), (1,1,1,0))
         self.assertEqual(self.draft.version, before_version)
+
+    def test_source_prepare_detail_exposes_exact_workspace_binding_and_plain_fallback(self):
+        template_root = Path(__file__).resolve().parents[1] / "templates"
+        self.app.jinja_env.loader = ChoiceLoader([
+            DictLoader({"base.html": "{% block title %}{% endblock %}{% block content %}{% endblock %}"}),
+            FileSystemLoader(str(template_root)),
+        ])
+        self.app.jinja_env.globals["csrf_token"] = lambda: "test-csrf"
+        self.app.context_processor(lambda: {"current_user": self.user_view})
+        if "seller_my_products_beta" not in self.app.view_functions:
+            self.app.add_url_rule(
+                "/my-products/beta", endpoint="seller_my_products_beta",
+                view_func=lambda: "",
+            )
+        if "marketplace_listings.index" not in self.app.view_functions:
+            self.app.add_url_rule(
+                "/marketplaces/listings/", endpoint="marketplace_listings.index",
+                view_func=lambda: "",
+            )
+        if "supplier_catalog" not in self.app.view_functions:
+            self.app.add_url_rule(
+                "/supplier/catalog", endpoint="supplier_catalog",
+                view_func=lambda: "",
+            )
+        second = ImportedProduct(
+            seller_id=self.seller.id, external_id="return-source-2",
+            source_type="synthetic", title="Второй товар возврата",
+        )
+        db.session.add(second)
+        db.session.flush()
+        ordered_product_ids = [second.id, self.source.id]
+        accepted = self.client.post(
+            "/marketplaces/ozon/uploads/",
+            json=self.source_payload(imported_product_ids=ordered_product_ids),
+        )
+        self.assertEqual(accepted.status_code, 202, accepted.get_json())
+        self.assertEqual(accepted.json["run"]["mode"], "source_prepare")
+        job_uid = accepted.json["run"]["job_uid"]
+        before = (
+            BackgroundJob.query.count(), OzonBulkUploadRun.query.count(),
+            OzonBulkUploadItem.query.count(), MarketplaceOperation.query.count(),
+        )
+
+        response = self.client.get(
+            f"/marketplaces/ozon/uploads/{job_uid}",
+            headers={"Accept": "text/html"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("no-store", response.headers.get("Cache-Control", ""))
+        html = response.get_data(as_text=True)
+        self.assertIn("Подготавливаем черновики", html)
+        match = re.search(
+            r'<script type="application/json" id="ozon-prepare-workspace-return">(.*?)</script>',
+            html, re.DOTALL,
+        )
+        self.assertIsNotNone(match, "source_prepare must expose its minimal return binding")
+        payload = json.loads(match.group(1))
+        self.assertEqual(set(payload), {"workspaceUrl", "owner", "accountId", "productIds", "jobUid"})
+        self.assertEqual(payload, {
+            "workspaceUrl": "/my-products/beta",
+            "owner": f"{self.user.id}:{self.seller.id}",
+            "accountId": self.account.id,
+            "productIds": ordered_product_ids,
+            "jobUid": job_uid,
+        })
+        self.assertRegex(
+            html,
+            r'<a class="text-xs underline underline-offset-2" data-source-prepare-products\s+'
+            r'style="[^"]*"\s+href="/my-products/beta">Мои товары</a>',
+        )
+        self.assertIn("common-product-content.js?v=20261122-ozon-prepare-return-r48", html)
+        self.assertIn("ozon-preparation-workspace-return.js?v=20261122-ozon-prepare-return-r48", html)
+        self.assertEqual(before, (
+            BackgroundJob.query.count(), OzonBulkUploadRun.query.count(),
+            OzonBulkUploadItem.query.count(), MarketplaceOperation.query.count(),
+        ), "opening the result must remain a read-only return-link enhancement")
+
+    def test_preparation_workspace_return_script_only_enhances_exact_local_href(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is required for the workspace-return UI contract check")
+        script_path = Path(__file__).resolve().parents[1] / "static" / "ozon-preparation-workspace-return.js"
+        completed = subprocess.run(
+            [node, "-e", r'''
+const assert=require('node:assert/strict');
+const fs=require('node:fs');const vm=require('node:vm');
+const source=fs.readFileSync(process.argv[1],'utf8');
+const payload={workspaceUrl:'/my-products/beta',owner:'12:34',accountId:56,productIds:[3,2,9],jobUid:'ozon-upload-'+'a'.repeat(32)};
+function exercise(result,json=JSON.stringify(payload)){
+  const link={href:'/my-products/beta',dataset:{},attributes:{},setAttribute(k,v){this.attributes[k]=v}};
+  const node={textContent:json};let calls=0;
+  const helpers={ozonPreparationWorkspaceReturnHref(...args){calls++;assert.equal(args.length,1);assert.equal(JSON.stringify(args[0]),JSON.stringify(payload));return result}};
+  const context={window:{location:{origin:'https://seller.test'},SellerHubCommonContent:helpers},
+    document:{getElementById:id=>id==='ozon-prepare-workspace-return'?node:null,
+      querySelector:selector=>selector==='a[data-source-prepare-products]'?link:null},URL,Array,JSON,RegExp};
+  context.window.fetch=()=>{throw Error('Return enhancement must not call the network')};
+  vm.runInNewContext(source,context,{filename:'ozon-preparation-workspace-return.js'});
+  return {link,calls};
+}
+const nonce='b'.repeat(32);
+const valid=exercise('/my-products/beta?import_batch=signed-token#workspace-return='+nonce);
+assert.equal(valid.link.href,'/my-products/beta?import_batch=signed-token#workspace-return='+nonce);
+assert.equal(valid.link.dataset.workspaceReturn,'verified');
+assert.match(valid.link.attributes['aria-label'],/прежним списком/);assert.equal(valid.calls,1);
+for(const invalid of ['', '//evil.test/my-products/beta#workspace-return='+nonce,
+  'https://evil.test/my-products/beta#workspace-return='+nonce,
+  '/my-products/beta?other=1#workspace-return='+nonce,
+  '/my-products/beta?import_batch=signed-token#other']){
+  const result=exercise(invalid);assert.equal(result.link.href,'/my-products/beta');assert.equal(result.link.dataset.workspaceReturn,undefined);
+}
+const malformed=exercise('/my-products/beta?import_batch=signed-token#workspace-return='+nonce,'{');
+assert.equal(malformed.link.href,'/my-products/beta');assert.equal(malformed.calls,0);
+''',
+             str(script_path)],
+            cwd=script_path.parents[1], text=True, capture_output=True, timeout=15,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
     def test_local_prepare_works_without_publication_or_connected_key(self):
         self.app.config["MARKETPLACE_OZON_PUBLICATION_ENABLED"] = False

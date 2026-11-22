@@ -140,6 +140,17 @@
         {% endfor %}
     </div>
     {% if not local_only %}<div class="mt-6" data-reviewed-result-guide>{{ result_journey }}</div>{% endif %}
+    {% if run['mode'] == 'source_prepare' %}
+    <script type="application/json" id="ozon-prepare-workspace-return">{{ {
+        'workspaceUrl': url_for('seller_my_products_beta'),
+        'owner': (current_user.id|string) ~ ':' ~ (current_user.seller.id|string),
+        'accountId': run['account_id'],
+        'productIds': run['items']|map(attribute='imported_product_id')|list,
+        'jobUid': run['job_uid'],
+    } | tojson }}</script>
+    <script defer src="{{ url_for('static', filename='common-product-content.js', v='20261122-ozon-prepare-return-r48') }}"></script>
+    <script defer src="{{ url_for('static', filename='ozon-preparation-workspace-return.js', v='20261122-ozon-prepare-return-r48') }}"></script>
+    {% endif %}
 </div>
 {% else %}
 {% set status_labels = {
