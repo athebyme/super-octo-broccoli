@@ -658,7 +658,7 @@ async function finishSupplierRefresh(data, ids) {
   assert.match(templateText, /aria-labelledby="mp-supplier-refresh-dialog-title"/);
   assert.match(templateText, /Данные на площадках не меняются/);
   assert.match(templateText, /filename='my-products-beta\.css', v='20261122-supplier-updated-batch-cta-r46'/);
-  assert.match(templateText, /filename='my-products-beta\.js', v='20261122-ozon-prepare-return-r48'/);
+  assert.match(templateText, /filename='my-products-beta\.js', v='20261122-supplier-refresh-terminal-result-r51'/);
   assert.match(templateText, /filename='common-product-content\.js', v='20261122-ozon-prepare-return-r48'/);
   assert.match(commonTemplateText, /filename='common-product-content\.js', v='20261121-common-content-workspace-return-r36'/);
   assert.match(stylesheetText, /\.mp-refresh-result\s*\{[^}]*scroll-margin-top:\s*72px/s);
@@ -722,6 +722,198 @@ async function finishSupplierRefresh(data, ids) {
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(stored.has(receiptKey), false, 'oversized receipts are never persisted');
   assert.match(oversizedReceipt.app.supplierRefreshResult.resumeWarning, /нельзя будет восстановить/);
+
+  const zeroFailureReceipt = 'v1.zero.failure.receipt';
+  const zeroFailureResponse = {
+    success: true,
+    status: 'completed_with_errors',
+    requested: 3,
+    updated: 0,
+    skipped: 1,
+    errors: 2,
+    resume_receipt: zeroFailureReceipt,
+    items: [
+      {product_id: 404, status: 'error', reason: 'update_failed'},
+      {product_id: 202, status: 'skipped', reason: 'no_supplier_link'},
+      {product_id: 303, status: 'error', reason: 'update_failed'},
+    ],
+  };
+  const zeroFailure = makeApp();
+  let zeroFailurePosts = 0;
+  setSupplierOutcome(zeroFailure.app, zeroFailureResponse, [404, 202, 303]);
+  zeroFailure.app.$api.post = function () {
+    zeroFailurePosts += 1;
+    return Promise.resolve(zeroFailureResponse);
+  };
+  zeroFailure.app.confirmSupplierRefreshReview();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(zeroFailure.app.supplierRefreshResult.kind, 'partial',
+    'an awaited HTTP 200 with exact error outcomes is a terminal result');
+  sameJson([
+    zeroFailure.app.supplierRefreshResult.updated,
+    zeroFailure.app.supplierRefreshResult.skipped,
+    zeroFailure.app.supplierRefreshResult.errors,
+  ], [0, 1, 2], 'skipped and failed rows keep distinct counters');
+  sameJson(zeroFailure.app.supplierRefreshResult.entries.map(entry => [
+    entry.productId, entry.status, entry.href || null,
+  ]), [
+    [404, 'error', '/my-products/common-content?product_id=404'],
+    [202, 'skipped', null],
+    [303, 'error', '/my-products/common-content?product_id=303'],
+  ], 'only failed rows keep their existing product-specific repair links');
+  assert.equal(stored.get(receiptKey), zeroFailureReceipt,
+    'a verified zero-update result is saved with the existing receipt key');
+  sameJson(zeroFailure.app.supplierRefreshOzonIds, []);
+  sameJson(zeroFailure.app.supplierRefreshWbProductIds, []);
+  assert.equal(zeroFailure.app.supplierRefreshCanSelectUpdated, false);
+  const formsBeforeZeroActions = submittedForms.length;
+  assert.equal(zeroFailure.app.prepareRefreshedForOzon({currentTarget: {}}), undefined);
+  assert.equal(zeroFailure.app.checkRefreshedWbCharacteristics(), false);
+  assert.equal(zeroFailure.app.selectUpdatedSupplierBatch(), false);
+  assert.equal(zeroFailurePosts, 1, 'failed and skipped rows never trigger another provider action');
+  assert.equal(submittedForms.length, formsBeforeZeroActions,
+    'failed and skipped rows never submit a WB action');
+
+  const zeroSkippedReceipt = 'v1.zero.skipped.receipt';
+  const zeroSkippedResponse = {
+    success: true,
+    status: 'completed',
+    requested: 2,
+    updated: 0,
+    skipped: 2,
+    errors: 0,
+    resume_receipt: zeroSkippedReceipt,
+    items: [
+      {product_id: 801, status: 'skipped', reason: 'no_supplier_link'},
+      {product_id: 802, status: 'skipped', reason: 'no_supplier_link'},
+    ],
+  };
+  const zeroSkipped = makeApp();
+  setSupplierOutcome(zeroSkipped.app, zeroSkippedResponse, [801, 802]);
+  zeroSkipped.app.confirmSupplierRefreshReview();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(zeroSkipped.app.supplierRefreshResult.kind, 'complete');
+  sameJson([
+    zeroSkipped.app.supplierRefreshResult.updated,
+    zeroSkipped.app.supplierRefreshResult.skipped,
+    zeroSkipped.app.supplierRefreshResult.errors,
+  ], [0, 2, 0]);
+  assert.equal(stored.get(receiptKey), zeroSkippedReceipt,
+    'all-skipped terminal results also retain a read-only resume receipt');
+  sameJson(zeroSkipped.app.supplierRefreshOzonIds, []);
+  sameJson(zeroSkipped.app.supplierRefreshWbProductIds, []);
+  assert.equal(zeroSkipped.app.supplierRefreshCanSelectUpdated, false);
+
+  let resolveChangedScopeApply;
+  const changedScopeApply = makeApp();
+  const changedScopeReceipt = 'v1.changed.scope.receipt';
+  const changedScopeResponse = {
+    ...zeroSkippedResponse,
+    resume_receipt: changedScopeReceipt,
+    items: [{product_id: 803, status: 'skipped', reason: 'no_supplier_link'}],
+    requested: 1,
+    skipped: 1,
+  };
+  setSupplierOutcome(changedScopeApply.app, changedScopeResponse, [803]);
+  changedScopeApply.app.feedScopeKey = function () {
+    return this.filters.search ? JSON.stringify({search: this.filters.search}) : 'current';
+  };
+  const loadedScopes = [];
+  changedScopeApply.app.load = function () {
+    this.cancelSupplierRefreshReview({restoreFocus: false});
+    this.selected = [];
+    loadedScopes.push(this.feedScopeKey());
+  };
+  changedScopeApply.app.$api.post = function () {
+    return new Promise(resolve => { resolveChangedScopeApply = resolve; });
+  };
+  const changedScopePending = changedScopeApply.app.confirmSupplierRefreshReview();
+  assert.equal(changedScopeApply.app.supplierRefreshReview.phase, 'applying');
+  changedScopeApply.app.filters.search = 'current user scope';
+  changedScopeApply.app.load();
+  assert.equal(changedScopeApply.app.supplierRefreshReview.phase, 'applying',
+    'loading a changed feed scope does not cancel an already-sent refresh');
+  resolveChangedScopeApply(changedScopeResponse);
+  await changedScopePending;
+  assert.equal(changedScopeApply.app.supplierRefreshResult.updated, 0,
+    'a late verified response remains visible after the user changes scope');
+  assert.equal(changedScopeApply.app.filters.search, 'current user scope',
+    'showing the terminal result preserves the current search scope');
+  sameJson(loadedScopes, [
+    JSON.stringify({search: 'current user scope'}),
+    JSON.stringify({search: 'current user scope'}),
+  ], 'scope changes and the post-result refresh both use the current scope');
+  assert.equal(stored.get(receiptKey), changedScopeReceipt);
+
+  let resolveUnmountedApply;
+  const unmountedApply = makeApp();
+  const unmountedApplyReceipt = 'v1.unmounted.zero.receipt';
+  const unmountedApplyResponse = {
+    ...zeroSkippedResponse,
+    resume_receipt: unmountedApplyReceipt,
+    items: [{product_id: 804, status: 'skipped', reason: 'no_supplier_link'}],
+    requested: 1,
+    skipped: 1,
+  };
+  setSupplierOutcome(unmountedApply.app, unmountedApplyResponse, [804]);
+  unmountedApply.app.$api.post = function () {
+    return new Promise(resolve => { resolveUnmountedApply = resolve; });
+  };
+  const unmountedApplyPending = unmountedApply.app.confirmSupplierRefreshReview();
+  component.beforeUnmount.call(unmountedApply.app);
+  resolveUnmountedApply(unmountedApplyResponse);
+  await unmountedApplyPending;
+  assert.equal(stored.get(receiptKey), unmountedApplyReceipt,
+    'a verified zero-update response arriving after unmount remains resumable');
+
+  const zeroRestoredReceipt = 'v1.zero.restored.receipt';
+  const zeroRestored = makeApp();
+  const zeroRestoredData = {
+    ...zeroFailureResponse,
+    labels: [404, 202, 303].map(productId => ({productId, label: 'Product ' + productId})),
+  };
+  stored.set(receiptKey, zeroRestoredReceipt);
+  fakeWindow.location.hash = '#supplier-refresh-result';
+  fetchCalls.length = 0;
+  let restoreMutationCalls = 0;
+  zeroRestored.app.$api.post = function () { restoreMutationCalls += 1; return Promise.resolve({}); };
+  fetchHandler = (url, options) => {
+    assert.equal(url, '/api/my-products/supplier-refresh-result');
+    assert.equal(options.headers['X-Supplier-Refresh-Receipt'], zeroRestoredReceipt);
+    return Promise.resolve(jsonResponse(200, zeroRestoredData));
+  };
+  zeroRestored.app._supplierRefreshReturnAnchor = true;
+  await zeroRestored.app.restoreSupplierRefreshResult();
+  assert.equal(fetchCalls.length, 1, 'zero-update restoration performs only one receipt GET');
+  assert.equal(zeroRestored.app.supplierRefreshResult.saved, true);
+  sameJson([
+    zeroRestored.app.supplierRefreshResult.updated,
+    zeroRestored.app.supplierRefreshResult.skipped,
+    zeroRestored.app.supplierRefreshResult.errors,
+  ], [0, 1, 2]);
+  sameJson(zeroRestored.app.supplierRefreshResult.entries.map(entry => [
+    entry.productId, entry.href || null,
+  ]), [
+    [404, '/my-products/common-content?product_id=404'],
+    [202, null],
+    [303, '/my-products/common-content?product_id=303'],
+  ]);
+  sameJson(zeroRestored.app.supplierRefreshOzonIds, []);
+  sameJson(zeroRestored.app.supplierRefreshWbProductIds, []);
+  assert.equal(zeroRestored.app.supplierRefreshCanSelectUpdated, false);
+  assert.equal(restoreMutationCalls, 0, 'restoration reads the saved receipt without replaying the update');
+  assert.equal(stored.get(receiptKey), zeroRestoredReceipt, 'restoration leaves the receipt reusable');
+
+  const unknown500 = makeApp();
+  setSupplierOutcome(unknown500.app, zeroFailureResponse, [404, 202, 303]);
+  unknown500.app.$api.post = function () {
+    return Promise.reject(Object.assign(new Error('server error'), {status: 500}));
+  };
+  unknown500.app.confirmSupplierRefreshReview();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(unknown500.app.supplierRefreshResult.kind, 'unknown',
+    'an HTTP 500 remains an unconfirmed result rather than a terminal all-failed result');
+  assert.equal(stored.has(receiptKey), false, 'an HTTP 500 does not create a result receipt');
 
   const receipt = 'v1.saved.receipt_1';
   stored.set(receiptKey, receipt);

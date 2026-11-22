@@ -558,7 +558,7 @@
         var submitted = exactSupplierRefreshResumeLabels(data);
         if (!submitted) return null;
         var outcome = supplierRefreshOutcome(data, submitted.ids, submitted.labels, commonContentUrl);
-        if (!outcome || outcome.updated < 1) return null;
+        if (!outcome) return null;
         outcome.saved = true;
         outcome.title = 'Сохранённый итог обновления из поставщика';
         return outcome;
@@ -2231,7 +2231,7 @@
                             var lateOutcome = supplierRefreshOutcome(
                                 data, ids, labelsAtReview, self.urls.commonContent || '',
                             );
-                            if (lateOutcome && lateOutcome.updated > 0) {
+                            if (lateOutcome) {
                                 saveSupplierRefreshReceipt(data.resume_receipt);
                             }
                         }
@@ -2243,8 +2243,7 @@
                     );
                     self.cancelSupplierRefreshReview({ restoreFocus: false, force: true });
                     if (outcome) {
-                        if (outcome.updated > 0 &&
-                            !saveSupplierRefreshReceipt(data.resume_receipt)) {
+                        if (!saveSupplierRefreshReceipt(data.resume_receipt)) {
                             outcome.resumeWarning = outcome.resumeWarning || 'Этот итог нельзя будет восстановить после перехода.';
                         }
                         self.supplierRefreshResult = outcome;
