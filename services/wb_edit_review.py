@@ -990,30 +990,50 @@ def commit_wb_bulk_review_claim(history: BulkEditHistory, *, session=None):
         return existing, False
 
 
-def validate_preview_against_current(
+def build_preview_from_review_payload(
     payload: Mapping[str, Any],
     products: list[Product],
 ) -> dict[str, Any]:
-    """Rebuild the local preview and reject any local/schema drift before I/O."""
-    if [int(product.id) for product in products] != payload.get('product_ids'):
-        raise WBEditReviewError('Точный набор товаров предпросмотра изменился')
+    """Rebuild a signed manual review for a supplied exact product subset.
+
+    The operation and canonical value come only from the signed preview
+    payload. Callers may use this to create a new, explicitly reviewed subset;
+    they must issue a new preview token for the returned preview.
+    """
     operation = payload.get('operation')
     normalized_changes = payload.get('normalized_changes')
     if operation in {'update_characteristic', 'add_characteristic'}:
+        if not isinstance(normalized_changes, list) or not normalized_changes:
+            raise WBEditReviewError('Предпросмотр характеристик повреждён')
+        subject_id = parse_exact_wb_subject_id(payload.get('subject_id'))
+        if operation == 'add_characteristic' and len(normalized_changes) != 1:
+            raise WBEditReviewError('Предпросмотр характеристики повреждён')
+        if any(
+            not isinstance(row, dict)
+            or isinstance(row.get('id'), bool)
+            or not isinstance(row.get('id'), int)
+            or row['id'] <= 0
+            or 'value' not in row
+            for row in normalized_changes
+        ):
+            raise WBEditReviewError('Предпросмотр характеристик повреждён')
         preview = build_bulk_characteristic_preview(
             products,
             operation=operation,
-            subject_id=payload.get('subject_id'),
+            subject_id=subject_id,
             change_input=[
                 {'char_id': str(row['id']), 'value': row['value']}
                 for row in normalized_changes
             ] if operation == 'update_characteristic' else None,
-            char_id=(normalized_changes[0]['id'] if operation == 'add_characteristic' else None),
-            value=(normalized_changes[0]['value'] if operation == 'add_characteristic' else None),
+            char_id=(normalized_changes[0].get('id') if operation == 'add_characteristic' else None),
+            value=(normalized_changes[0].get('value') if operation == 'add_characteristic' else None),
         )
     else:
-        if len(normalized_changes) != 1 or not isinstance(
-            normalized_changes[0].get('value'), str,
+        if (
+            not isinstance(normalized_changes, list)
+            or len(normalized_changes) != 1
+            or not isinstance(normalized_changes[0], dict)
+            or not isinstance(normalized_changes[0].get('value'), str)
         ):
             raise WBEditReviewError('Предпросмотр ручной операции повреждён')
         preview = build_bulk_manual_preview(
@@ -1021,6 +1041,17 @@ def validate_preview_against_current(
             operation=operation,
             value=normalized_changes[0]['value'],
         )
+    return preview
+
+
+def validate_preview_against_current(
+    payload: Mapping[str, Any],
+    products: list[Product],
+) -> dict[str, Any]:
+    """Rebuild the local preview and reject any local/schema drift before I/O."""
+    if [int(product.id) for product in products] != payload.get('product_ids'):
+        raise WBEditReviewError('Точный набор товаров предпросмотра изменился')
+    preview = build_preview_from_review_payload(payload, products)
     expected_digest = review_digest(preview, payload['product_ids'])
     if expected_digest != payload.get('digest'):
         raise WBEditReviewError('Карточка или схема WB изменилась после предпросмотра; проверьте снова')

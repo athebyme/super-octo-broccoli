@@ -4,6 +4,7 @@ import copy
 import json
 import os
 import threading
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -304,7 +305,10 @@ class WBBulkReviewReplayTest(unittest.TestCase):
                 ]),
             }
 
-    def _manual_review_submission(self, operation, value, *, product_ids=None):
+    def _manual_review_submission(
+        self, operation, value, *, product_ids=None, return_to='/products?page=1',
+        workspace_source_ids=None,
+    ):
         from models import Product
         from services.product_selection import (
             issue_product_selection_token,
@@ -339,8 +343,9 @@ class WBBulkReviewReplayTest(unittest.TestCase):
                 seller_id=self.seller_id,
                 product_ids=exact_ids,
                 state=parse_product_list_state({}, strict=True),
-                return_to='/products?page=1',
+                return_to=return_to,
                 wb_account_id='synthetic-wb-account',
+                workspace_source_ids=workspace_source_ids,
             )
             submission['selection_token'] = selection_token
             selection = load_product_selection_token(
@@ -361,6 +366,46 @@ class WBBulkReviewReplayTest(unittest.TestCase):
                 preview=preview,
             )
         return submission
+
+    def _review_exclusion_submission(self, base_submission, excluded_product_id, **extra):
+        return {
+            'csrf_token': 'synthetic-csrf',
+            'selection_token': base_submission['selection_token'],
+            'review_exclude': '1',
+            'base_preview_token': base_submission['preview_token'],
+            'excluded_product_id': str(excluded_product_id),
+            **extra,
+        }
+
+    @staticmethod
+    def _submitted_review_tokens(html):
+        class FormParser(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.forms = []
+                self.current = None
+
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if tag == 'form':
+                    self.current = {}
+                elif tag == 'input' and self.current is not None:
+                    name = attrs.get('name')
+                    if name:
+                        self.current.setdefault(name, []).append(attrs.get('value', ''))
+
+            def handle_endtag(self, tag):
+                if tag == 'form' and self.current is not None:
+                    self.forms.append(self.current)
+                    self.current = None
+
+        parser = FormParser()
+        parser.feed(html)
+        for form in parser.forms:
+            preview_tokens = form.get('preview_token') or []
+            if preview_tokens and preview_tokens[-1]:
+                return form.get('selection_token', [''])[-1], preview_tokens[-1]
+        raise AssertionError('fresh apply form tokens were not rendered')
 
     def _characteristic_review_submission(
         self, operation, *, char_id=None, value=None, changes=None,
@@ -590,6 +635,418 @@ class WBBulkReviewReplayTest(unittest.TestCase):
             expected_workspace_return=workspace_return,
         )
         self.assertEqual(fake_state, {'reads': 1, 'writes': 1})
+
+    def test_excluding_one_changed_workspace_card_issues_exact_fresh_review_without_writes(self):
+        from models import BulkEditHistory, ImportedProduct, Product
+        from services.product_selection import load_product_selection_token
+        from services.wb_edit_review import (
+            load_wb_edit_preview_token,
+            validate_preview_against_current,
+        )
+        from sqlalchemy import event
+
+        return_to = (
+            '/my-products/beta?import_batch=a.b.c#workspace-return='
+            + ('d' * 32)
+        )
+        with self.app.app_context():
+            sources = [
+                ImportedProduct(
+                    seller_id=self.seller_id,
+                    product_id=self.sibling_product_id,
+                    wb_nm_id=9742,
+                    external_id='workspace-exclusion-sibling',
+                ),
+                ImportedProduct(
+                    seller_id=self.seller_id,
+                    product_id=self.product_id,
+                    wb_nm_id=9741,
+                    external_id='workspace-exclusion-product',
+                ),
+            ]
+            self.db.session.add_all(sources)
+            self.db.session.commit()
+            source_ids = [row.id for row in sources]
+
+        original_order = [self.sibling_product_id, self.product_id]
+        base = self._manual_review_submission(
+            'update_brand', 'Narrowed review brand',
+            product_ids=original_order,
+            return_to=return_to,
+            workspace_source_ids=source_ids,
+        )
+        writes = []
+
+        def capture_sql(_conn, _cursor, statement, _parameters, _context, _many):
+            stripped = statement.lstrip()
+            if not stripped:
+                return
+            first_word = stripped.split(None, 1)[0].upper()
+            if first_word in {'INSERT', 'UPDATE', 'DELETE', 'REPLACE'}:
+                writes.append(first_word)
+
+        event.listen(self.engine, 'before_cursor_execute', capture_sql)
+        try:
+            with patch.object(
+                self.seller_platform,
+                'WildberriesAPIClient',
+                side_effect=AssertionError('review narrowing must not create a WB client'),
+            ):
+                response = self._client().post(
+                    '/products/bulk-edit',
+                    data=self._review_exclusion_submission(base, self.sibling_product_id),
+                )
+        finally:
+            event.remove(self.engine, 'before_cursor_execute', capture_sql)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(writes, [])
+        html = response.get_data(as_text=True)
+        new_selection_token, new_preview_token = self._submitted_review_tokens(html)
+        self.assertNotEqual(new_selection_token, base['selection_token'])
+        self.assertNotEqual(new_preview_token, base['preview_token'])
+
+        with self.app.app_context():
+            selection = load_product_selection_token(
+                new_selection_token,
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                wb_account_id='synthetic-wb-account',
+            )
+            review = load_wb_edit_preview_token(
+                new_preview_token,
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+            )
+            product = Product.query.filter_by(id=self.product_id).one()
+            sibling = Product.query.filter_by(id=self.sibling_product_id).one()
+            self.assertEqual(
+                validate_preview_against_current(review, [product])['changed_count'],
+                1,
+            )
+            # The original stateless review is not revoked by narrowing.
+            original = load_wb_edit_preview_token(
+                base['preview_token'],
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+            )
+            self.assertEqual(
+                validate_preview_against_current(original, [sibling, product])['changed_count'],
+                2,
+            )
+            self.assertEqual(BulkEditHistory.query.filter_by(seller_id=self.seller_id).count(), 0)
+            self.assertEqual(product.brand, 'Pipedream')
+            self.assertEqual(sibling.brand, 'Pipedream Classic')
+
+        self.assertEqual(selection['ids'], [self.product_id])
+        self.assertEqual(selection['workspace_source_ids'], [source_ids[1]])
+        self.assertEqual(selection['return_to'], return_to)
+        self.assertEqual(review['product_ids'], [self.product_id])
+        self.assertEqual(review['operation'], 'update_brand')
+        self.assertEqual(review['normalized_changes'], [{
+            'field': 'brand', 'value': 'Narrowed review brand',
+        }])
+
+    def test_excluded_review_token_flows_through_existing_exact_apply(self):
+        from models import BulkEditHistory, Product
+        from services.product_selection import load_product_selection_token
+        from services.wb_edit_review import load_wb_edit_preview_token
+
+        base = self._manual_review_submission(
+            'update_brand', 'New exact brand',
+            product_ids=[self.sibling_product_id, self.product_id],
+        )
+        response = self._client().post(
+            '/products/bulk-edit',
+            data=self._review_exclusion_submission(base, self.sibling_product_id),
+        )
+        self.assertEqual(response.status_code, 200)
+        selection_token, preview_token = self._submitted_review_tokens(
+            response.get_data(as_text=True),
+        )
+        with self.app.app_context():
+            selection = load_product_selection_token(
+                selection_token,
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                wb_account_id='synthetic-wb-account',
+            )
+            review = load_wb_edit_preview_token(
+                preview_token,
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+            )
+        self.assertEqual(selection['ids'], [self.product_id])
+        self.assertEqual(review['product_ids'], [self.product_id])
+
+        writes = {'updates': None}
+
+        class FakeWBClient:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def update_cards_merged(self, updates, *, pre_merge_callback=None, **_kwargs):
+                writes['updates'] = updates
+                for nm_id, patch_data in updates.items():
+                    pre_merge_callback(
+                        nm_id,
+                        {'nmID': nm_id, 'brand': 'Pipedream'},
+                        patch_data,
+                    )
+                return {
+                    'sent': [9741], 'missing': [], 'invalid': {}, 'failed': {},
+                    'snapshots': {
+                        9741: {
+                            'before': {'nmID': 9741, 'brand': 'Pipedream'},
+                            'after': {'nmID': 9741, 'brand': 'New exact brand'},
+                        },
+                    },
+                }
+
+        with patch.object(self.seller_platform, 'WildberriesAPIClient', FakeWBClient):
+            applied = self._client().post('/products/bulk-edit', data={
+                'csrf_token': 'synthetic-csrf',
+                'selection_token': selection_token,
+                'preview_token': preview_token,
+                'operation': 'update_brand',
+                'value': 'New exact brand',
+            })
+        self.assertEqual(applied.status_code, 302)
+        self.assertEqual(writes['updates'], {9741: {'brand': 'New exact brand'}})
+        with self.app.app_context():
+            operation = BulkEditHistory.query.filter_by(seller_id=self.seller_id).one()
+            product = Product.query.filter_by(id=self.product_id).one()
+            sibling = Product.query.filter_by(id=self.sibling_product_id).one()
+            self.assertEqual(operation.total_products, 1)
+            self.assertEqual(operation.operation_params['review_summary']['selected'], 1)
+            self.assertEqual(operation.operation_params['review_summary']['changed_product_ids'], [self.product_id])
+            self.assertEqual(product.brand, 'New exact brand')
+            self.assertEqual(sibling.brand, 'Pipedream Classic')
+
+    def test_review_exclusion_rejects_tampering_foreign_duplicates_and_mixed_modes(self):
+        from models import Product
+        from services.product_selection import load_product_selection_token
+        from services.wb_edit_review import (
+            build_bulk_manual_preview,
+            issue_wb_edit_preview_token,
+        )
+        from werkzeug.datastructures import MultiDict
+
+        base = self._manual_review_submission(
+            'update_brand', 'New exact brand',
+            product_ids=[self.sibling_product_id, self.product_id],
+        )
+        tampered_token = base['preview_token'][:-1] + (
+            'a' if base['preview_token'][-1] != 'a' else 'b'
+        )
+        with self.app.app_context():
+            selection = load_product_selection_token(
+                base['selection_token'],
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                wb_account_id='synthetic-wb-account',
+            )
+            products_by_id = {
+                int(product.id): product
+                for product in Product.query.filter(
+                    Product.seller_id == self.seller_id,
+                    Product.id.in_([self.sibling_product_id, self.product_id]),
+                ).all()
+            }
+            preview = build_bulk_manual_preview(
+                [products_by_id[product_id] for product_id in selection['ids']],
+                operation='update_brand',
+                value='New exact brand',
+            )
+            from services.wb_edit_review import issue_wb_edit_preview_token as issue_preview
+
+            with patch('itsdangerous.timed.TimestampSigner.get_timestamp',
+                       return_value=int(time.time()) - 901):
+                expired_token = issue_preview(
+                    secret_key=self.app.config['SECRET_KEY'],
+                    user_id=self.user_id,
+                    seller_id=self.seller_id,
+                    selection_payload=selection,
+                    preview=preview,
+                )
+        cases = [
+            ('empty exclusion', self._review_exclusion_submission(base, '')),
+            ('foreign product', self._review_exclusion_submission(base, self.foreign_product_id)),
+            ('tampered review', self._review_exclusion_submission(
+                {**base, 'preview_token': tampered_token}, self.sibling_product_id,
+            )),
+            ('expired review', self._review_exclusion_submission(
+                {**base, 'preview_token': expired_token}, self.sibling_product_id,
+            )),
+            ('operation smuggling', self._review_exclusion_submission(
+                base, self.sibling_product_id, operation='update_brand', value='attacker',
+            )),
+            ('back mode smuggling', self._review_exclusion_submission(
+                base, self.sibling_product_id, back_to_editor='1',
+            )),
+            ('apply token smuggling', self._review_exclusion_submission(
+                base, self.sibling_product_id, preview_token=base['preview_token'],
+            )),
+        ]
+        duplicate_data = MultiDict([
+            ('csrf_token', 'synthetic-csrf'),
+            ('selection_token', base['selection_token']),
+            ('review_exclude', '1'),
+            ('base_preview_token', base['preview_token']),
+            ('excluded_product_id', str(self.sibling_product_id)),
+            ('excluded_product_id', str(self.product_id)),
+        ])
+        cases.append(('duplicate excluded IDs', duplicate_data))
+
+        for label, data in cases:
+            with self.subTest(case=label), patch.object(
+                self.seller_platform,
+                'WildberriesAPIClient',
+                side_effect=AssertionError('invalid exclusion must not create WB client'),
+            ):
+                response = self._client().post('/products/bulk-edit', data=data)
+                self.assertEqual(response.status_code, 200)
+                with self.assertRaises(AssertionError):
+                    self._submitted_review_tokens(response.get_data(as_text=True))
+
+        from models import BulkEditHistory
+        with self.app.app_context():
+            self.assertEqual(BulkEditHistory.query.filter_by(seller_id=self.seller_id).count(), 0)
+
+    def test_review_exclusion_fails_closed_on_local_drift_claim_and_empty_remainder(self):
+        from models import BulkEditHistory, ImportedProduct, Product
+        from services.wb_edit_review import load_wb_edit_preview_token
+
+        base = self._manual_review_submission(
+            'update_brand', 'New exact brand',
+            product_ids=[self.sibling_product_id, self.product_id],
+        )
+        with self.app.app_context():
+            payload = load_wb_edit_preview_token(
+                base['preview_token'],
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+            )
+            self.db.session.add(BulkEditHistory(
+                seller_id=self.seller_id,
+                operation_type='update_brand',
+                review_key=payload['review_key'],
+                status='in_progress',
+                total_products=2,
+            ))
+            self.db.session.commit()
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('claimed review must not create WB client'),
+        ):
+            claimed = self._client().post(
+                '/products/bulk-edit',
+                data=self._review_exclusion_submission(base, self.sibling_product_id),
+            )
+        self.assertEqual(claimed.status_code, 200)
+        with self.assertRaises(AssertionError):
+            self._submitted_review_tokens(claimed.get_data(as_text=True))
+
+        drift_base = self._manual_review_submission(
+            'update_brand', 'Another target',
+            product_ids=[self.sibling_product_id, self.product_id],
+        )
+        with self.app.app_context():
+            product = Product.query.filter_by(id=self.product_id).one()
+            product.brand = 'Concurrent value'
+            self.db.session.commit()
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('drifted review must not create WB client'),
+        ):
+            drifted = self._client().post(
+                '/products/bulk-edit',
+                data=self._review_exclusion_submission(drift_base, self.sibling_product_id),
+            )
+        self.assertEqual(drifted.status_code, 200)
+        with self.assertRaises(AssertionError):
+            self._submitted_review_tokens(drifted.get_data(as_text=True))
+
+        with self.app.app_context():
+            product = Product.query.filter_by(id=self.product_id).one()
+            product.brand = 'Narrow target'
+            self.db.session.commit()
+        one_change = self._manual_review_submission(
+            'update_brand', 'Narrow target',
+            product_ids=[self.sibling_product_id, self.product_id],
+        )
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('empty remainder must not create WB client'),
+        ):
+            empty_remainder = self._client().post(
+                '/products/bulk-edit',
+                data=self._review_exclusion_submission(one_change, self.sibling_product_id),
+            )
+        self.assertEqual(empty_remainder.status_code, 200)
+        self.assertIn('После исключения не останется карточек'.encode(), empty_remainder.data)
+        with self.assertRaises(AssertionError):
+            self._submitted_review_tokens(empty_remainder.get_data(as_text=True))
+
+        with self.app.app_context():
+            sources = [
+                ImportedProduct(
+                    seller_id=self.seller_id,
+                    product_id=self.sibling_product_id,
+                    wb_nm_id=9742,
+                    external_id='workspace-exclusion-drift-sibling',
+                ),
+                ImportedProduct(
+                    seller_id=self.seller_id,
+                    product_id=self.product_id,
+                    wb_nm_id=9741,
+                    external_id='workspace-exclusion-drift-product',
+                ),
+            ]
+            self.db.session.add_all(sources)
+            self.db.session.commit()
+            source_ids = [row.id for row in sources]
+        workspace_return = '/my-products/beta#workspace-return=' + ('e' * 32)
+        workspace_base = self._manual_review_submission(
+            'update_brand', 'Workspace target',
+            product_ids=[self.sibling_product_id, self.product_id],
+            return_to=workspace_return,
+            workspace_source_ids=source_ids,
+        )
+        with self.app.app_context():
+            source = ImportedProduct.query.filter_by(id=source_ids[0]).one()
+            source.wb_nm_id = 999999
+            self.db.session.commit()
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('workspace mapping drift must not create WB client'),
+        ):
+            mapping_drift = self._client().post(
+                '/products/bulk-edit',
+                data=self._review_exclusion_submission(
+                    workspace_base, self.sibling_product_id,
+                ),
+            )
+        self.assertEqual(mapping_drift.status_code, 302)
+        self.assertEqual(mapping_drift.headers['Location'], workspace_return)
+
 
     def test_manual_wb_claim_precedes_provider_and_replay_is_single_use(self):
         from models import BulkEditHistory

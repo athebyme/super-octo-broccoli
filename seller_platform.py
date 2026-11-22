@@ -3287,6 +3287,7 @@ def products_bulk_edit():
     from services.product_selection import (
         ProductSelectionError,
         build_product_list_query,
+        issue_product_selection_token,
         load_product_selection_token,
         parse_product_list_state,
         parse_selected_product_ids,
@@ -3298,6 +3299,7 @@ def products_bulk_edit():
         bulk_characteristics_payload,
         bulk_subject_groups,
         build_bulk_characteristic_preview,
+        build_preview_from_review_payload,
         commit_wb_bulk_review_claim,
         find_wb_bulk_review_claim,
         issue_wb_edit_preview_token,
@@ -3515,6 +3517,7 @@ def products_bulk_edit():
             review_products=review_products,
             account_label=account_label,
             preview_token=preview_token,
+            base_preview_token=preview_token,
             selection_token=selection_token,
             return_to=return_to,
             selected_category=selected_category,
@@ -3525,6 +3528,230 @@ def products_bulk_edit():
         )
 
     if request.method == 'POST':
+        exclusion_fields = {
+            'base_preview_token', 'excluded_product_id', 'review_exclude',
+        }
+        has_exclusion_fields = bool(exclusion_fields.intersection(request.form.keys()))
+        if has_exclusion_fields:
+            expected_fields = {
+                'base_preview_token', 'excluded_product_id', 'review_exclude',
+                'selection_token',
+            }
+            allowed_fields = expected_fields | {'csrf_token'}
+            if (
+                set(request.form.keys()).difference(allowed_fields)
+                or not expected_fields.issubset(request.form.keys())
+                or any(len(request.form.getlist(field)) != 1 for field in expected_fields)
+                or ('csrf_token' in request.form and len(request.form.getlist('csrf_token')) != 1)
+                or request.form.getlist('review_exclude') != ['1']
+            ):
+                flash(
+                    'Запрос исключения карточки имеет неверный формат. '
+                    'Откройте проверку изменений заново.',
+                    'warning',
+                )
+                return render_bulk_editor()
+
+            try:
+                base_preview_token = request.form.get('base_preview_token', '').strip()
+                if not base_preview_token:
+                    raise WBEditReviewError(
+                        'Для исключения нужна исходная проверка изменений; '
+                        'подтверждение не было применено.'
+                    )
+                excluded_product_id = parse_selected_product_ids(
+                    request.form.getlist('excluded_product_id'),
+                    from_query=True,
+                )[0]
+                base_payload = load_wb_edit_preview_token(
+                    base_preview_token,
+                    secret_key=app.config['SECRET_KEY'],
+                    user_id=current_user.id,
+                    seller_id=current_user.seller.id,
+                )
+                operation = base_payload.get('operation')
+                manual_operations = {
+                    'update_brand', 'append_description', 'replace_description',
+                    'update_keywords', 'update_characteristic', 'add_characteristic',
+                }
+                if operation not in manual_operations:
+                    raise WBEditReviewError(
+                        'Эта проверка не поддерживает исключение карточек.'
+                    )
+                if (
+                    base_payload.get('product_ids') != selection_payload['ids']
+                    or base_payload.get('wb_account_id')
+                    != selection_payload.get('wb_account_id')
+                    or base_payload.get('selection_filter_fingerprint')
+                    != selection_payload.get('filter_fingerprint')
+                ):
+                    raise WBEditReviewError(
+                        'Проверка не совпадает с точным набором товаров и аккаунтом.'
+                    )
+                if (operation in {'update_characteristic', 'add_characteristic'}) != (
+                    base_payload.get('subject_id') is not None
+                ):
+                    raise WBEditReviewError('Категория проверки повреждена.')
+
+                # A claimed review may already have reached WB or the local
+                # write path. Do not turn it into a second, differently keyed
+                # confirmation, even when its final outcome is uncertain.
+                # Validate the complete base review against current local rows,
+                # content and schema before considering the one excluded ID.
+                if find_wb_bulk_review_claim(
+                    current_user.seller.id,
+                    base_payload['review_key'],
+                ) is not None:
+                    raise WBEditReviewError(
+                        'Эта проверка уже была отправлена. Откройте историю операции; '
+                        'новый набор не создан.'
+                    )
+                current_base_preview = validate_preview_against_current(
+                    base_payload, products,
+                )
+                from services.wb_edit_review import reviewed_diff_by_product
+
+                current_changed_by_product = reviewed_diff_by_product(
+                    current_base_preview,
+                )
+                if set(current_changed_by_product).difference(selection_payload['ids']):
+                    raise WBEditReviewError(
+                        'Изменения предпросмотра вышли за точный выбранный набор.'
+                    )
+                if excluded_product_id not in current_changed_by_product:
+                    raise WBEditReviewError(
+                        'Карточка больше не входит в текущие изменения. '
+                        'Проверьте весь набор заново.'
+                    )
+                if len(current_changed_by_product) <= 1:
+                    raise WBEditReviewError(
+                        'После исключения не останется карточек с изменениями. '
+                        'Вернитесь к выбору товаров.'
+                    )
+
+                remaining_ids = [
+                    product_id for product_id in selection_payload['ids']
+                    if product_id != excluded_product_id
+                ]
+                remaining_products = [products_by_id[product_id] for product_id in remaining_ids]
+                remaining_source_ids = None
+                if is_workspace_selection:
+                    paired_ids = dict(zip(
+                        selection_payload['ids'],
+                        selection_payload['workspace_source_ids'],
+                    ))
+                    remaining_source_ids = [paired_ids[product_id] for product_id in remaining_ids]
+
+                subset_preview = build_preview_from_review_payload(
+                    base_payload, remaining_products,
+                )
+
+                if subset_preview.get('changed_count', 0) <= 0 or subset_preview.get('error_count', 0):
+                    raise WBEditReviewError(
+                        'После исключения не осталось безопасных изменений. '
+                        'Проверьте весь набор заново.'
+                    )
+                subset_changed_by_product = reviewed_diff_by_product(subset_preview)
+                expected_remaining_changed = set(current_changed_by_product).difference(
+                    {excluded_product_id},
+                )
+                if (
+                    set(subset_changed_by_product) != expected_remaining_changed
+                ):
+                    raise WBEditReviewError(
+                        'Состав изменённых карточек изменился. Проверьте весь набор заново.'
+                    )
+
+                narrowed_selection_token = issue_product_selection_token(
+                    secret_key=app.config['SECRET_KEY'],
+                    user_id=current_user.id,
+                    seller_id=current_user.seller.id,
+                    product_ids=remaining_ids,
+                    workspace_source_ids=remaining_source_ids,
+                    state=state,
+                    return_to=return_to,
+                    wb_account_id=current_user.seller.wb_seller_id,
+                )
+                narrowed_selection_payload = load_product_selection_token(
+                    narrowed_selection_token,
+                    secret_key=app.config['SECRET_KEY'],
+                    user_id=current_user.id,
+                    seller_id=current_user.seller.id,
+                    wb_account_id=current_user.seller.wb_seller_id,
+                )
+                selection_context_keys = (
+                    'ids', 'workspace_source_ids', 'filters', 'sort', 'order',
+                    'page', 'per_page', 'wb_account_id', 'return_to',
+                )
+                expected_selection_context = (
+                    remaining_ids,
+                    remaining_source_ids,
+                    selection_payload.get('filters'),
+                    selection_payload.get('sort'),
+                    selection_payload.get('order'),
+                    selection_payload.get('page'),
+                    selection_payload.get('per_page'),
+                    selection_payload.get('wb_account_id'),
+                    return_to,
+                )
+                if tuple(
+                    narrowed_selection_payload.get(key) for key in selection_context_keys
+                ) != expected_selection_context:
+                    raise WBEditReviewError(
+                        'Не удалось сохранить исходный контекст выбора. '
+                        'Вернитесь в каталог и откройте проверку заново.'
+                    )
+                narrowed_preview_token = issue_wb_edit_preview_token(
+                    secret_key=app.config['SECRET_KEY'],
+                    user_id=current_user.id,
+                    seller_id=current_user.seller.id,
+                    selection_payload=narrowed_selection_payload,
+                    preview=subset_preview,
+                )
+
+                # Replace the route's presentation scope so the ordinary
+                # review/apply form is bound only to the freshly reviewed set.
+                selection_token = narrowed_selection_token
+                selection_payload = narrowed_selection_payload
+                products = remaining_products
+                return_to = narrowed_selection_payload['return_to']
+                selected_category = (
+                    str(subset_preview['subject_id'])
+                    if subset_preview.get('subject_id') is not None else ''
+                )
+                if operation == 'update_characteristic':
+                    characteristics_batch = json.dumps(
+                        subset_preview['normalized_changes'], ensure_ascii=False,
+                    )
+                    char_id = ''
+                    value = ''
+                elif operation == 'add_characteristic':
+                    characteristics_batch = ''
+                    char_id = str(subset_preview['normalized_changes'][0]['id'])
+                    value = json.dumps(
+                        subset_preview['normalized_changes'][0]['value'],
+                        ensure_ascii=False,
+                    )
+                else:
+                    characteristics_batch = ''
+                    char_id = ''
+                    value = subset_preview['normalized_changes'][0]['value']
+                flash(
+                    'Одна карточка исключена. Показана новая проверка оставшегося набора.',
+                    'info',
+                )
+                return render_bulk_review(
+                    subset_preview,
+                    preview_token=narrowed_preview_token,
+                    selected_category=selected_category,
+                    characteristics_batch=characteristics_batch,
+                    char_id=char_id,
+                    value=value,
+                )
+            except (ProductSelectionError, WBEditReviewError) as exc:
+                flash(str(exc), 'warning')
+                return render_bulk_editor()
+
         if request.form.get('back_to_editor') == '1':
             return render_bulk_editor()
 
