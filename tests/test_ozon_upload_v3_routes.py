@@ -952,15 +952,34 @@ assert.equal(malformed.link.href,'/my-products/beta');assert.equal(malformed.cal
         # Execute only these handlers, never the application's startup side effects.
         source = Path(__file__).resolve().parents[1] / "seller_platform.py"
         tree = ast.parse(source.read_text())
-        functions = []
+        extracted_names = {
+            "WB_BULK_CREATE_PROGRESS_KEY",
+            "_wb_bulk_create_managed_state",
+            "_wb_bulk_create_is_stale",
+            "_wb_bulk_create_public_job",
+            "api_job_status",
+            "api_jobs_active",
+        }
+        extracted = []
         for node in tree.body:
-            if isinstance(node, ast.FunctionDef) and node.name in {"api_job_status", "api_jobs_active"}:
-                node.decorator_list = []
-                functions.append(node)
-        self.assertEqual(len(functions), 2)
+            name = None
+            if isinstance(node, ast.FunctionDef):
+                name = node.name
+            elif isinstance(node, ast.Assign):
+                name = next((target.id for target in node.targets
+                             if isinstance(target, ast.Name)), None)
+            if name in extracted_names:
+                if isinstance(node, ast.FunctionDef) and name in {"api_job_status", "api_jobs_active"}:
+                    node.decorator_list = []
+                extracted.append(node)
+        self.assertEqual(
+            {node.name if isinstance(node, ast.FunctionDef) else node.targets[0].id
+             for node in extracted},
+            extracted_names,
+        )
         namespace = {"current_user": self.user_view, "BackgroundJob": BackgroundJob,
-                     "db": db, "jsonify": jsonify}
-        exec(compile(ast.Module(body=functions, type_ignores=[]), str(source), "exec"), namespace)
+                     "datetime": datetime, "db": db, "jsonify": jsonify}
+        exec(compile(ast.Module(body=extracted, type_ignores=[]), str(source), "exec"), namespace)
         for durable_type in ("ozon_bulk_upload", "ozon_draft_completion"):
             with self.subTest(job_type=durable_type):
                 job.job_type = durable_type
