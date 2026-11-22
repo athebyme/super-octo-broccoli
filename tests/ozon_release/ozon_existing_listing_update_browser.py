@@ -944,10 +944,12 @@ def exercise_signed_import_review_return(page):
     shell.wait_for()
     preview_dialog = page.locator("dialog.mcat-update-dialog[open]")
     preview_dialog.wait_for()
+    preview_confirm = preview_dialog.locator("[data-listing-update-confirm]")
+    preview_confirm.wait_for()
     assert state["handoff"] == 1 and state["preview"] == 1
     assert state["return_to"].startswith(source_href + "#workspace-return=")
     assert len(state["listing_ids"]) == 21 and len(state["source_ids"]) == 21
-    assert preview_dialog.locator("[data-listing-update-confirm]").is_disabled()
+    assert preview_confirm.is_disabled()
     preview_dialog.get_by_role("checkbox").check()
     confirm = preview_dialog.locator("[data-listing-update-confirm]")
     assert confirm.is_enabled()
