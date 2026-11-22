@@ -1241,6 +1241,7 @@ try:
         assert mobile_nav.count() == 1
         mobile_summary = mobile_nav.locator("summary")
         mobile_links = mobile_nav.locator(".pricing-workspace-mobile-links a")
+        mobile_items = mobile_nav.locator(".pricing-workspace-mobile-links .pricing-workspace-link")
         assert not mobile_nav.evaluate("element => element.open")
         assert mobile_summary.is_visible()
         initial_mobile_geometry = page.evaluate("""() => {
@@ -1284,15 +1285,42 @@ try:
             mobile_summary.press("Enter")
             assert mobile_nav.evaluate("element => element.open")
             mobile_links.first.wait_for(state="visible")
-            link_accessibility = mobile_links.evaluate_all("""links => links.map(link => ({
-                label:link.innerText.trim(), href:link.getAttribute('href'),
-                current:link.getAttribute('aria-current'), visible:link.getClientRects().length > 0,
+            nav_accessibility = mobile_items.evaluate_all("""items => items.map(item => ({
+                tag:item.tagName.toLowerCase(), label:item.innerText.trim(),
+                href:item.getAttribute('href'), current:item.getAttribute('aria-current'),
+                currentHref:item.getAttribute('data-current-href'),
+                visible:item.getClientRects().length > 0,
             }))""")
-            assert link_accessibility and all(
-                item["label"] and item["href"] and item["visible"] for item in link_accessibility
-            ), link_accessibility
-            assert any(item["label"] == "Предложения Ozon" and item["current"] == "page"
-                       for item in link_accessibility), link_accessibility
+            assert nav_accessibility and all(
+                item["label"] and item["visible"] and
+                (item["tag"] != "a" or item["href"])
+                for item in nav_accessibility
+            ), nav_accessibility
+            current_items = [item for item in nav_accessibility if item["current"] == "page"]
+            assert len(current_items) == 1, nav_accessibility
+            current_item = current_items[0]
+            assert current_item["label"] == "Предложения Ozon", nav_accessibility
+            assert current_item["tag"] == "span" and current_item["href"] is None
+            assert current_item["currentHref"], nav_accessibility
+            current_href = urlsplit(current_item["currentHref"])
+            expected_current_query = {"account_id": [str(account_id)]}
+            assert current_href.path == "/marketplaces/commercial/"
+            assert parse_qs(current_href.query) == expected_current_query
+            assert not current_href.fragment
+            current_route = urlsplit(page.url)
+            assert current_route.path == "/marketplaces/commercial/"
+            assert parse_qs(current_route.query).get("account_id") == [str(account_id)]
+            assert not any(
+                item["tag"] == "a"
+                and urlsplit(item["href"]).path == current_href.path
+                and parse_qs(urlsplit(item["href"]).query) == expected_current_query
+                for item in nav_accessibility
+            ), nav_accessibility
+            wb_counterparts = [item for item in nav_accessibility if item["label"] == "Текущие цены WB"]
+            assert len(wb_counterparts) == 1, nav_accessibility
+            wb_href = urlsplit(wb_counterparts[0]["href"] or "")
+            assert wb_counterparts[0]["tag"] == "a" and wb_counterparts[0]["current"] is None
+            assert wb_href.path == "/prices/" and not wb_href.query and not wb_href.fragment
             mobile_summary.press("Enter")
             assert not mobile_nav.evaluate("element => element.open")
             assert mobile_nav.locator(".pricing-workspace-mobile-links a:visible").count() == 0
