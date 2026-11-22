@@ -46,16 +46,8 @@
     function definition(field) {
         return {...field,id:field.external_id,required:true,collection:field.is_collection,max_values:field.max_values || 1};
     }
-    function encodeCompactDraftIds(values) {
-        if(!Array.isArray(values) || !values.length || values.length>200 ||
-            values.some(value=>!Number.isSafeInteger(value) || value<=0))return null;
-        const bytes=[];
-        for(const value of values){
-            let id=BigInt(value),offset=bytes.length;
-            for(let index=7;index>=0;index--){bytes[offset+index]=Number(id&255n);id>>=8n;}
-        }
-        return global.btoa(String.fromCharCode(...bytes)).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_');
-    }
+    const encodeCompactDraftIds = values =>
+        global.OzonWorkspaceReturn?.encodeCompactDraftIds?.(values) || null;
     function display(value) {
         if (Array.isArray(value)) return value.map(v => asText(v.value)).join(', ') || 'Не заполнено';
         if (value === true) return 'Да';
@@ -373,7 +365,7 @@
                                 reviewUrl.searchParams.set('draft_ids',data.editor.review_draft_ids.join(','));
                             }
                             reviewUrl.searchParams.delete('parent_prepare_job_uid');
-                            this.urls.review=reviewUrl.pathname+reviewUrl.search;}
+                            this.urls.review=reviewUrl.pathname+reviewUrl.search+reviewUrl.hash;}
                         this.page=Math.min(this.page,this.pages);
                         this.uncertain=false;this.persist();confirmed=true;
                         if(manual)this.notice='Текущее состояние прочитано. Проверьте сохранённые значения и конфликты перед новым действием.';
@@ -570,34 +562,10 @@
         safeWorkspaceReturn,workspaceReturnFromFragment};
     const bootstrap=global.document?.getElementById('orb-bootstrap');
     function safeWorkspaceReturn(value) {
-        if(typeof value!=='string' || new TextEncoder().encode(value).length>8448 || /[\\\u0000-\u001f\u007f]/.test(value))return null;
-        let url;try{url=new URL(value,global.location.origin);}catch(_){return null;}
-        if(url.origin!==global.location.origin || url.pathname!=='/my-products/beta' || url.username || url.password)return null;
-        let batch='';
-        if(url.search) {
-            const params=url.searchParams;
-            const values=params.getAll('import_batch');
-            if(params.size!==1 || values.length!==1)return null;
-            batch=values[0];
-            let parts=batch.split('.');if(parts.length===4 && parts[0]==='')parts=parts.slice(1);
-            if(parts.length!==3 || parts.some(part=>!part || !/^[A-Za-z0-9_-]+$/.test(part)) || new TextEncoder().encode(batch).length>8192)return null;
-        }
-        const fragment=url.hash ? url.hash.slice(1) : '';
-        if(fragment && !/^workspace-return=[0-9a-f]{32}$/.test(fragment))return null;
-        const canonical='/my-products/beta'+(batch?'?import_batch='+encodeURIComponent(batch):'')+(fragment?'#'+fragment:'');
-        return value===canonical ? value : null;
+        return global.OzonWorkspaceReturn?.safeWorkspaceReturn?.(value, global.location.origin) || null;
     }
     function workspaceReturnFromFragment() {
-        const page=new URL(global.location.href);
-        if(page.searchParams.getAll('workspace_return').length!==1 || page.searchParams.get('workspace_return')!=='1')return null;
-        const match=/^#workspace-return=([A-Za-z0-9_-]+)$/.exec(page.hash);
-        if(!match || match[1].length>11264)return null;
-        try {
-            const encoded=match[1],binary=global.atob(encoded.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-encoded.length%4)%4));
-            const bytes=Uint8Array.from(binary,character=>character.charCodeAt(0));
-            if(bytes.length>8448 || global.btoa(String.fromCharCode(...bytes)).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_')!==encoded)return null;
-            return safeWorkspaceReturn(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
-        } catch(_) {return null;}
+        return global.OzonWorkspaceReturn?.repairWorkspaceReturnFromHref?.(global.location.href) || null;
     }
     if(bootstrap) {
         try {
@@ -605,6 +573,15 @@
             const workspaceReturn=workspaceReturnFromFragment();
             if(workspaceReturn && config.editor?.mode==='draft_selection' && config.urls) {
                 config.urls.catalog_return=workspaceReturn;
+                const reviewFragment=global.OzonWorkspaceReturn?.encodeWorkspaceReturnFragment?.(
+                    workspaceReturn, global.location.origin);
+                if(reviewFragment && config.urls.review) {
+                    const reviewUrl=new URL(config.urls.review,global.location.origin);
+                    if(reviewUrl.origin===global.location.origin) {
+                        reviewUrl.hash=reviewFragment.slice(1);
+                        config.urls.review=reviewUrl.pathname+reviewUrl.search+reviewUrl.hash;
+                    }
+                }
                 const fallback=global.document.querySelector('[data-workspace-return-fallback]');
                 if(fallback)fallback.href=workspaceReturn;
             }

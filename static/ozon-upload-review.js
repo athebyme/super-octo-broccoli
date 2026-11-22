@@ -13,6 +13,20 @@
     const invalidResultContext = Boolean(resultJobUid && !runPattern.test(resultJobUid));
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     const positive = value => Number.isSafeInteger(value) && value > 0;
+    const workspaceReturns = global.OzonWorkspaceReturn;
+    const workspaceScope = workspaceReturns?.reviewWorkspaceScope?.(initial) || null;
+    const workspaceReturnHref = workspaceScope
+        ? workspaceReturns.resolveReviewWorkspaceReturn(initial, global.location.href) : null;
+    const workspaceReturnFragment = workspaceReturnHref
+        ? workspaceReturns.encodeWorkspaceReturnFragment(workspaceReturnHref) : '';
+    if (workspaceScope && workspaceReturnHref) {
+        const returnLink = document.querySelector('[data-review-workspace-return]');
+        if (returnLink) {
+            returnLink.href = workspaceReturnHref;
+            const returnLabel = returnLink.querySelector('[data-review-workspace-return-label]');
+            if (returnLabel) returnLabel.textContent = 'К выбранным товарам';
+        }
+    }
     const read = key => { try { return JSON.parse(sessionStorage.getItem(key) || 'null'); } catch (_) { return null; } };
     const hasStored = key => { try { return sessionStorage.getItem(key) !== null; } catch (_) { return false; } };
     const store = (key, value) => { try { sessionStorage.setItem(key, JSON.stringify(value)); return true; } catch (_) { return false; } };
@@ -38,8 +52,16 @@
         return true;
     }
     function params(ids, page) {
-        const query = new URLSearchParams({account_id:String(initial.account_id),
-            draft_ids:ids.join(','), page:String(page)});
+        let query;
+        if (workspaceScope) {
+            query = new URLSearchParams({account_id:String(initial.account_id), page:String(page)});
+            const compact = workspaceReturns.encodeCompactDraftIds(ids);
+            if (!compact) throw Error('Не удалось сохранить точный короткий список черновиков.');
+            query.set('workspace_selection', compact);
+        } else {
+            query = new URLSearchParams({account_id:String(initial.account_id),
+                draft_ids:ids.join(','), page:String(page)});
+        }
         if (initial.parent_prepare_job_uid) query.set('parent_prepare_job_uid', initial.parent_prepare_job_uid);
         if (resultJobUid) query.set('result_job_uid', resultJobUid);
         return query;
@@ -83,7 +105,7 @@
             canReviewAll() { return this.review.draft_ids.length > 1 && !this.locked; },
         },
         methods: {
-            pageUrl(page) { return config.urls.html + '?' + params(initial.draft_ids, page); },
+            pageUrl(page) { return config.urls.html + '?' + params(initial.draft_ids, page) + workspaceReturnFragment; },
             editorUrl(row, issue = null) {
                 const href = config.urls.editorBase + row.draft_id;
                 const token = initial.review_return_token;
@@ -138,6 +160,10 @@
                     throw Error('Состав карточек изменился. Начните просмотр заново.');
                 const pageCount = Math.ceil(ids.length / 20), rows = [];
                 let csrf = '', checkedAt = '';
+                const expectedWorkspaceSelection = workspaceScope
+                    ? workspaceReturns.encodeCompactDraftIds(ids) : null;
+                if (workspaceScope && !expectedWorkspaceSelection)
+                    throw Error('Не удалось сохранить точный короткий список черновиков.');
                 for (let page=1; page<=pageCount; page++) {
                     const data = await getJson(config.urls.api + '?' + params(ids, page));
                     const doc = data.review, pagination = doc?.pagination;
@@ -151,6 +177,7 @@
                         typeof doc.publication_enabled === 'boolean' &&
                         pagination?.page === page && pagination?.pages === pageCount &&
                         pagination?.total === ids.length && pagination?.per_page === 20 &&
+                        (!workspaceScope || doc.workspace_selection === expectedWorkspaceSelection) &&
                         Array.isArray(doc.items) && doc.items.length === expectedPageIds.length &&
                         same(doc.items.map(row => row && row.draft_id), expectedPageIds) &&
                         doc.items.every(row => row && positive(row.version) &&

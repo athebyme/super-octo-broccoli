@@ -14,8 +14,10 @@ const window={ozonDraftEditor:{fieldComponent:{},photoComponent:{}},document:{ac
   location:{href:'https://app.test/repair',origin:'https://app.test',pathname:'/repair',search:''},history:{replaceState(){}},
   sessionStorage:{setItem(k,v){saved.set(k,v)},getItem(k){return saved.get(k)}}};
 let transport=async()=>{throw Error('Unexpected fetch')},calls=[];
-vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),{window,URL,URLSearchParams,TextEncoder,AbortController,
-  setTimeout,clearTimeout,fetch:async(url,options)=>{calls.push({url,method:options.method||'GET',body:options.body?.toString(),headers:options.headers});return transport(url,options);}});
+const context={window,URL,URLSearchParams,TextEncoder,TextDecoder,AbortController,
+  setTimeout,clearTimeout,fetch:async(url,options)=>{calls.push({url,method:options.method||'GET',body:options.body?.toString(),headers:options.headers});return transport(url,options);}};
+vm.runInNewContext(fs.readFileSync(process.argv[1].replace('ozon-bulk-repair-vue.js','ozon-workspace-return.js'),'utf8'),context);
+vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),context);
 const core=window.ozonBulkRepair;
 const field=(id,type='String',dictionary=false,value='',dictionary_value_id='')=>({external_id:id,name:'Поле '+id,value,dictionary_value_id,
   editable:true,dictionary,dictionary_fresh:true,data_type:type,is_collection:false,max_values:1});
@@ -132,8 +134,10 @@ const window={ozonDraftEditor:{fieldComponent:{},photoComponent:{}},document:{ac
  history:{replaceState(){}},btoa:value=>Buffer.from(value,'binary').toString('base64'),atob:value=>Buffer.from(value,'base64').toString('binary'),
  addEventListener(){},removeEventListener(){},sessionStorage:{setItem(k,v){saved.set(k,v)},getItem(k){return saved.get(k)},removeItem(k){saved.delete(k)}}};
 let transport=async()=>{throw Error('Unexpected fetch')},calls=[];
-vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),{window,URL,URLSearchParams,TextEncoder,TextDecoder,AbortController,
- setTimeout,clearTimeout,fetch:async(url,options)=>{calls.push({url,method:options.method||'GET',body:options.body?.toString()});return transport(url,options);}});
+const context={window,URL,URLSearchParams,TextEncoder,TextDecoder,AbortController,
+ setTimeout,clearTimeout,fetch:async(url,options)=>{calls.push({url,method:options.method||'GET',body:options.body?.toString()});return transport(url,options);}};
+vm.runInNewContext(fs.readFileSync(process.argv[1].replace('ozon-bulk-repair-vue.js','ozon-workspace-return.js'),'utf8'),context);
+vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),context);
 const core=window.ozonBulkRepair;
 const fixture=()=>({draft_id:1,draft_version:1,imported_product_id:7,offer_id:'offer-1',title:'Товар один',action:'ИСПРАВИТЬ',
  product_type_id:4,product_type_name:'Тип',price_rub:'100',description:'Описание',package_width_mm:'',package_height_mm:'',
@@ -204,6 +208,8 @@ const response=data=>({status:200,ok:true,redirected:false,json:async()=>({...da
     assert 'Изменено: {{ report.updated }}' in template
     assert template.count('v-if="!draftSelection" class="orb-check"') == 2
     assert 'v-text="urls.catalog_return_label || \'К каталогу Ozon\'"' in template
+    assert "filename='ozon-workspace-return.js', v='20261122-ozon-workspace-review-return-r57'" in template
+    assert "filename='ozon-bulk-repair-vue.js', v='20261122-ozon-workspace-review-return-r57'" in template
 
 
 def test_ozon_bulk_repair_template_compiles_with_flask_loader():
@@ -222,8 +228,10 @@ const window={ozonDraftEditor:{fieldComponent:{},photoComponent:{}},document:{ac
  location:{href:'https://app.test/repair',origin:'https://app.test',pathname:'/repair',search:''},history:{replaceState(){}},
  addEventListener(){},removeEventListener(){},sessionStorage:{setItem(k,v){saved.set(k,v)},getItem(k){return saved.get(k)}}};
 let transport=async()=>{throw Error('Unexpected fetch')};
-vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),{window,URL,URLSearchParams,TextEncoder,AbortController,
- setTimeout,clearTimeout,fetch:async(url,options)=>transport(url,options)});
+const context={window,URL,URLSearchParams,TextEncoder,TextDecoder,AbortController,
+ setTimeout,clearTimeout,fetch:async(url,options)=>transport(url,options)};
+vm.runInNewContext(fs.readFileSync(process.argv[1].replace('ozon-bulk-repair-vue.js','ozon-workspace-return.js'),'utf8'),context);
+vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),context);
 const core=window.ozonBulkRepair;
 const field=(id,name,editable=true)=>({external_id:String(id),name,value:'',dictionary_value_id:'',editable,dictionary:false,
  dictionary_fresh:true,data_type:'String',is_collection:false,max_values:1,values:[]});

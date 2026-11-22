@@ -22,7 +22,9 @@
 <div id="our-boot-fallback" class="our-boot">Открываем проверку карточек…</div>
 <section class="our" aria-labelledby="our-title">
     <header class="our-header">
-        {% if reviewed_result_url %}
+        {% if review.workspace_selection|default('', true) %}
+        <a class="our-back" data-review-workspace-return href="{{ url_for('seller_my_products_beta') }}"><span aria-hidden="true">←</span> <span data-review-workspace-return-label>К моим товарам</span></a>
+        {% elif reviewed_result_url %}
         <a class="our-back" href="{{ reviewed_result_url }}"><span aria-hidden="true">←</span> К результату отправки</a>
         {% elif preparation_result_url %}
         <a class="our-back" href="{{ preparation_result_url }}"><span aria-hidden="true">←</span> К результатам подготовки</a>
@@ -114,13 +116,14 @@
             <button type="submit" class="sh-btn sh-btn--primary">Отправить отмеченные карточки</button>
         </form>
         <nav class="our-pagination" aria-label="Страницы проверки">
-            {% if review.pagination.page > 1 %}<a href="{{ url_for('ozon_bulk_uploads.review', account_id=review.account_id, draft_ids=review.draft_ids|join(','), page=review.pagination.page - 1, parent_prepare_job_uid=review.parent_prepare_job_uid, result_job_uid=reviewed_result_uid) }}">← Предыдущие 20</a>{% endif %}
-            {% if review.pagination.page < review.pagination.pages %}<a href="{{ url_for('ozon_bulk_uploads.review', account_id=review.account_id, draft_ids=review.draft_ids|join(','), page=review.pagination.page + 1, parent_prepare_job_uid=review.parent_prepare_job_uid, result_job_uid=reviewed_result_uid) }}">Следующие 20 →</a>{% endif %}
+            {% if review.pagination.page > 1 %}<a href="{{ url_for('ozon_bulk_uploads.review', account_id=review.account_id, workspace_selection=review.workspace_selection, page=review.pagination.page - 1, parent_prepare_job_uid=review.parent_prepare_job_uid, result_job_uid=reviewed_result_uid) if review.workspace_selection|default('', true) else url_for('ozon_bulk_uploads.review', account_id=review.account_id, draft_ids=review.draft_ids|join(','), page=review.pagination.page - 1, parent_prepare_job_uid=review.parent_prepare_job_uid, result_job_uid=reviewed_result_uid) }}">← Предыдущие 20</a>{% endif %}
+            {% if review.pagination.page < review.pagination.pages %}<a href="{{ url_for('ozon_bulk_uploads.review', account_id=review.account_id, workspace_selection=review.workspace_selection, page=review.pagination.page + 1, parent_prepare_job_uid=review.parent_prepare_job_uid, result_job_uid=reviewed_result_uid) if review.workspace_selection|default('', true) else url_for('ozon_bulk_uploads.review', account_id=review.account_id, draft_ids=review.draft_ids|join(','), page=review.pagination.page + 1, parent_prepare_job_uid=review.parent_prepare_job_uid, result_job_uid=reviewed_result_uid) }}">Следующие 20 →</a>{% endif %}
         </nav>
     </section>
 </noscript>
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
 <script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}" defer></script>
 <script src="{{ url_for('static', filename='ozon-draft-editor.js', v='20261122-review-editor-return-r50') }}" defer></script>
-<script src="{{ url_for('static', filename='ozon-upload-review.js', v='20261122-review-editor-return-r50') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-workspace-return.js', v='20261122-ozon-workspace-review-return-r57') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-upload-review.js', v='20261122-ozon-workspace-review-return-r57') }}" defer></script>
 {% endblock %}
