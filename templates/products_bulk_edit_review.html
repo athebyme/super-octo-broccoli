@@ -77,19 +77,44 @@
             <h2 class="font-semibold" style="color:var(--text)">Изменения: текущее → новое</h2>
             <p class="mt-1 text-xs" style="color:var(--text-secondary)">{{ preview.diff_count }} полей в {{ preview.changed_count }} карточках</p>
         </div>
-        <div class="max-h-[32rem] overflow-auto">
-            <table class="min-w-full divide-y divide-gray-100 text-sm">
+        <div class="max-h-[32rem] overflow-x-auto overflow-y-auto" tabindex="0" role="region" aria-label="Товары и проверяемые изменения">
+            <table class="min-w-[900px] w-full divide-y divide-gray-100 text-sm">
                 <thead class="sticky top-0 text-left text-xs uppercase" style="background:var(--bg);color:var(--text-secondary)">
-                    <tr><th class="px-4 py-3">Артикул / ID карточки</th><th class="px-4 py-3">Поле</th><th class="px-4 py-3">Было</th><th class="px-4 py-3">Будет</th></tr>
+                    <tr><th class="w-[20rem] px-4 py-3">Товар</th><th class="w-[13rem] px-4 py-3">Поле</th><th class="px-4 py-3">Было</th><th class="px-4 py-3">Будет</th></tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100">
-                    {% for row in preview.diff %}
-                    <tr>
-                        <td class="px-4 py-3" style="color:var(--text)"><strong>{{ row.vendor_code or '—' }}</strong><div class="text-xs" style="color:var(--text-muted)">ID карточки: {{ row.nm_id or '—' }}</div></td>
+                    {% for product_group in review_products %}
+                    {% for row in product_group.changes %}
+                    <tr data-review-product-change="{{ product_group.product_id }}">
+                        {% if loop.first %}
+                        <td rowspan="{{ product_group.changes|length }}" class="min-w-[20rem] align-top px-4 py-3" style="color:var(--text)" data-review-product-id="{{ product_group.product_id }}">
+                            <div class="flex min-w-0 items-start gap-3">
+                                {% if product_group.photo_url %}
+                                <img src="{{ product_group.photo_url }}" alt="Фото карточки Wildberries: {{ product_group.product.title or 'без названия' }}" loading="lazy" class="h-14 w-14 shrink-0 rounded-md border object-cover" style="border-color:var(--border);background:var(--bg)" onerror="this.hidden=true;this.nextElementSibling.hidden=false">
+                                <div hidden aria-hidden="true" class="flex h-14 w-14 shrink-0 items-center justify-center rounded-md border text-xs" style="border-color:var(--border);background:var(--bg);color:var(--text-muted)">Фото недоступно</div>
+                                {% else %}
+                                <div aria-hidden="true" class="flex h-14 w-14 shrink-0 items-center justify-center rounded-md border text-xs" style="border-color:var(--border);background:var(--bg);color:var(--text-muted)">Фото нет</div>
+                                {% endif %}
+                                <div class="min-w-0" style="overflow-wrap:anywhere">
+                                    <strong class="block font-semibold">{{ product_group.product.title or 'Название не указано' }}</strong>
+                                    <div class="mt-1 text-xs" style="color:var(--text-secondary)">Артикул: {{ product_group.product.vendor_code or '—' }}</div>
+                                    <div class="text-xs" style="color:var(--text-secondary)">ID Seller Hub: {{ product_group.product.id }} · nmID WB: {{ product_group.product.nm_id or '—' }}</div>
+                                    <div class="mt-1 text-xs" style="color:var(--text-muted)">
+                                        {% if product_group.last_sync_label %}
+                                        Синхронизация WB: <time datetime="{{ product_group.last_sync_iso }}">{{ product_group.last_sync_label }}</time>
+                                        {% else %}
+                                        Дата синхронизации WB неизвестна
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        </td>
+                        {% endif %}
                         <td class="px-4 py-3" style="color:var(--text)">{{ row.characteristic }}</td>
                         <td class="max-w-sm whitespace-pre-wrap px-4 py-3" style="color:var(--text-secondary)">{{ row.before|join(', ') if row.before else 'Пусто' }}</td>
                         <td class="max-w-sm whitespace-pre-wrap px-4 py-3 font-medium" style="color:var(--accent-text)">{{ row.after|join(', ') if row.after else 'Пусто' }}</td>
                     </tr>
+                    {% endfor %}
                     {% endfor %}
                 </tbody>
             </table>

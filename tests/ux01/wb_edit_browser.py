@@ -357,7 +357,8 @@ def seed_synthetic_wb(app) -> dict[str, int]:
                     "skus": [f"SYNTHETIC-WB-SKU-{index:03d}"],
                     "chrtID": 700000 + index,
                 }]),
-                photos_json="[]",
+                photos_json=json.dumps([1]) if index == 0 else "[]",
+                last_sync=fixture_now if index == 0 else None,
                 is_active=True,
             ))
         foreign = Product(
@@ -2832,7 +2833,34 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             page.wait_for_selector("section[aria-label='Сводка предпросмотра']")
             assert_review_summary(page, changed="50")
             assert "Pipedream" in page.content() and "Synthetic reviewed brand" in page.content()
+            reviewed_identity = page.locator(
+                f'[data-review-product-id="{fixture["product_id"]}"]',
+            )
+            assert reviewed_identity.count() == 1
+            assert "Pipedream Synthetic Product 000" in reviewed_identity.inner_text()
+            assert "Артикул: PD-000" in reviewed_identity.inner_text()
+            assert f"ID Seller Hub: {fixture['product_id']}" in reviewed_identity.inner_text()
+            assert "nmID WB: 900000" in reviewed_identity.inner_text()
+            assert reviewed_identity.locator("img").get_attribute("src") == (
+                "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="
+            )
+            from models import Product, db
+            with seller_app.app_context():
+                expected_sync = db.session.get(Product, fixture["product_id"]).last_sync
+            assert reviewed_identity.locator("time").get_attribute("datetime") == (
+                expected_sync.isoformat() + "Z"
+            )
+            assert reviewed_identity.locator("time").inner_text() == (
+                expected_sync.strftime("%d.%m.%Y %H:%M UTC")
+            )
             assert REPORT["fake_wb_client_instances"] == REPORT["fake_wb_write_calls"] == 0
+            check(
+                "bulk_review_shows_exact_local_product_identity_photo_and_sync_time",
+                product_id=fixture["product_id"],
+                wb_nm_id=900000,
+                sync_time_observed=True,
+                provider_io=0,
+            )
             assert_keyboard_focus(page, "bulk_review")
             check(
                 "manual_preview_reports_exact_selection_diff_before_fake_apply",

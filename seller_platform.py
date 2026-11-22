@@ -3420,9 +3420,80 @@ def products_bulk_edit():
             else f"{current_user.seller.company_name or 'WB'} · "
                  f"Seller Hub #{current_user.seller.id}"
         )
+
+        # Keep the exact affected-product identity beside the existing
+        # before/after values. ``products`` is the already-loaded, signed
+        # selection in token order; this is a presentation projection only
+        # and must not trigger another catalog/provider read.
+        products_by_id = {int(product.id): product for product in products}
+        photo_url_builder = app.jinja_env.globals.get('wb_photo_url', wb_photo_url)
+        review_products = []
+        review_products_by_id = {}
+        for change in preview.get('diff') or []:
+            try:
+                product_id = int(change.get('product_id'))
+            except (TypeError, ValueError):
+                continue
+            product = products_by_id.get(product_id)
+            group = review_products_by_id.get(product_id)
+            if group is None:
+                last_sync = getattr(product, 'last_sync', None) if product else None
+                last_sync_iso = None
+                last_sync_label = None
+                if last_sync:
+                    last_sync_iso = last_sync.isoformat()
+                    if last_sync.tzinfo is None or last_sync.utcoffset() is None:
+                        # Product.last_sync is written with datetime.utcnow().
+                        last_sync_iso += 'Z'
+                        last_sync_label = last_sync.strftime('%d.%m.%Y %H:%M UTC')
+                    else:
+                        offset = last_sync.strftime('%z')
+                        if len(offset) == 5:
+                            offset = f'{offset[:3]}:{offset[3:]}'
+                        last_sync_label = (
+                            last_sync.strftime('%d.%m.%Y %H:%M')
+                            + (f' {offset}' if offset else '')
+                        )
+
+                photo_url = ''
+                if product and product.nm_id:
+                    try:
+                        stored_photos = json.loads(product.photos_json) if product.photos_json else []
+                    except (TypeError, ValueError):
+                        stored_photos = []
+                    if isinstance(stored_photos, list):
+                        for photo in stored_photos:
+                            # The WB photo helper expects an observed photo
+                            # slot. Do not invent slot 1 for an unknown photo.
+                            if isinstance(photo, int) and not isinstance(photo, bool) and photo > 0:
+                                try:
+                                    photo_url = photo_url_builder(product.nm_id, photo, 'tm')
+                                except Exception:
+                                    photo_url = ''
+                                break
+                            if isinstance(photo, str) and photo.isdecimal() and int(photo) > 0:
+                                try:
+                                    photo_url = photo_url_builder(product.nm_id, int(photo), 'tm')
+                                except Exception:
+                                    photo_url = ''
+                                break
+
+                group = {
+                    'product': product,
+                    'product_id': product_id,
+                    'photo_url': photo_url,
+                    'last_sync_iso': last_sync_iso,
+                    'last_sync_label': last_sync_label,
+                    'changes': [],
+                }
+                review_products_by_id[product_id] = group
+                review_products.append(group)
+            group['changes'].append(change)
+
         return render_template(
             'products_bulk_edit_review.html',
             preview=preview,
+            review_products=review_products,
             account_label=account_label,
             preview_token=preview_token,
             selection_token=selection_token,
