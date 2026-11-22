@@ -479,6 +479,7 @@ def run():
     wb_create_posts = []
     product_feed_reads = []
     facet_reads = []
+    document_requests = []
     job_status_reads = []
     page_errors = []
     classic_fallback_documents = []
@@ -504,12 +505,10 @@ def run():
                     response = route.fetch(max_redirects=0)
                 except Exception:
                     raise AssertionError("local product feed request failed") from None
-                payload = None
-                if "import_batch" in query or "supplier_refresh_batch" in query:
-                    try:
-                        payload = response.json()
-                    except Exception:
-                        payload = None
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = None
                 product_feed_reads.append({
                     "sequence": next_event(),
                     "query_keys": tuple(sorted(query)),
@@ -684,6 +683,11 @@ def run():
         context.route("**/*", bridge)
         page = context.new_page()
         page.on("pageerror", lambda error: page_errors.append(str(error)))
+        page.on(
+            "request",
+            lambda request: document_requests.append(request.url)
+            if request.resource_type == "document" else None,
+        )
 
         normal_path = "/supplier-catalog/{}/products?{}".format(
             fixture_ids["supplier_id"], urlencode(FILTERS),
@@ -940,6 +944,12 @@ def run():
             assert persisted_source_ids == selected_ids, "only the exact selected source rows may persist"
             persisted_product_ids = {row.id for row in persisted}
             assert len(persisted_product_ids) == 50
+            all_workspace_product_ids = {
+                row.id for row in ImportedProduct.query.filter_by(
+                    seller_id=fixture.FIXTURE["seller_id"],
+                ).all()
+            }
+            assert persisted_product_ids <= all_workspace_product_ids
         imported_count = len(persisted_source_ids)
         with fixture.app.app_context():
             assert ImportedProduct.query.count() == fixture_ids["imported_before"] + imported_count
@@ -1052,18 +1062,89 @@ def run():
             )
             screenshot_name = "supplier-filtered-import-batch-dark-320.png"
             page.screenshot(path=REPORT_PATH.parent / screenshot_name, animations="disabled")
-            page.get_by_role("link", name="Все мои товары", exact=True).click()
-            page.get_by_role("heading", name="Мои товары", exact=True).wait_for()
-            page.wait_for_load_state("networkidle")
+            feeds_before_workspace_switch = len(product_feed_reads)
+            facets_before_workspace_switch = len(facet_reads)
+            documents_before_workspace_switch = len(document_requests)
+            with page.expect_response(
+                lambda response: urlsplit(response.url).path == "/api/my-products"
+                and response.request.method == "GET"
+                and "import_batch" not in parse_qs(
+                    urlsplit(response.url).query, keep_blank_values=True,
+                )
+                and "supplier_refresh_batch" not in parse_qs(
+                    urlsplit(response.url).query, keep_blank_values=True,
+                ),
+            ) as full_workspace_response:
+                page.get_by_role("button", name="Все мои товары", exact=True).click()
+            assert full_workspace_response.value.status == 200
+            page.wait_for_function("""() => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                return proxy && !proxy.loading && !proxy.importBatchMode &&
+                    !proxy.supplierRefreshBatchMode && Array.isArray(proxy.items) &&
+                    proxy.items.length > 0 && proxy.pagination.total > 0;
+            }""")
             normal_location = page.evaluate("() => ({path: location.pathname, search: location.search})")
             assert normal_location["path"] == "/my-products/beta"
             assert "import_batch" not in parse_qs(
                 normal_location["search"].removeprefix("?"), keep_blank_values=True,
             )
-            assert len([read for read in product_feed_reads if "import_batch" not in read["query_keys"]]) >= 1
-            assert len(facet_reads) >= 1
+            assert len(document_requests) == documents_before_workspace_switch, (
+                "switching from the signed import batch must not request another document",
+            )
+            assert len(product_feed_reads) == feeds_before_workspace_switch + 1, (
+                "workspace switch must perform one ordinary product feed read",
+            )
+            full_workspace_read = product_feed_reads[-1]
+            assert full_workspace_read["query_keys"] == (
+                "has_photos", "page", "per_page", "search", "sort", "stock", "supplier",
+            )
+            assert full_workspace_read["status"] == 200
+            full_workspace_payload = full_workspace_read["payload"]
+            assert isinstance(full_workspace_payload, dict)
+            assert full_workspace_payload.get("success") is True
+            full_workspace_items = full_workspace_payload.get("items")
+            full_workspace_pagination = full_workspace_payload.get("pagination")
+            assert isinstance(full_workspace_items, list) and isinstance(
+                full_workspace_pagination, dict,
+            )
+            assert full_workspace_pagination["total"] == len(all_workspace_product_ids)
+            assert full_workspace_pagination["page"] == 1
+            assert full_workspace_pagination["per_page"] == 50
+            assert full_workspace_pagination["pages"] == (
+                (len(all_workspace_product_ids) + 49) // 50
+            )
+            assert full_workspace_pagination["has_next"] == (
+                len(all_workspace_product_ids) > 50
+            )
+            full_workspace_item_ids = {
+                item.get("id") for item in full_workspace_items if isinstance(item, dict)
+            }
+            assert len(full_workspace_items) == min(len(all_workspace_product_ids), 50)
+            assert len(full_workspace_item_ids) == len(full_workspace_items)
+            assert full_workspace_item_ids <= all_workspace_product_ids
+            full_workspace_state = page.evaluate("""() => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                return proxy ? {
+                    importBatchMode: proxy.importBatchMode,
+                    supplierRefreshBatchMode: proxy.supplierRefreshBatchMode,
+                    items: proxy.items.map(item => item.id),
+                    selected: proxy.selected.slice(),
+                    pagination: proxy.pagination,
+                    loading: proxy.loading,
+                } : null;
+            }""")
+            assert full_workspace_state is not None
+            assert not full_workspace_state["importBatchMode"]
+            assert not full_workspace_state["supplierRefreshBatchMode"]
+            assert not full_workspace_state["loading"]
+            assert full_workspace_state["selected"] == []
+            assert set(full_workspace_state["items"]) == full_workspace_item_ids
+            assert full_workspace_state["pagination"]["total"] == len(all_workspace_product_ids)
+            assert len(facet_reads) == facets_before_workspace_switch + 1
             assert len(posts) == 1 and fixture.REPORT["provider_attempts"] == 0
-            checks.append("batch_reload_keeps_exact_50_then_all_my_products_exits_to_normal_workspace_at_320px")
+            checks.append(
+                "batch_reload_keeps_exact_50_then_same_document_exit_loads_full_workspace_at_320px"
+            )
         except Exception as error:
             message = str(error).replace(batch_token, "[redacted]")
             raise AssertionError(f"import batch browser assertion failed: {message}") from None
