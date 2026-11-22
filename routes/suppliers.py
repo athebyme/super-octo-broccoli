@@ -2904,6 +2904,10 @@ def register_supplier_routes(app):
         """Список доступных поставщиков для продавца"""
         seller = current_user.seller
         connections = SupplierService.get_seller_suppliers(seller.id)
+        if request.args.getlist('action') == ['import'] and len(connections) == 1:
+            return redirect(url_for(
+                'supplier_catalog_products', supplier_id=connections[0].supplier_id,
+            ))
         supplier_ids = [c.supplier_id for c in connections]
 
         # Прогреваем identity map одним SELECT — lazy conn.supplier дальше

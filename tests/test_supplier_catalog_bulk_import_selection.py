@@ -204,6 +204,31 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
             marketplace_draft_errors=0,
         )
 
+    def test_import_entry_skips_the_list_only_for_one_connected_supplier(self):
+        from models import SellerSupplier
+
+        path = '/supplier-catalog'
+        self.assertEqual(self.client.get(path + '?action=import').status_code, 200)
+        other_connection = SellerSupplier.query.filter_by(
+            seller_id=self.seller_id, supplier_id=self.other_supplier_id,
+        ).one()
+        other_connection.is_active = False
+        self.db.session.commit()
+
+        self.assertEqual(self.client.get(path).status_code, 200)
+        landing = self.client.get(path + '?action=import')
+        self.assertEqual(landing.status_code, 302)
+        self.assertEqual(urlsplit(landing.location).path,
+                         f'/supplier-catalog/{self.supplier_id}/products')
+        self.assertEqual(self.client.get(landing.location).status_code, 200)
+
+        sole_connection = SellerSupplier.query.filter_by(
+            seller_id=self.seller_id, supplier_id=self.supplier_id,
+        ).one()
+        sole_connection.is_active = False
+        self.db.session.commit()
+        self.assertEqual(self.client.get(path + '?action=import').status_code, 200)
+
     def test_filter_review_renders_complete_exact_selection_and_is_read_only(self):
         from models import ImportedProduct
 
