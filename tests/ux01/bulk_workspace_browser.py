@@ -1912,7 +1912,7 @@ def run():
         create_launcher = workspace_action_launcher(page, "create")
         selection_before_ozon_prepare = selected_browser_state(page)
         assert selection_before_ozon_prepare == {
-            "selected": [fixture_ids["manual_id"]], "ozonIds": [fixture_ids["manual_id"]],
+            "selected": [fixture_ids["manual_id"]], "ozonIds": [],
         }
         ozon_prepare_posts_before = sum(
             post["path"] == LOCAL_OZON_PREPARE for post in posts
@@ -1932,13 +1932,17 @@ def run():
         )
         prepare = dialog.get_by_role("button", name="Подготовить черновики")
         assert prepare.is_enabled()
-        assert selected_browser_state(page) == selection_before_ozon_prepare
+        assert selected_browser_state(page) == {
+            "selected": [fixture_ids["manual_id"]], "ozonIds": [fixture_ids["manual_id"]],
+        }
         assert sum(post["path"] == LOCAL_OZON_PREPARE for post in posts) == ozon_prepare_posts_before
 
         page.keyboard.press("Escape")
         dialog.wait_for(state="hidden")
         assert create_launcher.evaluate("element => element === document.activeElement")
-        assert selected_browser_state(page) == selection_before_ozon_prepare
+        assert selected_browser_state(page) == {
+            "selected": [fixture_ids["manual_id"]], "ozonIds": [fixture_ids["manual_id"]],
+        }
         assert sum(post["path"] == LOCAL_OZON_PREPARE for post in posts) == ozon_prepare_posts_before
 
         assert invoke_workspace_action(page, "ozon") == 2
@@ -1952,7 +1956,9 @@ def run():
         dialog.get_by_role("button", name="Вернуться", exact=True).click()
         dialog.wait_for(state="hidden")
         assert create_launcher.evaluate("element => element === document.activeElement")
-        assert selected_browser_state(page) == selection_before_ozon_prepare
+        assert selected_browser_state(page) == {
+            "selected": [fixture_ids["manual_id"]], "ozonIds": [fixture_ids["manual_id"]],
+        }
         assert sum(post["path"] == LOCAL_OZON_PREPARE for post in posts) == ozon_prepare_posts_before
 
         assert invoke_workspace_action(page, "ozon") == 2
