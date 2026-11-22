@@ -1234,7 +1234,56 @@ def main() -> None:
                 page.locator("[data-workspace-alt-summary]").click()
                 page.wait_for_function("""() => Alpine.$data(document.body).sidebarOpen === true
                     && document.querySelector('[data-workspace-alt-nav]')?.open === true""")
-                assert page.locator(".seller-workspace-alt-link").first.is_visible()
+                first_alternate_link = page.locator(".seller-workspace-alt-link").first
+                try:
+                    first_alternate_link.wait_for(state="visible", timeout=1000)
+                except Exception as exc:
+                    try:
+                        visibility_state = page.evaluate("""() => {
+                            const details = document.querySelector('[data-workspace-alt-nav]');
+                            const panel = details?.querySelector('.seller-workspace-alt-panel');
+                            const link = panel?.querySelector('.seller-workspace-alt-link');
+                            const inspect = node => {
+                                if (!node) return null;
+                                const rect = node.getBoundingClientRect();
+                                const style = getComputedStyle(node);
+                                return {
+                                    tag: node.tagName.toLowerCase(),
+                                    className: node.className,
+                                    display: style.display,
+                                    visibility: style.visibility,
+                                    opacity: style.opacity,
+                                    hidden: node.hidden,
+                                    hasXcloak: node.hasAttribute('x-cloak'),
+                                    rect: {top:rect.top, right:rect.right, bottom:rect.bottom,
+                                           left:rect.left, width:rect.width, height:rect.height},
+                                    clientRects: node.getClientRects().length,
+                                };
+                            };
+                            return {
+                                sidebarOpen: window.Alpine.$data(document.body).sidebarOpen,
+                                detailsOpen: details?.open,
+                                sidebarClass: document.querySelector('.sidebar')?.className,
+                                panelXShow: panel?.getAttribute('x-show'),
+                                details: inspect(details),
+                                panel: inspect(panel),
+                                firstLink: inspect(link),
+                                activeElement: document.activeElement ? {
+                                    tag: document.activeElement.tagName.toLowerCase(),
+                                    className: document.activeElement.className,
+                                    text: (document.activeElement.innerText || '').trim().slice(0,120),
+                                } : null,
+                            };
+                        }""")
+                    except Exception as diagnostic_error:
+                        visibility_state = {
+                            "diagnostic_error": str(diagnostic_error)[:300],
+                        }
+                    REPORT["collapsed_sidebar_visibility_failure"] = visibility_state
+                    raise AssertionError({
+                        "collapsed_sidebar_alternate_link_not_visible_after_bounded_wait": visibility_state,
+                    }) from exc
+                assert first_alternate_link.is_visible()
                 REPORT["interactions"].append({"check": "collapsed_sidebar_alternate_disclosure_opens", "status": "passed", "alternate_link_visible": True})
 
                 page.keyboard.press("Control+k")
