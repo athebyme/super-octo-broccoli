@@ -580,35 +580,33 @@ def journey_assertions(
         return supplier_catalog_assertions(page, name, rich=supplier_rich)
     section = page.locator("section.preparation-journey")
     section.wait_for()
-    text = section.inner_text()
-    compact_review = name == "review"
-    if compact_review:
-        assert section.get_attribute("aria-label") == "Этапы подготовки", (name, text)
-        assert section.locator(".preparation-journey-head").count() == 0, (name, text)
-        assert section.locator(".preparation-journey-context").count() == 0, (name, text)
-        assert section.locator("h2").count() == 0, (name, text)
-        assert section.locator("summary").inner_text().strip() == "Этапы подготовки", (name, text)
-    else:
-        assert "Канал:" in text and "Ozon" in text, (name, text)
-        assert "Дальше:" in text, (name, text)
-        assert "Объект:" in text, (name, text)
-        assert section.locator("h2").inner_text().startswith("Сейчас:"), (name, text)
+    assert "preparation-journey--compact" in (section.get_attribute("class") or ""), name
+    assert section.get_attribute("aria-label") == "Этапы подготовки", name
+    assert section.locator(".preparation-journey-head").count() == 0, name
+    assert section.locator(".preparation-journey-context").count() == 1, name
+    assert section.locator("h2").count() == 0, name
     assert section.locator("details").count() == 1
     assert section.locator("details[open]").count() == 0
     assert section.locator("li[aria-current=step]").count() == 1
-    # The seven-step path lives inside a closed disclosure, so use its DOM text
-    # while separately verifying the current/next summary is visible above it.
+    summary = section.locator("summary")
+    assert summary.is_visible()
+    assert summary.inner_text().strip() == "Этапы подготовки", name
+    assert section.locator(".preparation-journey-details").is_hidden(), name
+    assert section.locator("ol").is_hidden(), name
+    default_text = section.inner_text().strip()
+    assert default_text == "Этапы подготовки", (name, default_text)
     current_label = section.locator("li.is-current strong").text_content().strip()
     assert current_label == current, {
         "page": name,
         "expected_current": current,
         "actual_current": current_label,
-        "journey_text": text,
+        "journey_text": default_text,
     }
+    assert section.locator("li").count() == 7
     assert section.locator("li.is-complete").count() == 0
     for href in section.locator("a").evaluate_all("items => items.map(item => item.getAttribute('href'))"):
         assert href and href.startswith("/") and not href.startswith("//"), (name, href)
-    if compact_review:
+    if name == "review":
         expected_links = {
             "Источник поставщика": PAGE_PATHS["supplier_catalog"],
             "Внутренний товар": PAGE_PATHS["internal_ozon"],
@@ -632,11 +630,20 @@ def journey_assertions(
         internal_href = section.locator("li").filter(has_text="Внутренний товар").locator("a").get_attribute("href")
         assert internal_href, (name, "internal step must remain a link")
         assert parse_qs(urlsplit(internal_href).query).get("account_id") == [str(account_id)], (name, internal_href)
-    summary = section.locator("summary")
     summary.focus()
     page.keyboard.press("Enter")
     assert section.locator("details[open]").count() == 1, name
+    details_text = section.locator(".preparation-journey-details").inner_text()
+    assert f"Сейчас: {current}" in details_text, (name, details_text)
+    assert "Дальше:" in details_text, (name, details_text)
+    assert "Канал:" in details_text and "Ozon" in details_text, (name, details_text)
+    assert "Магазин:" in details_text and "Объект:" in details_text, (name, details_text)
+    if account_id is not None:
+        assert OZON_ACCOUNT_LABEL in details_text, (name, details_text, OZON_ACCOUNT_LABEL)
+    else:
+        assert "выберите при подготовке" in details_text, (name, details_text)
     assert section.locator("li").count() == 7, name
+    assert section.locator("li[aria-current=step]").is_visible(), name
     first_link = section.locator("ol a").first
     assert first_link.count() == 1, name
     page.keyboard.press("Tab")
@@ -664,19 +671,16 @@ def journey_assertions(
     assert focus["contrast"] is not None and focus["contrast"] >= 3, (name, focus)
     targets = section.evaluate("el => ({summary:el.querySelector('summary').getBoundingClientRect().height,links:Array.from(el.querySelectorAll('ol a')).map(a=>a.getBoundingClientRect().height)})")
     assert targets["summary"] >= 44 and all(height >= 44 for height in targets["links"]), (name, targets)
-    closed_with_keyboard = False
-    if compact_review:
-        summary.focus()
-        page.keyboard.press("Enter")
-        assert section.locator("details[open]").count() == 0, name
-        closed_with_keyboard = True
+    summary.focus()
+    page.keyboard.press("Enter")
+    assert section.locator("details[open]").count() == 0, name
     REPORT["interactions"].append({
         "name": name + "_disclosure_and_keyboard_focus",
         "focus": focus,
         "opened_with_keyboard": True,
-        "closed_with_keyboard": closed_with_keyboard,
+        "closed_with_keyboard": True,
     })
-    check_name = name + ("_compact_steps_and_exact_links" if compact_review else "_seven_steps_and_current_next")
+    check_name = name + "_compact_closed_steps_and_exact_links"
     REPORT["checks"].append(check_name)
     return section
 
@@ -710,10 +714,16 @@ def no_javascript_review_assertions(browser):
         assert guide_summary.is_visible()
         assert guide_summary.inner_text().strip() == "Этапы подготовки"
         assert guide.locator("details[open]").count() == 0
+        assert guide.inner_text().strip() == "Этапы подготовки"
         guide_summary.focus()
         page.keyboard.press("Enter")
         assert guide.locator("details[open]").count() == 1
         assert guide.locator("li").count() == 7
+        guide_details = guide.locator(".preparation-journey-details")
+        assert guide_details.is_visible()
+        assert "Сейчас: Свежая проверка" in guide_details.inner_text()
+        assert "Дальше:" in guide_details.inner_text()
+        assert "Ozon CI 0" in guide_details.inner_text()
         guide_summary.focus()
         page.keyboard.press("Enter")
         assert guide.locator("details[open]").count() == 0

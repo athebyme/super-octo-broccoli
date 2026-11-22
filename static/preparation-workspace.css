@@ -1,18 +1,7 @@
 .preparation-journey {
     min-width: 0;
-    margin: 12px 0 18px;
-    padding: 12px 14px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--bg-card);
+    margin: 8px 0 14px;
     color: var(--text);
-}
-.preparation-journey-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 6px 20px;
-    min-width: 0;
 }
 .preparation-journey-kicker {
     margin: 0 0 3px;
@@ -20,45 +9,87 @@
     font-size: 12px;
     font-weight: 600;
 }
-.preparation-journey-head h2 {
-    margin: 0;
-    color: var(--text);
-    font-family: var(--font-display, inherit);
-    font-size: 18px;
-    font-weight: 500;
-    line-height: 1.25;
-    overflow-wrap: anywhere;
-}
-.preparation-journey-note {
-    max-width: 62ch;
-    margin: 1px 0 0;
-    color: var(--text-secondary);
-    font-size: 12px;
-    line-height: 1.45;
-    overflow-wrap: anywhere;
-}
-.preparation-journey-note strong { color: var(--text); }
 .preparation-journey-context {
     display: flex;
     flex-wrap: wrap;
     gap: 3px 14px;
     min-width: 0;
-    margin: 7px 0 0;
+    margin: 5px 0 0;
     color: var(--text-secondary);
     font-size: 12px;
     line-height: 1.45;
     overflow-wrap: anywhere;
 }
 .preparation-journey-context strong { color: var(--text); }
-.preparation-journey-path { margin-top: 6px; }
+.preparation-journey-path {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-card);
+}
 .preparation-journey-path > summary {
     display: flex;
     min-height: 44px;
     align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 0 12px;
     color: var(--accent-strong);
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+.preparation-journey-path > summary::-webkit-details-marker {
+    display: none;
+}
+.preparation-journey-path > summary::marker {
+    content: "";
+}
+.preparation-journey-path > summary::after {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 auto;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    content: "";
+    transform: rotate(45deg);
+    transition: transform 120ms ease-out;
+}
+.preparation-journey-path[open] > summary {
+    border-bottom: 1px solid var(--border);
+}
+.preparation-journey-path[open] > summary::after {
+    transform: rotate(225deg);
+}
+.our-header .preparation-journey--compact .preparation-journey-path > summary {
+    display: flex;
+    min-height: 44px;
+    padding-inline-start: 12px;
+    line-height: normal;
+    list-style: none;
+}
+.preparation-journey-details {
+    min-width: 0;
+    padding: 9px 12px 8px;
+    border-bottom: 1px solid var(--border);
+}
+.preparation-journey-current,
+.preparation-journey-next {
+    min-width: 0;
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+.preparation-journey-next {
+    margin-top: 3px;
+}
+.preparation-journey-current strong,
+.preparation-journey-next strong {
+    color: var(--text);
 }
 .preparation-journey-path > summary:focus-visible {
     outline: 2px solid var(--accent-strong);
@@ -68,8 +99,8 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px 16px;
-    margin: 2px 0 3px;
-    padding: 0;
+    margin: 0;
+    padding: 7px 10px 9px;
     list-style: none;
 }
 .preparation-journey-step {
@@ -199,8 +230,6 @@
     outline-offset: 2px;
 }
 @media (max-width: 620px) {
-    .preparation-journey { padding: 10px 11px; }
-    .preparation-journey-head { flex-direction: column; }
     .preparation-listing-end-state { align-items: flex-start; flex-direction: column; }
     .ozon-classic-draft dl.grid > div { min-width: 0; }
 }
