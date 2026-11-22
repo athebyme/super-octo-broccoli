@@ -16,7 +16,7 @@ import socket
 import tempfile
 import threading
 import traceback
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import requests
 from cryptography.fernet import Fernet
@@ -96,6 +96,7 @@ from services.marketplace_drafts import MarketplaceDraftService
 from services.marketplace_publications import MarketplacePublicationService
 from services.marketplace_adapters import MarketplaceCredentials
 from services.ozon_bulk_upload import OzonBulkUploadService
+from routes.suppliers import _issue_supplier_import_batch_token
 from tests.ozon_release.seed import PASSWORD, PHOTO, USERNAME, seed
 
 
@@ -1517,6 +1518,12 @@ def run_browser_journey():
             is_active=True,
         ).all()
         assert [row.id for row in account_rows] == [account_id]
+        origin_product_ids = [*source_ids.values(), fixture["source_id"]]
+        origin_batch = _issue_supplier_import_batch_token(
+            user_id=account_rows[0].seller.user.id,
+            seller_id=fixture["seller_id"], imported_product_ids=origin_product_ids,
+        )
+        assert origin_batch
         baseline_counts = _business_counts()
     report["source_prepare"]["source_count"] = 4
     report["source_prepare"]["baseline_counts"] = baseline_counts
@@ -1549,9 +1556,11 @@ def run_browser_journey():
         page.locator('input[name="password"]').fill(PASSWORD)
         page.get_by_role("button", name="Войти", exact=True).click()
         page.wait_for_url(lambda value: urlsplit(value).path != "/login")
-        page.goto(base + "/my-products/beta")
-        page.locator("#my-products-app:not([v-cloak])").wait_for()
-        page.locator(".mp-list article.mp-row").first.wait_for()
+        page.goto(base + "/my-products/beta?" + urlencode({"import_batch": origin_batch}))
+        workspace = page.locator("#my-products-app:not([v-cloak])")
+        workspace.wait_for()
+        workspace.locator(".mp-list article.mp-row").nth(len(origin_product_ids) - 1).wait_for()
+        assert workspace.locator(".mp-list article.mp-row").count() == len(origin_product_ids)
 
         for key, title in source_titles.items():
             page.get_by_role("checkbox", name=f"Выбрать {title}", exact=True).check()
@@ -1586,8 +1595,44 @@ def run_browser_journey():
         assert state["source_worker_stats"]["needs_input"] == 0
         assert state["source_worker_stats"]["processed_items"] == 4
         assert state["source_job_uid"]
-        page.wait_for_url(f"**/marketplaces/ozon/uploads/{state['source_job_uid']}")
+        job_path = f"/marketplaces/ozon/uploads/{state['source_job_uid']}"
+        page.wait_for_url(f"**{job_path}")
+        assert not urlsplit(page.url).fragment
         page.locator("h1").wait_for()
+
+        return_link = page.locator('a[data-source-prepare-products][href*="#workspace-return="]')
+        return_link.wait_for()
+        original_posts = dict(report["post_counts"])
+        workspace_counts = _business_counts()
+        page.locator("[data-source-prepare-repair]").click()
+        native_editor = page.locator('#ozon-bulk-repair[data-editor-mode="source_prepare"]:not([v-cloak])')
+        native_editor.wait_for()
+        native_editor.locator(".orb-back").click()
+        page.wait_for_url(f"**{job_path}")
+        assert not urlsplit(page.url).fragment
+        return_link.wait_for()
+        parsed_return = urlsplit(return_link.get_attribute("href"))
+        assert parsed_return.path == "/my-products/beta" and not parsed_return.scheme and not parsed_return.netloc
+        assert parse_qs(parsed_return.query).get("import_batch") == [origin_batch]
+        assert re.fullmatch(r"workspace-return=[a-f0-9]{32}", parsed_return.fragment)
+        page.set_viewport_size({"width": 320, "height": 850})
+        return_link.press("Enter")
+        workspace.wait_for()
+        marked_rows = workspace.locator(".mp-list article.mp-row input[type=checkbox]:checked")
+        marked_rows.nth(3).wait_for()
+        assert set(marked_rows.evaluate_all("nodes => nodes.map(node => Number(node.value))")) == set(selected_ids)
+        assert marked_rows.count() == 4
+        assert workspace.locator(".mp-list article.mp-row").count() == len(origin_product_ids)
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+        assert _business_counts() == workspace_counts and report["post_counts"] == original_posts
+        page.screenshot(path=OUT / "ozon-source-prepare-exact-import-return-320.png", animations="disabled")
+        report["source_prepare"]["origin_import_return"] = {
+            "original_cards": len(origin_product_ids), "restored_selected": len(selected_ids),
+            "return_after_mass_editor": True, "additional_preparations": 0,
+        }
+        passed("source_preparation_return_restores_exact_signed_import_subset_after_editor")
+        page.set_viewport_size({"width": 1440, "height": 980})
+        page.goto(base + job_path)
 
         source_doc = page.locator("#ozon-result-status").count()
         detail_review_link = page.locator("a[data-source-prepare-review]")

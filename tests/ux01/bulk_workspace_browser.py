@@ -2100,11 +2100,12 @@ def run():
 
         # Ozon's local preparation result returns to the same signed supplier
         # receipt and preserves the WB handoff derived from that receipt.
-        my_products_link = page.locator(".sh-page-header .sh-page-actions").get_by_role(
-            "link", name="Мои товары", exact=True,
-        )
+        my_products_link = page.locator('a[data-source-prepare-products][href*="#workspace-return="]')
+        my_products_link.wait_for()
         ozon_return_url = "/my-products/beta"
-        assert my_products_link.get_attribute("href") == ozon_return_url
+        workspace_href = urlsplit(my_products_link.get_attribute("href"))
+        assert workspace_href.path == ozon_return_url and not workspace_href.query
+        assert re.fullmatch(r"workspace-return=[a-f0-9]{32}", workspace_href.fragment)
         refresh_posts_before_ozon_return = sum(post["path"] == LOCAL_REFRESH for post in posts)
         with page.expect_response(
             lambda response: is_supplier_refresh_result(response)
@@ -2112,7 +2113,10 @@ def run():
         ) as ozon_resumed:
             my_products_link.click()
         assert_resumed_refresh(ozon_resumed.value)
-        page.wait_for_url(fixture.BASE + ozon_return_url, wait_until="domcontentloaded")
+        page.wait_for_url(lambda value: urlsplit(value).path == ozon_return_url, wait_until="domcontentloaded")
+        restored_manual = page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}")
+        restored_manual.wait_for()
+        assert restored_manual.is_checked()
         restored_result = page.locator(".mp-refresh-result")
         restored_result.get_by_role(
             "heading", name="Сохранённый итог обновления из поставщика", exact=True,
