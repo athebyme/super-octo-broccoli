@@ -13,13 +13,15 @@ global.window = global;
 const elements = new Map();
 const attributeFields = [], groups = [], groupButtons = [], mediaItems = [];
 const focused = [], scrolled = [];
+const documentListeners = new Map();
 function element(id, dataset = {}, options = {}) {
     const details = options.details || null;
     const control = options.control || null;
     const item = {
-        id, dataset, disabled: !!options.disabled, fieldsetDisabled: !!options.fieldsetDisabled, open: false,
-        focus() { focused.push(id); },
+        id, dataset, disabled: !!options.disabled, fieldsetDisabled: !!options.fieldsetDisabled, open: false, isConnected:true,
+        focus() { focused.push(id); document.activeElement = this; },
         scrollIntoView() { scrolled.push(id); },
+        getClientRects() { return [{}]; },
         matches(selector) { return selector === ':disabled' && (this.disabled || this.fieldsetDisabled || !!options.inheritedDisabled); },
         querySelector(selector) {
             if (selector === 'summary') return options.summary || null;
@@ -32,7 +34,14 @@ function element(id, dataset = {}, options = {}) {
     return item;
 }
 global.document = {
+    activeElement: null,
     getElementById(id) { return elements.get(id) || null; },
+    addEventListener(event, listener) {
+        if (!documentListeners.has(event)) documentListeners.set(event, new Set());
+        documentListeners.get(event).add(listener);
+    },
+    removeEventListener(event, listener) { documentListeners.get(event)?.delete(listener); },
+    dispatchEvent(event) { for (const listener of documentListeners.get(event.type) || []) listener(event); },
     querySelectorAll(selector) {
         if (selector === '.ode-attribute') return attributeFields;
         if (selector === '.ode-complex-group') return groups;
@@ -41,12 +50,16 @@ global.document = {
         return [];
     },
 };
+document.body = element('body');
+global.addEventListener = () => {};
+global.removeEventListener = () => {};
 require('./static/ozon-draft-editor.js');
 const options = ozonDraftEditor.createOptions({enabled:true, publicationEnabled:true, urls:{}});
 const page = options.data();
 for (const [key, value] of Object.entries(options.methods)) page[key] = value.bind(page);
 const ticks = [];
 page.$nextTick = callback => ticks.push(callback);
+document.activeElement = element('initial-focus');
 function navigate(issue) {
     focused.length = 0; scrolled.length = 0;
     page.goToIssue(issue);
@@ -171,3 +184,63 @@ def test_template_exposes_stable_targets_without_changing_issue_actions():
     assert 'data-image-index="form.media.images.indexOf(photo)"' in template
     assert ':id="\'ode-barcode-\' + index"' in template
     assert '@click="form.barcodes.push(\'\')"' in template
+
+
+def test_review_context_focuses_only_a_fresh_exact_issue_and_does_not_steal_focus():
+    run_node(r'''
+function reviewPage(errors) {
+    const options = ozonDraftEditor.createOptions({enabled:true, publicationEnabled:true, urls:{},
+        reviewNavigation:{url:'/review?account_id=7&draft_ids=1&page=1', focus:{code:'physical_fact_required', field:'dimensions.weight'}}});
+    const instance = Object.assign(options.data(), options.methods);
+    const queue = [];
+    instance.$nextTick = callback => queue.push(callback);
+    instance.load = function() {
+        this.data = {current_validation:{errors}};
+        this.form = {dimensions:{}, commercial:{}, media:{images:[]}, barcodes:[], attributes:[], complex_attributes:[]};
+        this.draft = {id:1};
+        this.applyReviewNavigationFocus();
+    };
+    options.mounted.call(instance);
+    return {instance, queue};
+}
+
+const weight = element('ode-weight');
+document.activeElement = element('initial-focus-for-review');
+const fresh = reviewPage([{code:'physical_fact_required', field:'dimensions.weight'}]);
+assert.equal(fresh.queue.length, 1, 'navigation waits until fresh validation hydration');
+fresh.queue.shift()();
+assert.equal(fresh.queue.length, 1, 'the target field waits for the rendered editor');
+fresh.queue.shift()();
+assert.equal(focused.at(-1), 'ode-weight', 'a fresh exact issue focuses its matching control');
+assert.equal(document.activeElement, weight);
+assert.equal([...documentListeners.values()].reduce((count, listeners) => count + listeners.size, 0), 0,
+    'temporary user-interaction tracking ends after navigation');
+
+document.activeElement = element('initial-focus-for-mismatch');
+const stale = reviewPage([{code:'physical_fact_required', field:'dimensions.width'}]);
+const fallback = element('ode-validation');
+stale.queue.shift()();
+assert.equal(focused.at(-1), 'ode-validation', 'a stale or mismatched hint falls back to current validation');
+assert.equal(document.activeElement, fallback);
+
+document.activeElement = element('initial-focus-for-user');
+const user = reviewPage([{code:'physical_fact_required', field:'dimensions.weight'}]);
+const previousFocus = focused.at(-1);
+const chosenByUser = element('user-selected-control');
+document.activeElement = chosenByUser;
+document.dispatchEvent({type:'focusin'});
+user.queue.shift()();
+assert.equal(focused.at(-1), previousFocus, 'user focus prevents automatic issue focus');
+assert.equal(document.activeElement, chosenByUser, 'automatic navigation leaves user focus untouched');
+''')
+
+
+def test_review_issue_classifier_matches_backend_bounds_and_editable_paths():
+    run_node(r'''
+assert.equal(ozonDraftEditor.isNavigableIssue({code:'physical_fact_required', field:'dimensions.weight'}), true);
+assert.equal(ozonDraftEditor.isNavigableIssue({code:'ozon_brand_forbidden', field:'attributes.22232'}), false);
+assert.equal(ozonDraftEditor.isNavigableIssue({code:'x'.repeat(81), field:'dimensions.weight'}), false);
+assert.equal(ozonDraftEditor.isNavigableIssue({code:'ok', field:'x'.repeat(161)}), false);
+assert.equal(ozonDraftEditor.isNavigableIssue({code:'bad code', field:'dimensions.weight'}), false);
+assert.equal(ozonDraftEditor.isNavigableIssue({code:'provider_error', field:'account'}), false);
+''')

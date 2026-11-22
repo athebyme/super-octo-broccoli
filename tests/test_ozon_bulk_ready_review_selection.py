@@ -35,6 +35,7 @@ const bootstrapReview = {
   parent_prepare_job_uid: parentUid,
   csrf_token: 'csrf-bootstrap',
   checked_at: '2026-11-21T00:00:00',
+  review_return_token: 'signed-review-token',
   publication_enabled: true,
   pagination: {page: 10, per_page: 20, pages: 10, total: draftIds.length},
   items: [],
@@ -112,9 +113,11 @@ async function fakeFetch(url, options={}) {
   }});
 }
 
+global.window = global;
+require('./static/ozon-draft-editor.js');
 const fakeWindow = {
   Vue: {createApp(value) { component = value; return {component() { return this; }, mount() {}}; }},
-  ozonDraftEditor: {photoComponent: {}},
+  ozonDraftEditor: global.ozonDraftEditor,
   crypto: {randomUUID() { return 'c'.repeat(32); }},
   location: {assign(value) { navigations.push(value); }},
 };
@@ -167,6 +170,28 @@ function sameJson(left, right) {
 }
 
 (async () => {
+  const navigation = makeApp([]);
+  const navigationIssue = {code:'physical_fact_required', field:'dimensions.weight'};
+  assert.equal(navigation.navigableIssue(navigationIssue), true);
+  assert.equal(navigation.issueLabel({...navigationIssue, message:'weight должен быть целым числом'}),
+    'Вес с упаковкой: укажите подтверждённое значение больше нуля.');
+  assert.equal(navigation.issueLabel({code:'unknown_provider_issue', message:'Исходная подсказка'}),
+    'Исходная подсказка', 'unknown issue labels keep the provider message');
+  assert.equal(navigation.editorUrl(row(draftIds[0], 0), navigationIssue),
+    '/marketplaces/drafts/' + draftIds[0] + '?review_return=signed-review-token&focus_code=physical_fact_required&focus_field=dimensions.weight');
+  const systemBlocker = {code:'ozon_brand_forbidden', field:'attributes.22232'};
+  assert.equal(navigation.navigableIssue(systemBlocker), false);
+  assert.equal(navigation.editorUrl(row(draftIds[0], 0), systemBlocker),
+    '/marketplaces/drafts/' + draftIds[0] + '?review_return=signed-review-token',
+    'system blockers carry return context without a focus hint');
+  assert.equal(navigation.navigableIssue({code:'x'.repeat(81), field:'dimensions.weight'}), false);
+  assert.equal(navigation.navigableIssue({code:'valid', field:'x'.repeat(161)}), false);
+  const validToken = navigation.review.review_return_token;
+  navigation.review.review_return_token = 'x'.repeat(8193);
+  assert.equal(navigation.navigableIssue(navigationIssue), false);
+  assert.equal(navigation.editorUrl(row(draftIds[0], 0), navigationIssue), '/marketplaces/drafts/' + draftIds[0]);
+  navigation.review.review_return_token = validToken;
+
   const blockedIds = new Set([draftIds[44], draftIds[117], draftIds[199]]);
   const oldSelection = [{id: draftIds[0], version: 7}, {id: draftIds[199], version: 8}];
   const app = makeApp(oldSelection.map(item => ({...item})));

@@ -6,7 +6,7 @@
 {% set reviewed_result_uid = review.result_job_uid|default(none, true) %}
 {% set reviewed_result_url = url_for('ozon_bulk_uploads.detail', job_uid=reviewed_result_uid) if reviewed_result_uid else none %}
 <link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-editor.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='ozon-upload-review.css', v='20261121-ready-review-1') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-upload-review.css', v='20261122-review-editor-return-r50') }}">
 <script type="application/json" id="our-bootstrap">{{ {
     'review': review,
     'urls': {
@@ -62,7 +62,7 @@
                 <p class="our-meta">Артикул {{ row.offer_id }} · версия {{ row.version }} · товар № {{ row.imported_product_id }}</p>
                 <p class="our-meta">{{ row.type_name || 'Тип Ozon не выбран' }}<span v-if="row.external_category_id"> · категория {{ row.external_category_id }}</span></p>
                 <div class="our-facts"><span><strong>Цена продавца:</strong> {{ sellerPrice(row) }}</span><span v-if="oldPrice(row)"><strong>До скидок:</strong> {{ oldPrice(row) }}</span><span><strong>Упаковка:</strong> {{ packageLabel(row) }}</span><span v-if="Number.isSafeInteger(row.photos_count)"><strong>Фото в составе:</strong> {{ row.photos_count }}</span></div>
-                <ul v-if="row.errors?.length" class="our-issues"><li v-for="(issue,index) in row.errors" :key="'e'+index">{{ issue.message }}</li></ul>
+                <ul v-if="row.errors?.length" class="our-issues"><li v-for="(issue,index) in row.errors" :key="'e'+index"><a v-if="navigableIssue(issue)" data-review-issue-link :href="editorUrl(row, issue)" :aria-label="'Перейти к полю: ' + issueLabel(issue)">{{ issueLabel(issue) }}</a><span v-else>{{ issueLabel(issue) }}</span></li></ul>
                 <details v-if="row.warnings?.length" class="our-warnings"><summary>Предупреждения · {{ row.warnings.length }}</summary><ul><li v-for="(issue,index) in row.warnings" :key="'w'+index">{{ issue.message }}</li></ul></details>
                 <a class="our-card-link" :href="editorUrl(row)">{{ row.selectable ? 'Открыть и проверить поля →' : 'Исправить карточку →' }}</a>
             </div>
@@ -108,7 +108,7 @@
             {% if reviewed_result_uid %}<input type="hidden" name="result_job_uid" value="{{ reviewed_result_uid }}">{% endif %}
             <div class="our-list">
             {% for row in review['items'] %}
-                <article class="our-card"><div class="our-card-select">{% if row.selectable %}<label class="our-card-check"><input type="checkbox" name="draft_ids" value="{{ row.draft_id }}" aria-label="Выбрать карточку {{ row.title }}"></label>{% endif %}</div><div class="our-card-main"><h3>{{ row.title }}</h3><p>{{ 'Полное обновление' if row.action == 'update' else 'Новая карточка' }} · версия {{ row.version }} · {{ row.offer_id }}</p><p>{{ row.type_name or 'Тип Ozon не выбран' }}</p><p>Цена продавца: {% if row.commercial and row.commercial.currency_code == 'RUB' and row.commercial.price %}{{ row.commercial.price }} ₽{% else %}не указана или валюта не подтверждена{% endif %} · фото в составе: {{ row.photos_count if row.photos_count is not none else 'неизвестно' }}</p><p>Упаковка: {{ row.dimensions.width if row.dimensions and row.dimensions.width else '—' }} × {{ row.dimensions.height if row.dimensions and row.dimensions.height else '—' }} × {{ row.dimensions.depth if row.dimensions and row.dimensions.depth else '—' }} {{ dimension_units.get(row.dimensions.dimension_unit, '') if row.dimensions else '' }} · вес {{ row.dimensions.weight if row.dimensions and row.dimensions.weight else '—' }} {{ weight_units.get(row.dimensions.weight_unit, '') if row.dimensions else '' }}</p>{% if row.errors %}<ul class="our-issues">{% for issue in row.errors %}<li>{{ issue.message }}</li>{% endfor %}</ul>{% endif %}<a href="{{ url_for('marketplace_drafts.classic_detail', draft_id=row.draft_id) }}">Открыть карточку</a></div></article>
+                <article class="our-card"><div class="our-card-select">{% if row.selectable %}<label class="our-card-check"><input type="checkbox" name="draft_ids" value="{{ row.draft_id }}" aria-label="Выбрать карточку {{ row.title }}"></label>{% endif %}</div><div class="our-card-main"><h3>{{ row.title }}</h3><p>{{ 'Полное обновление' if row.action == 'update' else 'Новая карточка' }} · версия {{ row.version }} · {{ row.offer_id }}</p><p>{{ row.type_name or 'Тип Ozon не выбран' }}</p><p>Цена продавца: {% if row.commercial and row.commercial.currency_code == 'RUB' and row.commercial.price %}{{ row.commercial.price }} ₽{% else %}не указана или валюта не подтверждена{% endif %} · фото в составе: {{ row.photos_count if row.photos_count is not none else 'неизвестно' }}</p><p>Упаковка: {{ row.dimensions.width if row.dimensions and row.dimensions.width else '—' }} × {{ row.dimensions.height if row.dimensions and row.dimensions.height else '—' }} × {{ row.dimensions.depth if row.dimensions and row.dimensions.depth else '—' }} {{ dimension_units.get(row.dimensions.dimension_unit, '') if row.dimensions else '' }} · вес {{ row.dimensions.weight if row.dimensions and row.dimensions.weight else '—' }} {{ weight_units.get(row.dimensions.weight_unit, '') if row.dimensions else '' }}</p>{% if row.errors %}<ul class="our-issues">{% for issue in row.errors %}<li>{{ issue.message }}</li>{% endfor %}</ul>{% endif %}<a href="{{ url_for('marketplace_drafts.classic_detail', draft_id=row.draft_id, review_return=review.review_return_token) if review.review_return_token else url_for('marketplace_drafts.classic_detail', draft_id=row.draft_id) }}">Открыть карточку</a></div></article>
             {% endfor %}
             </div>
             <label class="our-confirm"><input type="checkbox" name="confirm_write" value="1" required>Я проверил выбранные карточки и подтверждаю отправку в Ozon</label>
@@ -122,6 +122,6 @@
 </noscript>
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
 <script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}" defer></script>
-<script src="{{ url_for('static', filename='ozon-draft-editor.js') }}" defer></script>
-<script src="{{ url_for('static', filename='ozon-upload-review.js', v='20261121-reviewed-result-r42') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-draft-editor.js', v='20261122-review-editor-return-r50') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-upload-review.js', v='20261122-review-editor-return-r50') }}" defer></script>
 {% endblock %}

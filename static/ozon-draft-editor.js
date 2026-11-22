@@ -43,6 +43,49 @@
         'dimensions.weight_unit':'ode-weight-unit', 'media':'ode-photo-url', 'media.images':'ode-photo-url',
         'media.primary_image':'ode-photo-url', 'media.color_image':'ode-color-url',
     };
+    const reviewFocusValue = /^[A-Za-z0-9_.:\-\[\]]+$/;
+    function issueDisplayLabel(issue) {
+        const labels = {
+            product_type_required:'Выберите категорию и тип товара Ozon.',
+            product_type_unavailable:'Выбранный тип товара недоступен. Выберите другой в справочнике.',
+            offer_id_required:'Укажите артикул продавца.',
+            offer_id_too_long:'Артикул слишком длинный. Сократите его до 50 символов.',
+            offer_id_already_published:'Этот артикул уже занят другой карточкой в магазине.',
+            dimension_unit_required:'Выберите единицу измерения габаритов упаковки.',
+            weight_unit_required:'Выберите единицу измерения веса с упаковкой.',
+            price_required:'Укажите рассчитанную цену продажи больше нуля.',
+            old_price_not_greater:'Цена до скидки должна быть выше цены продажи.',
+            old_price_invalid:'Цена до скидки должна быть числом больше нуля.',
+            vat_required:'Выберите ставку НДС для этого товара.',
+            currency_code_required:'Выберите валюту «Российский рубль».',
+            barcodes_limit:'Для отправки карточки оставьте один штрихкод.',
+            description_attribute_unavailable:'Требования Ozon к описанию пока недоступны. Дождитесь обновления справочника и повторите проверку.',
+            description_attribute_unsupported:'Формат описания в этой категории пока не поддерживается. Обратитесь в поддержку.',
+            description_attribute_duplicated:'Описание продублировано в характеристиках. Оставьте одно значение.',
+            description_attribute_conflict:'Описание в характеристиках отличается от основного описания. Приведите их к одному тексту.',
+            images360_removed:'Ozon больше не принимает фотографии 360° в этом способе отправки. Удалите их из карточки.'
+        };
+        const physical = {'dimensions.width':'Ширина упаковки', 'dimensions.height':'Высота упаковки', 'dimensions.depth':'Длина упаковки', 'dimensions.weight':'Вес с упаковкой'};
+        if (physical[issue?.field] && issue.code === 'physical_fact_required') return physical[issue.field] + ': укажите подтверждённое значение больше нуля.';
+        if (physical[issue?.field] && issue.code === 'physical_fact_not_integer') return physical[issue.field] + ': в выбранной единице нужно целое число.';
+        return labels[issue?.code] || issue?.message || '';
+    }
+    function isNavigableIssue(issue) {
+        if (!issue || typeof issue !== 'object' || issue.code === 'ozon_brand_forbidden' ||
+            typeof issue.code !== 'string' || issue.code.length > 80 || !reviewFocusValue.test(issue.code)) return false;
+        const field = typeof issue.field === 'string' ? issue.field : '';
+        if (!field || field.length > 160 || !reviewFocusValue.test(field)) return false;
+        if (Object.prototype.hasOwnProperty.call(issueFieldIds, field) || [
+            'content.name', 'content.description', 'offer_id', 'product_type_id',
+            'product_type', 'type_id', 'category', 'category_id', 'commercial.price', 'commercial.old_price',
+            'commercial.vat', 'commercial.currency_code', 'dimensions.width',
+            'dimensions.height', 'dimensions.depth', 'dimensions.weight',
+            'dimensions.dimension_unit', 'dimensions.weight_unit',
+        ].includes(field)) return true;
+        return /^(?:attributes(?:\.\d+|\[\d+\])|complex_attributes\[\d+\](?:\.attributes\[\d+\])?)(?:\.|$)/.test(field) ||
+            /^(?:media|images?)(?:\.|\[|$)/.test(field) ||
+            /^barcodes?(?:\.|\[|$)/.test(field);
+    }
     function issueNavigation(editor, issue) {
         const field = String(issue?.field || '');
         const complexPath = field.match(/^complex_attributes\[(\d+)\](?:\.attributes\[(\d+)\])?/);
@@ -236,6 +279,18 @@
     function createOptions(config) {
         let loadController, searchController, searchTimer, searchRevision = 0, typeController, typeTimer, typeRevision = 0;
         let alive = true, beforeUnload, dialogReturnFocus, categoryController;
+        let reviewNavigationPending = !!(config.reviewNavigation?.focus);
+        let reviewNavigationInitialFocus = null, reviewNavigationUserInteracted = false;
+        let reviewNavigationListeners = [];
+        const stopReviewNavigationTracking = () => {
+            for (const [event, listener] of reviewNavigationListeners) {
+                document.removeEventListener?.(event, listener, true);
+            }
+            reviewNavigationListeners = [];
+        };
+        const trackReviewNavigationInteraction = () => {
+            reviewNavigationUserInteracted = true;
+        };
         return {
             components: {'attribute-field': fieldComponent, 'draft-photo':photoComponent,
                 'ai-suggestions': global.ozonDraftAIReview?.component},
@@ -381,6 +436,43 @@
                     this.form.media.images ||= []; this.form.content.name ||= ''; this.form.content.description ||= '';
                     this.original = serialize(this.form); this.typeOptions = this.initialTypeOptions(); this.typeQuery = ''; this.selectedType = null;
                     this.conflict = false; this.uncertain = false; this.photoIndex = 0;
+                    this.applyReviewNavigationFocus();
+                },
+                applyReviewNavigationFocus() {
+                    if (!reviewNavigationPending) return;
+                    reviewNavigationPending = false;
+                    const focus = config.reviewNavigation?.focus;
+                    if (!focus || typeof focus.code !== 'string' || !focus.code ||
+                        typeof focus.field !== 'string' || !focus.field) {
+                        stopReviewNavigationTracking();
+                        return;
+                    }
+                    const validation = this.data?.current_validation;
+                    const currentIssue = validation && Array.isArray(validation.errors)
+                        ? validation.errors.find(issue => issue?.code === focus.code && issue?.field === focus.field)
+                        : null;
+                    const canFocus = () => alive && !reviewNavigationUserInteracted &&
+                        document.activeElement === reviewNavigationInitialFocus;
+                    const finishFocusAttempt = () => {
+                        const allowed = canFocus();
+                        stopReviewNavigationTracking();
+                        return allowed;
+                    };
+                    this.$nextTick(() => {
+                        if (!canFocus()) {
+                            stopReviewNavigationTracking();
+                            return;
+                        }
+                        if (currentIssue) this.goToIssue(currentIssue, finishFocusAttempt);
+                        else this.focusValidationFallback(finishFocusAttempt);
+                    });
+                },
+                focusValidationFallback(mayFocus = null) {
+                    if (mayFocus && !mayFocus()) return;
+                    const target = document.getElementById('ode-validation');
+                    if (!target) return;
+                    target.scrollIntoView?.({behavior:'auto', block:'center'});
+                    target.focus?.({preventScroll:true});
                 },
                 async load(confirmDiscard = false) {
                     if (this.busy) return;
@@ -389,7 +481,15 @@
                     this.loading = true; this.error = '';
                     try { const result = await this.request(config.urls.editor, {signal:current.signal}); if (alive && loadController === current) this.hydrate(result); }
                     catch (error) { if (alive && error.name !== 'AbortError' && loadController === current) this.error = this.readableError(error); }
-                    finally { if (alive && loadController === current) this.loading = false; }
+                    finally {
+                        if (alive && loadController === current) this.loading = false;
+                        if (reviewNavigationPending && (!loadController || loadController === current)) {
+                            // A failed initial read has no current issue to focus; stop tracking
+                            // input so a later manual reload never steals focus.
+                            reviewNavigationPending = false;
+                            stopReviewNavigationTracking();
+                        }
+                    }
                 },
                 readableError(error) { return error instanceof TypeError ? 'Нет ответа от сервера. Проверьте соединение; введённые данные остаются на экране.' : error.message; },
                 patch() { const current = serialize(this.form); return Object.fromEntries(Object.entries(current).filter(([key, value]) => !equal(value, this.original[key]))); },
@@ -447,38 +547,14 @@
                     // as a suggestion. Explicit search still lists every match.
                     return (this.data?.suggestions || []).filter(item => Number.isFinite(item.score) && item.score >= 55);
                 },
-                issueLabel(issue) {
-                    const labels = {
-                        product_type_required:'Выберите категорию и тип товара Ozon.',
-                        product_type_unavailable:'Выбранный тип товара недоступен. Выберите другой в справочнике.',
-                        offer_id_required:'Укажите артикул продавца.',
-                        offer_id_too_long:'Артикул слишком длинный. Сократите его до 50 символов.',
-                        offer_id_already_published:'Этот артикул уже занят другой карточкой в магазине.',
-                        dimension_unit_required:'Выберите единицу измерения габаритов упаковки.',
-                        weight_unit_required:'Выберите единицу измерения веса с упаковкой.',
-                        price_required:'Укажите рассчитанную цену продажи больше нуля.',
-                        old_price_not_greater:'Цена до скидки должна быть выше цены продажи.',
-                        old_price_invalid:'Цена до скидки должна быть числом больше нуля.',
-                        vat_required:'Выберите ставку НДС для этого товара.',
-                        currency_code_required:'Выберите валюту «Российский рубль».',
-                        barcodes_limit:'Для отправки карточки оставьте один штрихкод.',
-                        description_attribute_unavailable:'Требования Ozon к описанию пока недоступны. Дождитесь обновления справочника и повторите проверку.',
-                        description_attribute_unsupported:'Формат описания в этой категории пока не поддерживается. Обратитесь в поддержку.',
-                        description_attribute_duplicated:'Описание продублировано в характеристиках. Оставьте одно значение.',
-                        description_attribute_conflict:'Описание в характеристиках отличается от основного описания. Приведите их к одному тексту.',
-                        images360_removed:'Ozon больше не принимает фотографии 360° в этом способе отправки. Удалите их из карточки.'
-                    };
-                    const physical = {'dimensions.width':'Ширина упаковки', 'dimensions.height':'Высота упаковки', 'dimensions.depth':'Длина упаковки', 'dimensions.weight':'Вес с упаковкой'};
-                    if (physical[issue.field] && issue.code === 'physical_fact_required') return physical[issue.field] + ': укажите подтверждённое значение больше нуля.';
-                    if (physical[issue.field] && issue.code === 'physical_fact_not_integer') return physical[issue.field] + ': в выбранной единице нужно целое число.';
-                    return labels[issue.code] || issue.message;
-                },
-                goToIssue(issue) {
+                issueLabel(issue) { return issueDisplayLabel(issue); },
+                goToIssue(issue, mayFocus = null) {
                     const navigation = issueNavigation(this, issue);
                     this.section = navigation.section;
                     if (navigation.complex) this.attrQuery = '';
                     else if (navigation.attribute && navigation.attribute !== '4191') this.attrQuery = navigation.attribute;
                     this.$nextTick(() => {
+                        if (mayFocus && !mayFocus()) return;
                         const {target, control} = issueTarget(this, navigation);
                         target?.scrollIntoView?.({behavior:'auto', block:'center'});
                         (focusable(control) ? control : target)?.focus?.();
@@ -708,12 +784,22 @@
             },
             mounted() {
                 beforeUnload = event => { if (this.dirty || this.busy) { event.preventDefault(); event.returnValue = ''; } };
-                global.addEventListener('beforeunload', beforeUnload); this.load(); document.getElementById('ode-boot-fallback')?.remove();
+                global.addEventListener('beforeunload', beforeUnload);
+                if (reviewNavigationPending) {
+                    const active = document.activeElement;
+                    reviewNavigationInitialFocus = visibleFocusTarget(active) ? active : document.body;
+                    document.addEventListener?.('focusin', trackReviewNavigationInteraction, true);
+                    reviewNavigationListeners.push(['focusin', trackReviewNavigationInteraction]);
+                }
+                this.load(); document.getElementById('ode-boot-fallback')?.remove();
             },
-            beforeUnmount() { alive = false; loadController?.abort(); categoryController?.abort(); this.cancelTypeSearch(); this.closeDictionary(); global.removeEventListener('beforeunload', beforeUnload); },
+            beforeUnmount() {
+                alive = false; loadController?.abort(); categoryController?.abort(); this.cancelTypeSearch(); this.closeDictionary(); global.removeEventListener('beforeunload', beforeUnload);
+                stopReviewNavigationTracking();
+            },
         };
     }
-    global.ozonDraftEditor = {createOptions, serialize, safeImage, fieldComponent, photoComponent};
+    global.ozonDraftEditor = {createOptions, serialize, safeImage, fieldComponent, photoComponent, isNavigableIssue, issueLabel:issueDisplayLabel};
     const bootstrap = global.document?.getElementById('ode-bootstrap');
     if (bootstrap && global.Vue) global.Vue.createApp(createOptions(JSON.parse(bootstrap.textContent))).mount('#ozon-draft-editor');
 })(window);

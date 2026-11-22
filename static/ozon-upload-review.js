@@ -84,7 +84,27 @@
         },
         methods: {
             pageUrl(page) { return config.urls.html + '?' + params(initial.draft_ids, page); },
-            editorUrl(row) { return config.urls.editorBase + row.draft_id; },
+            editorUrl(row, issue = null) {
+                const href = config.urls.editorBase + row.draft_id;
+                const token = initial.review_return_token;
+                if (typeof token !== 'string' || !token || token.length > 8192) return href;
+                const query = new URLSearchParams({review_return:token});
+                if (issue && global.ozonDraftEditor?.isNavigableIssue?.(issue) &&
+                    typeof issue.code === 'string' && issue.code.length <= 80 &&
+                    typeof issue.field === 'string' && issue.field.length <= 160) {
+                    query.set('focus_code', issue.code);
+                    query.set('focus_field', issue.field);
+                }
+                return href + '?' + query;
+            },
+            navigableIssue(issue) {
+                return typeof initial.review_return_token === 'string' &&
+                    initial.review_return_token.length > 0 && initial.review_return_token.length <= 8192 &&
+                    !!global.ozonDraftEditor?.isNavigableIssue?.(issue);
+            },
+            issueLabel(issue) {
+                return global.ozonDraftEditor?.issueLabel?.(issue) || issue?.message || '';
+            },
             imageUrl(row) {
                 const value = row.primary_image;
                 if (typeof value !== 'string' || value.length > 2000) return '';
