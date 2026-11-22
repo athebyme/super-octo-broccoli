@@ -4,6 +4,15 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='common-product-content.css') }}">
+<style>
+#common-content-editor .cpc-diff-row { grid-template-columns: minmax(6rem, .55fr) repeat(3, minmax(0, 1fr)); }
+#common-content-editor .cpc-diff-label { min-width: 0; overflow-wrap: anywhere; }
+#common-content-editor .cpc-preview-confirm input:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; }
+@media (max-width: 760px) {
+    #common-content-editor .cpc-diff-row { grid-template-columns: minmax(0, 1fr); }
+    #common-content-editor .cpc-diff-label { grid-column: auto; }
+}
+</style>
 
 <script type="application/json" id="common-content-bootstrap">{{ {
     'products': products,
@@ -60,5 +69,5 @@
     {% endif %}
 </div>
 
-<script src="{{ url_for('static', filename='common-product-content.js', v='20261121-common-content-workspace-return-r36') }}" defer></script>
+<script src="{{ url_for('static', filename='common-product-content.js', v='20261123-common-content-provenance-r37') }}" defer></script>
 {% endblock %}

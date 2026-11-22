@@ -1586,16 +1586,25 @@
             var record = state.byId.get(item.product_id);
             var card = node('section', 'cpc-diff-product');
             card.appendChild(node('h4', '', record ? record.state.title : 'Выбранный товар'));
+            var fieldOrigins = item.source && item.source.field_origins
+                ? item.source.field_origins : {};
             (item.fields || []).forEach(function (field) {
                 var row = node('div', 'cpc-diff-row');
+                row.dataset.reviewField = field.field;
                 row.appendChild(node('span', 'cpc-diff-label', labels[field.field] || field.field));
+                var inherited = node('div', 'cpc-diff-value');
+                inherited.dataset.reviewLayer = 'inherited';
+                inherited.appendChild(node('small', '', 'Наследуемое значение · ' + originLabel(fieldOrigins[field.field])));
+                appendDiffValue(inherited, field.inherited, field.field, record);
                 var before = node('div', 'cpc-diff-value');
-                before.appendChild(node('small', '', 'Сейчас · ' + originLabel(field.before_origin)));
+                before.dataset.reviewLayer = 'saved';
+                before.appendChild(node('small', '', 'Сохранено сейчас · ' + originLabel(field.before_origin)));
                 appendDiffValue(before, field.before, field.field, record);
                 var after = node('div', 'cpc-diff-value cpc-diff-after');
-                after.appendChild(node('small', '', 'После · ' + originLabel(field.after_origin)));
+                after.dataset.reviewLayer = 'proposed';
+                after.appendChild(node('small', '', 'Будет сохранено · ' + originLabel(field.after_origin)));
                 appendDiffValue(after, field.after, field.field, record);
-                row.append(before, after);
+                row.append(inherited, before, after);
                 card.appendChild(row);
             });
             (item.recipients || []).forEach(function (recipient) {

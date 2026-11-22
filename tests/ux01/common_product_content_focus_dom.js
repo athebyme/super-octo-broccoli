@@ -337,7 +337,7 @@ function makeApp(options = {}) {
     };
     bootstrapNode.textContent = JSON.stringify(bootstrap);
 
-    const calls = { preview: 0, apply: [], get: 0 };
+    const calls = { preview: 0, previewBodies: [], apply: [], get: 0, unexpected: [] };
     const fakeFetch = (url, init = {}) => {
         const method = (init.method || 'GET').toUpperCase();
         if (method === 'GET') {
@@ -352,12 +352,13 @@ function makeApp(options = {}) {
         const body = JSON.parse(init.body || '{}');
         if (url === bootstrap.previewUrl) {
             calls.preview += 1;
+            calls.previewBodies.push(body);
             return response({
                 success: true,
                 save_effect: 'common_only',
                 preview: {
                     preview_token: 'synthetic-preview-' + calls.preview,
-                    items: [{ product_id: 11, fields: [], recipients: [] }],
+                    items: options.previewItems || [{ product_id: 11, fields: [], recipients: [] }],
                 },
             });
         }
@@ -365,6 +366,7 @@ function makeApp(options = {}) {
             calls.apply.push(body.preview_token);
             return response({ success: true, save_effect: 'common_only', applied: [{ product_id: 11, content_edit_version: 2 }] });
         }
+        calls.unexpected.push(url);
         return response({ success: false, error: 'unrecognized synthetic request' }, 404);
     };
     const windowListeners = new Map();
@@ -544,6 +546,74 @@ async function previewReturnDoesNotReuseToken() {
     externalControl.focus();
     await drain();
     assert.equal(externalApp.document.activeElement === externalControl, true, 'apply completion must not steal focus from outside the editor');
+}
+
+async function previewShowsInheritedSavedAndProposedValues() {
+    const previewItem = {
+        product_id: 11,
+        source: { field_origins: {
+            title: 'source',
+            description: 'unknown',
+            photos: 'supplier_enrichment',
+            characteristics: 'ai_suggestion',
+        } },
+        fields: [
+            {
+                field: 'title', before: 'Saved override', inherited: 'Inherited title', after: 'Inherited title',
+                before_origin: 'seller_override', after_origin: 'source',
+            },
+            {
+                field: 'description', before: 'Saved description', inherited: '', after: 'Proposed description',
+                before_origin: 'seller_override', after_origin: 'seller_override',
+            },
+            {
+                field: 'photos', before: ['photo-a'], inherited: ['photo-a', 'photo-b'], after: ['photo-b'],
+                before_origin: 'seller_override', after_origin: 'seller_override',
+            },
+            {
+                field: 'characteristics', before: [{ name: 'Material', value: 'cotton' }],
+                inherited: [{ name: 'Material', value: 'cotton' }, { name: 'Finish', value: 'matte' }],
+                after: [{ name: 'Material', value: 'linen' }],
+                before_origin: 'seller_override', after_origin: 'seller_override',
+            },
+        ],
+        recipients: [],
+    };
+    const app = makeApp({ previewItems: [previewItem] });
+    dispatchClick(find(app.fieldsNode, 'toggle-mode', (item) => item.dataset.field === 'title'));
+    dispatchClick(find(app.fieldsNode, 'toggle-mode', (item) => item.dataset.field === 'description'));
+    dispatchInput(app.fieldsNode.querySelector('[data-field-input="description"]'), 'Proposed description');
+    dispatchClick(find(app.fieldsNode, 'preview'));
+    await drain();
+
+    assert.equal(app.calls.previewBodies[0].items[0].changes.title.mode, 'inherit',
+        'the exact preview must include the requested reset to inherited source');
+    assert.equal(app.calls.previewBodies[0].items[0].changes.description.mode, 'override',
+        'the exact preview must include an explicit seller proposal');
+
+    const titleRow = app.previewNode.querySelector('[data-review-field="title"]');
+    assert.ok(titleRow, 'preview should include the changed title row');
+    const layers = titleRow.querySelectorAll('[data-review-layer]');
+    assert.deepEqual(layers.map((layer) => layer.dataset.reviewLayer), ['inherited', 'saved', 'proposed']);
+    assert.match(layers[0].textContent, /Наследуемое значение · из источника товара.*Inherited title/);
+    assert.match(layers[1].textContent, /Сохранено сейчас · введено продавцом.*Saved override/);
+    assert.match(layers[2].textContent, /Будет сохранено · из источника товара.*Inherited title/);
+
+    const description = app.previewNode.querySelector('[data-review-field="description"]')
+        .querySelector('[data-review-layer="inherited"]');
+    assert.match(description.textContent, /источник не указан/);
+    assert.match(description.textContent, /Пустое описание/);
+    assert.match(app.previewNode.querySelector('[data-review-field="photos"]')
+        .querySelector('[data-review-layer="inherited"]').textContent, /Фото 1 → Фото 2/);
+    assert.match(app.previewNode.querySelector('[data-review-field="characteristics"]')
+        .querySelector('[data-review-layer="inherited"]').textContent, /Material: cotton · Finish: matte/);
+
+    const acknowledgement = app.previewNode.querySelector('[data-action="acknowledge-preview"]');
+    assertFocused(app, acknowledgement, 'preview acknowledgement');
+    assert.equal(app.calls.preview, 1, 'only the local review endpoint should be called');
+    assert.deepEqual(app.calls.apply, [], 'opening review must not save common data or channel state');
+    assert.deepEqual(app.calls.unexpected, [], 'review must not call marketplace or other write endpoints');
+    assert.equal(app.calls.get, 0, 'preview rendering must not re-read or write channel state');
 }
 
 async function localReplacementFocusInventory() {
@@ -813,6 +883,7 @@ async function photoPreviewViewportPauseAndStaleLifecycle() {
 async function run() {
     productNavigatorKeyboardFocusScrollsLocally();
     await photoBoundaryFocus();
+    await previewShowsInheritedSavedAndProposedValues();
     await previewReturnDoesNotReuseToken();
     await localReplacementFocusInventory();
     await coldPhotoPendingRecoveryAndBoundedManualRetry();
@@ -824,6 +895,7 @@ async function run() {
             'common_photo_boundary_focus_first',
             'common_photo_boundary_focus_last',
             'common_preview_cancel_focus_return',
+            'common_preview_inherited_saved_proposed_provenance',
             'common_product_navigator_keyboard_focus_scroll',
             'successful_apply_restores_focus',
             'saved_but_readback_failed_restores_focus_and_keeps_status',

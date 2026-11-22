@@ -83,6 +83,9 @@ def test_page_renders_empty_and_selected_states_with_safe_bootstrap(api):
     assert "Черновики и опубликованные карточки WB и Ozon не меняются" in html
     assert "общему товару" not in html
     assert "common-product-content.css" in html
+    assert "grid-template-columns: minmax(6rem, .55fr) repeat(3, minmax(0, 1fr))" in html
+    assert "#common-content-editor .cpc-preview-confirm input:focus-visible" in html
+    assert "@media (max-width: 760px)" in html
     assert "common-product-content.js" in html
     assert "<pre" not in html
     assert "</script><script>window.injected" not in html
@@ -739,6 +742,7 @@ def test_production_editor_handlers_restore_native_focus_after_dom_replacement()
         "common_photo_boundary_focus_first",
         "common_photo_boundary_focus_last",
         "common_preview_cancel_focus_return",
+        "common_preview_inherited_saved_proposed_provenance",
         "successful_apply_restores_focus",
         "saved_but_readback_failed_restores_focus_and_keeps_status",
         "apply_completion_does_not_steal_external_focus",
