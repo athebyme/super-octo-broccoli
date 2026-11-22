@@ -11,7 +11,18 @@ body:has(#our-noscript-title) #our-boot-fallback { display:none; }
 .our-context strong { color:var(--our-ink); }
 .our-header .preparation-journey--compact { margin:4px 0 0; padding:0; border:0; border-radius:0; background:transparent; }
 .our-header .preparation-journey--compact .preparation-journey-path { margin-top:0; }
-.our-header .preparation-journey--compact .preparation-journey-path > summary { color:var(--accent-text); }
+.our-header .preparation-journey--compact .preparation-journey-path > summary {
+    display:list-item;
+    min-height:44px;
+    padding-inline-start:4px;
+    color:var(--accent-text);
+    line-height:44px;
+    list-style-position:inside;
+    list-style-type:disclosure-closed;
+}
+.our-header .preparation-journey--compact .preparation-journey-path[open] > summary {
+    list-style-type:disclosure-open;
+}
 .our-message { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:14px; margin:0 0 14px; padding:14px 17px; border:1px solid var(--our-line); border-left:3px solid var(--accent); border-radius:8px; background:var(--bg-card); color:var(--our-muted); font-size:13px; line-height:1.5; }
 .our-message p { margin:4px 0 0; }
 .our-message--error { border-left-color:var(--danger); }

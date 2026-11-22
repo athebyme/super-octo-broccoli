@@ -6,7 +6,7 @@
 {% set reviewed_result_uid = review.result_job_uid|default(none, true) %}
 {% set reviewed_result_url = url_for('ozon_bulk_uploads.detail', job_uid=reviewed_result_uid) if reviewed_result_uid else none %}
 <link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-editor.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='ozon-upload-review.css', v='20261122-bulk-review-header-r52') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-upload-review.css', v='20261122-bulk-review-header-r52compact') }}">
 <script type="application/json" id="our-bootstrap">{{ {
     'review': review,
     'urls': {
