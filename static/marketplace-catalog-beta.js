@@ -26,9 +26,55 @@
     var S = window.mcatShared;
     var syncTimer, cooldownWakeTimer, syncController, syncRevision = 0, syncStopped = false;
     var syncRequests = new Set();
+    var LISTING_UPDATE_MAX = 200;
+    var LISTING_UPDATE_STORAGE_KEY = 'mcat-ozon-update-selection-v1';
     function activeJob(job) { return !!job && ['pending', 'running'].includes(job.status); }
     function saved(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
     function remember(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* Optional preference. */ } }
+    function positiveIdList(value, max) {
+        return Array.isArray(value) && value.length > 0 && value.length <= max &&
+            value.every(function (id) { return Number.isSafeInteger(id) && id > 0; }) &&
+            new Set(value).size === value.length;
+    }
+    function sameOrderedIds(left, right) {
+        return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
+            left.every(function (id, index) { return id === right[index]; });
+    }
+    function validListingUpdateRow(row, listingId, statuses) {
+        return !!row && Number.isSafeInteger(row.listing_id) && row.listing_id === listingId &&
+            typeof row.title === 'string' && row.title.length <= 500 &&
+            typeof row.offer_id === 'string' && row.offer_id.length <= 300 &&
+            statuses.includes(row.status) &&
+            (row.message === undefined ||
+                (typeof row.message === 'string' && row.message.length <= 1000));
+    }
+    function validListingUpdatePreview(value, snapshot) {
+        if (!value || !Number.isSafeInteger(value.account_id) ||
+            value.account_id !== snapshot.accountId ||
+            value.account_label !== snapshot.accountLabel ||
+            !positiveIdList(value.listing_ids, LISTING_UPDATE_MAX) ||
+            !sameOrderedIds(value.listing_ids, snapshot.listingIds) ||
+            typeof value.token !== 'string' || !value.token || value.token.length > 8192 ||
+            !Array.isArray(value.rows) || value.rows.length !== snapshot.listingIds.length) return false;
+        return value.rows.every(function (row, index) {
+            return validListingUpdateRow(row, snapshot.listingIds[index], ['ready', 'existing', 'blocked']);
+        });
+    }
+    function validListingUpdateReport(value, snapshot) {
+        if (!value || !Number.isSafeInteger(value.account_id) ||
+            value.account_id !== snapshot.accountId ||
+            value.account_label !== snapshot.accountLabel ||
+            !positiveIdList(value.listing_ids, LISTING_UPDATE_MAX) ||
+            !sameOrderedIds(value.listing_ids, snapshot.listingIds) ||
+            !Array.isArray(value.rows) || value.rows.length !== snapshot.listingIds.length) return false;
+        return value.rows.every(function (row, index) {
+            if (!validListingUpdateRow(row, snapshot.listingIds[index], ['created', 'existing', 'blocked'])) {
+                return false;
+            }
+            if (row.status === 'blocked') return !Object.prototype.hasOwnProperty.call(row, 'draft_id');
+            return Number.isSafeInteger(row.draft_id) && row.draft_id > 0;
+        });
+    }
     function utcDate(value) {
         if (typeof value !== 'string' || !value) return null;
         var parsed = new Date(/[Zz]|[+-]\d\d:\d\d$/.test(value) ? value : value + 'Z');
@@ -41,6 +87,8 @@
         data: function () {
             return {
                 ozonEnabled: !!bootstrap.ozonEnabled,
+                listingUpdateOwner: typeof bootstrap.selectionOwner === 'string'
+                    ? bootstrap.selectionOwner : '',
                 accounts: (bootstrap.accounts || []).map(function (acc) {
                     acc._syncing = false;
                     acc._error = null;
@@ -81,6 +129,11 @@
                 view: saved('sh-mcat-view') === 'table' ? 'table' : 'grid',
                 mode: saved('sh-mcat-mode') === 'listings' ? 'listings' : 'products',
                 selectedIndex: -1,
+                listingUpdate: {
+                    selectedIds: [], phase: 'idle', preview: null, report: null,
+                    editorUrl: null, error: '', accountId: null, returnTo: '', confirmLocal: false,
+                    selectionScopeKey: '',
+                },
                 imgFailed: {},
                 hoverFailed: {},
                 failedImages: {},
@@ -122,6 +175,62 @@
                     return this.filters.account_id ? 'ozon:' + this.filters.account_id : 'ozon';
                 }
                 return 'all';
+            },
+            listingUpdateScopeEligible: function () {
+                var accountId = Number(this.filters.account_id);
+                return this.ozonEnabled && this.mode === 'listings' &&
+                    this.filters.marketplace === 'ozon' &&
+                    Number.isSafeInteger(accountId) && accountId > 0 &&
+                    this.accounts.some(function (account) { return account.id === accountId; });
+            },
+            listingUpdateCanSwitchToListings: function () {
+                var accountId = Number(this.filters.account_id);
+                return this.ozonEnabled && this.mode === 'products' &&
+                    this.filters.marketplace === 'ozon' &&
+                    Number.isSafeInteger(accountId) && accountId > 0 &&
+                    this.accounts.some(function (account) { return account.id === accountId; });
+            },
+            visibleListingUpdateIds: function () {
+                if (!this.listingUpdateScopeEligible) return [];
+                var accountId = Number(this.filters.account_id);
+                var seen = new Set();
+                var ids = [];
+                for (var i = 0; i < this.items.length; i += 1) {
+                    var group = this.items[i];
+                    var row = group && group._p;
+                    if (!group || !Array.isArray(group.listings) || group.listings.length !== 1 ||
+                        (group.listing_count !== undefined && group.listing_count !== 1) ||
+                        !row || row.marketplace_code !== 'ozon' || row.account_id !== accountId ||
+                        !Number.isSafeInteger(row.id) || row.id <= 0 || seen.has(row.id)) continue;
+                    seen.add(row.id);
+                    ids.push(row.id);
+                }
+                return ids;
+            },
+            listingUpdateAllVisibleSelected: function () {
+                var ids = this.visibleListingUpdateIds;
+                return ids.length > 0 && ids.every((id) => this.listingUpdate.selectedIds.includes(id));
+            },
+            listingUpdateSomeVisibleSelected: function () {
+                var ids = this.visibleListingUpdateIds;
+                return ids.some((id) => this.listingUpdate.selectedIds.includes(id));
+            },
+            listingUpdateCanPreview: function () {
+                return this.listingUpdateScopeEligible && !this.loading && !this.loadingMore &&
+                    this.listingUpdate.selectedIds.length > 0 &&
+                    this.listingUpdate.selectedIds.length <= LISTING_UPDATE_MAX &&
+                    this.listingUpdate.selectionScopeKey === this.listingUpdateScopeKey() &&
+                    positiveIdList(this.listingUpdate.selectedIds, LISTING_UPDATE_MAX);
+            },
+            listingUpdatePreviewLabel: function () {
+                if (this.listingUpdate.phase === 'complete') return 'Открыть итог подготовки';
+                if (this.listingUpdate.phase === 'read_failed' ||
+                    this.listingUpdate.phase === 'apply_uncertain') return 'Проверить ещё раз';
+                return 'Подготовить обновления';
+            },
+            listingUpdateCanApply: function () {
+                return this.listingUpdate.phase === 'review' && !!this.listingUpdate.preview &&
+                    this.listingUpdate.preview.rows.some(function (row) { return row.status !== 'blocked'; });
             },
             activeGroup: function () {
                 return this.items[this.selectedIndex] || null;
@@ -243,6 +352,7 @@
             searchInput: function (value) {
                 var self = this;
                 clearTimeout(this._searchTimer);
+                this.clearListingUpdateSelection();
                 this._searchTimer = setTimeout(function () {
                     var next = (value || '').trim().slice(0, 200);
                     if (next !== self.filters.search) self.filters.search = next;
@@ -251,6 +361,11 @@
             filters: {
                 deep: true,
                 handler: function () {
+                    var currentScope = this.listingUpdateScopeKey();
+                    var retainedScope = this.listingUpdate.selectionScopeKey;
+                    if (currentScope && retainedScope === currentScope &&
+                        (!this._listingUpdateSnapshot || this._listingUpdateSnapshot.scopeKey === currentScope)) return;
+                    this.clearListingUpdateSelection();
                     if (this.historyRestoring) return;
                     this.requestedPage = 1;
                     this.loadedStartPage = 1;
@@ -259,6 +374,7 @@
                 }
             },
             perPage: function () {
+                this.clearListingUpdateSelection();
                 if (this.historyRestoring) return;
                 this.requestedPage = 1;
                 this.loadedStartPage = 1;
@@ -292,6 +408,7 @@
             document.addEventListener('visibilitychange', this._onVisibility);
             this.scheduleCooldownWake();
             this.scheduleSyncPoll();
+            this.restoreListingUpdateSelection();
             this.refresh();
         },
         beforeUnmount: function () {
@@ -304,6 +421,7 @@
             if (this._listAbort) this._listAbort.abort();
             if (this._facetAbort) this._facetAbort.abort();
             if (this._detailAbort) this._detailAbort.abort();
+            if (this._listingUpdateAbort) this._listingUpdateAbort.abort();
             syncRequests.forEach(controller => controller.abort());
             document.removeEventListener('visibilitychange', this._onVisibility);
             window.removeEventListener('keydown', this._onKey);
@@ -312,6 +430,428 @@
         },
 
         methods: {
+            listingUpdateScopeKey: function () {
+                if (!this.listingUpdateScopeEligible) return '';
+                return JSON.stringify({
+                    owner: this.listingUpdateOwner,
+                    marketplace: 'ozon',
+                    account_id: Number(this.filters.account_id),
+                    mode: 'listings',
+                    status: this.filters.status || '',
+                    link_status: this.filters.link_status || '',
+                    include_unavailable: !!this.filters.include_unavailable,
+                    search: (this.filters.search || '').trim().slice(0, 200),
+                });
+            },
+            persistListingUpdateSelection: function () {
+                try {
+                    if (!this.listingUpdate.selectedIds.length) {
+                        this.listingUpdate.selectionScopeKey = '';
+                        sessionStorage.removeItem(LISTING_UPDATE_STORAGE_KEY);
+                        return;
+                    }
+                    this.listingUpdate.selectionScopeKey = this.listingUpdateScopeKey();
+                    sessionStorage.setItem(LISTING_UPDATE_STORAGE_KEY, JSON.stringify({
+                        owner: this.listingUpdateOwner,
+                        scope: this.listingUpdate.selectionScopeKey,
+                        listing_ids: this.listingUpdate.selectedIds.slice(),
+                    }));
+                } catch (_) { /* The current page still keeps an in-memory exact set. */ }
+            },
+            restoreListingUpdateSelection: function () {
+                if (!this.listingUpdateScopeEligible || !this.listingUpdateOwner) return false;
+                try {
+                    var raw = sessionStorage.getItem(LISTING_UPDATE_STORAGE_KEY);
+                    if (!raw) return false;
+                    var stored = JSON.parse(raw);
+                    if (!stored || stored.owner !== this.listingUpdateOwner ||
+                        stored.scope !== this.listingUpdateScopeKey() ||
+                        !positiveIdList(stored.listing_ids, LISTING_UPDATE_MAX)) {
+                        sessionStorage.removeItem(LISTING_UPDATE_STORAGE_KEY);
+                        return false;
+                    }
+                    this.listingUpdate.selectedIds = stored.listing_ids.slice();
+                    this.listingUpdate.selectionScopeKey = this.listingUpdateScopeKey();
+                    return true;
+                } catch (_) {
+                    try { sessionStorage.removeItem(LISTING_UPDATE_STORAGE_KEY); } catch (__) {}
+                    return false;
+                }
+            },
+            clearListingUpdateSelection: function () {
+                if (this._listingUpdateAbort && this.listingUpdate.phase !== 'applying') {
+                    this._listingUpdateAbort.abort();
+                    this._listingUpdateAbort = null;
+                    this._listingUpdateRevision = (this._listingUpdateRevision || 0) + 1;
+                }
+                try { sessionStorage.removeItem(LISTING_UPDATE_STORAGE_KEY); } catch (_) {}
+                this.listingUpdate.selectedIds = [];
+                this.listingUpdate.selectionScopeKey = '';
+                if (this.listingUpdate.phase === 'applying') return;
+                this.listingUpdate.phase = 'idle';
+                this.listingUpdate.preview = null;
+                this.listingUpdate.report = null;
+                this.listingUpdate.editorUrl = null;
+                this.listingUpdate.error = '';
+                this.listingUpdate.confirmLocal = false;
+                this._listingUpdateSnapshot = null;
+                var dialog = this.$refs && this.$refs.listingUpdateDialog;
+                if (dialog && dialog.open) dialog.close();
+            },
+            resetListingUpdateOutcome: function () {
+                if (this.listingUpdate.phase === 'applying') return false;
+                if (this._listingUpdateAbort) {
+                    this._listingUpdateAbort.abort();
+                    this._listingUpdateAbort = null;
+                    this._listingUpdateRevision = (this._listingUpdateRevision || 0) + 1;
+                }
+                this.listingUpdate.phase = 'idle';
+                this.listingUpdate.preview = null;
+                this.listingUpdate.report = null;
+                this.listingUpdate.editorUrl = null;
+                this.listingUpdate.error = '';
+                this.listingUpdate.confirmLocal = false;
+                this._listingUpdateSnapshot = null;
+                return true;
+            },
+            listingUpdateCandidateId: function (group) {
+                if (!this.listingUpdateScopeEligible || !group ||
+                    !Array.isArray(group.listings) || group.listings.length !== 1 ||
+                    (group.listing_count !== undefined && group.listing_count !== 1)) return null;
+                var listing = group._p;
+                var accountId = Number(this.filters.account_id);
+                return listing && listing.marketplace_code === 'ozon' &&
+                    listing.account_id === accountId &&
+                    Number.isSafeInteger(listing.id) && listing.id > 0
+                    ? listing.id : null;
+            },
+            listingUpdateSelected: function (group) {
+                var id = this.listingUpdateCandidateId(group);
+                return id !== null && this.listingUpdate.selectedIds.includes(id);
+            },
+            toggleListingUpdate: function (group, checked) {
+                var id = this.listingUpdateCandidateId(group);
+                if (id === null) return false;
+                if (this.listingUpdate.selectedIds.length &&
+                    this.listingUpdate.selectionScopeKey !== this.listingUpdateScopeKey()) {
+                    this.clearListingUpdateSelection();
+                }
+                var ids = this.listingUpdate.selectedIds.slice();
+                var index = ids.indexOf(id);
+                if (checked && index === -1) {
+                    if (ids.length >= LISTING_UPDATE_MAX) {
+                        this.listingUpdate.error = 'За один раз можно выбрать не больше 200 карточек. Снимите отметку или сузьте поиск.';
+                        return false;
+                    }
+                    ids.push(id);
+                } else if (!checked && index !== -1) {
+                    ids.splice(index, 1);
+                }
+                if (!sameOrderedIds(ids, this.listingUpdate.selectedIds)) {
+                    if (!this.resetListingUpdateOutcome()) return false;
+                }
+                this.listingUpdate.selectedIds = ids;
+                this.listingUpdate.error = '';
+                this.persistListingUpdateSelection();
+                return true;
+            },
+            toggleLoadedListingUpdates: function (checked) {
+                var visible = this.visibleListingUpdateIds;
+                if (!visible.length) return false;
+                if (this.listingUpdate.selectedIds.length &&
+                    this.listingUpdate.selectionScopeKey !== this.listingUpdateScopeKey()) {
+                    this.clearListingUpdateSelection();
+                }
+                var current = this.listingUpdate.selectedIds.slice();
+                var visibleSet = new Set(visible);
+                if (!checked) {
+                    current = current.filter(function (id) { return !visibleSet.has(id); });
+                } else {
+                    var combined = current.slice();
+                    visible.forEach(function (id) {
+                        if (!combined.includes(id)) combined.push(id);
+                    });
+                    if (combined.length > LISTING_UPDATE_MAX) {
+                        this.listingUpdate.error = 'Загружено больше 200 карточек. Выберите часть вручную или сузьте поиск; набор не сокращён.';
+                        return false;
+                    }
+                    current = combined;
+                }
+                if (!sameOrderedIds(current, this.listingUpdate.selectedIds)) {
+                    if (!this.resetListingUpdateOutcome()) return false;
+                }
+                this.listingUpdate.selectedIds = current;
+                this.listingUpdate.error = '';
+                this.persistListingUpdateSelection();
+                return true;
+            },
+            openListingUpdateDialog: function (event) {
+                var dialog = this.$refs && this.$refs.listingUpdateDialog;
+                if (!dialog) return false;
+                this._listingUpdateTrigger = event && event.currentTarget
+                    ? event.currentTarget : document.activeElement;
+                if (!dialog.open) dialog.showModal();
+                return true;
+            },
+            startListingUpdatePreview: function (event) {
+                if (!this.listingUpdateCanPreview) return false;
+                if (this.listingUpdate.phase === 'complete' && this.listingUpdate.report) {
+                    return this.openListingUpdateDialog(event);
+                }
+                if (!this.openListingUpdateDialog(event)) return false;
+                return this.readListingUpdatePreview();
+            },
+            cancelListingUpdateDialog: function () {
+                if (this.listingUpdate.phase === 'applying') return false;
+                if (this.listingUpdate.phase === 'previewing' && this._listingUpdateAbort) {
+                    this._listingUpdateAbort.abort();
+                    this._listingUpdateAbort = null;
+                    this._listingUpdateRevision = (this._listingUpdateRevision || 0) + 1;
+                    this.listingUpdate.phase = 'idle';
+                    this.listingUpdate.preview = null;
+                    this._listingUpdateSnapshot = null;
+                }
+                if (this.listingUpdate.phase === 'review') {
+                    this.listingUpdate.phase = 'idle';
+                    this.listingUpdate.preview = null;
+                    this.listingUpdate.confirmLocal = false;
+                    this._listingUpdateSnapshot = null;
+                }
+                var dialog = this.$refs && this.$refs.listingUpdateDialog;
+                if (dialog && dialog.open) dialog.close();
+                var trigger = this._listingUpdateTrigger;
+                this.$nextTick(function () {
+                    if (trigger && trigger.isConnected !== false && typeof trigger.focus === 'function') {
+                        trigger.focus();
+                    }
+                });
+                return true;
+            },
+            safeListingUpdateEndpoint: function (value) {
+                try {
+                    if (typeof value !== 'string' || !value) return null;
+                    var target = new URL(value, window.location.origin);
+                    if (target.origin !== window.location.origin || target.username || target.password || target.hash) return null;
+                    return target.pathname + target.search;
+                } catch (_) { return null; }
+            },
+            readListingUpdatePreview: async function () {
+                var ids = this.listingUpdate.selectedIds.slice();
+                var accountId = Number(this.filters.account_id);
+                var accountLabel = this.accountLabel(accountId) || '';
+                var scopeKey = this.listingUpdateScopeKey();
+                if (!scopeKey || !accountLabel || !positiveIdList(ids, LISTING_UPDATE_MAX) ||
+                    !this.listingUpdateScopeEligible || this.listingUpdate.selectionScopeKey !== scopeKey) {
+                    this.listingUpdate.error = 'Выберите карточки одного магазина Ozon в режиме «По площадкам».';
+                    this.listingUpdate.phase = 'read_failed';
+                    return false;
+                }
+                var endpoint = this.safeListingUpdateEndpoint(this.urls.previewUpdateDrafts);
+                var returnTo = this.catalogUrl(this.requestedPage || this.loadedStartPage || 1, this.urls.base);
+                if (!endpoint || !this.safeCatalogReturnUrl(returnTo)) {
+                    this.listingUpdate.error = 'Не удалось проверить адрес каталога. Обновите страницу и повторите выбор.';
+                    this.listingUpdate.phase = 'read_failed';
+                    return false;
+                }
+                if (this._listingUpdateAbort) this._listingUpdateAbort.abort();
+                var controller = new AbortController();
+                var revision = (this._listingUpdateRevision || 0) + 1;
+                this._listingUpdateRevision = revision;
+                this._listingUpdateAbort = controller;
+                var snapshot = {
+                    accountId: accountId,
+                    accountLabel: accountLabel,
+                    listingIds: ids,
+                    scopeKey: scopeKey,
+                    returnTo: returnTo,
+                };
+                this._listingUpdateSnapshot = snapshot;
+                this.listingUpdate.phase = 'previewing';
+                this.listingUpdate.error = '';
+                this.listingUpdate.confirmLocal = false;
+                this.listingUpdate.preview = null;
+                this.listingUpdate.report = null;
+                this.listingUpdate.editorUrl = null;
+                try {
+                    var response = await fetch(endpoint, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            Accept: 'application/json',
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': CSRF,
+                        },
+                        body: JSON.stringify({
+                            account_id: accountId,
+                            listing_ids: ids,
+                            return_to: returnTo,
+                        }),
+                        signal: controller.signal,
+                    });
+                    var data = await response.json();
+                    if (!response.ok || !data || data.success !== true ||
+                        !validListingUpdatePreview(data.preview, snapshot)) {
+                        throw new Error('Не удалось подтвердить точный список Ozon. Проверьте список ещё раз.');
+                    }
+                    if (controller.signal.aborted || this._listingUpdateRevision !== revision ||
+                        this.listingUpdateScopeKey() !== scopeKey ||
+                        !sameOrderedIds(this.listingUpdate.selectedIds, ids)) return false;
+                    this.listingUpdate.preview = data.preview;
+                    this.listingUpdate.phase = 'review';
+                    this.$nextTick(() => {
+                        if (this.$refs && this.$refs.listingUpdateConfirm &&
+                            this.$refs.listingUpdateConfirm.isConnected !== false) {
+                            this.$refs.listingUpdateConfirm.focus();
+                        }
+                    });
+                    return true;
+                } catch (error) {
+                    if (error && error.name === 'AbortError') return false;
+                    if (this._listingUpdateRevision === revision) {
+                        this.listingUpdate.phase = 'read_failed';
+                        this.listingUpdate.preview = null;
+                        this.listingUpdate.error = error && typeof error.message === 'string'
+                            ? error.message.slice(0, 300)
+                            : 'Не удалось проверить список. Выбор сохранён; прочитайте список ещё раз.';
+                    }
+                    return false;
+                } finally {
+                    if (this._listingUpdateAbort === controller) this._listingUpdateAbort = null;
+                }
+            },
+            safeCatalogReturnUrl: function (value) {
+                try {
+                    var target = new URL(value, window.location.origin);
+                    var base = new URL(this.urls.base, window.location.origin);
+                    var params = target.searchParams;
+                    var allowed = ['marketplace', 'account_id', 'status', 'link_status',
+                        'include_unavailable', 'search', 'page', 'per_page'];
+                    if (target.origin !== window.location.origin || target.pathname !== base.pathname ||
+                        target.username || target.password || target.hash ||
+                        Array.from(params.keys()).some(function (key) { return !allowed.includes(key); }) ||
+                        allowed.some(function (key) { return params.getAll(key).length > 1; })) return false;
+                    var page = params.get('page') || '1';
+                    var perPage = params.get('per_page') || String(this.perPage);
+                    var search = params.get('search') || '';
+                    var expectedPage = this.requestedPage || this.loadedStartPage || 1;
+                    return params.get('marketplace') === 'ozon' &&
+                        params.get('account_id') === String(Number(this.filters.account_id)) &&
+                        /^[1-9][0-9]*$/.test(page) && Number(page) <= 90071992547409 &&
+                        /^[1-9][0-9]*$/.test(perPage) && Number(perPage) <= 100 &&
+                        Number(page) === Number(expectedPage) && Number(perPage) === Number(this.perPage) &&
+                        (params.get('status') || '') === (this.filters.status || '') &&
+                        (params.get('link_status') || '') === (this.filters.link_status || '') &&
+                        (params.get('include_unavailable') === '1') === !!this.filters.include_unavailable &&
+                        ['', 'active', 'moderation', 'creating', 'error', 'archived', 'inactive', 'unknown'].includes(params.get('status') || '') &&
+                        ['', 'linked', 'unlinked', 'ambiguous'].includes(params.get('link_status') || '') &&
+                        ['', '0', '1'].includes(params.get('include_unavailable') || '') &&
+                        search === (this.filters.search || '') &&
+                        search.length <= 200 && !/[\x00-\x1f\x7f]/.test(search);
+                } catch (_) { return false; }
+            },
+            safeListingUpdateEditorUrl: function (value, report, snapshot) {
+                var draftIds = report.rows.filter(function (row) {
+                    return row.status === 'created' || row.status === 'existing';
+                }).map(function (row) { return row.draft_id; });
+                if (!draftIds.length) return value === null ? null : false;
+                try {
+                    if (typeof value !== 'string' || value.length > 4096) return false;
+                    var target = new URL(value, window.location.origin);
+                    var expected = new URL(this.urls.repairDraftSelection, window.location.origin);
+                    if (target.origin !== window.location.origin || target.pathname !== expected.pathname ||
+                        target.username || target.password || target.hash) return false;
+                    var params = target.searchParams;
+                    var allowed = ['account_id', 'draft_ids', 'return_to'];
+                    if (Array.from(params.keys()).some(function (key) { return !allowed.includes(key); }) ||
+                        params.getAll('account_id').length !== 1 ||
+                        params.get('account_id') !== String(snapshot.accountId) ||
+                        params.getAll('draft_ids').length !== 1 ||
+                        params.getAll('return_to').length !== 1) return false;
+                    var parsedDraftIds = params.get('draft_ids').split(',').map(function (item) {
+                        return /^[1-9][0-9]*$/.test(item) ? Number(item) : NaN;
+                    });
+                    if (!positiveIdList(parsedDraftIds, LISTING_UPDATE_MAX) ||
+                        !sameOrderedIds(parsedDraftIds, draftIds)) return false;
+                    var returnUrl = new URL(params.get('return_to'), window.location.origin);
+                    var expectedReturn = new URL(snapshot.returnTo, window.location.origin);
+                    if (returnUrl.origin !== window.location.origin || returnUrl.username || returnUrl.password ||
+                        returnUrl.hash || returnUrl.pathname !== expectedReturn.pathname ||
+                        returnUrl.searchParams.toString() !== expectedReturn.searchParams.toString()) return false;
+                    return target.pathname + target.search;
+                } catch (_) { return false; }
+            },
+            applyListingUpdatePreview: async function () {
+                var preview = this.listingUpdate.preview;
+                var snapshot = this._listingUpdateSnapshot;
+                if (this.listingUpdate.phase !== 'review' || !preview || !snapshot ||
+                    !this.listingUpdate.confirmLocal ||
+                    !sameOrderedIds(this.listingUpdate.selectedIds, snapshot.listingIds) ||
+                    this.listingUpdateScopeKey() !== snapshot.scopeKey ||
+                    !validListingUpdatePreview(preview, snapshot) ||
+                    !preview.rows.some(function (row) { return row.status !== 'blocked'; })) return false;
+                var endpoint = this.safeListingUpdateEndpoint(this.urls.applyUpdateDrafts);
+                if (!endpoint) {
+                    this.listingUpdate.phase = 'apply_uncertain';
+                    this.listingUpdate.error = 'Не удалось проверить адрес подтверждения. Сначала перечитайте выбранный список.';
+                    return false;
+                }
+                var controller = new AbortController();
+                var revision = (this._listingUpdateRevision || 0) + 1;
+                this._listingUpdateRevision = revision;
+                this._listingUpdateAbort = controller;
+                this.listingUpdate.phase = 'applying';
+                this.listingUpdate.error = '';
+                try {
+                    var response = await fetch(endpoint, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            Accept: 'application/json',
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': CSRF,
+                        },
+                        body: JSON.stringify({ token: preview.token, confirm_local: true }),
+                        signal: controller.signal,
+                    });
+                    var data = await response.json();
+                    if (!response.ok || !data || data.success !== true ||
+                        !validListingUpdateReport(data.report, snapshot)) {
+                        throw new Error('Сервер не подтвердил итог для выбранных карточек. Перечитайте список перед новым подтверждением.');
+                    }
+                    var editorUrl = this.safeListingUpdateEditorUrl(data.report.editor_url, data.report, snapshot);
+                    if (editorUrl === false) {
+                        throw new Error('Ссылка на редактор не совпала с магазином и черновиками из итога. Перечитайте список.');
+                    }
+                    this.listingUpdate.report = data.report;
+                    this.listingUpdate.editorUrl = editorUrl;
+                    this.listingUpdate.phase = 'complete';
+                    this.$nextTick(() => {
+                        if (this.$refs && this.$refs.listingUpdateResultHeading &&
+                            this.$refs.listingUpdateResultHeading.isConnected !== false) {
+                            this.$refs.listingUpdateResultHeading.focus();
+                        }
+                    });
+                    return true;
+                } catch (error) {
+                    if (this._listingUpdateRevision === revision) {
+                        this.listingUpdate.phase = 'apply_uncertain';
+                        this.listingUpdate.error = error && typeof error.message === 'string'
+                            ? error.message.slice(0, 300)
+                            : 'Не удалось подтвердить результат. Перечитайте выбранный список перед новым подтверждением.';
+                    }
+                    return false;
+                } finally {
+                    if (this._listingUpdateAbort === controller) this._listingUpdateAbort = null;
+                }
+            },
+            listingUpdateStatusLabel: function (status) {
+                return ({ready: 'Готово к обновлению', existing: 'Черновик уже есть', blocked: 'Нельзя подготовить',
+                    created: 'Черновик создан', error: 'Ошибка подготовки'})[status] || 'Статус не подтверждён';
+            },
+            listingUpdateRowCount: function (rows, status) {
+                return Array.isArray(rows)
+                    ? rows.filter(function (row) { return row && row.status === status; }).length : 0;
+            },
             /* ---------- загрузка данных ---------- */
             catalogUrl: function (page, path) {
                 var source;
@@ -552,6 +1092,7 @@
             setMode: function (value) {
                 if (this.mode === value) return;
                 // Иначе открытая карточка осталась бы на другом товаре из нового списка
+                this.clearListingUpdateSelection();
                 if (this.drawer.open) this.closeDrawer();
                 this.mode = value;
                 remember('sh-mcat-mode', value);

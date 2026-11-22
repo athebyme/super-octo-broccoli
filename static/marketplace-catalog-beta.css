@@ -1050,3 +1050,126 @@
 
 .mdet-photo-retry { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:12px; font-size:12px; color:var(--text-secondary); }
 .mdet-photo-retry .sh-btn { white-space:normal; }
+
+/* ---------- Ozon exact listing selection ---------- */
+.mcat-update-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px 14px;
+    flex-wrap: wrap;
+    padding: 12px 14px;
+    margin: 0 0 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--mp-ozon);
+    border-radius: var(--r-md);
+}
+.mcat-update-summary { display: flex; flex: 1 1 220px; flex-direction: column; gap: 3px; min-width: 0; }
+.mcat-update-summary strong { color: var(--text); font-size: 13px; }
+.mcat-update-summary > span { color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
+.mcat-update-select-loaded, .mcat-update-confirm-check {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 44px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+    cursor: pointer;
+}
+.mcat-update-select-loaded input, .mcat-update-confirm-check input,
+.mcat-update-card-check input, .mcat-update-row-check input {
+    width: 20px;
+    height: 20px;
+    flex: none;
+    accent-color: var(--accent);
+}
+.mcat-update-toolbar .sh-btn { min-height: 44px; white-space: normal; }
+.mcat-update-clear { flex: none; }
+.mcat-update-preview, .mcat-update-switch { flex: 0 1 auto; }
+.mcat-update-inline-error { flex-basis: 100%; margin: 0; color: var(--danger); font-size: 12px; line-height: 1.45; }
+.mcat-update-switch-summary { align-items: flex-start; gap: 8px; }
+.mcat-update-card-check {
+    position: absolute;
+    z-index: 3;
+    top: 7px;
+    left: 8px;
+    display: grid;
+    width: 44px;
+    height: 44px;
+    place-items: center;
+    background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    box-shadow: var(--shadow-1);
+    cursor: pointer;
+}
+.mcat-update-card-check:focus-within, .mcat-update-row-check:focus-within {
+    outline: 2px solid var(--focus-outline);
+    outline-offset: 1px;
+}
+.mcat-update-row-check { display: grid; width: 44px; height: 44px; flex: none; place-items: center; cursor: pointer; }
+.mcat-update-dialog {
+    box-sizing: border-box;
+    width: min(760px, calc(100vw - 24px));
+    max-width: none;
+    max-height: calc(100dvh - 24px);
+    margin: auto;
+    padding: 0;
+    overflow: auto;
+    color: var(--text);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-3);
+}
+.mcat-update-dialog::backdrop { background: rgb(20 24 32 / 54%); backdrop-filter: blur(2px); }
+.mcat-update-dialog-head, .mcat-update-dialog-intro, .mcat-update-review,
+.mcat-update-report, .mcat-update-confirm-box, .mcat-update-progress,
+.mcat-update-dialog-error, .mcat-update-dialog-actions { margin: 0; padding: 16px 20px; }
+.mcat-update-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; border-bottom: 1px solid var(--border-light); }
+.mcat-update-eyebrow { margin: 0 0 4px; color: var(--text-muted); font-size: 11px; }
+.mcat-update-dialog h2 { margin: 0; color: var(--text); font-size: 18px; line-height: 1.3; }
+.mcat-update-dialog-close { width: 44px; height: 44px; flex: none; font-size: 24px; }
+.mcat-update-dialog-intro { color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
+.mcat-update-counts { display: flex; flex-wrap: wrap; gap: 8px 14px; color: var(--text-secondary); font-size: 12px; }
+.mcat-update-counts b { color: var(--text); font-variant-numeric: tabular-nums; }
+.mcat-update-rows { display: flex; flex-direction: column; gap: 8px; max-height: 38vh; margin: 14px 0 0; padding: 0 4px 0 0; overflow: auto; list-style: none; }
+.mcat-update-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border-light); border-radius: var(--r-sm); }
+.mcat-update-row-main, .mcat-update-row-proof { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mcat-update-row-main { flex: 1 1 55%; }
+.mcat-update-row-main strong { color: var(--text); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.mcat-update-row-main .mcat-mono { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.mcat-update-row-proof { flex: 0 1 42%; align-items: flex-start; }
+.mcat-update-status { display: inline-flex; align-items: center; min-height: 24px; padding: 3px 8px; border-radius: var(--r-pill); font-size: 11px; font-weight: 600; line-height: 1.3; }
+.mcat-update-status--ready, .mcat-update-status--created { color: var(--ok); background: var(--ok-bg); }
+.mcat-update-status--existing { color: var(--info); background: var(--info-bg); }
+.mcat-update-status--blocked, .mcat-update-status--error { color: var(--warn); background: var(--warn-bg); }
+.mcat-update-row-message { color: var(--text-secondary); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.mcat-update-report { border-top: 1px solid var(--border-light); }
+.mcat-update-report h3 { margin: 0 0 6px; font-size: 14px; }
+.mcat-update-report > p, .mcat-update-no-editor { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.mcat-update-no-editor { margin-top: 12px; padding: 10px; color: var(--warn); background: var(--warn-bg); border-radius: var(--r-sm); }
+.mcat-update-confirm-box { border-top: 1px solid var(--border-light); background: var(--bg); }
+.mcat-update-confirm-check { align-items: flex-start; }
+.mcat-update-confirm-check input { margin-top: 2px; }
+.mcat-update-confirm { min-height: 44px; margin-top: 10px; white-space: normal; }
+.mcat-update-progress { display: flex; align-items: center; gap: 9px; color: var(--text-secondary); font-size: 13px; }
+.mcat-update-dialog-error { color: var(--danger); background: var(--danger-bg); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.mcat-update-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 9px; border-top: 1px solid var(--border-light); }
+.mcat-update-dialog-actions .sh-btn { min-height: 44px; white-space: normal; }
+.mcat-update-confirm:focus-visible, .mcat-update-dialog-actions .sh-btn:focus-visible,
+.mcat-update-toolbar .sh-btn:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; }
+@media (max-width: 520px) {
+    .mcat-update-toolbar { align-items: stretch; gap: 8px; padding: 12px; }
+    .mcat-update-summary, .mcat-update-select-loaded, .mcat-update-toolbar .sh-btn { flex-basis: 100%; }
+    .mcat-update-toolbar .sh-btn { width: 100%; }
+    .mcat-update-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: var(--r-md); }
+    .mcat-update-dialog-head, .mcat-update-dialog-intro, .mcat-update-review,
+    .mcat-update-report, .mcat-update-confirm-box, .mcat-update-progress,
+    .mcat-update-dialog-error, .mcat-update-dialog-actions { padding: 13px 14px; }
+    .mcat-update-row { flex-direction: column; gap: 8px; }
+    .mcat-update-row-proof { flex-basis: auto; }
+    .mcat-update-dialog-actions { align-items: stretch; }
+    .mcat-update-dialog-actions .sh-btn { width: 100%; }
+}

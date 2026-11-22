@@ -4,7 +4,7 @@
 {% block title %}Каталог маркетплейсов — Seller Hub{% endblock %}
 
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static', filename='marketplace-catalog-beta.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='marketplace-catalog-beta.css', v='20261122-ozon-update-drafts-r47') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='marketplace-catalog.css') }}">
 
@@ -15,6 +15,7 @@
     'catalogReturnUrl': catalog_return_url,
     'catalogPage': catalog_page,
     'perPage': catalog_per_page,
+    'selectionOwner': (current_user.id|string) ~ ':' ~ (current_user.seller.id|string),
     'urls': {
         'api': url_for('marketplace_listings.list_api'),
         'groups': url_for('marketplace_listings.groups_api'),
@@ -23,6 +24,9 @@
         'overviewBase': url_for('marketplace_listings.index') ~ 'view/',
         'classic': url_for('marketplace_listings.classic'),
         'drafts': url_for('marketplace_drafts.index'),
+        'previewUpdateDrafts': url_for('marketplace_listings.preview_update_drafts'),
+        'applyUpdateDrafts': url_for('marketplace_listings.apply_update_drafts'),
+        'repairDraftSelection': url_for('ozon_bulk_uploads.repair_draft_selection'),
         'accountsPage': url_for('marketplace_accounts.index'),
         'accountsStatus': url_for('marketplace_accounts.list_api'),
         'myProducts': url_for('seller_my_products'),
@@ -192,6 +196,41 @@
         <button v-if="hasSearchFilters" type="button" class="mcat-reset" @click="resetFilters">Сбросить фильтры {% endraw %}{{ icon('close', 13) }}{% raw %}</button>
         <span v-if="loading && items.length" class="mcat-refresh-indicator" role="status"><span class="sh-spinner sh-spinner--sm" aria-hidden="true"></span> Обновляем список…</span>
     </div>
+    <section v-if="listingUpdateScopeEligible || listingUpdateCanSwitchToListings" class="mcat-update-toolbar"
+             aria-label="Подготовка выбранных карточек Ozon" data-listing-update-scope>
+        <template v-if="listingUpdateScopeEligible">
+        <div class="mcat-update-summary">
+            <strong>Карточки магазина Ozon · {{ accountLabel(Number(filters.account_id)) }}</strong>
+            <span>Выбрано {{ listingUpdate.selectedIds.length }} из 200 · выбор можно продолжить после загрузки страницы</span>
+        </div>
+        <label class="mcat-update-select-loaded">
+            <input type="checkbox" data-listing-update-toggle
+                   :checked="listingUpdateAllVisibleSelected"
+                   :indeterminate.prop="listingUpdateSomeVisibleSelected && !listingUpdateAllVisibleSelected"
+                   :disabled="!visibleListingUpdateIds.length || (loading && !items.length)"
+                   @change="toggleLoadedListingUpdates($event.target.checked)">
+            <span>Выбрать загруженные карточки ({{ visibleListingUpdateIds.length }})</span>
+        </label>
+        <button type="button" class="sh-btn sh-btn--secondary mcat-update-clear"
+                :disabled="!listingUpdate.selectedIds.length" @click="clearListingUpdateSelection()">
+            Снять выбор
+        </button>
+        <button ref="listingUpdatePreviewButton" type="button" class="sh-btn sh-btn--primary mcat-update-preview"
+                data-listing-update-preview
+                :disabled="!listingUpdateCanPreview || listingUpdate.phase === 'applying'"
+                @click="startListingUpdatePreview($event)">
+            {{ listingUpdatePreviewLabel }} ({{ listingUpdate.selectedIds.length }})
+        </button>
+        <p v-if="listingUpdate.error" class="mcat-update-inline-error" role="alert">{{ listingUpdate.error }}</p>
+        </template>
+        <div v-else class="mcat-update-summary mcat-update-switch-summary">
+            <strong>Подготовка обновлений · {{ accountLabel(Number(filters.account_id)) }}</strong>
+            <span>Для точного выбора карточек магазина откройте «По площадкам».</span>
+            <button type="button" class="sh-btn sh-btn--primary mcat-update-switch"
+                    data-listing-update-switch-to-listings
+                    @click="setMode('listings')">Перейти к карточкам Ozon</button>
+        </div>
+    </section>
     <div v-if="error" class="mcat-error" role="alert">
         <span>{{ error }}</span>
         <button type="button" class="sh-btn sh-btn--secondary" @click="refresh">Повторить</button>
@@ -238,6 +277,14 @@
                  @focus="selectedIndex = i">
             <span class="mcat-rail" :class="railClass(g)"></span>
             <div class="mcat-photo" @mouseenter="hoverItem(g._p)">
+                <label v-if="listingUpdateScopeEligible && listingUpdateCandidateId(g) !== null"
+                       class="mcat-update-card-check" @click.stop @keydown.stop>
+                    <input type="checkbox" :data-listing-update-select="String(listingUpdateCandidateId(g))"
+                           :aria-label="'Выбрать ' + (g._p.title || g._p.offer_id) + ' для обновления в Ozon'"
+                           :checked="listingUpdateSelected(g)"
+                           :disabled="listingUpdate.selectedIds.length >= 200 && !listingUpdateSelected(g)"
+                           @change.stop="toggleListingUpdate(g, $event.target.checked)">
+                </label>
                 <template v-if="g._p.primary_image && !imgFailed[g._p.id]">
                     <img v-image-deadline :src="g._p.primary_image" loading="lazy" decoding="async" referrerpolicy="no-referrer" alt=""
                          @error="imgFailed[g._p.id] = true">
@@ -315,6 +362,14 @@
                     @focus="selectedIndex = i">
                     <td>
                         <div class="mcat-row-product">
+                            <label v-if="listingUpdateScopeEligible && listingUpdateCandidateId(g) !== null"
+                                   class="mcat-update-row-check" @click.stop @keydown.stop>
+                                <input type="checkbox" :data-listing-update-select="String(listingUpdateCandidateId(g))"
+                                       :aria-label="'Выбрать ' + (g._p.title || g._p.offer_id) + ' для обновления в Ozon'"
+                                       :checked="listingUpdateSelected(g)"
+                                       :disabled="listingUpdate.selectedIds.length >= 200 && !listingUpdateSelected(g)"
+                                       @change.stop="toggleListingUpdate(g, $event.target.checked)">
+                            </label>
                             <div class="mcat-thumb">
                                 <img v-image-deadline v-if="g._p.primary_image && !imgFailed[g._p.id]"
                                      :src="g._p.primary_image" loading="lazy" alt=""
@@ -354,6 +409,120 @@
                 :class="{'is-loading': loadingMore}" :disabled="loadingMore"
                 @click="loadMore">Показать ещё</button>
     </div>
+
+    <dialog ref="listingUpdateDialog" class="mcat-update-dialog" aria-labelledby="mcat-update-title"
+            @cancel.prevent="cancelListingUpdateDialog()">
+        <header class="mcat-update-dialog-head">
+            <div>
+                <p class="mcat-update-eyebrow">Ozon · {{ accountLabel(Number(filters.account_id)) }}</p>
+                <h2 id="mcat-update-title">Подготовка обновлений карточек</h2>
+            </div>
+            <button type="button" class="sh-icon-btn mcat-update-dialog-close"
+                    aria-label="Закрыть окно" :disabled="listingUpdate.phase === 'applying'"
+                    @click="cancelListingUpdateDialog()">×</button>
+        </header>
+
+        <p v-if="listingUpdate.phase !== 'complete'" class="mcat-update-dialog-intro">
+            Проверяется точный выбранный список. Сохранение создаёт или находит локальные черновики;
+            публикация на Ozon не выполняется.
+        </p>
+
+        <div v-if="listingUpdate.phase === 'previewing'" class="mcat-update-progress" role="status">
+            <span class="sh-spinner sh-spinner--sm" aria-hidden="true"></span> Проверяем выбранные карточки…
+        </div>
+
+        <div v-if="listingUpdate.phase === 'read_failed' || listingUpdate.phase === 'apply_uncertain'"
+             class="mcat-update-dialog-error" role="alert">
+            {{ listingUpdate.error || 'Результат не подтверждён. Проверьте точный выбранный список ещё раз.' }}
+        </div>
+
+        <section v-if="listingUpdate.preview && listingUpdate.phase !== 'complete'"
+                 class="mcat-update-review" aria-label="Проверенный список">
+            <div class="mcat-update-counts">
+                <span><b>{{ listingUpdate.preview.listing_ids.length }}</b> выбрано</span>
+                <span><b>{{ listingUpdateRowCount(listingUpdate.preview.rows, 'ready') }}</b> можно подготовить</span>
+                <span><b>{{ listingUpdateRowCount(listingUpdate.preview.rows, 'existing') }}</b> черновик уже есть</span>
+                <span><b>{{ listingUpdateRowCount(listingUpdate.preview.rows, 'blocked') }}</b> требуют внимания</span>
+            </div>
+            <ol class="mcat-update-rows">
+                <li v-for="row in listingUpdate.preview.rows" :key="row.listing_id" class="mcat-update-row">
+                    <div class="mcat-update-row-main">
+                        <strong>{{ row.title || 'Без названия' }}</strong>
+                        <span v-if="row.offer_id" class="mcat-mono">{{ row.offer_id }}</span>
+                    </div>
+                    <div class="mcat-update-row-proof">
+                        <span class="mcat-update-status" :class="'mcat-update-status--' + row.status">
+                            {{ listingUpdateStatusLabel(row.status) }}
+                        </span>
+                        <span v-if="row.message" class="mcat-update-row-message">{{ row.message }}</span>
+                    </div>
+                </li>
+            </ol>
+        </section>
+
+        <section v-if="listingUpdate.report" class="mcat-update-report" aria-label="Итог локальной подготовки">
+            <h3 ref="listingUpdateResultHeading" tabindex="-1">Итог для {{ listingUpdate.report.account_label }}</h3>
+            <p>Обработано {{ listingUpdate.report.rows.length }} карточек:
+                создано {{ listingUpdateRowCount(listingUpdate.report.rows, 'created') }},
+                уже были в черновиках {{ listingUpdateRowCount(listingUpdate.report.rows, 'existing') }},
+                требуют внимания {{ listingUpdateRowCount(listingUpdate.report.rows, 'blocked') }}.
+            </p>
+            <ol class="mcat-update-rows">
+                <li v-for="row in listingUpdate.report.rows" :key="row.listing_id" class="mcat-update-row">
+                    <div class="mcat-update-row-main">
+                        <strong>{{ row.title || 'Без названия' }}</strong>
+                        <span v-if="row.offer_id" class="mcat-mono">{{ row.offer_id }}</span>
+                    </div>
+                    <div class="mcat-update-row-proof">
+                        <span class="mcat-update-status" :class="'mcat-update-status--' + row.status">
+                            {{ listingUpdateStatusLabel(row.status) }}
+                        </span>
+                        <span v-if="row.message" class="mcat-update-row-message">{{ row.message }}</span>
+                    </div>
+                </li>
+            </ol>
+            <p v-if="!listingUpdate.editorUrl" class="mcat-update-no-editor">
+                Подходящих черновиков нет. Проверьте причины выше и повторите выбор позже.
+            </p>
+        </section>
+
+        <div v-if="listingUpdate.phase === 'review' && listingUpdateCanApply" class="mcat-update-confirm-box">
+            <label class="mcat-update-confirm-check">
+                <input type="checkbox" v-model="listingUpdate.confirmLocal">
+                <span>Подтверждаю локальную подготовку черновиков для выбранных карточек магазина {{ listingUpdate.preview.account_label }}. Это не публикует изменения на Ozon.</span>
+            </label>
+            <button ref="listingUpdateConfirm" type="button" class="sh-btn sh-btn--primary mcat-update-confirm"
+                    data-listing-update-confirm :disabled="!listingUpdate.confirmLocal"
+                    @click="applyListingUpdatePreview()">Подготовить черновики локально</button>
+        </div>
+
+        <div v-if="listingUpdate.phase === 'applying'" class="mcat-update-progress" role="status">
+            <span class="sh-spinner sh-spinner--sm" aria-hidden="true"></span> Сохраняем результат только в черновики…
+        </div>
+
+        <footer class="mcat-update-dialog-actions">
+            <button v-if="listingUpdate.phase === 'read_failed' || listingUpdate.phase === 'apply_uncertain'"
+                    type="button" class="sh-btn sh-btn--secondary mcat-update-reread"
+                    :disabled="!listingUpdateCanPreview" @click="readListingUpdatePreview()">
+                Проверить выбранный список заново
+            </button>
+            <button v-if="listingUpdate.phase === 'complete'" type="button"
+                    class="sh-btn sh-btn--secondary mcat-update-reread"
+                    :disabled="!listingUpdateCanPreview" @click="readListingUpdatePreview()">
+                Проверить актуальность списка
+            </button>
+            <a v-if="listingUpdate.phase === 'complete' && listingUpdate.editorUrl"
+               class="sh-btn sh-btn--primary mcat-update-editor"
+               data-listing-update-editor :href="listingUpdate.editorUrl">
+                Открыть редактор Ozon
+            </a>
+            <button type="button" class="sh-btn sh-btn--secondary mcat-update-return"
+                    :disabled="listingUpdate.phase === 'applying'"
+                    @click="cancelListingUpdateDialog()">
+                {{ listingUpdate.phase === 'complete' ? 'Вернуться в каталог' : 'Отмена' }}
+            </button>
+        </footer>
+    </dialog>
 
     <!-- Quick view -->
     <transition name="mcat-fade">
@@ -497,5 +666,5 @@
 
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}"></script>
-<script src="{{ url_for('static', filename='marketplace-catalog-beta.js') }}"></script>
+<script src="{{ url_for('static', filename='marketplace-catalog-beta.js', v='20261122-ozon-update-drafts-r47') }}"></script>
 {% endblock %}

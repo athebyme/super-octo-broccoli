@@ -260,3 +260,158 @@ directive.beforeUnmount(img);assert.equal(timers.size,0);
 const lazy=new Img('https://img.example/offscreen.jpg',true);directive.mounted(lazy);directive.beforeUnmount(lazy);
 observations[0].fn([{isIntersecting:true}]);assert.equal(timers.size,0);assert.equal(observations[0].disconnected,true);
 ''')
+
+
+def test_ozon_listing_update_selection_is_one_shop_exact_and_survives_loaded_pages_and_view_toggle():
+    run_node(SETUP + r'''
+(async()=>{
+const listing=(id,accountId=2)=>({id,account_id:accountId,marketplace_code:'ozon',title:'Ozon '+id,offer_id:'offer-'+id});
+const group=(row)=>({key:'l'+row.id,listing_count:1,listings:[row],_p:row});
+const stored=new Map();global.sessionStorage={getItem:k=>stored.get(k)||null,setItem:(k,v)=>stored.set(k,v),removeItem:k=>stored.delete(k)};
+page.listingUpdateOwner='user-5:seller-8';
+page.mode='listings';page.filters={marketplace:'ozon',account_id:2,status:'active',link_status:'',include_unavailable:false,search:'shoe'};
+page.items=[group(listing(101)),group(listing(201,1)),{key:'mixed',listing_count:2,listings:[listing(301),listing(302)],_p:listing(301)}];
+assert.equal(page.listingUpdateScopeEligible,true);
+assert.deepEqual(page.visibleListingUpdateIds,[101]);
+assert.equal(page.listingUpdateCandidateId(page.items[1]),null,'a different shop cannot enter the set');
+assert.equal(page.listingUpdateCandidateId(page.items[2]),null,'a grouped/multi-listing row cannot enter the set');
+assert.equal(page.listingUpdateCanSwitchToListings,false);
+page.toggleListingUpdate(page.items[0],true);assert.deepEqual(page.listingUpdate.selectedIds,[101]);
+page.urls.api='/api/listings';page.pagination={page:1,pages:2,total:2,has_next:true};page.perPage=1;
+global.fetch=async(url)=>{
+    assert.match(url,/page=2/);
+    return {ok:true,status:200,headers:{get:()=> 'application/json'},json:async()=>({success:true,
+        items:[listing(102)],pagination:{page:2,pages:2,total:2,has_next:false}})};
+};
+page.loadMore();await new Promise(setImmediate);await new Promise(setImmediate);
+assert.deepEqual(page.visibleListingUpdateIds,[101,102]);assert.deepEqual(page.listingUpdate.selectedIds,[101]);
+page.setView('table');assert.equal(page.view,'table');assert.deepEqual(page.listingUpdate.selectedIds,[101]);
+page.toggleLoadedListingUpdates(true);assert.deepEqual(page.listingUpdate.selectedIds,[101,102]);
+page.toggleListingUpdate(page.items[3],false);assert.deepEqual(page.listingUpdate.selectedIds,[101]);
+page.historyRestoring=true;page.filters={...page.filters};definition.watch.filters.handler.call(page);
+assert.deepEqual(page.listingUpdate.selectedIds,[101],'same exact account/filter scope survives a history return');
+page.listingUpdate.selectedIds=[];page.listingUpdate.selectionScopeKey='';
+assert.equal(page.restoreListingUpdateSelection(),true);assert.deepEqual(page.listingUpdate.selectedIds,[101]);
+page.filters.status='archived';definition.watch.filters.handler.call(page);
+assert.deepEqual(page.listingUpdate.selectedIds,[],'a changed status clears the old set');
+page.historyRestoring=false;page.mode='products';
+assert.equal(page.listingUpdateScopeEligible,false);assert.equal(page.listingUpdateCanSwitchToListings,true);
+page.filters.account_id=null;assert.equal(page.listingUpdateCanSwitchToListings,false,'no selected shop means no switch CTA');
+page.filters={marketplace:'wb',account_id:2,status:'',link_status:'',include_unavailable:false,search:''};
+page.mode='listings';assert.equal(page.listingUpdateScopeEligible,false,'WB listings cannot use Ozon preparation');
+
+page.filters={marketplace:'ozon',account_id:2,status:'',link_status:'',include_unavailable:false,search:''};
+page.mode='listings';page.items=Array.from({length:201},(_,i)=>group(listing(i+1)));
+assert.equal(page.toggleLoadedListingUpdates(true),false,'bulk select must refuse, never truncate over 200');
+assert.deepEqual(page.listingUpdate.selectedIds,[]);
+page.listingUpdate.selectedIds=Array.from({length:200},(_,i)=>i+1);
+page.listingUpdate.selectionScopeKey=page.listingUpdateScopeKey();
+assert.equal(page.toggleListingUpdate(page.items[200],true),false);
+assert.equal(page.listingUpdate.selectedIds.length,200);
+})().catch(e=>{console.error(e);process.exitCode=1});
+''')
+
+
+def test_ozon_update_preview_confirmation_and_editor_link_are_exact_local_only():
+    run_node(SETUP + r'''
+(async()=>{
+global.location=new URL('https://seller.test/marketplaces/listings/');
+const store=new Map();global.sessionStorage={getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)};
+page.mode='listings';page.filters={marketplace:'ozon',account_id:2,status:'active',link_status:'linked',include_unavailable:false,search:'shoe~blue'};
+page.urls={...page.urls,base:'/marketplaces/listings/',previewUpdateDrafts:'/marketplaces/listings/update-drafts/preview',
+    applyUpdateDrafts:'/marketplaces/listings/update-drafts/apply',repairDraftSelection:'/marketplaces/ozon/uploads/selection/repair'};
+page.catalogReturnUrl='/marketplaces/listings/?marketplace=ozon&account_id=2&status=active&link_status=linked&search=shoe&per_page=1&page=2';
+page.perPage=1;page.requestedPage=2;page.loadedStartPage=1;page.loading=false;page.loadingMore=false;
+page.listingUpdate.selectedIds=[101,102];
+page.listingUpdate.selectionScopeKey=page.listingUpdateScopeKey();
+const dialog={open:false,showModal(){this.open=true},close(){this.open=false}};
+const trigger={isConnected:true,focus(){this.focused=true}};
+const confirmButton={isConnected:true,focus(){this.focused=true}};
+const resultHeading={isConnected:true,focus(){this.focused=true}};
+page.$refs={listingUpdateDialog:dialog,listingUpdateConfirm:confirmButton,listingUpdateResultHeading:resultHeading};
+let previewBody=null,applyBody=null;const calls=[];
+const rows=[
+    {listing_id:101,title:'Товар 101',offer_id:'offer-101',status:'ready'},
+    {listing_id:102,title:'Товар 102',offer_id:'offer-102',status:'existing'},
+];
+const reportRows=[
+    {listing_id:101,title:'Товар 101',offer_id:'offer-101',status:'created',draft_id:701},
+    {listing_id:102,title:'Товар 102',offer_id:'offer-102',status:'existing',draft_id:702},
+];
+global.fetch=async(url,opts)=>{
+    calls.push({url,opts});
+    if(url==='/marketplaces/listings/update-drafts/preview'){
+        previewBody=JSON.parse(opts.body);
+        return {ok:true,json:async()=>({success:true,preview:{account_id:2,account_label:'Магазин 2',listing_ids:[101,102],rows,token:'signed-preview-token'}})};
+    }
+    if(url==='/marketplaces/listings/update-drafts/apply'){
+        applyBody=JSON.parse(opts.body);
+        const editor=new URL('/marketplaces/ozon/uploads/selection/repair',location.origin);
+        editor.searchParams.set('account_id','2');editor.searchParams.set('draft_ids','701,702');
+        editor.searchParams.set('return_to',previewBody.return_to.replace(/%7E/g,'~'));
+        return {ok:true,json:async()=>({success:true,report:{account_id:2,account_label:'Магазин 2',listing_ids:[101,102],rows:reportRows,editor_url:editor.pathname+editor.search}})};
+    }
+    throw Error('No other endpoint is allowed');
+};
+assert.equal(await page.startListingUpdatePreview({currentTarget:trigger}),true);
+assert.equal(dialog.open,true);assert.equal(page.listingUpdate.phase,'review');
+assert.deepEqual(previewBody.listing_ids,[101,102]);assert.equal(previewBody.account_id,2);
+const returnUrl=new URL(previewBody.return_to,location.origin);
+assert.equal(returnUrl.pathname,'/marketplaces/listings/');
+assert.equal(returnUrl.searchParams.get('per_page'),'1');assert.equal(returnUrl.searchParams.get('page'),'2');
+assert.equal(returnUrl.searchParams.get('status'),'active');assert.equal(returnUrl.searchParams.get('link_status'),'linked');
+assert.equal(page.listingUpdate.confirmLocal,false);
+assert.equal(await page.applyListingUpdatePreview(),false,'the explicit local confirmation checkbox is required');
+assert.equal(calls.length,1);
+page.listingUpdate.confirmLocal=true;
+assert.equal(await page.applyListingUpdatePreview(),true);
+assert.deepEqual(applyBody,{token:'signed-preview-token',confirm_local:true});
+assert.deepEqual(calls.map(call=>call.url),['/marketplaces/listings/update-drafts/preview','/marketplaces/listings/update-drafts/apply']);
+assert.equal(calls.every(call=>call.opts.method==='POST'&&call.opts.credentials==='same-origin'),true);
+assert.equal(page.listingUpdate.phase,'complete');assert.equal(page.listingUpdate.report.rows.length,2);
+assert.equal(resultHeading.focused,true,'the accepted result receives keyboard focus');
+const editorUrl=new URL(page.listingUpdate.editorUrl,location.origin);
+assert.equal(editorUrl.pathname,'/marketplaces/ozon/uploads/selection/repair');
+assert.equal(editorUrl.searchParams.get('account_id'),'2');assert.equal(editorUrl.searchParams.get('draft_ids'),'701,702');
+assert.equal(new URL(editorUrl.searchParams.get('return_to'),location.origin).searchParams.get('per_page'),'1');
+assert.equal(page.cancelListingUpdateDialog(),true);assert.equal(dialog.open,false);assert.equal(trigger.focused,true);
+page.items=[{key:'l103',listing_count:1,listings:[{id:103,account_id:2,marketplace_code:'ozon'}],
+    _p:{id:103,account_id:2,marketplace_code:'ozon'}}];
+assert.equal(page.toggleListingUpdate(page.items[0],true),true);
+assert.equal(page.listingUpdate.phase,'idle');assert.equal(page.listingUpdate.report,null);
+assert.equal(page.listingUpdate.preview,null);assert.deepEqual(page.listingUpdate.selectedIds,[101,102,103]);
+})().catch(e=>{console.error(e);process.exitCode=1});
+''')
+
+
+def test_ozon_update_uncertain_apply_keeps_scope_and_requires_new_read_before_confirmation():
+    run_node(SETUP + r'''
+(async()=>{
+global.location=new URL('https://seller.test/marketplaces/listings/');
+page.mode='listings';page.filters={marketplace:'ozon',account_id:2,status:'',link_status:'',include_unavailable:false,search:''};
+page.urls={...page.urls,base:'/marketplaces/listings/',previewUpdateDrafts:'/preview',applyUpdateDrafts:'/apply',
+    repairDraftSelection:'/marketplaces/ozon/uploads/selection/repair'};
+page.catalogReturnUrl='/marketplaces/listings/?marketplace=ozon&account_id=2';
+page.listingUpdate.selectedIds=[101];page.listingUpdate.selectionScopeKey=page.listingUpdateScopeKey();page.listingUpdate.confirmLocal=true;
+page.$refs={};
+let reads=0,applies=0;
+global.fetch=async(url)=>{
+    if(url==='/preview'){
+        reads++;
+        return {ok:true,json:async()=>({success:true,preview:{account_id:2,account_label:'Магазин 2',listing_ids:[101],
+            rows:[{listing_id:101,title:'Товар 101',offer_id:'offer-101',status:'ready'}],token:'signed'}})};
+    }
+    applies++;
+    return {ok:true,json:async()=>({success:true,report:{account_id:2,account_label:'Магазин 2',listing_ids:[999],
+        rows:[{listing_id:999,title:'wrong row',offer_id:'wrong',status:'created',draft_id:901}],editor_url:'/unsafe'}})};
+};
+assert.equal(await page.readListingUpdatePreview(),true);page.listingUpdate.confirmLocal=true;
+assert.equal(await page.applyListingUpdatePreview(),false,'a mismatched outcome cannot be accepted');
+assert.equal(page.listingUpdate.phase,'apply_uncertain');assert.deepEqual(page.listingUpdate.selectedIds,[101]);
+assert.equal(page.listingUpdate.report,null);assert.equal(page.listingUpdate.editorUrl,null);
+assert.equal(reads,1);assert.equal(applies,1);
+assert.equal(page.listingUpdateCanApply,false,'no second confirmation is available before a fresh read');
+assert.equal(await page.readListingUpdatePreview(),true);assert.equal(reads,2);
+assert.equal(page.listingUpdate.confirmLocal,false,'a fresh preview requires a new explicit confirmation');
+})().catch(e=>{console.error(e);process.exitCode=1});
+''')
