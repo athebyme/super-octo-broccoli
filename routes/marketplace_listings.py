@@ -1065,7 +1065,6 @@ def index():
         workspace_update=workspace_update,
         workspace_update_mode=False,
         workspace_update_error=workspace_update_error,
-        workspace_update_fallback_url=url_for("seller_my_products"),
         ozon_enabled=bool(
             current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
         ),

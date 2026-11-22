@@ -4,7 +4,9 @@
 {% block title %}Каталог маркетплейсов — Seller Hub{% endblock %}
 
 {% block content %}
-{% set workspace_update_fallback = url_for('seller_my_products_beta') if workspace_update_mode|default(false) else workspace_update_fallback_url|default(url_for('seller_my_products_beta')) %}
+{% if workspace_update_mode|default(false) %}
+{% set workspace_update_fallback = workspace_update_fallback_url %}
+{% endif %}
 <link rel="stylesheet" href="{{ url_for('static', filename='marketplace-catalog-beta.css', v='20261122-ozon-workspace-update-r56') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='marketplace-catalog.css') }}">
