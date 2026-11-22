@@ -1936,6 +1936,10 @@ def run():
             "selected": [fixture_ids["manual_id"]], "ozonIds": [fixture_ids["manual_id"]],
         }
         assert sum(post["path"] == LOCAL_OZON_PREPARE for post in posts) == ozon_prepare_posts_before
+        page.screenshot(
+            path=OUTPUT / "ozon-local-prepare-single-account.png",
+            animations="disabled",
+        )
 
         page.keyboard.press("Escape")
         dialog.wait_for(state="hidden")
@@ -1992,6 +1996,7 @@ def run():
                 job_uid=job_path.rsplit("/", 1)[-1], seller_id=fixture.FIXTURE["seller_id"],
             ).one()
             assert queued_job.total == 1
+        checks.append("single_ozon_account_prepares_without_redundant_confirmation")
         checks.append("ordinary_ozon_bulk_prepare_queues_exact_local_set")
 
         open_products(page)
