@@ -88,6 +88,8 @@ WB форма изменения цен использует один автом
 
 GET `/my-products/push-to-wb-bulk/result` по `X-WB-Create-Key` читает точную локальную квитанцию. Только типизированный ответ об отсутствии квитанции при ещё неизвестном ID запуска допускает явный повтор с тем же ключом и набором. Принятие, запрос отмены, неизвестный исход и подтверждённое завершение имеют разные состояния. Завершение локального worker подтверждается `worker_exited`. Оно само по себе не доказывает результат в WB. UI сохраняет выбор для Ozon во время работы WB. После подтверждённого завершения выбор сверяется с текущей точной партией и учитывает снятые пользователем отметки. При R61 cutover оператор дополнительно проверяет отсутствие известных активных запусков WB создания перед остановкой контейнера, включая повторную проверку под существующим writer gate.
 
+В пользовательских подписях указывайте «Маркетплейсы», название конкретной площадки или магазина. «Данные товара» обозначают общие локальные поля. Карточки Wildberries и Ozon имеют собственные категории и правила заполнения. В массовом редакторе Wildberries показывайте исходное количество выбранных товаров и отдельно точный набор подходящей категории для каждого изменения. Названия и причины пропуска доступны перед подтверждением.
+
 Встроенная форма импорта собирается из `frontend/` на Vue 3.5.46 и Vite 8.3.8. Команды из корня репозитория: `npm --prefix frontend ci --ignore-scripts`, `npm --prefix frontend test`, `npm --prefix frontend run build` на Node 22.12 или новее. Flask отдаёт зафиксированные артефакты `static/workspace/` и локальную сборку Vue. Один runtime Vue обслуживает существующее окно «Мои товары» и собранный компонент. Lockfile, исходники и артефакты проверяются совместно. `frontend/node_modules/` и локальный кэш сборки исключены из Git и Docker.
 
 Продолжение r13 от 04.10 фиксирует отдельный native Ozon mobile touch остаток: actual enabled Photos tab на 320/light имеет высоту 35.05px. Scoped CSS не меняет media values, форму или publication actions; existing normal-path Vue browser добавляет 320/360/390px × light/dark actual measurements для enabled tabs/media controls, минимум 44×44px, root overflow и keyboard outline/viewport. Прежние full-flow assertions сохраняются, измерение не активирует save/remove/cover. Новые source/test inputs требуют нового manifest и затронутого frozen gate; старые R12 failed/passed receipts неизменны. Разрешённый список private live browser принимает только exact current version-bound media URLs на распознанных HTTPS Ozon CDN (`cdn1.ozone.ru`, `ir.ozone.ru`, default 443/no userinfo), а не произвольный origin. Operator refusal/неполная telemetry сами по себе не устанавливают backend-причину.
@@ -1473,7 +1475,7 @@ WB `/analytics` использует отдельный `static/analytics-worksp
   второй селектор кабинета на страницу с channel bar.
 - Мультимаркетплейсная ИА: один концепт — один пункт сайдбара, каналы
   переключаются channel bar-ом внутри страницы. Пары: `/products` ↔
-  `/marketplaces/listings` (+таб «Все каналы»), `/card-quality` ↔
+  `/marketplaces/listings` (+таб «Все маркетплейсы»), `/card-quality` ↔
   `/marketplaces/quality`, `/prices/` ↔ `/marketplaces/commercial`, `/analytics` ↔
   `/marketplaces/analytics`, `/finances` ↔ `/marketplaces/finance`, `/reviews` ↔
   `/marketplaces/reviews`, `/products/sync-status` ↔ `/marketplaces/operations`,
@@ -1481,7 +1483,7 @@ WB `/analytics` использует отдельный `static/analytics-worksp
   только channel-специфичные стадии: Каталог маркетплейсов, Черновики Ozon
   (группа «Поставщики»), Операции Ozon (группа «Операции»), Заказы Ozon
   (внутренние табы заказы/возвраты/отмены), Кабинеты Ozon. «Мои товары» показывает
-  колонку «Каналы» (WB-статус + бейдж черновика на кабинет) и bulk «Подготовить
+  состояния карточек WB и Ozon (WB-статус + бейдж черновика на кабинет) и действие «Подготовить
   Ozon». Не добавляйте новые пункты вида «X Ozon» для концепта, у которого есть
   WB-страница — расширяйте channel bar.
 
