@@ -62,6 +62,7 @@ REPORT = {
     "network_policy": "loopback_and_hash_pinned_assets_only",
     "layouts": [],
     "footer_mobile_layouts": [],
+    "bulk_review_mobile_layouts": [],
     "overflow_diagnostics": [],
     "checks": [],
     "interactions": [],
@@ -2300,6 +2301,146 @@ def assert_review_summary(page, *, changed: str, skipped: str = "0") -> None:
     assert "Предпросмотр" in page.content() and "не отправляет изменения в Wildberries" in page.content()
 
 
+def assert_bulk_review_mobile_projection(
+    page, fixture: dict[str, int], expected_sync: datetime,
+) -> None:
+    """Check the narrow review list, exact evidence, and keyboard scrolling."""
+    page.set_viewport_size({"width": 320, "height": 800})
+    settled = wait_for_layout_settle(page, width=320, theme="light")
+    region = page.locator("[data-review-mobile-region]")
+    desktop_table = page.locator("[data-review-desktop-table]")
+    assert region.is_visible(), "The narrow review projection must be visible at 320px"
+    assert not desktop_table.is_visible(), "The wide table must be hidden at 320px"
+    assert_review_summary(page, changed="50")
+
+    mobile_products = page.locator("[data-review-product-id-mobile]")
+    mobile_changes = page.locator("[data-review-product-change-mobile]")
+    assert mobile_products.count() == 50, mobile_products.count()
+    assert mobile_changes.count() == 50, mobile_changes.count()
+    product_ids = mobile_products.evaluate_all(
+        "nodes => nodes.map(node => node.getAttribute('data-review-product-id-mobile'))",
+    )
+    assert len(set(product_ids)) == 50, product_ids
+
+    reviewed_identity = page.locator(
+        f'[data-review-product-id-mobile="{fixture["product_id"]}"]',
+    )
+    assert reviewed_identity.count() == 1
+    identity_text = reviewed_identity.inner_text()
+    assert "Pipedream Synthetic Product 000" in identity_text
+    assert "Артикул: PD-000" in identity_text
+    assert f"ID Seller Hub: {fixture['product_id']}" in identity_text
+    assert "nmID WB: 900000" in identity_text
+    assert reviewed_identity.locator("img").get_attribute("src") == (
+        "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="
+    )
+    review_time = reviewed_identity.locator("time")
+    assert review_time.count() == 1
+    assert review_time.get_attribute("datetime") == expected_sync.isoformat() + "Z"
+    assert review_time.inner_text() == expected_sync.strftime("%d.%m.%Y %H:%M UTC")
+
+    first_change = reviewed_identity.locator("[data-review-product-change-mobile]")
+    assert first_change.count() == 1
+    change_text = first_change.inner_text()
+    assert "Было" in change_text and "Pipedream" in change_text, change_text
+    assert "Будет" in change_text and "Synthetic reviewed brand" in change_text, change_text
+
+    geometry = page.evaluate("""() => {
+        const region = document.querySelector('[data-review-mobile-region]');
+        const desktop = document.querySelector('[data-review-desktop-table]');
+        const bounded = [...document.querySelectorAll(
+            '[data-review-product-id-mobile], [data-review-product-change-mobile]'
+        )].map(element => ({
+            scrollWidth: element.scrollWidth,
+            clientWidth: element.clientWidth,
+        }));
+        const boxes = element => {
+            const rect = element.getBoundingClientRect();
+            return {width: rect.width, height: rect.height, left: rect.left, right: rect.right};
+        };
+        const back = document.querySelector('[data-review-mobile-back]');
+        const apply = document.querySelector('[data-review-mobile-apply]');
+        return {
+            viewportWidth: window.innerWidth,
+            documentWidth: document.documentElement.scrollWidth,
+            bodyWidth: document.body.scrollWidth,
+            regionScrollWidth: region?.scrollWidth ?? null,
+            regionClientWidth: region?.clientWidth ?? null,
+            regionScrollHeight: region?.scrollHeight ?? null,
+            regionClientHeight: region?.clientHeight ?? null,
+            desktopDisplay: desktop ? getComputedStyle(desktop).display : null,
+            bounded,
+            back: back ? boxes(back) : null,
+            apply: apply ? boxes(apply) : null,
+        };
+    }""")
+    assert geometry["viewportWidth"] == 320, geometry
+    assert geometry["documentWidth"] <= 320 and geometry["bodyWidth"] <= 320, geometry
+    assert geometry["regionScrollWidth"] <= geometry["regionClientWidth"] + 1, geometry
+    assert geometry["regionScrollHeight"] > geometry["regionClientHeight"], geometry
+    assert geometry["desktopDisplay"] == "none", geometry
+    assert all(row["scrollWidth"] <= row["clientWidth"] + 1 for row in geometry["bounded"]), geometry
+    for name in ("back", "apply"):
+        box = geometry[name]
+        assert box and box["width"] >= 44 and box["height"] >= 44, geometry
+        assert box["left"] >= -0.75 and box["right"] <= 320.75, geometry
+
+    region.focus()
+    page.keyboard.press("Tab")
+    page.keyboard.press("Shift+Tab")
+    focus = page.evaluate("""() => {
+        const region = document.querySelector('[data-review-mobile-region]');
+        const style = getComputedStyle(region);
+        return {
+            focused: document.activeElement === region,
+            keyboardVisible: region.matches(':focus-visible'),
+            outlineWidth: style.outlineWidth,
+            outlineStyle: style.outlineStyle,
+        };
+    }""")
+    assert focus == {
+        "focused": True,
+        "keyboardVisible": True,
+        "outlineWidth": "2px",
+        "outlineStyle": "solid",
+    }, focus
+    before_scroll = region.evaluate("element => element.scrollTop")
+    page.keyboard.press("PageDown")
+    after_scroll = region.evaluate("element => element.scrollTop")
+    assert after_scroll > before_scroll, {
+        "before_scroll": before_scroll,
+        "after_scroll": after_scroll,
+        "focus": focus,
+    }
+
+    REPORT["bulk_review_mobile_layouts"].append({
+        "viewport_width": geometry["viewportWidth"],
+        "document_width": geometry["documentWidth"],
+        "product_count": mobile_products.count(),
+        "change_count": mobile_changes.count(),
+        "region_vertical_scroll": True,
+        "region_horizontal_scroll": False,
+        "touch_targets_at_least_44px": True,
+        "layout_settle": settled,
+    })
+    check(
+        "bulk_review_mobile_projection_exact_rows_identity_and_touch_targets",
+        products=mobile_products.count(),
+        changes=mobile_changes.count(),
+        viewport_width=geometry["viewportWidth"],
+        horizontal_overflow=False,
+        touch_targets_at_least_44px=True,
+    )
+    check(
+        "bulk_review_mobile_region_has_visible_keyboard_focus_and_scroll",
+        focus_visible=focus["keyboardVisible"],
+        keyboard_scroll_changed=True,
+    )
+    interaction("320px_bulk_review_uses_exact_mobile_cards_with_keyboard_scroll")
+    page.set_viewport_size({"width": 1280, "height": 900})
+    wait_for_layout_settle(page, width=1280, theme="light")
+
+
 def assert_bulk_selected_count(page, count: int) -> None:
     summary = page.locator("p").filter(
         has_text="Для характеристик выберите категорию",
@@ -2861,6 +3002,7 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
                 sync_time_observed=True,
                 provider_io=0,
             )
+            assert_bulk_review_mobile_projection(page, fixture, expected_sync)
             assert_keyboard_focus(page, "bulk_review")
             check(
                 "manual_preview_reports_exact_selection_diff_before_fake_apply",
