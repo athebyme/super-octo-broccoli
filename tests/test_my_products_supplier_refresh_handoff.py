@@ -116,6 +116,7 @@ function savedRefreshResponse() {
     errors: 1,
     wb_ready: 1,
     wb_unavailable: 1,
+    updated_batch: 'signed-updated-batch',
     wb_targets: [{imported_product_id: 101, product_id: 9101}],
     items: [
       {product_id: 404, status: 'error', reason: 'update_failed'},
@@ -232,6 +233,7 @@ function setSupplierOutcome(app, data, ids) {
 
 function remount(importBatch, search, supplierRefreshBatch = null, supplierRefreshBatchInvalid = false) {
   boot.importBatch = importBatch;
+  boot.batchKind = 'import';
   boot.supplierRefreshBatch = supplierRefreshBatch;
   boot.supplierRefreshBatchInvalid = supplierRefreshBatchInvalid;
   fakeWindow.location.search = search;
@@ -692,6 +694,7 @@ async function finishSupplierRefresh(data, ids) {
     skipped: 0,
     errors: 0,
     resume_receipt: nextReceipt,
+    updated_batch: 'signed-updated-batch',
     items: [{product_id: 101, status: 'updated', reason: null}],
   }, [101]);
   stored.set(receiptKey, previousReceipt);
@@ -701,7 +704,7 @@ async function finishSupplierRefresh(data, ids) {
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(stored.get(receiptKey), nextReceipt,
     'only the verified updated result receipt is stored, as a raw token');
-  assert.equal(postResult.app.supplierRefreshResult.resumeWarning, undefined);
+  assert.equal(postResult.app.supplierRefreshResult.resumeWarning, '');
 
   const oversizedReceipt = makeApp();
   setSupplierOutcome(oversizedReceipt.app, {
@@ -712,6 +715,7 @@ async function finishSupplierRefresh(data, ids) {
     skipped: 0,
     errors: 0,
     resume_receipt: 'x'.repeat(7501),
+    updated_batch: 'signed-updated-batch',
     items: [{product_id: 101, status: 'updated', reason: null}],
   }, [101]);
   oversizedReceipt.app.confirmSupplierRefreshReview();
@@ -836,6 +840,7 @@ async function finishSupplierRefresh(data, ids) {
   const batchToken = 'supplier-import-receipt-7';
   const batchPage = {
     success: true,
+    batch_kind: 'import',
     import_batch_count: 2,
     items: [{id: 101, title: 'Imported A'}, {id: 202, title: 'Imported B'}],
     pagination: {page: 1, per_page: 200, total: 2, pages: 1, has_next: false},
@@ -1391,3 +1396,246 @@ class SupplierRefreshHandoffRouteTest(unittest.TestCase):
             )
         self.assertEqual(legacy.status_code, 302)
         update.assert_called_once_with(self.seller_id, [self.first_id])
+
+    def test_supplier_refresh_result_batch_is_exact_and_resumable(self):
+        from models import ImportedProduct, db
+        from routes.suppliers import (
+            _issue_supplier_import_batch_token,
+            _supplier_import_batch_serializer,
+        )
+        from itsdangerous import BadSignature
+
+        third = ImportedProduct(
+            seller_id=self.seller_id, supplier_id=self.supplier_id,
+            external_id='handoff-third', source_type='synthetic',
+            title='Third selected product', brand='Acme',
+            import_status='validated',
+        )
+        fourth = ImportedProduct(
+            seller_id=self.seller_id, supplier_id=self.supplier_id,
+            external_id='handoff-fourth', source_type='synthetic',
+            title='Fourth selected product', brand='Acme',
+            import_status='validated',
+        )
+        db.session.add_all([third, fourth])
+        db.session.commit()
+
+        requested_ids = [self.second_id, self.first_id, third.id, fourth.id]
+        mixed_result = SimpleNamespace(
+            imported=2,
+            skipped=1,
+            errors=1,
+            total_requested=4,
+            item_results=[
+                {'product_id': self.second_id, 'status': 'updated', 'reason': None},
+                {
+                    'product_id': self.first_id,
+                    'status': 'skipped',
+                    'reason': 'no_supplier_link',
+                },
+                {
+                    'product_id': third.id,
+                    'status': 'error',
+                    'reason': 'update_failed',
+                },
+                {'product_id': fourth.id, 'status': 'updated', 'reason': None},
+            ],
+            success=True,
+        )
+        with self._auth(), patch(
+            'routes.suppliers.SupplierService.update_imported_products',
+            return_value=mixed_result,
+        ) as update:
+            post = self.client.post(
+                '/my-products/refresh-from-supplier',
+                json={'product_ids': requested_ids},
+            )
+        self.assertEqual(post.status_code, 200)
+        update.assert_called_once_with(self.seller_id, requested_ids)
+        post_payload = post.get_json()
+        self.assertIsInstance(post_payload['resume_receipt'], str)
+        self.assertIsInstance(post_payload['updated_batch'], str)
+        self.assertEqual(
+            [item['status'] for item in post_payload['items']],
+            ['updated', 'skipped', 'error', 'updated'],
+        )
+
+        updated_batch = post_payload['updated_batch']
+        with self.assertRaises(BadSignature):
+            _supplier_import_batch_serializer().loads(updated_batch)
+
+        query = urlencode({'import_batch': updated_batch})
+        with self._auth(), patch(
+            'routes.suppliers.SupplierService.update_imported_products',
+        ) as update, patch(
+            'routes.suppliers.SupplierService.preview_imported_products',
+        ) as preview, patch(
+            'routes.suppliers.render_template', return_value='rendered',
+        ) as render:
+            feed = self.client.get('/api/my-products?' + query)
+            page = self.client.get('/my-products/beta?' + query)
+            resumed = self.client.get(
+                '/api/my-products/supplier-refresh-result',
+                headers={'X-Supplier-Refresh-Receipt': post_payload['resume_receipt']},
+            )
+        update.assert_not_called()
+        preview.assert_not_called()
+        self.assertEqual(feed.status_code, 200)
+        self.assertIn('no-store', feed.headers['Cache-Control'])
+        feed_payload = feed.get_json()
+        self.assertEqual(feed_payload['batch_kind'], 'supplier_refresh_result')
+        self.assertEqual(feed_payload['import_batch_count'], 2)
+        self.assertEqual(
+            [item['id'] for item in feed_payload['items']],
+            [self.second_id, fourth.id],
+        )
+        self.assertEqual(feed_payload['pagination']['pages'], 1)
+        self.assertEqual(feed_payload['pagination']['has_next'], False)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('no-store', page.headers['Cache-Control'])
+        self.assertEqual(render.call_args.kwargs['batch_kind'], 'supplier_refresh_result')
+        self.assertEqual(render.call_args.kwargs['import_batch'], updated_batch)
+        self.assertEqual(resumed.status_code, 200)
+        self.assertIn('no-store', resumed.headers['Cache-Control'])
+        resumed_payload = resumed.get_json()
+        self.assertIsInstance(resumed_payload['updated_batch'], str)
+        self.assertEqual(
+            [item['product_id'] for item in resumed_payload['items']],
+            requested_ids,
+        )
+        self.assertEqual(
+            [item['status'] for item in resumed_payload['items']],
+            ['updated', 'skipped', 'error', 'updated'],
+        )
+
+        with self._auth():
+            resumed_feed = self.client.get(
+                '/api/my-products?' + urlencode({
+                    'import_batch': resumed_payload['updated_batch'],
+                }),
+            )
+        self.assertEqual(resumed_feed.status_code, 200)
+        self.assertEqual(
+            [item['id'] for item in resumed_feed.get_json()['items']],
+            [self.second_id, fourth.id],
+        )
+
+        regular_import = _issue_supplier_import_batch_token(
+            user_id=self.user.id,
+            seller_id=self.seller_id,
+            imported_product_ids=[self.first_id],
+        )
+        with self._auth():
+            regular_feed = self.client.get(
+                '/api/my-products?' + urlencode({'import_batch': regular_import}),
+            )
+            with patch('routes.suppliers.render_template', return_value='rendered') as render:
+                regular_page = self.client.get(
+                    '/my-products/beta?' + urlencode({'import_batch': regular_import}),
+                )
+        self.assertEqual(regular_feed.status_code, 200)
+        self.assertEqual(regular_feed.get_json()['batch_kind'], 'import')
+        self.assertEqual(regular_page.status_code, 200)
+        self.assertEqual(render.call_args.kwargs['batch_kind'], 'import')
+
+    def test_supplier_refresh_post_without_verified_updates_returns_null_batch(self):
+        result = SimpleNamespace(
+            imported=0,
+            skipped=1,
+            errors=0,
+            total_requested=1,
+            item_results=[{
+                'product_id': self.first_id,
+                'status': 'skipped',
+                'reason': 'no_supplier_link',
+            }],
+            success=True,
+        )
+        with self._auth(), patch(
+            'routes.suppliers.SupplierService.update_imported_products',
+            return_value=result,
+        ):
+            response = self.client.post(
+                '/my-products/refresh-from-supplier',
+                json={'product_ids': [self.first_id]},
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertIn('updated_batch', payload)
+        self.assertIsNone(payload['updated_batch'])
+        self.assertNotIn('resume_receipt', payload)
+
+    def test_supplier_refresh_result_batch_rejects_scope_expiry_and_row_drift(self):
+        from models import ImportedProduct, db
+        from routes.suppliers import _issue_supplier_refresh_result_batch_token
+
+        result_token = _issue_supplier_refresh_result_batch_token(
+            user_id=self.user.id,
+            seller_id=self.seller_id,
+            updated_product_ids=[self.second_id, self.first_id],
+        )
+        self.assertIsInstance(result_token, str)
+        self.assertIsNone(_issue_supplier_refresh_result_batch_token(
+            user_id=self.user.id,
+            seller_id=self.seller_id,
+            updated_product_ids=[],
+        ))
+        self.assertIsNone(_issue_supplier_refresh_result_batch_token(
+            user_id=self.user.id,
+            seller_id=self.seller_id,
+            updated_product_ids=[self.first_id, self.first_id],
+        ))
+        self.assertIsNone(_issue_supplier_refresh_result_batch_token(
+            user_id=self.user.id,
+            seller_id=self.seller_id,
+            updated_product_ids=list(range(1, 202)),
+        ))
+        token_body, signature = result_token.rsplit('.', 1)
+        changed_signature = ('a' if signature[0] != 'a' else 'b') + signature[1:]
+        cases = [
+            (
+                urlencode({'import_batch': f'{token_body}.{changed_signature}'}),
+                400,
+            ),
+            (
+                urlencode({'import_batch': _issue_supplier_refresh_result_batch_token(
+                    user_id=self.user.id + 1,
+                    seller_id=self.seller_id,
+                    updated_product_ids=[self.first_id],
+                )}),
+                404,
+            ),
+            (
+                urlencode({'import_batch': _issue_supplier_refresh_result_batch_token(
+                    user_id=self.user.id,
+                    seller_id=self.seller_id + 1,
+                    updated_product_ids=[self.first_id],
+                )}),
+                404,
+            ),
+        ]
+        for query, expected_status in cases:
+            with self.subTest(expected_status=expected_status), self._auth():
+                response = self.client.get('/api/my-products?' + query)
+            self.assertEqual(response.status_code, expected_status)
+            self.assertIn('no-store', response.headers['Cache-Control'])
+            self.assertNotIn('items', response.get_json())
+
+        with patch(
+            'routes.suppliers.SUPPLIER_REFRESH_RESULT_BATCH_MAX_AGE_SECONDS', -1,
+        ), self._auth():
+            expired = self.client.get('/api/my-products?' + urlencode({
+                'import_batch': result_token,
+            }))
+        self.assertEqual(expired.status_code, 410)
+        self.assertIn('no-store', expired.headers['Cache-Control'])
+
+        db.session.query(ImportedProduct).filter_by(id=self.second_id).delete()
+        db.session.commit()
+        with self._auth():
+            drifted = self.client.get('/api/my-products?' + urlencode({
+                'import_batch': result_token,
+            }))
+        self.assertEqual(drifted.status_code, 404)
+        self.assertIn('no-store', drifted.headers['Cache-Control'])
+        self.assertNotIn('items', drifted.get_json())

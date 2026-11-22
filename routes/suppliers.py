@@ -35,6 +35,9 @@ MAX_BULK_PRODUCTS = 200
 SUPPLIER_IMPORT_BATCH_TOKEN_SALT = 'supplier-import-workspace-v1'
 SUPPLIER_IMPORT_BATCH_MAX_AGE_SECONDS = 60 * 60
 SUPPLIER_IMPORT_BATCH_MAX_TOKEN_BYTES = 8 * 1024
+SUPPLIER_REFRESH_RESULT_BATCH_TOKEN_SALT = 'supplier-refresh-result-batch-v1'
+SUPPLIER_REFRESH_RESULT_BATCH_MAX_AGE_SECONDS = SUPPLIER_IMPORT_BATCH_MAX_AGE_SECONDS
+SUPPLIER_REFRESH_RESULT_BATCH_MAX_TOKEN_BYTES = SUPPLIER_IMPORT_BATCH_MAX_TOKEN_BYTES
 SUPPLIER_REFRESH_HANDOFF_TOKEN_SALT = 'supplier-refresh-handoff-v1'
 SUPPLIER_REFRESH_HANDOFF_MAX_AGE_SECONDS = 10 * 60
 SUPPLIER_REFRESH_HANDOFF_MAX_TOKEN_BYTES = 8 * 1024
@@ -281,6 +284,13 @@ def _supplier_import_batch_serializer():
     )
 
 
+def _supplier_refresh_result_batch_serializer():
+    return URLSafeTimedSerializer(
+        current_app.secret_key,
+        salt=SUPPLIER_REFRESH_RESULT_BATCH_TOKEN_SALT,
+    )
+
+
 def _supplier_refresh_handoff_serializer():
     return URLSafeTimedSerializer(
         current_app.secret_key,
@@ -461,16 +471,50 @@ def _issue_supplier_import_batch_token(*, user_id, seller_id, imported_product_i
     return token
 
 
-def _load_supplier_import_batch_ids(*, user_id, seller_id):
+def _issue_supplier_refresh_result_batch_token(
+    *, user_id, seller_id, updated_product_ids,
+):
+    """Sign the exact updated subset of one verified supplier refresh result."""
+    if (
+        type(user_id) is not int or user_id <= 0
+        or type(seller_id) is not int or seller_id <= 0
+        or user_id > MAX_SIGNED_SQLITE_ID
+        or seller_id > MAX_SIGNED_SQLITE_ID
+    ):
+        return None
+    try:
+        ids = _bulk_product_ids(updated_product_ids)
+    except ValueError:
+        return None
+    if len(ids) > MAX_BULK_PRODUCTS or any(
+        value > MAX_SIGNED_SQLITE_ID for value in ids
+    ):
+        return None
+    payload = {
+        'v': 1,
+        'user_id': user_id,
+        'seller_id': seller_id,
+        'ids': ids,
+    }
+    token = _supplier_refresh_result_batch_serializer().dumps(payload)
+    if len(token.encode('utf-8')) > SUPPLIER_REFRESH_RESULT_BATCH_MAX_TOKEN_BYTES:
+        return None
+    return token
+
+
+def _load_supplier_import_batch_context(*, user_id, seller_id):
     values = request.args.getlist('import_batch')
     if len(values) != 1:
         raise SupplierImportBatchTokenError('Набор импорта недействителен')
     token = values[0]
-    if (
-        not token
-        or len(token.encode('utf-8')) > SUPPLIER_IMPORT_BATCH_MAX_TOKEN_BYTES
+    if not token:
+        raise SupplierImportBatchTokenError('Набор импорта недействителен')
+    if len(token.encode('utf-8')) > max(
+        SUPPLIER_IMPORT_BATCH_MAX_TOKEN_BYTES,
+        SUPPLIER_REFRESH_RESULT_BATCH_MAX_TOKEN_BYTES,
     ):
         raise SupplierImportBatchTokenError('Набор импорта недействителен')
+
     try:
         payload = _supplier_import_batch_serializer().loads(
             token,
@@ -482,9 +526,23 @@ def _load_supplier_import_batch_ids(*, user_id, seller_id):
             status_code=410,
         ) from exc
     except BadSignature as exc:
-        raise SupplierImportBatchTokenError(
-            'Набор импорта недействителен',
-        ) from exc
+        try:
+            payload = _supplier_refresh_result_batch_serializer().loads(
+                token,
+                max_age=SUPPLIER_REFRESH_RESULT_BATCH_MAX_AGE_SECONDS,
+            )
+            batch_kind = 'supplier_refresh_result'
+        except SignatureExpired as result_exc:
+            raise SupplierImportBatchTokenError(
+                'Срок действия списка обновлённых товаров истёк',
+                status_code=410,
+            ) from result_exc
+        except BadSignature as result_exc:
+            raise SupplierImportBatchTokenError(
+                'Набор импорта недействителен',
+            ) from result_exc
+    else:
+        batch_kind = 'import'
 
     if not isinstance(payload, dict) or set(payload) != {
         'v', 'user_id', 'seller_id', 'ids',
@@ -499,7 +557,11 @@ def _load_supplier_import_batch_ids(*, user_id, seller_id):
         raise SupplierImportBatchTokenError('Набор импорта недействителен')
     if payload['user_id'] != user_id or payload['seller_id'] != seller_id:
         raise SupplierImportBatchTokenError(
-            'Набор импорта недоступен',
+            (
+                'Список обновлённых товаров недоступен'
+                if batch_kind == 'supplier_refresh_result'
+                else 'Набор импорта недоступен'
+            ),
             status_code=404,
         )
     try:
@@ -510,7 +572,29 @@ def _load_supplier_import_batch_ids(*, user_id, seller_id):
         ) from exc
     if any(value > MAX_SIGNED_SQLITE_ID for value in ids):
         raise SupplierImportBatchTokenError('Набор импорта недействителен')
-    return ids
+    return {'ids': ids, 'batch_kind': batch_kind}
+
+
+def _load_supplier_import_batch_ids(*, user_id, seller_id):
+    """Compatibility wrapper for callers needing only the exact product IDs."""
+    return _load_supplier_import_batch_context(
+        user_id=user_id,
+        seller_id=seller_id,
+    )['ids']
+
+
+def _supplier_import_batch_kind_for_template(*, user_id, seller_id):
+    """Return a verified batch purpose for safe initial UI labeling."""
+    if 'import_batch' not in request.args:
+        return None
+    try:
+        batch = _load_supplier_import_batch_context(
+            user_id=user_id,
+            seller_id=seller_id,
+        )
+    except SupplierImportBatchTokenError:
+        return None
+    return batch['batch_kind']
 
 
 def _bounded_import_batch_template_value():
@@ -3323,6 +3407,11 @@ def register_supplier_routes(app):
             ozon_uploads_url = url_for('ozon_bulk_uploads.index')
         except Exception:
             ozon_uploads_url = '/marketplaces/ozon/uploads/'
+        import_batch = _bounded_import_batch_template_value()
+        batch_kind = _supplier_import_batch_kind_for_template(
+            user_id=current_user.id,
+            seller_id=seller.id,
+        )
         response = render_template(
             'my_products_beta.html',
             wb_connected=bool(seller.has_valid_api_key()),
@@ -3330,7 +3419,8 @@ def register_supplier_routes(app):
             ozon_accounts=ozon_accounts,
             suppliers_payload=suppliers_payload,
             ozon_uploads_url=ozon_uploads_url,
-            import_batch=_bounded_import_batch_template_value(),
+            import_batch=import_batch,
+            batch_kind=batch_kind,
             supplier_refresh_batch=supplier_refresh_batch,
             supplier_refresh_batch_invalid=supplier_refresh_batch_invalid,
             supplier_refresh_return_url=supplier_refresh_return_url,
@@ -3387,7 +3477,7 @@ def register_supplier_routes(app):
             )
         if 'import_batch' in request.args:
             try:
-                imported_product_ids = _load_supplier_import_batch_ids(
+                batch = _load_supplier_import_batch_context(
                     user_id=current_user.id,
                     seller_id=seller.id,
                 )
@@ -3399,18 +3489,27 @@ def register_supplier_routes(app):
             try:
                 payload = MyProductsFeed.list_products_by_ids(
                     seller_id=seller.id,
-                    imported_product_ids=imported_product_ids,
+                    imported_product_ids=batch['ids'],
                 )
             except MyProductsFeedNotFound:
                 return _no_store_supplier_import_batch_response((jsonify({
                     'success': False,
-                    'error': 'Набор импорта недоступен',
+                    'error': (
+                        'Список обновлённых товаров недоступен'
+                        if batch['batch_kind'] == 'supplier_refresh_result'
+                        else 'Набор импорта недоступен'
+                    ),
                 }), 404))
             except MyProductsFeedError:
                 return _no_store_supplier_import_batch_response((jsonify({
                     'success': False,
-                    'error': 'Набор импорта недействителен',
+                    'error': (
+                        'Список обновлённых товаров недействителен'
+                        if batch['batch_kind'] == 'supplier_refresh_result'
+                        else 'Набор импорта недействителен'
+                    ),
                 }), 400))
+            payload['batch_kind'] = batch['batch_kind']
             return _no_store_supplier_import_batch_response(
                 jsonify({'success': True, **payload})
             )
@@ -5843,6 +5942,7 @@ def register_supplier_routes(app):
                 'message': message,
                 'wb_ready': len(wb_product_ids),
                 'wb_targets': wb_targets,
+                'updated_batch': None,
             }
             receipt = None
             if getattr(result, 'success', None) is True:
@@ -5859,6 +5959,13 @@ def register_supplier_routes(app):
                 )
             if receipt:
                 response_payload['resume_receipt'] = receipt
+                response_payload['updated_batch'] = (
+                    _issue_supplier_refresh_result_batch_token(
+                        user_id=current_user.id,
+                        seller_id=seller.id,
+                        updated_product_ids=updated_ids,
+                    )
+                )
             response = jsonify(response_payload)
             if receipt:
                 response.headers['Cache-Control'] = 'no-store'
@@ -5926,6 +6033,15 @@ def register_supplier_routes(app):
             for product_id in ids
         ]
         statuses = receipt['statuses']
+        updated_ids = [
+            product_id for product_id, item_status in zip(ids, statuses)
+            if item_status == 'updated'
+        ]
+        updated_batch = _issue_supplier_refresh_result_batch_token(
+            user_id=current_user.id,
+            seller_id=current_user.seller.id,
+            updated_product_ids=updated_ids,
+        ) if updated_ids else None
         counts = {
             'updated': statuses.count('updated'),
             'skipped': statuses.count('skipped'),
@@ -5992,6 +6108,7 @@ def register_supplier_routes(app):
             'wb_targets': wb_targets,
             'wb_unavailable': wb_unavailable,
             'labels': labels,
+            'updated_batch': updated_batch,
         })
 
     # -------------------------------------------------------------------
