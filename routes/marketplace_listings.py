@@ -229,6 +229,12 @@ def _detail_return_url(listing=None) -> str:
         if listing is not None and listing.marketplace is not None
         else None
     )
+    account_id = getattr(listing, "account_id", None) if listing is not None else None
+    return listing_return_url(
+        request.args.getlist("return_to"),
+        marketplace_code=marketplace_code,
+        account_id=account_id,
+    )
 
 
 def _existing_update_serializer():
@@ -516,12 +522,6 @@ def _existing_update_error(
         "error": message,
         "code": code,
     }, status_code)
-    account_id = getattr(listing, "account_id", None) if listing is not None else None
-    return listing_return_url(
-        request.args.getlist("return_to"),
-        marketplace_code=marketplace_code,
-        account_id=account_id,
-    )
 
 
 def _redirect_to_detail(listing_id: int, listing=None):
