@@ -1605,6 +1605,243 @@ class WBBulkReviewReplayTest(unittest.TestCase):
         })
         self.assertEqual(drift.status_code, 409)
 
+    def test_resolver_rejects_unhashable_mode_with_bad_request(self):
+        response = self._client().post('/products/selection/resolve', json={
+            'mode': [],
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()['code'], 'invalid_selection')
+
+    def test_workspace_resolver_binds_exact_ordered_imported_and_wb_ids(self):
+        from models import ImportedProduct
+        from services.product_selection import load_product_selection_token
+
+        return_to = '/my-products/beta#workspace-return=' + 'a' * 32
+        with self.app.app_context():
+            from models import Seller
+
+            sources = [
+                ImportedProduct(
+                    seller_id=self.seller_id,
+                    product_id=self.product_id,
+                    wb_nm_id=9741,
+                    external_id='workspace-source-a',
+                ),
+                ImportedProduct(
+                    seller_id=self.seller_id,
+                    product_id=self.sibling_product_id,
+                    wb_nm_id=9742,
+                    external_id='workspace-source-b',
+                ),
+            ]
+            self.db.session.add_all(sources)
+            Seller.query.filter_by(id=self.seller_id).one().wb_seller_id = None
+            self.db.session.commit()
+            source_ids = [row.id for row in sources]
+
+        response = self._client().post('/products/selection/resolve', json={
+            'mode': 'workspace',
+            'ids': source_ids,
+            'wb_ids': [self.product_id, self.sibling_product_id],
+            'return_to': return_to,
+        })
+        self.assertEqual(response.status_code, 200)
+        result = response.get_json()
+        self.assertEqual(result['ids'], [self.product_id, self.sibling_product_id])
+        self.assertEqual(result['count'], 2)
+        self.assertEqual(result['marketplace'], 'wb')
+        with self.app.app_context():
+            selection = load_product_selection_token(
+                result['selection_token'],
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                wb_account_id=None,
+            )
+        self.assertEqual(selection['ids'], [self.product_id, self.sibling_product_id])
+        self.assertEqual(selection['workspace_source_ids'], source_ids)
+        self.assertEqual(selection['return_to'], return_to)
+
+        reversed_mapping = self._client().post('/products/selection/resolve', json={
+            'mode': 'workspace',
+            'ids': source_ids,
+            'wb_ids': [self.sibling_product_id, self.product_id],
+            'return_to': return_to,
+        })
+        self.assertEqual(reversed_mapping.status_code, 409)
+        self.assertEqual(
+            reversed_mapping.get_json()['code'], 'workspace_mapping_changed',
+        )
+
+        unsafe = self._client().post('/products/selection/resolve', json={
+            'mode': 'workspace',
+            'ids': source_ids,
+            'wb_ids': [self.product_id, self.sibling_product_id],
+            'return_to': 'https://evil.example/my-products/beta',
+        })
+        self.assertEqual(unsafe.status_code, 200)
+        with self.app.app_context():
+            unsafe_selection = load_product_selection_token(
+                unsafe.get_json()['selection_token'],
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                wb_account_id=None,
+            )
+        self.assertEqual(unsafe_selection['return_to'], '/my-products/beta')
+
+    def test_workspace_resolver_rejects_foreign_duplicate_unlinked_and_drifted_links(self):
+        from models import ImportedProduct, Product
+
+        with self.app.app_context():
+            foreign_product = Product.query.filter_by(id=self.foreign_product_id).one()
+            sources = [
+                ImportedProduct(
+                    seller_id=self.seller_id,
+                    product_id=self.product_id,
+                    wb_nm_id=9741,
+                    external_id='workspace-linked-source',
+                ),
+                ImportedProduct(
+                    seller_id=self.seller_id,
+                    product_id=None,
+                    wb_nm_id=9741,
+                    external_id='workspace-unlinked-source',
+                ),
+                ImportedProduct(
+                    seller_id=foreign_product.seller_id,
+                    product_id=self.foreign_product_id,
+                    wb_nm_id=9741,
+                    external_id='workspace-foreign-source',
+                ),
+                ImportedProduct(
+                    seller_id=self.seller_id,
+                    product_id=self.product_id,
+                    wb_nm_id=9742,
+                    external_id='workspace-drifted-source',
+                ),
+            ]
+            self.db.session.add_all(sources)
+            self.db.session.commit()
+            linked_id, unlinked_id, foreign_id, drifted_id = [
+                row.id for row in sources
+            ]
+
+        client = self._client()
+        duplicate = client.post('/products/selection/resolve', json={
+            'mode': 'workspace',
+            'ids': [linked_id, linked_id],
+            'wb_ids': [self.product_id, self.product_id],
+            'return_to': '/my-products/beta',
+        })
+        self.assertEqual(duplicate.status_code, 400)
+        self.assertEqual(duplicate.get_json()['code'], 'invalid_workspace_selection')
+
+        mixed_unlinked = client.post('/products/selection/resolve', json={
+            'mode': 'workspace',
+            'ids': [linked_id, unlinked_id],
+            'wb_ids': [self.product_id, self.sibling_product_id],
+            'return_to': '/my-products/beta',
+        })
+        self.assertEqual(mixed_unlinked.status_code, 409)
+        self.assertEqual(mixed_unlinked.get_json()['code'], 'workspace_link_unavailable')
+
+        foreign = client.post('/products/selection/resolve', json={
+            'mode': 'workspace',
+            'ids': [foreign_id],
+            'wb_ids': [self.foreign_product_id],
+            'return_to': '/my-products/beta',
+        })
+        self.assertEqual(foreign.status_code, 409)
+        self.assertEqual(foreign.get_json()['code'], 'workspace_link_unavailable')
+
+        drifted = client.post('/products/selection/resolve', json={
+            'mode': 'workspace',
+            'ids': [drifted_id],
+            'wb_ids': [self.product_id],
+            'return_to': '/my-products/beta',
+        })
+        self.assertEqual(drifted.status_code, 409)
+        self.assertEqual(drifted.get_json()['code'], 'workspace_mapping_changed')
+
+    def test_workspace_resolver_requires_available_wb_account(self):
+        from models import ImportedProduct, Seller
+
+        with self.app.app_context():
+            source = ImportedProduct(
+                seller_id=self.seller_id,
+                product_id=self.product_id,
+                wb_nm_id=9741,
+                external_id='workspace-account-source',
+            )
+            self.db.session.add(source)
+            seller = Seller.query.filter_by(id=self.seller_id).one()
+            seller.wb_api_key = None
+            self.db.session.commit()
+            source_id = source.id
+
+        response = self._client().post('/products/selection/resolve', json={
+            'mode': 'workspace',
+            'ids': [source_id],
+            'wb_ids': [self.product_id],
+            'return_to': '/my-products/beta',
+        })
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()['code'], 'workspace_account_unavailable')
+
+    def test_bulk_edit_revalidates_workspace_links_before_preview_or_write(self):
+        from models import CardEditHistory, ImportedProduct
+        from services.product_selection import load_product_selection_token
+
+        return_to = '/my-products/beta#workspace-return=' + 'c' * 32
+        with self.app.app_context():
+            source = ImportedProduct(
+                seller_id=self.seller_id,
+                product_id=self.product_id,
+                wb_nm_id=9741,
+                external_id='workspace-drift-source',
+            )
+            self.db.session.add(source)
+            self.db.session.commit()
+            source_id = source.id
+
+        resolved = self._client().post('/products/selection/resolve', json={
+            'mode': 'workspace',
+            'ids': [source_id],
+            'wb_ids': [self.product_id],
+            'return_to': return_to,
+        })
+        self.assertEqual(resolved.status_code, 200)
+        token = resolved.get_json()['selection_token']
+        with self.app.app_context():
+            selection = load_product_selection_token(
+                token,
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                wb_account_id='synthetic-wb-account',
+            )
+            source = ImportedProduct.query.filter_by(id=source_id).one()
+            source.product_id = self.sibling_product_id
+            source.wb_nm_id = 9742
+            self.db.session.commit()
+
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('stale workspace links must block provider I/O'),
+        ):
+            response = self._client().post('/products/bulk-edit', data={
+                'selection_token': token,
+                'operation': 'update_brand',
+                'brand': 'Should not preview',
+            })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers['Location'], return_to)
+        self.assertEqual(selection['workspace_source_ids'], [source_id])
+        with self.app.app_context():
+            self.assertEqual(CardEditHistory.query.count(), 0)
+
     def test_bulk_filter_drift_returns_only_to_signed_safe_catalog_context(self):
         from models import Product
         from services.product_selection import (

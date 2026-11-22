@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from typing import Any, Mapping
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -33,6 +34,13 @@ MAX_PRODUCT_LIST_PAGE = 1_000_000
 MAX_PRODUCT_LIST_PER_PAGE = 200
 SELECTION_TOKEN_MAX_AGE_SECONDS = 15 * 60
 SELECTION_TOKEN_SALT = 'wb-product-selection-v1'
+SELECTION_TOKEN_MAX_BYTES = 8 * 1024
+WORKSPACE_SELECTION_TOKEN_MAX_BYTES = 24 * 1024
+MAX_WORKSPACE_IMPORT_BATCH_TOKEN_BYTES = 8 * 1024
+MAX_WORKSPACE_RETURN_URL_BYTES = MAX_WORKSPACE_IMPORT_BATCH_TOKEN_BYTES + 256
+WORKSPACE_RETURN_FRAGMENT_RE = re.compile(r'workspace-return=[0-9a-f]{32}')
+IMPORT_BATCH_TOKEN_PART_RE = re.compile(r'[A-Za-z0-9_-]+')
+IMPORT_BATCH_TIMESTAMP_RE = re.compile(r'[A-Za-z0-9_-]+')
 
 FILTER_KEYS = (
     'search',
@@ -65,6 +73,15 @@ SORT_COLUMNS = {
 
 class ProductSelectionError(ValueError):
     """A product selection is malformed, stale, or outside its exact scope."""
+
+
+class WorkspaceSelectionError(ProductSelectionError):
+    """A workspace handoff is malformed, stale, or unavailable."""
+
+    def __init__(self, message: str, *, code: str, status_code: int):
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
 
 
 def _values(source: Any, key: str) -> list[Any]:
@@ -428,6 +445,168 @@ def safe_products_return_url(value: Any) -> str:
     return urlunsplit(('', '', '/products', urlencode(args), ''))
 
 
+def _valid_import_batch_token(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        if not value or len(value.encode('utf-8')) > MAX_WORKSPACE_IMPORT_BATCH_TOKEN_BYTES:
+            return False
+    except UnicodeEncodeError:
+        return False
+    parts = value.split('.')
+    if len(parts) == 4 and parts[0] == '':
+        parts = parts[1:]
+    if len(parts) != 3:
+        return False
+    payload, timestamp, signature = parts
+    return bool(
+        IMPORT_BATCH_TOKEN_PART_RE.fullmatch(payload)
+        and IMPORT_BATCH_TIMESTAMP_RE.fullmatch(timestamp)
+        and IMPORT_BATCH_TOKEN_PART_RE.fullmatch(signature)
+    )
+
+
+def safe_workspace_return_url(value: Any) -> str:
+    """Accept only the beta workspace origin and its bounded typed context."""
+    fallback = '/my-products/beta'
+    if not isinstance(value, str):
+        return fallback
+    try:
+        if len(value.encode('utf-8')) > MAX_WORKSPACE_RETURN_URL_BYTES:
+            return fallback
+    except UnicodeEncodeError:
+        return fallback
+    if any(ord(char) < 32 or char == '\\' for char in value):
+        return fallback
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return fallback
+    if parsed.scheme or parsed.netloc or parsed.path != fallback:
+        return fallback
+    if parsed.fragment and not WORKSPACE_RETURN_FRAGMENT_RE.fullmatch(parsed.fragment):
+        return fallback
+    try:
+        pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        return fallback
+    if not pairs:
+        if parsed.query:
+            return fallback
+    elif (
+        len(pairs) != 1
+        or pairs[0][0] != 'import_batch'
+        or not _valid_import_batch_token(pairs[0][1])
+    ):
+        return fallback
+    return urlunsplit((
+        '', '', fallback, urlencode(pairs), parsed.fragment,
+    ))
+
+
+def validate_workspace_product_mapping(
+    *,
+    seller_id: int,
+    workspace_source_ids: Any,
+    expected_wb_product_ids: Any,
+) -> tuple[list[int], list[int]]:
+    """Re-read exact seller-owned ImportedProduct → legacy WB Product links.
+
+    ``ImportedProduct.product_id`` is the authoritative link. A present legacy
+    ``wb_nm_id`` must still agree with its linked Product; it never creates a
+    link on its own. The returned lists retain the source selection order.
+    """
+    try:
+        source_ids = parse_selected_product_ids(workspace_source_ids)
+        expected_ids = parse_selected_product_ids(expected_wb_product_ids)
+    except ProductSelectionError as exc:
+        raise WorkspaceSelectionError(
+            'Выбор товаров в рабочем пространстве недействителен',
+            code='invalid_workspace_selection', status_code=400,
+        ) from exc
+    if len(source_ids) != len(expected_ids):
+        raise WorkspaceSelectionError(
+            'Состав рабочего выбора изменился; вернитесь к товарам',
+            code='workspace_selection_mismatch', status_code=409,
+        )
+    if isinstance(seller_id, bool) or not isinstance(seller_id, int) or seller_id <= 0:
+        raise WorkspaceSelectionError(
+            'Кабинет Wildberries недоступен',
+            code='workspace_account_unavailable', status_code=409,
+        )
+
+    rows = db.session.query(
+        ImportedProduct.id,
+        ImportedProduct.product_id,
+        ImportedProduct.wb_nm_id,
+        Product.id,
+        Product.nm_id,
+    ).outerjoin(
+        Product,
+        and_(
+            Product.id == ImportedProduct.product_id,
+            Product.seller_id == seller_id,
+        ),
+    ).filter(
+        ImportedProduct.seller_id == seller_id,
+        ImportedProduct.id.in_(source_ids),
+    ).all()
+    by_source_id = {int(row[0]): row[1:] for row in rows}
+    if set(by_source_id) != set(source_ids):
+        raise WorkspaceSelectionError(
+            'Одна или несколько карточек рабочего пространства недоступны',
+            code='workspace_link_unavailable', status_code=409,
+        )
+
+    actual_ids = []
+    nm_ids = []
+    for source_id in source_ids:
+        source_product_id, source_nm_id, product_id, nm_id = by_source_id[source_id]
+        if (
+            isinstance(source_product_id, bool)
+            or not isinstance(source_product_id, int)
+            or source_product_id <= 0
+            or product_id != source_product_id
+        ):
+            raise WorkspaceSelectionError(
+                'Для каждой выбранной карточки требуется точная связь с товаром WB',
+                code='workspace_link_unavailable', status_code=409,
+            )
+        if isinstance(nm_id, bool) or not isinstance(nm_id, int) or nm_id <= 0:
+            raise WorkspaceSelectionError(
+                'Связанный товар WB не имеет действительного nmID',
+                code='workspace_link_unavailable', status_code=409,
+            )
+        if source_nm_id is not None and (
+            isinstance(source_nm_id, bool)
+            or not isinstance(source_nm_id, int)
+            or source_nm_id <= 0
+            or source_nm_id != nm_id
+        ):
+            raise WorkspaceSelectionError(
+                'Связь с товаром WB изменилась; обновите рабочий список',
+                code='workspace_mapping_changed', status_code=409,
+            )
+        actual_ids.append(int(product_id))
+        nm_ids.append(nm_id)
+    if len(set(nm_ids)) != len(nm_ids):
+        raise WorkspaceSelectionError(
+            'Выбранные карточки не имеют уникальных WB идентификаторов',
+            code='workspace_link_ambiguous', status_code=409,
+        )
+    if len(set(actual_ids)) != len(actual_ids):
+        raise WorkspaceSelectionError(
+            'Несколько исходных карточек связаны с одним товаром WB',
+            code='workspace_link_ambiguous', status_code=409,
+        )
+    if actual_ids != expected_ids:
+        raise WorkspaceSelectionError(
+            'Связь рабочего выбора с товарами WB изменилась; обновите выбор',
+            code='workspace_mapping_changed', status_code=409,
+        )
+    return source_ids, actual_ids
+
+
 def parse_selected_product_ids(raw_ids: Any, *, from_query: bool = False) -> list[int]:
     """Strictly parse a non-empty selection of at most 200 unique IDs."""
     if not isinstance(raw_ids, list) or not raw_ids:
@@ -476,8 +655,16 @@ def issue_product_selection_token(
     state: Mapping[str, Any],
     return_to: Any,
     wb_account_id: Any = None,
+    workspace_source_ids: Any = None,
 ) -> str:
     ids = parse_selected_product_ids(product_ids)
+    workspace_ids = None
+    if workspace_source_ids is not None:
+        workspace_ids = parse_selected_product_ids(workspace_source_ids)
+        if len(workspace_ids) != len(ids):
+            raise ProductSelectionError(
+                'Выбор рабочего пространства не совпадает с товарами WB'
+            )
     payload = {
         'v': 1,
         'user_id': int(user_id),
@@ -491,9 +678,27 @@ def issue_product_selection_token(
         'order': state['order'],
         'page': state['page'],
         'per_page': state['per_page'],
-        'return_to': safe_products_return_url(return_to),
+        'return_to': (
+            safe_workspace_return_url(return_to)
+            if workspace_ids is not None
+            else safe_products_return_url(return_to)
+        ),
     }
-    return _serializer(secret_key).dumps(payload)
+    if workspace_ids is not None:
+        payload['workspace_source_ids'] = workspace_ids
+    serializer = _serializer(secret_key)
+    token = serializer.dumps(payload)
+    max_bytes = (
+        WORKSPACE_SELECTION_TOKEN_MAX_BYTES
+        if workspace_ids is not None
+        else SELECTION_TOKEN_MAX_BYTES
+    )
+    if len(token.encode('utf-8')) > max_bytes and workspace_ids is not None:
+        payload['return_to'] = '/my-products/beta'
+        token = serializer.dumps(payload)
+    if len(token.encode('utf-8')) > max_bytes:
+        raise ProductSelectionError('Выбор товаров превышает поддерживаемый размер')
+    return token
 
 
 def load_product_selection_token(
@@ -505,7 +710,13 @@ def load_product_selection_token(
     wb_account_id: Any = None,
     max_age: int = SELECTION_TOKEN_MAX_AGE_SECONDS,
 ) -> dict[str, Any]:
-    if not isinstance(token, str) or not token or len(token) > 8192:
+    if not isinstance(token, str) or not token:
+        raise ProductSelectionError('Выбор товаров отсутствует или повреждён')
+    try:
+        token_bytes = len(token.encode('utf-8'))
+    except UnicodeEncodeError as exc:
+        raise ProductSelectionError('Выбор товаров отсутствует или повреждён') from exc
+    if token_bytes > WORKSPACE_SELECTION_TOKEN_MAX_BYTES:
         raise ProductSelectionError('Выбор товаров отсутствует или повреждён')
     try:
         payload = _serializer(secret_key).loads(token, max_age=max_age)
@@ -515,6 +726,13 @@ def load_product_selection_token(
         raise ProductSelectionError('Подпись выбора товаров неверна') from exc
     if not isinstance(payload, dict):
         raise ProductSelectionError('Формат выбора товаров неверен')
+    max_bytes = (
+        WORKSPACE_SELECTION_TOKEN_MAX_BYTES
+        if 'workspace_source_ids' in payload
+        else SELECTION_TOKEN_MAX_BYTES
+    )
+    if token_bytes > max_bytes:
+        raise ProductSelectionError('Выбор товаров отсутствует или повреждён')
     if (
         payload.get('v') != 1
         or payload.get('marketplace') != 'wb'
@@ -525,7 +743,19 @@ def load_product_selection_token(
     ):
         raise ProductSelectionError('Выбор относится к другому пользователю или продавцу')
     payload['ids'] = parse_selected_product_ids(payload.get('ids'))
-    payload['return_to'] = safe_products_return_url(payload.get('return_to'))
+    workspace_source_ids = None
+    if 'workspace_source_ids' in payload:
+        workspace_source_ids = parse_selected_product_ids(
+            payload.get('workspace_source_ids'),
+        )
+        if len(workspace_source_ids) != len(payload['ids']):
+            raise ProductSelectionError('Связь рабочего выбора повреждена')
+        payload['workspace_source_ids'] = workspace_source_ids
+        payload['return_to'] = safe_workspace_return_url(
+            payload.get('return_to'),
+        )
+    else:
+        payload['return_to'] = safe_products_return_url(payload.get('return_to'))
     filters = payload.get('filters')
     if not isinstance(filters, dict) or set(filters).difference(FILTER_KEYS):
         raise ProductSelectionError('Фильтры выбора товаров повреждены')

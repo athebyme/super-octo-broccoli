@@ -1901,12 +1901,14 @@ def products_selection_resolve():
     from services.product_selection import (
         MAX_BULK_PRODUCT_SELECTION,
         ProductSelectionError,
+        WorkspaceSelectionError,
         build_product_list_query,
         issue_product_selection_token,
         parse_product_list_state,
         parse_selected_product_ids,
         product_filter_fingerprint,
         safe_products_return_url,
+        validate_workspace_product_mapping,
     )
 
     if not current_user.seller:
@@ -1914,15 +1916,88 @@ def products_selection_resolve():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({'error': 'JSON body is required'}), 400
+    mode = data.get('mode')
     allowed_keys = {
         'mode', 'ids', 'filters', 'sort', 'order', 'page', 'per_page', 'return_to',
     }
-    if set(data).difference(allowed_keys):
+    if mode == 'workspace':
+        if set(data) != {'mode', 'ids', 'wb_ids', 'return_to'}:
+            return jsonify({
+                'error': 'Поля выбора рабочего пространства имеют неверный формат',
+                'code': 'invalid_workspace_selection',
+            }), 400
+    elif set(data).difference(allowed_keys):
         return jsonify({'error': 'Unsupported selection fields'}), 400
 
+    def issue_selection_response(
+        product_ids, state, return_to, *, workspace_source_ids=None,
+    ):
+        state['page'] = max(1, int(state['page']))
+        token = issue_product_selection_token(
+            secret_key=app.config['SECRET_KEY'],
+            user_id=current_user.id,
+            seller_id=current_user.seller.id,
+            product_ids=product_ids,
+            workspace_source_ids=workspace_source_ids,
+            state=state,
+            return_to=return_to,
+            wb_account_id=current_user.seller.wb_seller_id,
+        )
+        return jsonify({
+            'selection_token': token,
+            'ids': product_ids,
+            'count': len(product_ids),
+            'limit': MAX_BULK_PRODUCT_SELECTION,
+            'marketplace': 'wb',
+            'filter_fingerprint': product_filter_fingerprint(
+                current_user.seller.id, state['filters'],
+            ),
+        })
+
     try:
-        mode = data.get('mode')
-        if mode not in {'ids', 'all_filtered'}:
+        if mode == 'workspace':
+            seller = current_user.seller
+            if not seller.has_valid_api_key():
+                raise WorkspaceSelectionError(
+                    'Кабинет Wildberries недоступен; проверьте подключение в настройках',
+                    code='workspace_account_unavailable', status_code=409,
+                )
+            workspace_source_ids, product_ids = validate_workspace_product_mapping(
+                seller_id=int(seller.id),
+                workspace_source_ids=data.get('ids'),
+                expected_wb_product_ids=data.get('wb_ids'),
+            )
+            state = parse_product_list_state({}, strict=True)
+            query, _, _, _ = build_product_list_query(
+                seller.id,
+                {
+                    **state['filters'], 'sort': state['sort'],
+                    'order': state['order'], 'page': state['page'],
+                    'per_page': state['per_page'],
+                },
+                common_read_requested=bool(app.config.get(
+                    'MARKETPLACE_WB_COMMON_READ_ENABLED', False,
+                )),
+                strict=True,
+            )
+            visible_ids = {
+                int(row[0]) for row in query.with_entities(Product.id).filter(
+                    Product.id.in_(product_ids),
+                ).all()
+            }
+            if visible_ids != set(product_ids):
+                raise WorkspaceSelectionError(
+                    'Связанный товар WB недоступен в каталоге продавца',
+                    code='workspace_link_unavailable', status_code=409,
+                )
+            return issue_selection_response(
+                product_ids,
+                state,
+                data.get('return_to'),
+                workspace_source_ids=workspace_source_ids,
+            )
+
+        if not isinstance(mode, str) or mode not in {'ids', 'all_filtered'}:
             raise ProductSelectionError('Укажите режим точного выбора товаров')
         filters = data.get('filters', {})
         if not isinstance(filters, dict) or set(filters).difference({
@@ -1995,28 +2070,12 @@ def products_selection_resolve():
                     'code': 'selection_filter_changed',
                 }), 409
 
-        state['page'] = max(1, int(state['page']))
-        token = issue_product_selection_token(
-            secret_key=app.config['SECRET_KEY'],
-            user_id=current_user.id,
-            seller_id=current_user.seller.id,
-            product_ids=product_ids,
-            state=state,
-            return_to=return_to,
-            wb_account_id=current_user.seller.wb_seller_id,
-        )
-        return jsonify({
-            'selection_token': token,
-            'ids': product_ids,
-            'count': len(product_ids),
-            'limit': MAX_BULK_PRODUCT_SELECTION,
-            'marketplace': 'wb',
-            'filter_fingerprint': product_filter_fingerprint(
-                current_user.seller.id, state['filters'],
-            ),
-        })
+        return issue_selection_response(product_ids, state, return_to)
+    except WorkspaceSelectionError as exc:
+        return jsonify({'error': str(exc), 'code': exc.code}), exc.status_code
     except ProductSelectionError as exc:
-        return jsonify({'error': str(exc), 'code': 'invalid_selection'}), 400
+        code = 'invalid_workspace_selection' if mode == 'workspace' else 'invalid_selection'
+        return jsonify({'error': str(exc), 'code': code}), 400
     except Exception as exc:
         app.logger.exception('WB product selection resolver failed')
         return jsonify({'error': 'Не удалось проверить выбор товаров'}), 500
@@ -3218,7 +3277,7 @@ def products_bulk_edit():
         parse_product_list_state,
         parse_selected_product_ids,
         query_for_selection,
-        safe_products_return_url,
+        validate_workspace_product_mapping,
     )
     from services.wb_edit_review import (
         WBEditReviewError,
@@ -3249,6 +3308,13 @@ def products_bulk_edit():
             seller_id=current_user.seller.id,
             wb_account_id=current_user.seller.wb_seller_id,
         )
+        is_workspace_selection = 'workspace_source_ids' in selection_payload
+        if is_workspace_selection:
+            validate_workspace_product_mapping(
+                seller_id=int(current_user.seller.id),
+                workspace_source_ids=selection_payload['workspace_source_ids'],
+                expected_wb_product_ids=selection_payload['ids'],
+            )
         state = parse_product_list_state({
             **selection_payload['filters'],
             'sort': selection_payload['sort'],
@@ -3279,11 +3345,11 @@ def products_bulk_edit():
         products = [products_by_id[product_id] for product_id in selection_payload['ids']]
         if not products:
             raise ProductSelectionError('Не выбраны товары для редактирования')
-        return_to = safe_products_return_url(selection_payload.get('return_to'))
+        return_to = selection_payload['return_to']
     except ProductSelectionError as exc:
         flash(str(exc), 'warning')
         safe_return_to = (
-            safe_products_return_url(selection_payload.get('return_to'))
+            selection_payload['return_to']
             if isinstance(selection_payload, dict)
             else url_for('products_list')
         )
