@@ -171,6 +171,47 @@
         }
     }
 
+    function storeOzonPreparationWorkspaceReturn(app, accountId, productIds, selectionIds, scope) {
+        if (!scope || !Array.isArray(productIds) || !Array.isArray(selectionIds)) return null;
+        var helpers = window.SellerHubCommonContent || {};
+        if (typeof helpers.storeWorkspaceReturn !== 'function') return null;
+        try {
+            var nonce = helpers.storeWorkspaceReturn({
+                owner: boot.workspaceOwner,
+                prepareTarget: {
+                    accountId: accountId,
+                    productIds: productIds.slice(),
+                },
+                selectionIds: selectionIds.slice(),
+                scope: scope,
+                batch: app.importBatchMode ? app.importBatch : null,
+            });
+            return workspaceReturnHash(nonce) ? nonce : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function bindOzonPreparationWorkspaceReturn(pending, jobUid) {
+        var hash = workspaceReturnHash(pending && pending.workspace_return_nonce);
+        var helpers = window.SellerHubCommonContent || {};
+        if (!hash || typeof helpers.bindOzonPreparationWorkspaceResult !== 'function' ||
+            !pending || !Array.isArray(pending.imported_product_ids)) return false;
+        try {
+            var bound = helpers.bindOzonPreparationWorkspaceResult(hash, {
+                owner: boot.workspaceOwner,
+                prepareTarget: {
+                    accountId: pending.account_id,
+                    productIds: pending.imported_product_ids.slice(),
+                },
+                jobUid: jobUid,
+            });
+            return bound === hash;
+        } catch (_) {
+            return false;
+        }
+    }
+
     function workspaceReturnHash(nonce) {
         return typeof nonce === 'string' && /^[a-f0-9]{32}$/.test(nonce)
             ? '#workspace-return=' + nonce
@@ -2543,7 +2584,20 @@
                 if (!csrf) { this.ozonError = 'Защита формы недоступна. Обновите страницу перед подготовкой.'; return; }
                 var pending = {account_id:accountId, imported_product_ids:this.ozonIds.slice(),
                     request_key:ozonRequestKey()};
+                var selectionIds = Array.isArray(this.selected) ? this.selected.slice() : [];
+                var returnScope = null;
+                var returnNonce = null;
+                try {
+                    returnScope = this.buildWorkspaceReturnScope();
+                    returnNonce = storeOzonPreparationWorkspaceReturn(
+                        this, accountId, pending.imported_product_ids, selectionIds, returnScope,
+                    );
+                } catch (_) {
+                    returnNonce = null;
+                }
+                if (returnNonce) pending.workspace_return_nonce = returnNonce;
                 if (!saveOzonPending(pending)) {
+                    if (returnNonce) this.consumeWorkspaceReturn(returnNonce);
                     this.ozonError = 'Браузер не сохранил ключ подготовки. Запуск остановлен, чтобы не потерять результат.';
                     return;
                 }
@@ -2567,7 +2621,12 @@
                     var response = await fetch(this.urls.ozonUploads, {
                         method:'POST', credentials:'same-origin', redirect:'manual', signal:controller.signal,
                         headers:{Accept:'application/json','Content-Type':'application/json','X-CSRFToken':csrf},
-                        body:JSON.stringify({...pending, confirm_prepare:true}),
+                        body:JSON.stringify({
+                            account_id:pending.account_id,
+                            imported_product_ids:pending.imported_product_ids.slice(),
+                            request_key:pending.request_key,
+                            confirm_prepare:true,
+                        }),
                     });
                     if (response.status === 401 || response.type === 'opaqueredirect' || response.redirected)
                         throw Object.assign(Error('Сессия завершилась. Войдите снова и проверьте результат подготовки.'), {status:401});
@@ -2583,6 +2642,7 @@
                     if (data.run?.mode !== 'source_prepare' || data.run.account_id !== pending.account_id ||
                         !/^ozon-upload-[0-9a-f]{32}$/.test(data.run.job_uid))
                         throw Error('Ответ не совпал с подготовкой. Проверьте результат по ключу.');
+                    bindOzonPreparationWorkspaceReturn(pending, data.run.job_uid);
                     clearOzonPending(); this.ozonPending = null;
                     window.location.assign(this.urls.ozonUploads + data.run.job_uid);
                 } catch (error) {
@@ -2622,6 +2682,7 @@
                     if (data.run?.mode !== 'source_prepare' || data.run.account_id !== this.ozonPending.account_id ||
                         !/^ozon-upload-[0-9a-f]{32}$/.test(data.run.job_uid))
                         throw Error('Найденный запуск не совпал с выбранным магазином.');
+                    bindOzonPreparationWorkspaceReturn(this.ozonPending, data.run.job_uid);
                     clearOzonPending(); this.ozonPending = null;
                     window.location.assign(this.urls.ozonUploads + data.run.job_uid);
                 } catch (error) {

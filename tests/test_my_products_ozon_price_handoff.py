@@ -324,6 +324,255 @@ assert.equal(
 """
 
 
+PREPARE_RETURN_NODE_CASES = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const plain = value => JSON.parse(JSON.stringify(value));
+const nonce = '0123456789abcdef0123456789abcdef';
+const jobUid = 'ozon-upload-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+function jsonResponse(data, status = 200, beforeJson = null) {
+  return {
+    status, ok: status >= 200 && status < 300, redirected: false, type: 'basic',
+    headers: {get() { return 'application/json'; }},
+    async json() { if (beforeJson) beforeJson(); return data; },
+  };
+}
+
+function harness({batch = null, storeNonce = nonce, bindResult = null} = {}) {
+  let component;
+  const session = new Map();
+  const requests = [];
+  const assigned = [];
+  const stored = [];
+  const bound = [];
+  const location = {
+    origin: 'https://seller.test',
+    pathname: '/my-products/beta',
+    search: batch ? '?import_batch=' + encodeURIComponent(batch) : '',
+    hash: '',
+    assign(value) { assigned.push(value); },
+  };
+  const storage = {
+    getItem(key) { return session.has(key) ? session.get(key) : null; },
+    setItem(key, value) { session.set(key, String(value)); },
+    removeItem(key) { session.delete(key); },
+  };
+  const helpers = {
+    storeWorkspaceReturn(payload) {
+      stored.push(plain(payload));
+      return storeNonce;
+    },
+    bindOzonPreparationWorkspaceResult(hash, payload) {
+      bound.push({hash, payload: plain(payload)});
+      if (bindResult !== null) return bindResult;
+      const capsule = stored[stored.length - 1];
+      return capsule && capsule.owner === payload.owner &&
+        JSON.stringify(capsule.prepareTarget) === JSON.stringify(payload.prepareTarget)
+        ? hash : '';
+    },
+    consumeWorkspaceReturn(value) { return value === nonce; },
+  };
+  const context = {
+    window: {
+      location,
+      crypto: {randomUUID() { return '11111111-2222-4333-8444-555555555555'; }},
+      SellerHubCommonContent: helpers,
+      shVue: {
+        bootstrapData() {
+          return {
+            workspaceOwner: '7:9', wbConnected: true, ozonEnabled: true,
+            ozonAccounts: [{id: 11, label: 'Shop A'}], suppliers: [],
+            importBatch: batch, batchKind: 'import', supplierRefreshBatch: null,
+            supplierRefreshBatchInvalid: false,
+            urls: {
+              ozonUploads: '/marketplaces/ozon/bulk-uploads/',
+              ozonByRequest: '/api/ozon/bulk-uploads/by-request',
+              workspace: '/my-products/beta',
+            },
+          };
+        },
+        mount(_selector, options) { component = options; },
+      },
+    },
+    location, sessionStorage: storage,
+    document: {
+      activeElement: {focus() {}},
+      querySelector() { return {content: 'csrf-test-token', setAttribute() {}}; },
+    },
+    URL, URLSearchParams, AbortController, setTimeout, clearTimeout, setInterval, clearInterval, console,
+  };
+  context.window.sessionStorage = storage;
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
+  const responses = [];
+  context.fetch = async (url, options = {}) => {
+    const method = options.method || 'GET';
+    const call = {url, method, headers: options.headers || {}, body: null};
+    if (options.body) call.body = JSON.parse(options.body);
+    requests.push(call);
+    if (method === 'POST') {
+      call.pendingAtSend = JSON.parse(session.get('ozon-source-prepare-v1') || 'null');
+    }
+    const next = responses.shift();
+    if (next instanceof Error) throw next;
+    return next;
+  };
+
+  function makeApp(productIds, selectionIds = productIds) {
+    const app = component.data();
+    Object.assign(app, component.methods);
+    app.items = productIds.map(id => ({id, import_status: 'imported'}));
+    app.selected = selectionIds.slice();
+    app.ozonIds = productIds.slice();
+    app.ozonAccountId = '11';
+    app.ozonConfirmed = true;
+    app.ozonAccounts = [{id: 11, label: 'Shop A'}];
+    app.ozonEnabled = true;
+    app.ozonBusy = '';
+    app.ozonPending = app.ozonPending || null;
+    app.ozonStorageProblem = false;
+    app.ozonSessionEnded = false;
+    app.loading = false;
+    app.itemsScope = app.feedScopeKey();
+    app.$refs = {ozonDialog: {close() {}}};
+    app.$nextTick = callback => callback.call(app);
+    let scopeBuilds = 0;
+    const originalBuildScope = app.buildWorkspaceReturnScope;
+    app.buildWorkspaceReturnScope = function () {
+      scopeBuilds += 1;
+      return originalBuildScope.call(this);
+    };
+    return {app, scopeBuildCount: () => scopeBuilds};
+  }
+  return {session, requests, assigned, stored, bound, responses, makeApp};
+}
+
+(async () => {
+  // A 75-item signed import selection is stored locally with the existing
+  // return scope; only the existing four request fields go over the wire.
+  const ids = Array.from({length: 75}, (_, index) => 5001 + index);
+  const importBatch = 'signed.import.batch.token';
+  const imported = harness({batch: importBatch});
+  imported.responses.push(jsonResponse({success: true, run: {
+    mode: 'source_prepare', account_id: 11, job_uid: jobUid,
+  }}));
+  const importedSetup = imported.makeApp(ids);
+  await importedSetup.app.prepareOzon();
+  assert.equal(importedSetup.scopeBuildCount(), 1);
+  assert.deepEqual(imported.stored[0], {
+    owner: '7:9',
+    prepareTarget: {accountId: 11, productIds: ids},
+    selectionIds: ids,
+    scope: {
+      activeTab: '', search: '', supplier: '', has_photos: '',
+      stock: '', sort: '', visibleCount: 75,
+    },
+    batch: importBatch,
+  });
+  assert.deepEqual(Object.keys(imported.requests[0].body).sort(),
+    ['account_id', 'confirm_prepare', 'imported_product_ids', 'request_key']);
+  assert.deepEqual(imported.requests[0].body, {
+    account_id: 11, imported_product_ids: ids,
+    request_key: '11111111222243338444555555555555', confirm_prepare: true,
+  });
+  assert.equal(imported.requests[0].pendingAtSend.workspace_return_nonce, nonce,
+    'capsule nonce is persisted before the POST');
+  assert.equal(imported.bound.length, 1);
+  assert.deepEqual(imported.bound[0], {
+    hash: '#workspace-return=' + nonce,
+    payload: {owner: '7:9', prepareTarget: {accountId: 11, productIds: ids}, jobUid},
+  });
+  assert.deepEqual(imported.assigned, [
+    '/marketplaces/ozon/bulk-uploads/' + jobUid,
+  ]);
+
+  // A lost response leaves the same local pending key and recovers with GET;
+  // no second prepare POST is sent before the capsule is bound.
+  const recovered = harness();
+  recovered.responses.push(new TypeError('connection dropped'), jsonResponse({success: true, run: {
+    mode: 'source_prepare', account_id: 11, job_uid: jobUid,
+  }}));
+  const recoveredSetup = recovered.makeApp([701, 702, 703]);
+  await recoveredSetup.app.prepareOzon();
+  assert.ok(recoveredSetup.app.ozonPending.workspace_return_nonce);
+  await recoveredSetup.app.readOzonPending();
+  assert.deepEqual(recovered.requests.map(call => call.method), ['POST', 'GET']);
+  assert.equal(recovered.bound.length, 1);
+  assert.deepEqual(recovered.assigned, [
+    '/marketplaces/ozon/bulk-uploads/' + jobUid,
+  ]);
+
+  // Old pending records remain readable; a missing capsule only removes the
+  // return fragment and does not block ordinary preparation/navigation.
+  const noStorage = harness({storeNonce: null});
+  noStorage.responses.push(jsonResponse({success: true, run: {
+    mode: 'source_prepare', account_id: 11, job_uid: jobUid,
+  }}));
+  const noStorageSetup = noStorage.makeApp([801, 802]);
+  await noStorageSetup.app.prepareOzon();
+  assert.equal(noStorage.requests.length, 1);
+  assert.equal(noStorage.requests[0].pendingAtSend.workspace_return_nonce, undefined);
+  assert.equal(noStorage.bound.length, 0);
+  assert.deepEqual(noStorage.assigned, ['/marketplaces/ozon/bulk-uploads/' + jobUid]);
+
+  const legacyPending = harness();
+  const legacyIds = [8501, 8502];
+  legacyPending.session.set('ozon-source-prepare-v1', JSON.stringify({
+    account_id: 11, imported_product_ids: legacyIds, request_key: 'a'.repeat(32),
+  }));
+  legacyPending.responses.push(jsonResponse({success: true, run: {
+    mode: 'source_prepare', account_id: 11, job_uid: jobUid,
+  }}));
+  const legacySetup = legacyPending.makeApp(legacyIds);
+  assert.deepEqual(plain(legacySetup.app.ozonPending), {
+    account_id: 11, imported_product_ids: legacyIds, request_key: 'a'.repeat(32),
+  }, 'the pre-capsule pending shape remains valid');
+  await legacySetup.app.readOzonPending();
+  assert.deepEqual(legacyPending.requests.map(call => call.method), ['GET']);
+  assert.equal(legacyPending.bound.length, 0);
+  assert.deepEqual(legacyPending.assigned, ['/marketplaces/ozon/bulk-uploads/' + jobUid]);
+
+  // A mismatched/invalid server acknowledgement is never bound.
+  const invalidAck = harness();
+  invalidAck.responses.push(jsonResponse({success: true, run: {
+    mode: 'source_prepare', account_id: 12, job_uid: jobUid,
+  }}));
+  const invalidAckSetup = invalidAck.makeApp([901]);
+  await invalidAckSetup.app.prepareOzon();
+  assert.equal(invalidAck.bound.length, 0);
+  assert.deepEqual(invalidAck.assigned, []);
+
+  // A capsule whose stored owner no longer matches degrades to the ordinary job URL.
+  const rejectedCapsule = harness();
+  rejectedCapsule.responses.push(jsonResponse({success: true, run: {
+    mode: 'source_prepare', account_id: 11, job_uid: jobUid,
+  }}, 200, () => { rejectedCapsule.stored[0].owner = '8:9'; }));
+  const rejectedSetup = rejectedCapsule.makeApp([1001, 1002]);
+  await rejectedSetup.app.prepareOzon();
+  assert.equal(rejectedCapsule.bound.length, 1);
+  assert.equal(rejectedCapsule.bound[0].payload.owner, '7:9');
+  assert.deepEqual(rejectedCapsule.assigned, ['/marketplaces/ozon/bulk-uploads/' + jobUid]);
+
+  // Invalid local return scope is optional and does not change request shape.
+  const invalidScope = harness();
+  invalidScope.responses.push(jsonResponse({success: true, run: {
+    mode: 'source_prepare', account_id: 11, job_uid: jobUid,
+  }}));
+  const invalidScopeSetup = invalidScope.makeApp([1101]);
+  invalidScopeSetup.app.buildWorkspaceReturnScope = () => null;
+  await invalidScopeSetup.app.prepareOzon();
+  assert.equal(invalidScope.stored.length, 0);
+  assert.equal(invalidScope.bound.length, 0);
+  assert.deepEqual(Object.keys(invalidScope.requests[0].body).sort(),
+    ['account_id', 'confirm_prepare', 'imported_product_ids', 'request_key']);
+  assert.deepEqual(invalidScope.assigned, ['/marketplaces/ozon/bulk-uploads/' + jobUid]);
+  console.log('Ozon preparation workspace return and recovery: passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+
+
 class MyProductsOzonPriceHandoffTest(unittest.TestCase):
     def test_exact_account_and_listing_mapping_is_fail_closed(self):
         node = shutil.which('node')
@@ -337,6 +586,23 @@ class MyProductsOzonPriceHandoffTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_ozon_prepare_binds_exact_workspace_return_and_recovers_by_request(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node.js is required for the isolated UI logic check')
+        result = subprocess.run(
+            [node, '-e', PREPARE_RETURN_NODE_CASES, str(ROOT / 'static' / 'my-products-beta.js')],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+        template = (ROOT / 'templates' / 'my_products_beta.html').read_text()
+        self.assertIn("v='20261122-ozon-prepare-return-r48'", template)
+        self.assertIn("filename='common-product-content.js'", template)
 
     def test_template_keeps_normal_price_entry_and_uses_read_only_get_target(self):
         template = (ROOT / 'templates' / 'my_products_beta.html').read_text()
