@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-22T16:45:44.331529+00:00",
+  "generated_at": "2026-11-22T17:46:39.862511+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "99ba5bc87ad23ea789a8671a73d008f16ff15fd91cc1aa705bbd574d43f838f7"
+      "sha256": "322a2455ba989609e4556267706287abfc68c1286b566d1bcee8933549845156"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -481,7 +481,7 @@
     },
     {
       "path": "docs/design/seller-bulk-workspace-2026-11-20.md",
-      "sha256": "a3366422cb47de9cd4d7f188e44665bfe68d5e4be55b66b98cc23422b8f7006d"
+      "sha256": "df831040a93f0447bce5642331528a53cdea282b524b002cc2b9c56ba3f628a7"
     },
     {
       "path": "docs/design/startup-migration-performance.md",
@@ -2601,11 +2601,11 @@
     },
     {
       "path": "static/my-products-beta.css",
-      "sha256": "03999ede1457f7d26e6e2273d9c70b46b680a2f990741b39cc72afc2fd40c30c"
+      "sha256": "5f084eae1186890f32109ae6072e63133014cf6562518e46bc77852b90d0e9c1"
     },
     {
       "path": "static/my-products-beta.js",
-      "sha256": "a72c959080eb734313207fa260fbaa99a9bd1eb0351755b59994bcfc49bfba1b"
+      "sha256": "0ad853be21afe55e007dead0d6df5a015983b63d704a17191aebad552558a17a"
     },
     {
       "path": "static/operations-workspace.css",
@@ -3261,7 +3261,7 @@
     },
     {
       "path": "templates/my_products_beta.html",
-      "sha256": "fc895829523f9697d5d7a53de35c79df9abd77be7b398a0833b99f04bb29cf80"
+      "sha256": "e7a71892e46e3fe646f517673e892d16ae9fd19f53fa34e67127c1efc13df333"
     },
     {
       "path": "templates/notifications.html",
@@ -3705,7 +3705,7 @@
     },
     {
       "path": "tests/ozon_release/ozon_bulk_ready_review_browser.py",
-      "sha256": "427b02e0ff4654333b3e3c7b970bf7d71cf33d3e66debd4c1321f9f36fb2fe71"
+      "sha256": "3872e861d47486228753d3941d4a546f25b6a32730825f9045d2c1f2fce595be"
     },
     {
       "path": "tests/ozon_release/ozon_complete_journey_browser.py",
@@ -3729,7 +3729,7 @@
     },
     {
       "path": "tests/ozon_release/upload_two_step_browser.py",
-      "sha256": "4a3e886bccd7606adc9c9f627d0604adb63ae6d45bf9f4e511572796ff396b3d"
+      "sha256": "100fccc0bcb3aefaa24b17909368cb58b44e49ff04441f1ccc97802d770b96cb"
     },
     {
       "path": "tests/ozon_release/vue_link_category_browser.py",
@@ -4433,7 +4433,7 @@
     },
     {
       "path": "tests/test_my_products_ozon_price_handoff.py",
-      "sha256": "3145d133cdad5c3297e0ea079a07b6a38f8bdffd9303b9082d6f823a54b6233b"
+      "sha256": "79cb8c15487514b6c28ac380e97204bb22200b9dc6872657d9bb41917d31366b"
     },
     {
       "path": "tests/test_my_products_ozon_workspace_update_handoff.py",
@@ -4441,7 +4441,7 @@
     },
     {
       "path": "tests/test_my_products_supplier_refresh_handoff.py",
-      "sha256": "00ba4f561dda4bf104183c390886423b40fad3748a40f20d29c82213a300184a"
+      "sha256": "4ddcf13eeb798b0ff937b27f6c1708ccc1d9557a2dbf49fb0da8ff6f67343080"
     },
     {
       "path": "tests/test_my_products_wb_workspace_handoff.py",
@@ -5173,7 +5173,7 @@
     },
     {
       "path": "tests/ux01/bulk_workspace_browser.py",
-      "sha256": "e843f790e097ede3553d64c21c9b46e0024825be28872bc8b53fc54d8f930ac6"
+      "sha256": "3b101e0c6a3a29dfe18b6bc7f98b2e03c12c985fc986bf95cfd48694fab8f50b"
     },
     {
       "path": "tests/ux01/common_content_browser.py",
@@ -5185,7 +5185,7 @@
     },
     {
       "path": "tests/ux01/journey_browser.py",
-      "sha256": "e24aba0ebd0b439a144cb11cdf5a3377d44149be7e20e0b4b3b0f524d40e312d"
+      "sha256": "81cc274ea2463fbb90d5c571571ed11376012276a816bb83b8221b5c38966573"
     },
     {
       "path": "tests/ux01/listing_browser.py",
@@ -5197,7 +5197,7 @@
     },
     {
       "path": "tests/ux01/supplier_filtered_import_browser.py",
-      "sha256": "d0d61fcdfbf1ee1bec28cbf19c1f3591c864564705147c706be97fdc5da08ef5"
+      "sha256": "44d02fd79f4bd61e5efcd02428560f704fa88c46e346951d23c8e928c04641c9"
     },
     {
       "path": "tests/ux01/wb_edit_browser.py",
@@ -5212,5 +5212,5 @@
       "sha256": "6dafc53856f7efe7357f960b8345dbd4dd66acd4f858d5b2d1defc87c2920017"
     }
   ],
-  "aggregate_sha256": "b8cca171e0b81d104318e92531508cab33ff312aabf4c001e0d41992541ff42b"
+  "aggregate_sha256": "6ddaa61718e9a0850e15c080f1211e02dd8b35ab19ff2e47d825579ad23e4f6d"
 }
