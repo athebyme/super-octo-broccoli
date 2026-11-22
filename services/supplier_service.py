@@ -3320,6 +3320,7 @@ class SupplierService:
                 ImportedProduct.id
             ).filter(
                 ImportedProduct.seller_id == seller_id,
+                ImportedProduct.supplier_id == supplier_id,
                 ImportedProduct.supplier_product_id == SupplierProduct.id,
                 ImportedProduct.supplier_content_revision
                 < SupplierProduct.content_revision,

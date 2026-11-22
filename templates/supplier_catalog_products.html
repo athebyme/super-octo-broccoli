@@ -116,7 +116,15 @@
     </div>
     {% endif %}
 
-    {% if selection_block_reason == 'limit' %}
+    {% if selection_block_reason == 'limit' and selection_mode == 'updates' %}
+    <div class="sh-alert sh-alert--warning mb-4" role="status">
+        <div class="sh-alert-content">
+            <strong>В текущем фильтре {{ selection_block_total }} товаров каталога.</strong>
+            Массовый выбор обновлений ограничен 200 товарами каталога. Сузьте фильтры или выберите позиции на странице.
+            Ни одна позиция не была отмечена.
+        </div>
+    </div>
+    {% elif selection_block_reason == 'limit' %}
     <div class="sh-alert sh-alert--warning mb-4" role="status">
         <div class="sh-alert-content">
             <strong>В текущем фильтре {{ selection_block_total }} товаров.</strong>
@@ -156,8 +164,10 @@
 
     <!-- Отдельные формы не смешивают выбранные товары и локальные обновления. -->
     <div data-supplier-products x-data="{
-        importSelected: {{ selected_import_ids|map('string')|list|tojson|forceescape }}, updateSelected: [],
-        allImport: {{ 'true' if selection_review and selected_import_ids else 'false' }}, allUpdate: false,
+        importSelected: {{ selected_import_ids|map('string')|list|tojson|forceescape }},
+        updateSelected: {{ selected_update_ids|map('string')|list|tojson|forceescape }},
+        allImport: {{ 'true' if selection_review and selection_mode == 'import' and selected_import_ids else 'false' }},
+        allUpdate: {{ 'true' if selection_review and selection_mode == 'updates' and selected_update_ids else 'false' }},
         selectPage(kind, checked) {
             const ids = Array.from(this.$root.querySelectorAll('input[data-selection-kind]'))
                 .filter(input => input.dataset.selectionKind === kind)
@@ -180,7 +190,17 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         </form>
 
-        {% if selection_review %}
+        {% if selection_review and selection_mode == 'updates' %}
+        <div class="mb-4 rounded-lg border p-3 text-sm" role="status" aria-live="polite"
+             style="border-color:var(--border);background:var(--bg-card);color:var(--text-secondary)">
+            <strong style="color:var(--text)"
+                    x-text="'Выбрано ' + updateSelected.length + ' из ' + {{ action_counts.updatable }} + ' позиций с обновлениями по текущему фильтру.'">Выбрано {{ selected_update_ids|length }} из {{ action_counts.updatable }} позиций с обновлениями по текущему фильтру.</strong>
+            Проверка охватит ваши локальные карточки, связанные с отмеченными позициями.
+            Снимите отметки, чтобы исключить позиции.
+            <a class="ml-2 underline underline-offset-2" style="color:var(--accent-strong)"
+               href="{{ cancel_select_all_url }}">Отменить массовый выбор</a>
+        </div>
+        {% elif selection_review and selection_mode == 'import' %}
         <div class="mb-4 rounded-lg border p-3 text-sm" role="status" aria-live="polite"
              style="border-color:var(--border);background:var(--bg-card);color:var(--text-secondary)">
             <strong style="color:var(--text)"
@@ -283,12 +303,19 @@
                             <input id="select-all-updates" type="checkbox" :checked="allUpdate"
                                    @change="selectPage('update', $event.target.checked)"
                                    class="rounded border-gray-300">
-                            <span>Выбрать все {{ action_counts.updatable }} на странице</span>
+                            <span>Выбрать все {{ action_counts.updatable }} {{ 'в текущем фильтре' if selection_review and selection_mode == 'updates' else 'на странице' }}</span>
                         </label>
                         {% else %}
-                        <span class="text-xs" style="color:var(--text-muted)">Нет изменений на странице</span>
+                        <span class="text-xs" style="color:var(--text-muted)">{{ 'В фильтре нет подтверждённых обновлений' if selection_review and selection_mode == 'updates' else 'Нет изменений на странице' }}</span>
                         {% endif %}
                     </div>
+                    {% if not selection_review and not selection_block_reason and pagination.total > 50 and supplier_update_filtered_count > 0 and pagination.total <= 200 %}
+                    <a data-supplier-filter-update-select
+                       class="mt-2 inline-flex min-h-11 items-center text-xs underline underline-offset-2"
+                       style="color:var(--accent-strong)" href="{{ select_all_updates_url }}">
+                        Выбрать обновления по фильтру ({{ supplier_update_filtered_count }})
+                    </a>
+                    {% endif %}
                     <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
                         <button type="submit" form="supplier-update-form" disabled
                                 class="sh-btn sh-btn--secondary sh-btn--sm"

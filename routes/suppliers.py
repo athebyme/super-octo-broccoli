@@ -8,7 +8,7 @@ import logging
 import secrets
 from datetime import datetime
 from functools import wraps
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from flask import (
     Blueprint, render_template, redirect, url_for, flash,
@@ -906,7 +906,15 @@ def _safe_supplier_catalog_update_return(supplier_id, candidate):
         )
     ):
         return fallback
-    return parsed.path + (f'?{parsed.query}' if parsed.query else '') + (
+    query = parsed.query
+    if parsed.path == product_path and query:
+        query_items = parse_qsl(query, keep_blank_values=True)
+        if any(key == 'select_all' and value == 'updates' for key, value in query_items):
+            query = urlencode(
+                [(key, value) for key, value in query_items if key != 'select_all'],
+                doseq=True,
+            )
+    return parsed.path + (f'?{query}' if query else '') + (
         f'#{parsed.fragment}' if parsed.fragment else ''
     )
 
@@ -2949,7 +2957,19 @@ def register_supplier_routes(app):
             flash('Поставщик не найден', 'danger')
             return redirect(url_for('supplier_catalog'))
 
-        select_all_requested = request.args.get('select_all') == '1'
+        select_all_values = request.args.getlist('select_all')
+        select_all_mode = (
+            select_all_values[0]
+            if len(select_all_values) == 1
+            and select_all_values[0] in ('1', 'updates')
+            else None
+        )
+        selection_mode = (
+            'import' if select_all_mode == '1'
+            else 'updates' if select_all_mode == 'updates'
+            else None
+        )
+        select_all_requested = selection_mode is not None
         page = 1 if select_all_requested else request.args.get('page', 1, type=int)
         search = request.args.get('search', '').strip()
         show_imported = request.args.get('show_imported', '0') == '1'
@@ -2978,6 +2998,7 @@ def register_supplier_routes(app):
             ImportedProduct.id
         ).filter(
             ImportedProduct.seller_id == seller.id,
+            ImportedProduct.supplier_id == supplier_id,
             ImportedProduct.supplier_product_id == SupplierProduct.id,
             ImportedProduct.supplier_content_revision
             < SupplierProduct.content_revision,
@@ -3059,6 +3080,25 @@ def register_supplier_routes(app):
             updates_only=updates_only,
             wb_existing_sp_ids=wb_existing_sp_ids
         )
+        can_filter_to_imported = effective_show_imported or wb_filter is not None
+        supplier_update_filtered_count = 0
+        if (
+            not select_all_requested
+            and pagination.total > 50
+            and pagination.total <= MAX_BULK_PRODUCTS
+            and can_filter_to_imported
+        ):
+            update_pagination = SupplierService.get_available_products_for_seller(
+                seller.id, supplier_id,
+                page=1, per_page=1,
+                search=search, show_imported=effective_show_imported,
+                stock_status=effective_stock,
+                wb_filter=wb_filter,
+                ai_filter=ai_filter,
+                updates_only=True,
+                wb_existing_sp_ids=wb_existing_sp_ids,
+            )
+            supplier_update_filtered_count = update_pagination.total
         selection_review = False
         selection_block_reason = None
         selection_block_total = None
@@ -3090,30 +3130,37 @@ def register_supplier_routes(app):
             wb_existing_sp_ids |= _vendor_code_wb_sp_ids(
                 wb_existing_sp_ids, page_sp_ids)
 
-        # Статусы импорта/обновлений нужны только строкам текущей страницы
-        imported_revision_by_sp = {
-            row[0]: int(row[1] or 0)
+        # Imported status intentionally counts every seller-linked row for
+        # compatibility; update eligibility below requires an exact supplier
+        # match and at least one stale owned copy.
+        imported_sp_ids = {
+            row[0]
             for row in db.session.query(
                 ImportedProduct.supplier_product_id,
-                ImportedProduct.supplier_content_revision,
             ).filter(
                 ImportedProduct.seller_id == seller.id,
                 ImportedProduct.supplier_product_id.in_(page_sp_ids),
-            ).all()
-        } if page_sp_ids else {}
-        imported_sp_ids = set(imported_revision_by_sp)
+            ).distinct().all()
+        } if page_sp_ids else set()
         supplier_update_sp_ids = {
-            product.id for product in pagination.items
-            if product.id in imported_revision_by_sp
-            and int(product.content_revision or 1)
-            > imported_revision_by_sp[product.id]
-        }
+            row[0]
+            for row in db.session.query(SupplierProduct.id).filter(
+                SupplierProduct.supplier_id == supplier_id,
+                SupplierProduct.id.in_(page_sp_ids),
+                stale_supplier_copy_exists,
+            ).all()
+        } if page_sp_ids else set()
         selected_import_ids = [
             product.id for product in pagination.items
-            if selection_review
+            if selection_review and selection_mode == 'import'
             and product.id not in imported_sp_ids
             and product.id not in supplier_update_sp_ids
             and product.id not in wb_existing_sp_ids
+        ]
+        selected_update_ids = [
+            product.id for product in pagination.items
+            if selection_review and selection_mode == 'updates'
+            and product.id in supplier_update_sp_ids
         ]
 
         stats = SupplierService.get_product_stats(supplier_id)
@@ -3185,6 +3232,10 @@ def register_supplier_routes(app):
             'supplier_catalog_products', supplier_id=supplier_id,
             select_all='1', **catalog_filter_args,
         )
+        select_all_updates_url = url_for(
+            'supplier_catalog_products', supplier_id=supplier_id,
+            select_all='updates', **catalog_filter_args,
+        )
         cancel_select_all_url = url_for(
             'supplier_catalog_products', supplier_id=supplier_id,
             **catalog_filter_args,
@@ -3193,14 +3244,18 @@ def register_supplier_routes(app):
                                supplier=supplier, pagination=pagination,
                                stats=stats, search=search,
                                selection_review=selection_review,
+                               selection_mode=selection_mode,
                                selection_block_reason=selection_block_reason,
                                selection_block_total=selection_block_total,
                                selected_import_ids=selected_import_ids,
+                               selected_update_ids=selected_update_ids,
                                select_all_url=select_all_url,
+                               select_all_updates_url=select_all_updates_url,
                                cancel_select_all_url=cancel_select_all_url,
                                show_imported=show_imported,
                                updates_only=updates_only,
                                supplier_update_count=supplier_update_count,
+                               supplier_update_filtered_count=supplier_update_filtered_count,
                                stock_status=stock_status,
                                wb_filter=wb_filter or '',
                                ai_filter=ai_filter or '',

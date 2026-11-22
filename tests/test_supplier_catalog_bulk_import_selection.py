@@ -18,6 +18,7 @@ class _SupplierPageParser(HTMLParser):
         self.import_rows = []
         self.update_rows = []
         self.root_state = None
+        self.update_select_href = None
         self.catalog_cards = 0
         self.text = []
 
@@ -40,6 +41,8 @@ class _SupplierPageParser(HTMLParser):
                 self.catalog_cards += 1
         if tag == 'div' and 'data-supplier-products' in attributes:
             self.root_state = attributes.get('x-data')
+        if tag == 'a' and 'data-supplier-filter-update-select' in attributes:
+            self.update_select_href = attributes.get('href')
 
     def handle_data(self, data):
         self.text.append(data)
@@ -284,6 +287,164 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertEqual(set(json.loads(match.group(1))), free_ids)
         self.assertEqual(ImportedProduct.query.count(), before_import_count)
+
+    def test_filtered_update_selection_is_exact_bounded_and_separate_from_import(self):
+        from models import ImportedProduct
+
+        source_rows = []
+        for index in range(55):
+            source = self._product(title=f'FilteredUpdate source {index:03d}')
+            source.content_revision = 2
+            self.db.session.flush()
+            if index == 0:
+                # The source is eligible because at least one exact seller copy
+                # is stale, even though another linked copy is already current.
+                self._link_import(source, stale=False)
+                self._link_import(source, stale=True)
+            else:
+                self._link_import(source, stale=True)
+            source_rows.append(source)
+
+        mismatched = self._product(title='FilteredUpdate mismatched supplier copy')
+        mismatched.content_revision = 2
+        self.db.session.flush()
+        self.db.session.add(ImportedProduct(
+            seller_id=self.seller_id,
+            supplier_id=self.other_supplier_id,
+            supplier_product_id=mismatched.id,
+            supplier_content_revision=1,
+            title=mismatched.title,
+        ))
+        unimported = self._product(title='FilteredUpdate import only')
+        foreign_source = self._product(
+            supplier_id=self.other_supplier_id,
+            title='FilteredUpdate foreign source',
+        )
+        self.db.session.flush()
+        self.db.session.add(ImportedProduct(
+            seller_id=self.seller_id,
+            supplier_id=self.other_supplier_id,
+            supplier_product_id=foreign_source.id,
+            supplier_content_revision=1,
+            title=foreign_source.title,
+        ))
+        self.db.session.commit()
+        before_count = ImportedProduct.query.count()
+
+        filters = (
+            'search=FilteredUpdate&show_imported=1&stock_status=all'
+            '&wb_filter=not_on_wb&ai_filter=ai_parsed'
+        )
+        normal_path = f'/supplier-catalog/{self.supplier_id}/products?{filters}'
+        normal_response = self.client.get(normal_path)
+        self.assertEqual(normal_response.status_code, 200)
+        normal_page = self._parse_supplier_page(normal_response.get_data(as_text=True))
+        self.assertIsNotNone(normal_page.update_select_href)
+        link_query = parse_qs(urlsplit(normal_page.update_select_href).query)
+        self.assertEqual(link_query, {
+            'page': ['1'], 'search': ['FilteredUpdate'],
+            'show_imported': ['1'],
+            'stock_status': ['all'], 'wb_filter': ['not_on_wb'],
+            'ai_filter': ['ai_parsed'], 'select_all': ['updates'],
+        })
+
+        review_path = f'{normal_path}&select_all=updates'
+        review_response = self.client.get(review_path)
+        self.assertEqual(review_response.status_code, 200)
+        review_html = review_response.get_data(as_text=True)
+        review_page = self._parse_supplier_page(review_html)
+        self.assertEqual(review_page.catalog_cards, 57)
+        self.assertEqual(review_page.update_select_href, None)
+        state = review_page.root_state or ''
+        selected_update_match = re.search(
+            r'updateSelected:\s*(\[[^\]]*\])', state,
+        )
+        selected_import_match = re.search(
+            r'importSelected:\s*(\[[^\]]*\])', state,
+        )
+        self.assertIsNotNone(selected_update_match)
+        self.assertIsNotNone(selected_import_match)
+        selected_update_ids = {int(value) for value in json.loads(selected_update_match.group(1))}
+        self.assertEqual(
+            selected_update_ids,
+            {source.id for source in source_rows},
+        )
+        self.assertEqual(
+            {row['id'] for row in review_page.update_rows},
+            {str(source.id) for source in source_rows},
+        )
+        self.assertEqual(json.loads(selected_import_match.group(1)), [])
+        self.assertIn(
+            'Выбрано 55 из 55 позиций с обновлениями по текущему фильтру.',
+            review_html,
+        )
+        self.assertIn('update_product_ids', review_html)
+        self.assertNotIn('update_all_for_supplier', review_html)
+        self.assertEqual(ImportedProduct.query.count(), before_count)
+
+    def test_filtered_update_selection_rejects_over_cap_and_incomplete_reads(self):
+        from models import ImportedProduct
+        from services.supplier_service import SupplierService
+
+        rows = []
+        for index in range(201):
+            source = self._product(title=f'UpdateLimit source {index:03d}')
+            source.content_revision = 2
+            self.db.session.flush()
+            self._link_import(source, stale=True)
+            rows.append(source)
+        self.db.session.commit()
+        before_count = ImportedProduct.query.count()
+
+        path = (
+            f'/supplier-catalog/{self.supplier_id}/products?'
+            'search=UpdateLimit&show_imported=1&stock_status=all'
+            '&select_all=updates'
+        )
+        over_limit = self.client.get(path)
+        self.assertEqual(over_limit.status_code, 200)
+        over_page = self._parse_supplier_page(over_limit.get_data(as_text=True))
+        self.assertEqual(over_page.catalog_cards, 50)
+        state = over_page.root_state or ''
+        selected_match = re.search(r'updateSelected:\s*(\[[^\]]*\])', state)
+        self.assertIsNotNone(selected_match)
+        self.assertEqual(json.loads(selected_match.group(1)), [])
+        over_limit_html = over_limit.get_data(as_text=True)
+        self.assertIn('В текущем фильтре 201 товаров каталога.', over_limit_html)
+        self.assertIn('Ни одна позиция не была отмечена.', over_limit_html)
+        self.assertIsNone(over_page.update_select_href)
+
+        original_get = SupplierService.get_available_products_for_seller
+
+        class _IncompletePagination:
+            def __init__(self, wrapped):
+                self._wrapped = wrapped
+                self.total = wrapped.total + 1
+
+            def __getattr__(self, name):
+                return getattr(self._wrapped, name)
+
+        def incomplete_once(*args, **kwargs):
+            result = original_get(*args, **kwargs)
+            if kwargs.get('per_page') == 201:
+                return _IncompletePagination(result)
+            return result
+
+        with patch(
+            'routes.suppliers.SupplierService.get_available_products_for_seller',
+            side_effect=incomplete_once,
+        ):
+            incomplete = self.client.get(path.replace('UpdateLimit', 'UpdateLimit source 000'))
+        self.assertEqual(incomplete.status_code, 200)
+        incomplete_html = incomplete.get_data(as_text=True)
+        incomplete_page = self._parse_supplier_page(incomplete_html)
+        self.assertEqual(incomplete_page.catalog_cards, 1)
+        self.assertIn('Список изменился во время подготовки массового выбора.', incomplete_html)
+        incomplete_state = incomplete_page.root_state or ''
+        incomplete_match = re.search(r'updateSelected:\s*(\[[^\]]*\])', incomplete_state)
+        self.assertIsNotNone(incomplete_match)
+        self.assertEqual(json.loads(incomplete_match.group(1)), [])
+        self.assertEqual(ImportedProduct.query.count(), before_count)
 
     def test_over_limit_filter_falls_back_to_unselected_fifty_rows(self):
         from models import ImportedProduct

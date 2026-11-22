@@ -11,6 +11,7 @@ import os
 import re
 import unittest
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
 
@@ -283,6 +284,48 @@ class SupplierCatalogUpdateAllTest(unittest.TestCase):
         self.assertEqual(imported.title, 'Новое имя 1')
         self.assertEqual(imported.supplier_price, 149)
         self.assertEqual(imported.supplier_quantity, 5)
+
+    def test_filtered_update_review_return_clears_auto_select_and_keeps_filters(self):
+        source, imported = self._add_source_copy('filtered-return')
+        return_to = (
+            f'/supplier-catalog/{self.supplier_id}/products?page=1'
+            '&search=fixture&show_imported=1&updates_only=1'
+            '&stock_status=all&wb_filter=not_on_wb&ai_filter=ai_parsed'
+            '&select_all=updates'
+        )
+        review = self._review_post({
+            'supplier_id': str(self.supplier_id),
+            'update_product_ids': [str(source.id)],
+            'return_to': return_to,
+        })
+        self.assertEqual(review.status_code, 200)
+        match = re.search(
+            rb'name="return_to" value="([^"]+)"',
+            review.data,
+        )
+        self.assertIsNotNone(match)
+        import html
+        safe_return = html.unescape(match.group(1).decode('utf-8'))
+        parsed_return = urlsplit(safe_return)
+        self.assertEqual(
+            parsed_return.path,
+            f'/supplier-catalog/{self.supplier_id}/products',
+        )
+        self.assertEqual(parse_qs(parsed_return.query), {
+            'page': ['1'], 'search': ['fixture'], 'show_imported': ['1'],
+            'updates_only': ['1'], 'stock_status': ['all'],
+            'wb_filter': ['not_on_wb'], 'ai_filter': ['ai_parsed'],
+        })
+        self.assertNotIn('select_all', parse_qs(parsed_return.query))
+        self.assertEqual(imported.title, f'Старое имя filtered-return')
+
+        confirmation = self._confirm_post(self._confirm_values(
+            [source.id], self._review_token(review), return_to=return_to,
+        ))
+        self.assertEqual(confirmation.status_code, 302)
+        self.assertEqual(confirmation.headers['Location'], safe_return)
+        self.db.session.refresh(imported)
+        self.assertEqual(imported.title, source.title)
 
     def test_supplier_wide_review_is_explicit_and_tokenless_legacy_still_applies(self):
         source, imported = self._add_source_copy('all')
