@@ -414,8 +414,9 @@ def check_wb_create_selection_continuity(
         create = confirmation.get_by_role('button', name='Создать карточки', exact=True)
         assert create.is_enabled() and str(len(selected)) in confirmation.inner_text()
         state['wb_mode'] = 'drop_before'
-        with page.expect_request_failed(
-            lambda request: urlsplit(request.url).path == wb_create_path
+        with page.expect_event(
+            'requestfailed',
+            predicate=lambda request: urlsplit(request.url).path == wb_create_path
             and request.method == 'POST',
         ) as lost:
             create.click()
