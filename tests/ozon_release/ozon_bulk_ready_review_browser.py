@@ -46,6 +46,7 @@ report = {
     "review": {},
     "reviewed_queue": {},
     "reviewed_result_recovery": {},
+    "review_editor_navigation": {},
     "saved_draft_selection": {},
     "mixed_type_selection": {},
     "scope": "synthetic_ozon_bulk_ready_review_browser",
@@ -311,6 +312,15 @@ state = {
     "recovery_confirmation_pending": False,
     "recovery_review_api_pages": [],
     "recovery_review_queries": [],
+    "review_editor_navigation_job_uid": None,
+    "review_editor_navigation_draft_ids": [],
+    "review_editor_navigation_api_pages": [],
+    "review_editor_navigation_draft_id": None,
+    "review_editor_navigation_initial_version": None,
+    "review_editor_navigation_save_posts": 0,
+    "review_editor_navigation_validate_posts": 0,
+    "review_editor_navigation_saved_version": None,
+    "review_editor_navigation_validated_version": None,
 }
 business_write_events = []
 BUSINESS_TABLES = {
@@ -762,11 +772,23 @@ def bridge(route):
     if url.hostname == "127.0.0.1" and url.port == server.server_port:
         path = url.path
         if request.method not in ("GET", "HEAD"):
+            navigation_draft_id = state.get("review_editor_navigation_draft_id")
+            navigation_save_path = (
+                f"/marketplaces/drafts/{navigation_draft_id}"
+                if navigation_draft_id else None
+            )
+            navigation_validate_path = (
+                f"/marketplaces/drafts/{navigation_draft_id}/validate"
+                if navigation_draft_id else None
+            )
             if path not in {
                 "/login",
                 "/marketplaces/ozon/uploads/",
                 "/marketplaces/ozon/uploads/from-drafts",
-            }:
+            } and not (
+                request.method == "POST"
+                and path in {navigation_save_path, navigation_validate_path}
+            ):
                 if not (request.method == "POST" and path.endswith("/repair/apply")):
                     report["unexpected_http"].append({"method": request.method, "path": path})
                     route.abort()
@@ -803,6 +825,13 @@ def bridge(route):
             elif query.get("parent_prepare_job_uid") == [state.get("recovery_source_job_uid")]:
                 assert ids == state["recovery_source_draft_ids"], (ids, state["recovery_source_draft_ids"])
                 state.setdefault("recovery_source_review_api_pages", []).append(page)
+            elif query.get("parent_prepare_job_uid") == [
+                state.get("review_editor_navigation_job_uid")
+            ]:
+                assert ids == state["review_editor_navigation_draft_ids"], (
+                    ids, state["review_editor_navigation_draft_ids"],
+                )
+                state["review_editor_navigation_api_pages"].append(page)
             elif state.get("selection_draft_ids") and not query.get("parent_prepare_job_uid"):
                 assert set(ids) == set(state["selection_draft_ids"]), query
                 assert len(ids) == len(state["selection_draft_ids"]), query
@@ -811,6 +840,28 @@ def bridge(route):
                 assert query.get("parent_prepare_job_uid") == [state["source_job_uid"]], query
                 assert ids == state["draft_ids"], (ids, state["draft_ids"])
                 state["review_api_pages"].append(page)
+
+        navigation_draft_id = state.get("review_editor_navigation_draft_id")
+        if request.method == "POST" and navigation_draft_id:
+            save_path = f"/marketplaces/drafts/{navigation_draft_id}"
+            validate_path = save_path + "/validate"
+            if path == save_path:
+                body = json.loads(request.post_data or "{}")
+                assert set(body) == {"expected_version", "patch"}, set(body)
+                assert body["expected_version"] == state[
+                    "review_editor_navigation_initial_version"
+                ]
+                dimensions = body["patch"].get("dimensions")
+                assert dimensions and dimensions.get("weight") == "250", dimensions
+                assert dimensions.get("weight_unit") == "GRAMS", dimensions
+                state["review_editor_navigation_save_posts"] += 1
+            elif path == validate_path:
+                body = json.loads(request.post_data or "{}")
+                assert set(body) == {"expected_version"}, set(body)
+                assert body["expected_version"] == state[
+                    "review_editor_navigation_saved_version"
+                ]
+                state["review_editor_navigation_validate_posts"] += 1
 
         if request.method == "POST" and path == "/marketplaces/ozon/uploads/":
             body = json.loads(request.post_data or "{}")
@@ -933,6 +984,23 @@ def bridge(route):
             # The real durable v3 worker runs only after the ordinary local
             # prepare POST has committed and before its normal response lands.
             _run_real_source_worker(state["source_job_uid"])
+
+        elif request.method == "POST" and path == (
+            f"/marketplaces/drafts/{state.get('review_editor_navigation_draft_id')}"
+        ):
+            assert response.status == 200, (response.status, response.text()[:300])
+            body = response.json()
+            assert body["success"] is True
+            state["review_editor_navigation_saved_version"] = body["draft"]["version"]
+
+        elif request.method == "POST" and path == (
+            f"/marketplaces/drafts/{state.get('review_editor_navigation_draft_id')}/validate"
+        ):
+            assert response.status == 200, (response.status, response.text()[:300])
+            body = response.json()
+            assert body["success"] is True
+            assert body["draft"]["validation"]["publishable"] is True
+            state["review_editor_navigation_validated_version"] = body["draft"]["version"]
 
         elif request.method == "POST" and path == "/marketplaces/ozon/uploads/from-drafts":
             assert response.status == 202, (response.status, response.text()[:300])
@@ -2001,6 +2069,397 @@ def run_mixed_type_selection_journey(page):
     passed("mixed_type_bulk_editor_opens_and_saves_exact_applicable_rows")
 
 
+def _seed_review_editor_navigation_batch():
+    """Prepare two unchanged rows and one actionable weight issue for return UX."""
+    titles = {
+        "unchanged_first": "BR Review Return · неизменённая первая",
+        "weight_issue": "BR Review Return · исправление веса",
+        "unchanged_last": "BR Review Return · неизменённая последняя",
+    }
+    with app.app_context():
+        product_type = MarketplaceProductType.query.filter_by(
+            marketplace_id=marketplace_id,
+            external_type_id="1000",
+        ).one()
+        dimensions_category = product_type.category.name
+        first = _make_source(
+            seller_id=fixture["seller_id"],
+            external_id="br-review-return-unchanged-first",
+            vendor_code="BR-REVIEW-RETURN-FIRST",
+            title=titles["unchanged_first"],
+            description="Синтетическая готовая карточка для точной проверки возврата.",
+            category=dimensions_category,
+            barcode="4600000000911",
+        )
+        weight_issue = _make_source(
+            seller_id=fixture["seller_id"],
+            external_id="br-review-return-weight-issue",
+            vendor_code="BR-REVIEW-RETURN-WEIGHT",
+            title=titles["weight_issue"],
+            description="Синтетическая карточка с одним отсутствующим весом упаковки.",
+            category=dimensions_category,
+            barcode="4600000000912",
+        )
+        raw = json.loads(weight_issue.original_data)
+        raw["dimensions"].pop("Вес упаковки, г")
+        weight_issue.original_data = json.dumps(raw, ensure_ascii=False)
+        last = _make_source(
+            seller_id=fixture["seller_id"],
+            external_id="br-review-return-unchanged-last",
+            vendor_code="BR-REVIEW-RETURN-LAST",
+            title=titles["unchanged_last"],
+            description="Ещё одна синтетическая готовая карточка для точной проверки возврата.",
+            category=dimensions_category,
+            barcode="4600000000913",
+        )
+        sources = [first, weight_issue, last]
+        db.session.add_all(sources)
+        db.session.flush()
+        source_ids = [source.id for source in sources]
+
+        source_identity = MarketplaceDraftService._mapping_identities(first)[-1]
+        exact_mapping = MarketplaceCategoryMapping.query.filter_by(
+            seller_id=fixture["seller_id"],
+            marketplace_id=marketplace_id,
+            scope_key=source_identity["scope_key"],
+            source_type=source_identity["source_type"],
+            source_category_normalized=source_identity["source_category_normalized"],
+            product_type_id=product_type.id,
+            mapping_status="active",
+        ).first()
+        assert exact_mapping is not None
+
+        acceptance = OzonBulkUploadService.accept_source_prepare(
+            seller_id=fixture["seller_id"],
+            account_id=account_id,
+            imported_product_ids=source_ids,
+            request_key="br-review-editor-return-prepare-00000001",
+            created_by_user_id=fixture.get("user_id"),
+        )
+        job_uid = acceptance.job.job_uid
+        stats = OzonBulkUploadService.run_due_preparation()
+        run = OzonBulkUploadRun.query.filter_by(
+            seller_id=fixture["seller_id"],
+            account_id=account_id,
+            mode="source_prepare",
+        ).join(BackgroundJob, BackgroundJob.id == OzonBulkUploadRun.job_id).filter(
+            BackgroundJob.job_uid == job_uid,
+        ).one()
+        items = OzonBulkUploadItem.query.filter_by(
+            run_id=run.id,
+        ).order_by(OzonBulkUploadItem.ordinal.asc()).all()
+        assert [item.imported_product_id for item in items] == source_ids
+        assert len(items) == 3 and all(item.draft_id for item in items)
+        assert [item.phase for item in items] == ["prepared", "needs_input", "prepared"]
+        assert stats["prepared"] == 2 and stats["needs_input"] == 1, stats
+        drafts = [db.session.get(MarketplaceProductDraft, item.draft_id) for item in items]
+        assert [draft.status for draft in drafts] == ["ready", "blocked", "ready"]
+        draft_ids = [item.draft_id for item in items]
+        versions = {item.draft_id: item.version for item in drafts}
+        return job_uid, draft_ids, source_ids, titles, versions, stats
+
+
+def _review_editor_navigation_operation_rows(draft_ids):
+    with app.app_context():
+        return MarketplaceOperation.query.filter(
+            MarketplaceOperation.seller_id == fixture["seller_id"],
+            MarketplaceOperation.account_id == account_id,
+            MarketplaceOperation.draft_id.in_(draft_ids),
+        ).order_by(MarketplaceOperation.id.asc()).with_entities(
+            MarketplaceOperation.id,
+            MarketplaceOperation.draft_id,
+            MarketplaceOperation.operation_kind,
+            MarketplaceOperation.status,
+        ).all()
+
+
+def run_review_editor_navigation_journey(page):
+    """Follow one exact review issue into a saved fix and back to its batch."""
+    job_uid, draft_ids, source_ids, titles, prepared_versions, worker_stats = (
+        _seed_review_editor_navigation_batch()
+    )
+    issue_draft_id = draft_ids[1]
+    unchanged_ids = [draft_ids[0], draft_ids[2]]
+    state["review_editor_navigation_job_uid"] = job_uid
+    state["review_editor_navigation_draft_ids"] = list(draft_ids)
+    state["review_editor_navigation_draft_id"] = issue_draft_id
+    state["review_editor_navigation_initial_version"] = prepared_versions[issue_draft_id]
+
+    page.set_viewport_size({"width": 320, "height": 780})
+    page.goto(f"{base}/marketplaces/ozon/uploads/{job_uid}")
+    source_review_link = page.locator("a[data-source-prepare-review]")
+    source_review_link.wait_for()
+    source_review_href = source_review_link.get_attribute("href")
+    source_review_parts = urlsplit(source_review_href)
+    source_review_query = parse_qs(source_review_parts.query)
+    assert source_review_parts.path == "/marketplaces/ozon/uploads/review"
+    assert source_review_query.get("account_id") == [str(account_id)]
+    assert source_review_query.get("parent_prepare_job_uid") == [job_uid]
+    assert [
+        int(value) for value in source_review_query["draft_ids"][0].split(",")
+    ] == draft_ids
+
+    review_counts = _business_counts()
+    review_write_marker = len(business_write_events)
+    review_post_counts = dict(report["post_counts"])
+    provider_marker = (report["provider_attempts"], report["provider_dispatch_calls"])
+    assert _review_editor_navigation_operation_rows(draft_ids) == []
+    source_review_link.click()
+    page.wait_for_url("**/marketplaces/ozon/uploads/review?*")
+    review_root = page.locator("#ozon-upload-review:not([v-cloak])")
+    review_root.wait_for()
+    initial_review = page.evaluate(
+        "() => JSON.parse(document.querySelector('#our-bootstrap').textContent).review"
+    )
+    assert initial_review["account_id"] == account_id
+    assert initial_review["parent_prepare_job_uid"] == job_uid
+    assert not initial_review.get("result_job_uid")
+    assert initial_review["draft_ids"] == draft_ids
+    assert initial_review["pagination"] == {
+        "page": 1, "per_page": 20, "pages": 1, "total": 3,
+    }
+    assert initial_review.get("review_return_token")
+    assert [row["draft_id"] for row in initial_review["items"]] == draft_ids
+    review_rows = {row["draft_id"]: row for row in initial_review["items"]}
+    assert all(review_rows[draft_id]["selectable"] for draft_id in unchanged_ids)
+    issue_row = review_rows[issue_draft_id]
+    assert not issue_row["selectable"]
+    weight_issues = [
+        issue for issue in issue_row["errors"]
+        if issue.get("field") == "dimensions.weight"
+    ]
+    assert len(weight_issues) == 1, issue_row["errors"]
+    weight_issue = weight_issues[0]
+    assert weight_issue["code"] == "physical_fact_required"
+
+    # Save a two-row selection in this exact batch. Its identity includes the
+    # parent job, account, ordered IDs and page and survives the editor trip.
+    for draft_id in unchanged_ids:
+        checkbox = page.locator(f"#our-select-{draft_id}")
+        assert checkbox.is_enabled()
+        checkbox.check()
+    initial_selected = page.locator(
+        ".our-list input[type='checkbox']:checked"
+    ).evaluate_all("nodes => nodes.map(node => Number(node.id.replace('our-select-', '')))")
+    assert initial_selected == unchanged_ids, initial_selected
+
+    issue_card = page.locator(".our-card").filter(has_text=titles["weight_issue"])
+    issue_links = issue_card.locator("a[data-review-issue-link]")
+    issue_link = None
+    issue_href = None
+    for index in range(issue_links.count()):
+        candidate = issue_links.nth(index)
+        candidate_href = candidate.get_attribute("href")
+        candidate_query = parse_qs(urlsplit(candidate_href).query)
+        if candidate_query.get("focus_field") == ["dimensions.weight"]:
+            issue_link = candidate
+            issue_href = candidate_href
+            break
+    assert issue_link is not None and issue_href
+    issue_parts = urlsplit(issue_href)
+    issue_query = parse_qs(issue_parts.query)
+    assert issue_parts.path == f"/marketplaces/drafts/{issue_draft_id}"
+    assert issue_query.get("review_return") == [initial_review["review_return_token"]]
+    assert issue_query.get("focus_code") == [weight_issue["code"]]
+    assert issue_query.get("focus_field") == [weight_issue["field"]]
+
+    issue_link.click()
+    page.wait_for_url(f"**/marketplaces/drafts/{issue_draft_id}?*")
+    page.locator("#ozon-draft-editor:not([v-cloak])").wait_for()
+    editor_boot = page.evaluate(
+        "() => JSON.parse(document.querySelector('#ode-bootstrap').textContent)"
+    )
+    assert editor_boot["draftId"] == issue_draft_id
+    assert editor_boot["accountId"] == account_id
+    navigation = editor_boot["reviewNavigation"]
+    assert navigation["focus"] == {
+        "code": weight_issue["code"], "field": weight_issue["field"],
+    }
+    canonical_return = urlsplit(navigation["url"])
+    canonical_query = parse_qs(canonical_return.query)
+    assert canonical_return.path == "/marketplaces/ozon/uploads/review"
+    assert canonical_query.get("account_id") == [str(account_id)]
+    assert [
+        int(value) for value in canonical_query["draft_ids"][0].split(",")
+    ] == draft_ids
+    assert canonical_query.get("page") == ["1"]
+    assert canonical_query.get("parent_prepare_job_uid") == [job_uid]
+    assert not canonical_query.get("result_job_uid")
+    assert parse_qs(urlsplit(page.url).query).get("review_return") == [
+        initial_review["review_return_token"]
+    ]
+
+    weight_input = page.locator("#ode-weight")
+    page.wait_for_function(
+        "() => document.activeElement?.id === 'ode-weight'"
+    )
+    weight_bounds = weight_input.bounding_box()
+    assert weight_bounds and 0 <= weight_bounds["y"] < 780
+    assert weight_bounds["y"] + weight_bounds["height"] <= 780
+    assert weight_input.evaluate("""input => {
+        const style = getComputedStyle(input);
+        return document.activeElement === input && style.outlineStyle !== 'none' &&
+            parseFloat(style.outlineWidth) >= 2;
+    }""")
+    issue_screenshot = OUT / "ozon-review-edit-issue-320.png"
+    page.screenshot(path=str(issue_screenshot), animations="disabled")
+
+    # GET navigation to the editor and its fresh validation payload are read-only.
+    assert len(business_write_events) == review_write_marker
+    assert _business_counts() == review_counts
+    assert report["post_counts"] == review_post_counts
+    assert (report["provider_attempts"], report["provider_dispatch_calls"]) == provider_marker
+    assert _review_editor_navigation_operation_rows(draft_ids) == []
+
+    weight_input.fill("250")
+    page.locator("#ode-weight-unit").select_option("GRAMS")
+    save_button = page.locator(".ode-savebar").get_by_role(
+        "button", name="Сохранить", exact=True,
+    )
+    with page.expect_response(lambda response: (
+        response.request.method == "POST"
+        and urlsplit(response.url).path == f"/marketplaces/drafts/{issue_draft_id}"
+    )) as save_response_info:
+        save_button.click()
+    save_response = save_response_info.value
+    assert save_response.status == 200
+    assert state["review_editor_navigation_save_posts"] == 1
+    saved_version = state["review_editor_navigation_saved_version"]
+    assert saved_version > prepared_versions[issue_draft_id]
+
+    validate_button = page.locator(".ode-validation").get_by_role(
+        "button", name="Проверить карточку", exact=True,
+    )
+    with page.expect_response(lambda response: (
+        response.request.method == "POST"
+        and urlsplit(response.url).path == f"/marketplaces/drafts/{issue_draft_id}/validate"
+    )) as validate_response_info:
+        validate_button.click()
+    validate_response = validate_response_info.value
+    assert validate_response.status == 200
+    validated_version = state["review_editor_navigation_validated_version"]
+    assert validated_version > saved_version
+    assert state["review_editor_navigation_validate_posts"] == 1
+    page.locator(".ode-validation .ode-message--success").wait_for()
+    with app.app_context():
+        corrected_draft = db.session.get(MarketplaceProductDraft, issue_draft_id)
+        assert corrected_draft.status == "ready"
+        assert corrected_draft.version == validated_version
+        corrected_dimensions = json.loads(corrected_draft.dimensions_json)
+        assert corrected_dimensions["weight"] == "250"
+        assert corrected_dimensions["weight_unit"] == "GRAMS"
+    assert _review_editor_navigation_operation_rows(draft_ids) == []
+    assert report["provider_attempts"] == 0 and report["provider_dispatch_calls"] == 0
+
+    return_link = page.locator("a[data-review-return]")
+    return_link.wait_for()
+    assert return_link.inner_text().strip() == "К проверке партии"
+    assert urlsplit(return_link.get_attribute("href")).geturl() == navigation["url"]
+    before_return_counts = _business_counts()
+    before_return_writes = len(business_write_events)
+    before_return_posts = dict(report["post_counts"])
+    with app.app_context():
+        run_count = OzonBulkUploadRun.query.filter_by(
+            seller_id=fixture["seller_id"], account_id=account_id,
+        ).count()
+        item_count = OzonBulkUploadItem.query.join(
+            OzonBulkUploadRun, OzonBulkUploadItem.run_id == OzonBulkUploadRun.id,
+        ).filter(
+            OzonBulkUploadRun.seller_id == fixture["seller_id"],
+            OzonBulkUploadRun.account_id == account_id,
+        ).count()
+    return_link.click()
+    page.wait_for_url("**/marketplaces/ozon/uploads/review?*")
+    review_root.wait_for()
+    actual_return_url = urlsplit(page.url)
+    assert actual_return_url.path == canonical_return.path
+    assert parse_qs(actual_return_url.query) == canonical_query
+    returned_review = page.evaluate(
+        "() => JSON.parse(document.querySelector('#our-bootstrap').textContent).review"
+    )
+    assert returned_review["account_id"] == account_id
+    assert returned_review["parent_prepare_job_uid"] == job_uid
+    assert not returned_review.get("result_job_uid")
+    assert returned_review["draft_ids"] == draft_ids
+    assert returned_review["pagination"]["page"] == 1
+    assert [row["draft_id"] for row in returned_review["items"]] == draft_ids
+    returned_rows = {row["draft_id"]: row for row in returned_review["items"]}
+    assert returned_rows[issue_draft_id]["selectable"] is True
+    assert returned_rows[issue_draft_id]["version"] == validated_version
+    assert all(returned_rows[draft_id]["selectable"] for draft_id in unchanged_ids)
+    assert all(
+        returned_rows[draft_id]["version"] == prepared_versions[draft_id]
+        for draft_id in unchanged_ids
+    )
+    page.wait_for_function(
+        "expected => JSON.stringify([...document.querySelectorAll('.our-list input[type=checkbox]:checked')]"
+        ".map(node => Number(node.id.replace('our-select-', '')))) === JSON.stringify(expected)",
+        unchanged_ids,
+    )
+    returned_selected = page.locator(
+        ".our-list input[type='checkbox']:checked"
+    ).evaluate_all("nodes => nodes.map(node => Number(node.id.replace('our-select-', '')))")
+    assert returned_selected == unchanged_ids
+    changed_checkbox = page.locator(f"#our-select-{issue_draft_id}")
+    assert changed_checkbox.is_enabled()
+    assert not changed_checkbox.is_checked()
+    assert len(business_write_events) == before_return_writes
+    assert _business_counts() == before_return_counts
+    assert report["post_counts"] == before_return_posts
+    assert _review_editor_navigation_operation_rows(draft_ids) == []
+    with app.app_context():
+        assert OzonBulkUploadRun.query.filter_by(
+            seller_id=fixture["seller_id"], account_id=account_id,
+        ).count() == run_count
+        assert OzonBulkUploadItem.query.join(
+            OzonBulkUploadRun, OzonBulkUploadItem.run_id == OzonBulkUploadRun.id,
+        ).filter(
+            OzonBulkUploadRun.seller_id == fixture["seller_id"],
+            OzonBulkUploadRun.account_id == account_id,
+        ).count() == item_count
+    assert report["provider_attempts"] == 0 and report["provider_dispatch_calls"] == 0
+    assert state["review_editor_navigation_api_pages"] == [1, 1], (
+        state["review_editor_navigation_api_pages"]
+    )
+    assert page.evaluate(
+        "() => document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+    )
+    return_screenshot = OUT / "ozon-review-return-exact-320.png"
+    page.screenshot(path=str(return_screenshot), animations="disabled")
+
+    report["review_editor_navigation"] = {
+        "account_id": account_id,
+        "parent_prepare_job_uid": job_uid,
+        "result_job_uid": None,
+        "draft_ids": draft_ids,
+        "page": 1,
+        "initial_selectable_draft_ids": unchanged_ids,
+        "issue_draft_id": issue_draft_id,
+        "issue_code": weight_issue["code"],
+        "issue_field": weight_issue["field"],
+        "editor_focused_input": "ode-weight",
+        "focus_ring_visible": True,
+        "explicit_local_save_posts": state["review_editor_navigation_save_posts"],
+        "explicit_local_validation_posts": state["review_editor_navigation_validate_posts"],
+        "prepared_version": prepared_versions[issue_draft_id],
+        "saved_version": saved_version,
+        "validated_version": validated_version,
+        "returned_selectable": returned_rows[issue_draft_id]["selectable"],
+        "unchanged_selection_preserved": returned_selected == unchanged_ids,
+        "changed_entry_not_auto_selected": not changed_checkbox.is_checked(),
+        "review_api_page_numbers": state["review_editor_navigation_api_pages"],
+        "review_api_page_request_count": len(state["review_editor_navigation_api_pages"]),
+        "navigation_business_writes": 0,
+        "navigation_posts": 0,
+        "operations_for_batch_drafts": 0,
+        "provider_attempts": report["provider_attempts"],
+        "provider_dispatch_calls": report["provider_dispatch_calls"],
+        "mobile_viewport": {"width": 320, "height": 780},
+        "screenshots": [issue_screenshot.name, return_screenshot.name],
+    }
+    passed("review_issue_editor_returns_to_exact_fresh_batch_without_automatic_publication")
+
+
 def run_browser_journey():
     with app.app_context():
         account_rows = SellerMarketplaceAccount.query.filter_by(
@@ -2507,6 +2966,7 @@ def run_browser_journey():
         run_recovery_browser_journey(page, browser, context)
         run_selected_draft_journey(page)
         run_mixed_type_selection_journey(page)
+        run_review_editor_navigation_journey(page)
         browser.close()
 
 
