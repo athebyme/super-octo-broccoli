@@ -361,7 +361,7 @@ function formatMoney(value, currency = 'RUB') {
   if (!Number.isFinite(number)) return '—';
   try {
     return new Intl.NumberFormat('ru-RU', {
-      style: 'currency', currency, maximumFractionDigits: 2,
+      style: 'currency', currency, minimumFractionDigits: 0, maximumFractionDigits: 2,
     }).format(number);
   } catch (_) { return `${number.toLocaleString('ru-RU')} ${currency}`; }
 }
@@ -444,7 +444,6 @@ defineExpose({ open: openDialog, close: () => closeDialog(true) });
       :data-price-stage="stage"
       :data-price-marketplace="activeScope?.marketplace || ''"
       aria-labelledby="workspace-price-title"
-      aria-describedby="workspace-price-description"
       :aria-busy="busy ? 'true' : 'false'"
       @cancel="onCancel"
       @close="onNativeClose"
@@ -454,12 +453,9 @@ defineExpose({ open: openDialog, close: () => closeDialog(true) });
           <div class="mp-price-dialog__heading-block">
             <div class="mp-price-dialog__context">
               <span :class="['mp-price-dialog__market', isOzon ? 'is-ozon' : 'is-wb']">{{ marketplaceLabel }}</span>
-              <span>{{ targetLabel }}</span>
-              <span aria-hidden="true">·</span>
-              <span>{{ selectedCount }} {{ selectedCount === 1 ? 'карточка' : 'карточек' }}</span>
+              <span v-if="isOzon" class="mp-price-dialog__target">{{ targetLabel }}</span>
             </div>
             <h2 id="workspace-price-title" ref="heading" tabindex="-1">Изменить цену</h2>
-            <p id="workspace-price-description">Сначала сравнение, затем локальное сохранение.</p>
           </div>
           <button
             type="button"
@@ -567,8 +563,8 @@ defineExpose({ open: openDialog, close: () => closeDialog(true) });
               <div v-if="previewSummary.warningCount"><strong>{{ previewSummary.warningCount }}</strong><span>с предупреждением</span></div>
               <div v-if="previewSummary.dangerousCount"><strong>{{ previewSummary.dangerousCount }}</strong><span>опасное изменение</span></div>
             </section>
-            <p v-if="isOzon" class="mp-price-dialog__eligible-note">
-              В локальную заявку попадут только {{ previewSummary.eligibleCount || 0 }} подходящих карточек из {{ selectedCount }}.
+            <p v-if="isOzon && previewSummary.eligibleCount < selectedCount" class="mp-price-dialog__eligible-note">
+              В ценовую заявку войдут только подходящие карточки: {{ previewSummary.eligibleCount }} из {{ selectedCount }}.
             </p>
 
             <h3 id="workspace-price-preview-heading" tabindex="-1" class="mp-price-dialog__section-title">
@@ -678,13 +674,16 @@ defineExpose({ open: openDialog, close: () => closeDialog(true) });
 
         <footer class="mp-price-dialog__footer">
           <div class="mp-price-dialog__footer-links">
-            <button v-if="stage === 'edit' || stage === 'preview'" type="button" class="sh-btn sh-btn--ghost" data-price-legacy :disabled="!!busy" @click="openLegacy">
+            <button v-if="stage === 'edit'" type="button" class="sh-btn sh-btn--ghost" data-price-legacy :disabled="!!busy" @click="openLegacy">
               Расширенное ценообразование
             </button>
           </div>
           <div class="mp-price-dialog__footer-actions">
-            <button type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy" @click="closeDialog(true)">
-              {{ stage === 'receipt' ? 'Готово' : 'Закрыть' }}
+            <button v-if="stage === 'edit'" type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy" @click="closeDialog(true)">
+              Закрыть
+            </button>
+            <button v-else-if="stage === 'receipt'" type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy" @click="closeDialog(true)">
+              Готово
             </button>
             <button
               v-if="stage === 'edit'"
@@ -745,7 +744,7 @@ defineExpose({ open: openDialog, close: () => closeDialog(true) });
 .mp-price-dialog__market { display: inline-flex; min-height: 22px; align-items: center; padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-weight: 650; }
 .mp-price-dialog__market.is-ozon { border-color: var(--accent); color: var(--accent-text); }
 .mp-price-dialog__heading-block h2 { margin: 0; color: var(--text); font-size: 22px; font-weight: 620; line-height: 1.25; letter-spacing: -.025em; }
-.mp-price-dialog__heading-block p { margin: 5px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.45; }
+.mp-price-dialog__target { color: var(--text-muted); }
 .mp-price-dialog__close { flex: none; width: 44px; min-height: 44px; padding: 0; font-size: 22px; line-height: 1; }
 .mp-price-dialog__body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 18px 24px 22px; }
 .mp-price-dialog__alert { margin: 0 0 14px; }
@@ -785,8 +784,8 @@ defineExpose({ open: openDialog, close: () => closeDialog(true) });
 .mp-price-dialog__review-product { display: grid; grid-template-columns: 42px minmax(0,1fr) auto; align-items: center; gap: 10px; }
 .mp-price-dialog__review-product img, .mp-price-dialog__review-product .mp-price-dialog__photo-placeholder { width: 42px; height: 42px; }
 .mp-price-dialog__review-title { display: grid; min-width: 0; gap: 3px; }
-.mp-price-dialog__review-title strong { overflow: hidden; color: var(--text); font-size: 13px; font-weight: 580; text-overflow: ellipsis; white-space: nowrap; }
-.mp-price-dialog__review-title small { color: var(--text-muted); font-size: 11px; }
+.mp-price-dialog__review-title strong { display: -webkit-box; overflow: hidden; color: var(--text); font-size: 13px; font-weight: 580; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.mp-price-dialog__review-title small { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
 .mp-price-dialog__status { display: inline-flex; min-height: 24px; align-items: center; padding: 2px 7px; border-radius: 5px; font-size: 11px; white-space: nowrap; }
 .mp-price-dialog__status.is-ready { color: var(--ok); background: var(--ok-bg); }
 .mp-price-dialog__status.is-warning { color: var(--warn); background: var(--warn-bg); }
@@ -815,17 +814,18 @@ defineExpose({ open: openDialog, close: () => closeDialog(true) });
   .mp-price-dialog { width: calc(100vw - 12px); max-height: calc(100dvh - 12px); border-radius: 10px; }
   .mp-price-dialog__header { gap: 10px; padding: 15px 15px 13px; }
   .mp-price-dialog__heading-block h2 { font-size: 19px; }
-  .mp-price-dialog__heading-block p { font-size: 12px; }
   .mp-price-dialog__body { padding: 13px 14px 17px; }
   .mp-price-dialog__form { grid-template-columns: 1fr; gap: 12px; }
   .mp-price-dialog__field--wide { grid-column: auto; }
   .mp-price-dialog__footer { align-items: stretch; flex-direction: column; gap: 4px; padding: 10px 14px max(10px, env(safe-area-inset-bottom)); }
   .mp-price-dialog__footer-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .mp-price-dialog[data-price-stage="receipt"] .mp-price-dialog__footer-actions { grid-template-columns: 1fr; }
   .mp-price-dialog__footer-actions .sh-btn { min-width: 0; padding-right: 8px; padding-left: 8px; font-size: 12px; }
   .mp-price-dialog__footer-actions [data-price-local-save], .mp-price-dialog__footer-actions [data-price-preview-action], .mp-price-dialog__footer-actions [data-price-retry-exact] { grid-column: 1 / -1; }
   .mp-price-dialog__footer-links .sh-btn { min-height: 44px; }
-  .mp-price-dialog__review-product { grid-template-columns: 38px minmax(0,1fr) auto; gap: 8px; }
+  .mp-price-dialog__review-product { grid-template-columns: 38px minmax(0,1fr); align-items: start; gap: 8px; }
   .mp-price-dialog__review-product img, .mp-price-dialog__review-product .mp-price-dialog__photo-placeholder { width: 38px; height: 38px; }
+  .mp-price-dialog__review-product .mp-price-dialog__status { grid-column:2; justify-self:start; }
   .mp-price-dialog__review-values { margin-left: 46px; }
   .mp-price-dialog__row-reason { margin-left: 46px; }
   .mp-price-dialog__status { padding: 2px 5px; font-size: 10px; }
