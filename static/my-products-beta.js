@@ -1254,6 +1254,15 @@
         },
 
         computed: {
+            statusTabs: function () {
+                return this.tabs.filter(function (tab) { return tab.key !== 'updates'; });
+            },
+            supplierUpdatesEntryAriaLabel: function () {
+                var count = this.facets.supplier_updates;
+                return Number.isSafeInteger(count) && count >= 0
+                    ? 'Обновления поставщика, ' + count + ' ' + this.$fmt.plural(count, 'товар', 'товара', 'товаров')
+                    : 'Обновления поставщика';
+            },
             allSelected: function () {
                 var chosen = this.selected;
                 return this.items.length > 0 && this.items.every(function (item) {
@@ -3006,6 +3015,12 @@
                 this.activeTab = key;
                 this.selected = [];
                 this.load();
+            },
+            toggleSupplierUpdates: function () {
+                if (this.importBatchMode || this.supplierRefreshBatchMode ||
+                    this.selected.length || this.workspaceReturnPending) return false;
+                this.setTab(this.activeTab === 'updates' ? '' : 'updates');
+                return true;
             },
             resetFilters: function () {
                 if (this.importBatchMode || this.supplierRefreshBatchMode) return;

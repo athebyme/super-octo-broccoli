@@ -6,7 +6,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-unified-catalog-prices-r63b') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-supplier-entry-r65') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261123-unified-catalog-prices-r63b') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
@@ -142,16 +142,40 @@
                     @click="clearImportBatch">Все мои товары</button>
             <a v-else class="sh-btn sh-btn--secondary" :href="urls.workspace">Все мои товары</a>
         </div>
-        <div v-else class="mp-head-actions">
-            <button v-if="importPanelAvailable" type="button" class="sh-btn sh-btn--primary"
+        <div v-else class="mp-head-actions mp-head-actions--catalog-entry">
+            <button v-if="importPanelAvailable" type="button" class="sh-btn sh-btn--primary mp-head-import-action"
+                    aria-label="Импортировать товары"
                     data-supplier-import-open @click="openSupplierImport">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="shk-btn-icon"><path d="M12 5v14M5 12h14"/></svg>
-                Импортировать товары
+                <span class="mp-head-action-label--full">Импортировать товары</span>
+                <span class="mp-head-action-label--compact" aria-hidden="true">Импорт</span>
             </button>
-            <a v-else class="sh-btn sh-btn--primary" :href="urls.supplierCatalog">
+            <a v-else class="sh-btn sh-btn--primary mp-head-import-action" aria-label="Импортировать товары" :href="urls.supplierCatalog">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="shk-btn-icon"><path d="M12 5v14M5 12h14"/></svg>
-                Импортировать товары
+                <span class="mp-head-action-label--full">Импортировать товары</span>
+                <span class="mp-head-action-label--compact" aria-hidden="true">Импорт</span>
             </a>
+            <button type="button" class="sh-btn sh-btn--secondary mp-supplier-updates-entry"
+                    data-supplier-updates-entry
+                    :aria-label="supplierUpdatesEntryAriaLabel"
+                    :aria-pressed="activeTab === 'updates'"
+                    :aria-describedby="selected.length ? 'mp-supplier-updates-selection-note' : (workspaceReturnPending ? 'mp-supplier-updates-return-note' : null)"
+                    :disabled="selected.length > 0 || workspaceReturnPending"
+                    @click="toggleSupplierUpdates">
+                <span class="mp-head-action-label--full">Обновления поставщика</span>
+                <span class="mp-head-action-label--compact" aria-hidden="true">Обновления</span>
+                <span v-if="facets.supplier_updates !== undefined" class="mp-supplier-updates-count">{{ $fmt.int(facets.supplier_updates) }}</span>
+            </button>
+            <p v-if="selected.length" id="mp-supplier-updates-selection-note"
+               class="mp-supplier-updates-selection-note" data-supplier-updates-selection-note
+               role="status" aria-live="polite">
+                Сначала снимите выбранные товары: переход к обновлениям очистил бы выбор.
+            </p>
+            <p v-else-if="workspaceReturnPending" id="mp-supplier-updates-return-note"
+               class="mp-supplier-updates-selection-note" data-supplier-updates-return-note
+               role="status" aria-live="polite">
+                Сначала восстановим точный выбранный список.
+            </p>
         </div>
     </header>
 
@@ -297,7 +321,7 @@
     <section class="mp-catalog-surface" data-workspace-catalog aria-label="Каталог товаров">
     <!-- Вкладки статуса, точный выбор и карточки остаются на одной поверхности. -->
     <nav v-if="!importBatchMode && !supplierRefreshBatchMode" class="mp-tabs" aria-label="Статус карточек">
-        <button v-for="tab in tabs" :key="tab.key" type="button"
+        <button v-for="tab in statusTabs" :key="tab.key" type="button"
                 class="mp-tab" :class="{'is-active': activeTab === tab.key}"
                 :aria-pressed="activeTab === tab.key"
                 @click="setTab(tab.key)">
@@ -353,7 +377,7 @@
     </div>
 
     <div v-if="items.length || loading" class="mp-grid-head" aria-hidden="true">
-        <span></span><span></span><span>Товар</span><span data-workspace-column="category">Категория</span>
+        <span></span><span></span><span>Товар</span><span data-workspace-column="category">Категория каталога</span>
         <span data-workspace-column="supplier">Закупка · остаток</span><span data-workspace-column="wb">WB</span>
         <span data-workspace-column="ozon">Ozon</span><span></span>
     </div>
@@ -413,7 +437,7 @@
             </div>
 
             <div class="mp-category" data-workspace-column="category">
-                <span class="mp-cell-label">Категория</span>
+                <span class="mp-cell-label">Категория каталога</span>
                 <span class="mp-cat">{{ item.category || '—' }}</span>
             </div>
 
@@ -720,5 +744,5 @@
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261122-ozon-update-return-r56') }}"></script>
 <script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261123-unified-catalog-prices-r63b') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-unified-catalog-prices-r63c') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-supplier-entry-r65') }}"></script>
 {% endblock %}

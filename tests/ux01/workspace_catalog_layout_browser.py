@@ -4,6 +4,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from playwright.sync_api import expect, sync_playwright
 
@@ -66,6 +67,7 @@ with sync_playwright() as playwright:
             expect(row).to_have_count(1)
             expect(row.get_by_role("heading")).to_have_text(MAIN_TITLE)
             expect(row.locator("[data-common-content-row-link]")).to_have_text(MAIN_TITLE)
+            expect(row.locator('[data-workspace-column="category"] .mp-cell-label')).to_have_text("Категория каталога")
             expect(row.locator('[data-workspace-column="wb"]')).to_contain_text("На площадке")
             expect(row).to_contain_text("Северный склад")
             expect(row).to_contain_text("Южный склад")
@@ -93,10 +95,84 @@ with sync_playwright() as playwright:
                 ozon_cell = row.locator('[data-workspace-column="ozon"]').bounding_box()
                 assert wb_cell and ozon_cell and abs(wb_cell["y"] - ozon_cell["y"]) <= 1
                 assert wb_cell["x"] + wb_cell["width"] <= ozon_cell["x"] + 1
+            if width == 320:
+                import_entry = page.locator(".mp-head-import-action")
+                updates_entry = page.locator("[data-supplier-updates-entry]")
+                expect(import_entry).to_be_visible()
+                expect(updates_entry).to_be_visible()
+                expect(updates_entry).to_have_attribute("aria-pressed", "false")
+                expect(updates_entry.locator(".mp-supplier-updates-count")).to_be_visible()
+                expect(page.locator(".mp-tabs").get_by_text("Обновления поставщика", exact=True)).to_have_count(0)
+                action_boxes = [control.bounding_box() for control in (import_entry, updates_entry)]
+                assert all(box and box["width"] >= 44 and box["height"] >= 44 for box in action_boxes), action_boxes
+                assert abs(action_boxes[0]["y"] - action_boxes[1]["y"]) <= 1, action_boxes
+                assert action_boxes[0]["x"] + action_boxes[0]["width"] <= action_boxes[1]["x"] + 1, action_boxes
             snapshot = f"catalog-grid-{width}-{theme}.png"
             page.screenshot(path=target / snapshot, animations="disabled")
+
+            if width == 320 and theme == "light":
+                bootstrap = json.loads(page.locator("#mp-bootstrap").text_content())
+                feed_path = urlsplit(bootstrap["urls"]["feed"]).path
+                feed_requests = []
+
+                def feed_response(response, updates):
+                    parsed = urlsplit(response.url)
+                    query = parse_qs(parsed.query)
+                    return (
+                        response.request.method == "GET" and parsed.path == feed_path and
+                        (query.get("updates") == ["1"] if updates else "updates" not in query)
+                    )
+
+                def record_feed_request(request):
+                    parsed = urlsplit(request.url)
+                    if request.method == "GET" and parsed.path == feed_path:
+                        feed_requests.append(parsed.query)
+
+                page.on("request", record_feed_request)
+                page.evaluate("window.__supplierEntryDocumentMarker = 'same-document'")
+
+                before_url = page.url
+                stock_filter = page.get_by_label("Остаток у поставщика")
+                baseline_feed_reads = len(feed_requests)
+                with page.expect_response(lambda response: feed_response(response, False)) as stock_response:
+                    stock_filter.select_option("in_stock")
+                assert stock_response.value.status == 200
+                assert len(feed_requests) == baseline_feed_reads + 1, feed_requests
+
+                updates_entry = page.locator("[data-supplier-updates-entry]")
+                baseline_feed_reads = len(feed_requests)
+                with page.expect_response(lambda response: feed_response(response, True)) as updates_response:
+                    updates_entry.click()
+                assert updates_response.value.status == 200
+                assert len(feed_requests) == baseline_feed_reads + 1, feed_requests
+                update_query = parse_qs(urlsplit(updates_response.value.url).query)
+                assert update_query.get("stock") == ["in_stock"], update_query
+                expect(updates_entry).to_have_attribute("aria-pressed", "true")
+                assert page.url == before_url
+                assert page.evaluate("window.__supplierEntryDocumentMarker") == "same-document"
+
+                baseline_feed_reads = len(feed_requests)
+                with page.expect_response(lambda response: feed_response(response, False)) as all_response:
+                    updates_entry.click()
+                assert all_response.value.status == 200
+                assert len(feed_requests) == baseline_feed_reads + 1, feed_requests
+                all_query = parse_qs(urlsplit(all_response.value.url).query)
+                assert all_query.get("stock") == ["in_stock"], all_query
+                expect(updates_entry).to_have_attribute("aria-pressed", "false")
+                expect(stock_filter).to_have_value("in_stock")
+                assert page.url == before_url
+                assert page.evaluate("window.__supplierEntryDocumentMarker") == "same-document"
+
             checkbox = row.get_by_role("checkbox")
             checkbox.check()
+            if width == 320 and theme == "light":
+                updates_entry = page.locator("[data-supplier-updates-entry]")
+                expect(updates_entry).to_be_disabled()
+                expect(page.locator("[data-supplier-updates-selection-note]")).to_contain_text(
+                    "переход к обновлениям очистил бы выбор"
+                )
+                expect(checkbox).to_be_checked()
+                assert page.evaluate("document.documentElement.scrollWidth === document.documentElement.clientWidth")
             expect(page.locator(".mp-bulkbar")).to_be_visible()
             for group in ("cards", "prices", "create", "refresh"):
                 expect(page.locator(f'[data-bulk-action-group="{group}"]')).to_be_visible()
