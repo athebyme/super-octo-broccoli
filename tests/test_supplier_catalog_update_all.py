@@ -184,7 +184,7 @@ class SupplierCatalogUpdateAllTest(unittest.TestCase):
     @staticmethod
     def _review_count(response, field):
         match = re.search(
-            rb'data-' + field.encode('ascii') + rb'[^>]*>([0-9]+)</dd>',
+            rb'data-' + field.encode('ascii') + rb'[^>]*>\s*([0-9]+)\s*<',
             response.data,
         )
         if not match:
@@ -266,7 +266,10 @@ class SupplierCatalogUpdateAllTest(unittest.TestCase):
         self.assertIn('Проверка обновления'.encode('utf-8'), response.data)
         self.assertIn('Старое имя 1'.encode('utf-8'), response.data)
         self.assertIn('Новое имя 1'.encode('utf-8'), response.data)
-        self.assertIn('Данные не отправляются в WB и Ozon'.encode('utf-8'), response.data)
+        self.assertIn(
+            'Сохранение не отправляет данные в WB или Ozon'.encode('utf-8'),
+            response.data,
+        )
         self.assertIn('no-store', response.headers.get('Cache-Control', '').lower())
         self.db.session.refresh(imported)
         self.assertEqual(
@@ -336,7 +339,10 @@ class SupplierCatalogUpdateAllTest(unittest.TestCase):
             'return_to': '/supplier-catalog',
         })
         self.assertEqual(response.status_code, 200)
-        self.assertIn('Все ваши локальные карточки'.encode('utf-8'), response.data)
+        self.assertIn(
+            'Все связанные локальные карточки этого поставщика.'.encode('utf-8'),
+            response.data,
+        )
         self.assertEqual(self._review_count(response, 'review-requested'), 4)
         self.assertEqual(self._review_count(response, 'review-changed'), 1)
         self.assertEqual(self._review_count(response, 'review-unlinked'), 3)

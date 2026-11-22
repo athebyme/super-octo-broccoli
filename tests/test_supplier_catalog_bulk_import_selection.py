@@ -19,6 +19,7 @@ class _SupplierPageParser(HTMLParser):
         self.update_rows = []
         self.root_state = None
         self.update_select_href = None
+        self.updates_mode_href = None
         self.catalog_cards = 0
         self.text = []
 
@@ -43,6 +44,8 @@ class _SupplierPageParser(HTMLParser):
             self.root_state = attributes.get('x-data')
         if tag == 'a' and 'data-supplier-filter-update-select' in attributes:
             self.update_select_href = attributes.get('href')
+        if tag == 'a' and 'intent=updates' in attributes.get('href', ''):
+            self.updates_mode_href = attributes.get('href')
 
     def handle_data(self, data):
         self.text.append(data)
@@ -242,6 +245,10 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         imported = self._product(title='BulkChoice already imported')
         stale_import = self._product(title='BulkChoice stale update')
         stale_import.content_revision = 2
+        stale_import_out_of_stock = self._product(
+            title='BulkChoice stale update out of stock', quantity=0,
+        )
+        stale_import_out_of_stock.content_revision = 2
         wb_linked = self._product(title='BulkChoice linked on WB')
         non_ai = self._product(title='BulkChoice not parsed', parsed=False)
         out_of_stock = self._product(title='BulkChoice out of stock', quantity=0)
@@ -252,6 +259,7 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         self.db.session.flush()
         self._link_import(imported)
         self._link_import(stale_import, stale=True)
+        self._link_import(stale_import_out_of_stock, stale=True)
         self._link_import(wb_linked, on_wb=True)
         self.db.session.commit()
         free_ids = {str(product.id) for product in free}
@@ -270,6 +278,8 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         self.assertEqual(normal_page.catalog_cards, 50)
         self.assertEqual(len(normal_page.import_rows), 49)
         self.assertEqual(sum(row['checked'] for row in normal_page.import_rows), 0)
+        self.assertEqual(normal_page.update_rows, [])
+        self.assertIsNone(normal_page.update_select_href)
         self.assertIn('select_all=1', normal_html)
         self.assertIn('ai_filter=ai_parsed', normal_html)
 
@@ -282,11 +292,7 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         }
         self.assertEqual(len(review_page.import_rows), 55)
         self.assertEqual(review_page.catalog_cards, 57)
-        self.assertEqual(
-            {row['id'] for row in review_page.update_rows},
-            {str(stale_import.id)},
-        )
-        self.assertEqual(sum(row['checked'] for row in review_page.update_rows), 0)
+        self.assertEqual(review_page.update_rows, [])
         self.assertEqual(checked_ids, free_ids)
         self.assertEqual(sum(row['checked'] for row in review_page.import_rows), 55)
         rendered_titles = {
@@ -312,6 +318,34 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertEqual(set(json.loads(match.group(1))), free_ids)
         self.assertEqual(ImportedProduct.query.count(), before_import_count)
+
+        # The other intent exposes only stale linked rows. A deep link without
+        # an explicit stock filter defaults to all stock states so an out of
+        # stock row whose supplier data changed remains available for refresh.
+        default_stock_path = (
+            f'/supplier-catalog/{self.supplier_id}/products?'
+            'search=BulkChoice&ai_filter=ai_parsed&wb_filter=not_on_wb'
+            '&show_imported=1'
+        )
+        default_stock_page = self._parse_supplier_page(
+            self.client.get(default_stock_path).get_data(as_text=True),
+        )
+        self.assertIsNone(default_stock_page.update_select_href)
+        self.assertIsNotNone(default_stock_page.updates_mode_href)
+        update_intent_path = default_stock_page.updates_mode_href
+        update_intent_query = parse_qs(urlsplit(update_intent_path).query)
+        self.assertEqual(update_intent_query['search'], ['BulkChoice'])
+        self.assertEqual(update_intent_query['stock_status'], ['all'])
+        self.assertEqual(update_intent_query['intent'], ['updates'])
+        self.assertEqual(update_intent_query['updates_only'], ['1'])
+        update_intent_page = self._parse_supplier_page(
+            self.client.get(update_intent_path).get_data(as_text=True),
+        )
+        self.assertEqual(
+            {row['id'] for row in update_intent_page.update_rows},
+            {str(stale_import.id), str(stale_import_out_of_stock.id)},
+        )
+        self.assertEqual(update_intent_page.import_rows, [])
 
     def test_filtered_update_selection_is_exact_bounded_and_separate_from_import(self):
         from models import ImportedProduct
@@ -359,6 +393,7 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         filters = (
             'search=FilteredUpdate&show_imported=1&stock_status=all'
             '&wb_filter=not_on_wb&ai_filter=ai_parsed'
+            '&intent=updates&updates_only=1'
         )
         normal_path = f'/supplier-catalog/{self.supplier_id}/products?{filters}'
         normal_response = self.client.get(normal_path)
@@ -370,7 +405,8 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
             'page': ['1'], 'search': ['FilteredUpdate'],
             'show_imported': ['1'],
             'stock_status': ['all'], 'wb_filter': ['not_on_wb'],
-            'ai_filter': ['ai_parsed'], 'select_all': ['updates'],
+            'ai_filter': ['ai_parsed'], 'intent': ['updates'],
+            'updates_only': ['1'], 'select_all': ['updates'],
         })
 
         review_path = f'{normal_path}&select_all=updates'
@@ -378,7 +414,7 @@ class SupplierCatalogBulkImportSelectionTest(unittest.TestCase):
         self.assertEqual(review_response.status_code, 200)
         review_html = review_response.get_data(as_text=True)
         review_page = self._parse_supplier_page(review_html)
-        self.assertEqual(review_page.catalog_cards, 57)
+        self.assertEqual(review_page.catalog_cards, 55)
         self.assertEqual(review_page.update_select_href, None)
         state = review_page.root_state or ''
         selected_update_match = re.search(
