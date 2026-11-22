@@ -27,8 +27,8 @@
         {'key': 'ozon-operations', 'label': 'Операции Ozon', 'href': url_for('marketplace_operations.index', account_id=operations_nav_account)}
     ] %}
 {% endif %}
-<nav class="operations-history-nav" aria-label="Истории изменений по каналу">
-    <span class="operations-history-nav-label">Истории по каналу</span>
+<nav class="operations-history-nav" aria-label="История изменений на маркетплейсах">
+    <span class="operations-history-nav-label">История изменений</span>
     <div class="operations-history-nav-links">
         {% for item in operation_history_items %}
         {% if operations_history_current == item.key %}

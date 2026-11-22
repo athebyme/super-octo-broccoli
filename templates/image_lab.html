@@ -139,11 +139,11 @@
           </template>
         </select>
         <div x-show="currentMarketplaceTargets.length" x-cloak class="mt-3">
-          <label class="block text-xs text-gray-500 mb-1" for="image-lab-marketplace-target">Целевой канал</label>
+          <label class="block text-xs text-gray-500 mb-1" for="image-lab-marketplace-target">Карточка маркетплейса</label>
           <select id="image-lab-marketplace-target"
                   class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
                   x-model="marketplaceTargetListingId">
-            <option value="">Без канала · только общий результат</option>
+            <option value="">Общий результат для товара</option>
             <template x-for="target in currentMarketplaceTargets" :key="target.listing_id">
               <option :value="String(target.listing_id)"
                       x-text="`Ozon · ${target.account_label} · ${target.offer_id}`"></option>

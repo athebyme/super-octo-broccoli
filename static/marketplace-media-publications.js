@@ -4,7 +4,7 @@
   const labels = {
     draft: 'Только предпросмотр', ready: 'Готово к подтверждению',
     queued: 'В очереди', preflighting: 'Повторная проверка',
-    submitting: 'Отправка', reconciling: 'Сверка с каналом',
+    submitting: 'Отправка', reconciling: 'Сверка с маркетплейсом',
     running: 'В работе', succeeded: 'Подтверждено', partial: 'Есть проблемы',
     uncertain: 'Требует сверки', failed: 'Не применено', conflict: 'Конфликт',
     blocked: 'Недоступно', cancelled: 'Отменено'
