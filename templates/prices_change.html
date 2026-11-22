@@ -2,7 +2,7 @@
 
 {% block title %}Изменить цены - Seller Hub{% endblock %}
 
-{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='20261121-pricing-compact-nav') }}">{% if selection_handoff and not selection_error %}<script src="{{ url_for('static', filename='common-product-content.js', v='20261121-price-result-return-r41') }}"></script>{% endif %}{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='20261122-selection-header') }}">{% if selection_handoff and not selection_error %}<script src="{{ url_for('static', filename='common-product-content.js', v='20261121-price-result-return-r41') }}"></script>{% endif %}{% endblock %}
 
 {% block content %}
 {% if selection_error %}
@@ -18,12 +18,22 @@
     </div>
 </div>
 {% else %}
-<div class="pricing-workspace max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
+<div class="pricing-workspace{% if selection_handoff %} pricing-workspace--selection{% endif %} max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
      x-data='priceChangeApp({{ selection_handoff|default(false)|tojson }}, {{ selected_product_ids|default([])|tojson }}, {owner: {{ ((current_user.id|string) ~ ':' ~ (current_user.seller.id|string))|tojson }}, workspaceUrl: {{ url_for('seller_my_products_beta')|tojson }}})'>
     {% set pricing_workspace_current = 'wb-change' %}
     {% include 'partials/pricing_workspace_nav.html' %}
 
-    <!-- Хлебные крошки -->
+    {% if selection_handoff %}
+    <header class="pricing-selection-header" data-price-selection-header>
+        <div class="pricing-selection-header__content">
+            <p class="pricing-selection-header__eyebrow">Wildberries · массовое изменение</p>
+            <h1 class="pricing-selection-header__title">Изменение цен</h1>
+            <p class="pricing-selection-header__summary" role="status">Выбор закреплён: {{ selected_product_ids|length }} товаров из «Мои товары».</p>
+        </div>
+        <a data-price-workspace-return :href="workspaceReturnHref()" class="pricing-selection-header__return">Вернуться к товарам</a>
+    </header>
+    {% else %}
+    <!-- Standalone mode keeps its existing prices-area breadcrumb and heading. -->
     <nav class="mb-6 text-sm">
         <ol class="flex items-center space-x-2 text-gray-500">
             <li><a href="{{ url_for('prices.prices_dashboard') }}" class="hover:text-indigo-600">Управление ценами</a></li>
@@ -32,24 +42,16 @@
         </ol>
     </nav>
 
-    <!-- Заголовок -->
     <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
         <div class="relative">
             <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Изменение цен</h1>
             <p class="mt-2 text-sm text-gray-400">Выберите товары и укажите параметры изменения цен</p>
         </div>
     </div>
-
-    {% if selection_handoff %}
-    <div class="mb-6 p-4 rounded-xl border border-indigo-200 bg-indigo-50 text-sm text-indigo-900" role="status">
-        Выбор закреплён: {{ selected_product_ids|length }} товаров из «Мои товары».
-        <a data-price-workspace-return :href="workspaceReturnHref()" class="inline-flex items-center min-h-[44px] font-medium underline">Вернуться к товарам</a>
-    </div>
     {% endif %}
 
     <div data-price-review-error x-show="requestError" x-cloak class="mb-6 p-4 rounded-xl border border-red-200 bg-red-50 text-sm text-red-800" role="alert">
         <p x-text="requestError"></p>
-        <a x-show="selectionHandoff" data-price-workspace-return :href="workspaceReturnHref()" class="inline-flex items-center min-h-[44px] mt-2 font-medium underline">Вернуться к товарам</a>
     </div>
 
     <div x-show="pendingReviewSubmission" x-cloak data-price-reviewed-retry-pending class="mb-6 p-4 rounded-xl border border-amber-300 bg-amber-50 text-sm text-amber-950" role="status">
@@ -65,6 +67,7 @@
         <!-- Левая колонка - Параметры изменения -->
         <div class="lg:col-span-1 space-y-6">
             <!-- Выбранные товары -->
+            {% if not selection_handoff %}
             <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4" x-show="selectedIds.length > 0">
                 <div class="flex items-center justify-between mb-3">
                     <h3 class="font-medium text-gray-900">Выбрано товаров</h3>
@@ -74,6 +77,7 @@
                     Очистить выбор
                 </button>
             </div>
+            {% endif %}
 
             <!-- Источник цен -->
             <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
