@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-22T16:15:45.296474+00:00",
+  "generated_at": "2026-11-22T16:45:44.331529+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -2817,7 +2817,7 @@
     },
     {
       "path": "static/supplier-catalog-workspace.css",
-      "sha256": "85a7ea5a8d681207fd36970badaca3b2e4788d83c531b4bae2e0724aae7d090b"
+      "sha256": "aa0029f997eddd51b2b272940561005ac6788b195b7cf46732a6c85f123d84a2"
     },
     {
       "path": "static/supplier-feed-freshness.css",
@@ -3529,7 +3529,7 @@
     },
     {
       "path": "templates/supplier_catalog.html",
-      "sha256": "0491befe6aa81b04a6016859651557c20b045652cc25ed8eabdd2f466f50c07a"
+      "sha256": "4a5c044cc6c517dffb44c5612a1002f411e81e0fe732c80192b8e478d6d1766b"
     },
     {
       "path": "templates/supplier_catalog_product_detail.html",
@@ -3537,11 +3537,11 @@
     },
     {
       "path": "templates/supplier_catalog_products.html",
-      "sha256": "06e7c17f74890480ecca31d5722006f52a11e6d6a5fc26f6e308b82818a0b9dd"
+      "sha256": "def49b0912ae813630b5de33bfa5aa2fe7003e4b14450a879e1d3a64b559c8b7"
     },
     {
       "path": "templates/supplier_catalog_update_review.html",
-      "sha256": "c264254ce2992511b97e9723dcd30fcc2b663934570514478d761353908b2e52"
+      "sha256": "dac0ce95d788a245b57ade1d15cd4f2bfdb8f8113ee8ed259aad14b48655edee"
     },
     {
       "path": "templates/supplier_updates.html",
@@ -5185,7 +5185,7 @@
     },
     {
       "path": "tests/ux01/journey_browser.py",
-      "sha256": "fc6b74e9862f38fcc37516a45931dd99bd6fd8ba813d5971c51e8aead5cac6b7"
+      "sha256": "e24aba0ebd0b439a144cb11cdf5a3377d44149be7e20e0b4b3b0f524d40e312d"
     },
     {
       "path": "tests/ux01/listing_browser.py",
@@ -5209,8 +5209,8 @@
     },
     {
       "path": "tests/ux01/workspace_browser.py",
-      "sha256": "41d04281515c9a4bd495df742fa1a24e924ea3a509e73752771bd2da8764ee1f"
+      "sha256": "6dafc53856f7efe7357f960b8345dbd4dd66acd4f858d5b2d1defc87c2920017"
     }
   ],
-  "aggregate_sha256": "04abf642b4e82659d0f4d8e4432391a8b66eedf0827c457a83c52f9e549a8351"
+  "aggregate_sha256": "b8cca171e0b81d104318e92531508cab33ff312aabf4c001e0d41992541ff42b"
 }
