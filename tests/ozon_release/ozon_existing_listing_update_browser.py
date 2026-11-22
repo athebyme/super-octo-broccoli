@@ -509,15 +509,31 @@ def exercise_workspace_update(page):
     workspace = page.locator("#my-products-app:not([v-cloak])")
     workspace.wait_for()
     search = page.get_by_role("searchbox", name="Название, бренд или артикул")
-    search.fill("R56 workspace item")
-    page.get_by_label("Сортировка").select_option("title")
+    workspace_titles = [
+        "R56 workspace item 0", "R56 workspace item 1", "R56 workspace item 2",
+    ]
+    with page.expect_response(lambda response: (
+        response.request.method == "GET"
+        and urlsplit(response.url).path == "/api/my-products"
+        and parse_qs(urlsplit(response.url).query).get("search") == ["R56 workspace item"]
+        and parse_qs(urlsplit(response.url).query).get("sort") == ["title"]
+    )) as filtered_feed_info:
+        search.fill("R56 workspace item")
+        page.get_by_label("Сортировка").select_option("title")
+    filtered_feed = filtered_feed_info.value
+    assert filtered_feed.status == 200
+    filtered_data = filtered_feed.json()
+    assert filtered_data["success"] is True
+    assert filtered_data["pagination"]["total"] == 3
+    assert [item["title"] for item in filtered_data["items"]] == workspace_titles
     rows = workspace.locator("article.mp-row")
-    rows.nth(2).wait_for()
+    page.wait_for_function("""expected => {
+        const rows = Array.from(document.querySelectorAll('#my-products-app article.mp-row'));
+        return rows.length === expected.length && rows.every((row, index) =>
+            row.querySelector('.mp-title')?.textContent.trim() === expected[index]);
+    }""", arg=workspace_titles)
     assert rows.count() == 3
     expected_titles = ["R56 workspace item 0", "R56 workspace item 1"]
-    assert [row.locator(".mp-title").inner_text() for row in rows.all()] == [
-        *expected_titles, "R56 workspace item 2",
-    ]
     for title in expected_titles:
         workspace.get_by_role("checkbox", name="Выбрать " + title, exact=True).check()
     chosen = workspace.get_by_role("button", name="Что сделать", exact=True)
@@ -604,10 +620,28 @@ def exercise_workspace_update(page):
     return_link.wait_for()
     assert return_link.inner_text().strip().endswith("К моим товарам")
     assert return_link.get_attribute("href") == workspace_state["return_to"]
-    return_link.click()
-
+    with page.expect_response(lambda response: (
+        response.request.method == "GET"
+        and urlsplit(response.url).path == "/api/my-products"
+        and parse_qs(urlsplit(response.url).query).get("search") == ["R56 workspace item"]
+        and parse_qs(urlsplit(response.url).query).get("sort") == ["title"]
+    )) as restored_feed_info:
+        return_link.click()
+    restored_feed = restored_feed_info.value
+    assert restored_feed.status == 200
+    restored_data = restored_feed.json()
+    assert restored_data["success"] is True
+    assert restored_data["pagination"]["total"] == 3
+    assert [item["title"] for item in restored_data["items"]] == workspace_titles
     workspace.wait_for()
-    page.wait_for_function("document.querySelectorAll('#my-products-app article.mp-row').length === 3")
+    page.wait_for_function("""expected => {
+        const rows = Array.from(document.querySelectorAll('#my-products-app article.mp-row'));
+        if (rows.length !== expected.length) return false;
+        const titles = rows.map(row => row.querySelector('.mp-title')?.textContent.trim());
+        const selected = rows.map(row => !!row.querySelector('.mp-check input')?.checked);
+        return titles.every((title, index) => title === expected[index]) &&
+            selected.join(',') === 'true,true,false';
+    }""", arg=workspace_titles)
     assert search.input_value() == "R56 workspace item"
     assert page.get_by_label("Сортировка").input_value() == "title"
     for title in expected_titles:
