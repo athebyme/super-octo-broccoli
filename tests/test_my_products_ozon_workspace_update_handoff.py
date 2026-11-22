@@ -450,4 +450,3 @@ class MyProductsOzonWorkspaceUpdateHandoffTest(unittest.TestCase):
         self.assertIsNotNone(helper_asset)
         self.assertRegex(js_asset.group(1), r"^\d{8}-[a-z0-9][a-z0-9-]*$")
         self.assertRegex(helper_asset.group(1), r"^\d{8}-[a-z0-9][a-z0-9-]*$")
-
