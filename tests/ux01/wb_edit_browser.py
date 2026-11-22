@@ -2831,6 +2831,11 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             # characteristic-only edit must preserve nullable values and the
             # exact stored title without asking the seller to repair the form.
             with seller_app.app_context():
+                provider_card = FakeWBClient._read_full_card(900000)
+                pre_single_fake_core_values = {
+                    field: provider_card.get(field)
+                    for field in ("vendorCode", "title", "description", "brand")
+                }
                 single_product = Product.query.filter_by(
                     id=fixture["product_id"], seller_id=fixture["seller_id"],
                 ).one()
@@ -2842,6 +2847,13 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
                 single_product.title = "  Pipedream Synthetic Product 000  "
                 single_product.description = None
                 single_product.brand = None
+                provider_card.update({
+                    "vendorCode": single_product.vendor_code or "",
+                    "title": single_product.title,
+                    "description": single_product.description,
+                    "brand": single_product.brand,
+                })
+                _FAKE_WB_CARDS[900000] = FakeWBClient._copy_card(provider_card)
                 db.session.commit()
 
             single_edit_path = f"/products/{fixture['product_id']}/edit"
@@ -3438,6 +3450,18 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
                 "characteristics": [
                     {"id": 202, "value": ["Россия"]},
                 ],
+                "fake_provider_core_before": {
+                    "vendor_code": "PD-000",
+                    "title": "  Pipedream Synthetic Product 000  ",
+                    "description": None,
+                    "brand": None,
+                },
+                "fake_provider_core_after": {
+                    "vendor_code": "PD-000",
+                    "title": "  Pipedream Synthetic Product 000  ",
+                    "description": None,
+                    "brand": None,
+                },
                 "full_card_read_before": True,
                 "full_card_patch_merged": True,
                 "full_card_readback": True,
@@ -3793,6 +3817,10 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
                 ).one()
                 for field, value in pre_single_core_values.items():
                     setattr(single_product, field, value)
+                provider_card = FakeWBClient._read_full_card(900000)
+                for field, value in pre_single_fake_core_values.items():
+                    provider_card[field] = value
+                _FAKE_WB_CARDS[900000] = FakeWBClient._copy_card(provider_card)
                 db.session.commit()
 
             # Filter change resets the stored exact set rather than expanding
