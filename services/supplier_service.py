@@ -32,7 +32,7 @@ from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
 import requests
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import joinedload, selectinload
 
 from models import (
@@ -3295,6 +3295,30 @@ class SupplierService:
             raise
 
     @staticmethod
+    def stale_supplier_product_ids_select(seller_id: int, supplier_id: int):
+        """Select source IDs with at least one stale copy owned by this seller.
+
+        Keep this as an independent subquery instead of a correlated EXISTS on
+        each SupplierProduct row. SQLite can scan the seller/supplier slice of
+        imported_products once, then look up each source by its primary key.
+        """
+        return (
+            select(ImportedProduct.supplier_product_id)
+            .select_from(ImportedProduct)
+            .join(
+                SupplierProduct,
+                SupplierProduct.id == ImportedProduct.supplier_product_id,
+            )
+            .where(
+                ImportedProduct.seller_id == seller_id,
+                ImportedProduct.supplier_id == supplier_id,
+                SupplierProduct.supplier_id == supplier_id,
+                ImportedProduct.supplier_content_revision
+                < SupplierProduct.content_revision,
+            )
+        )
+
+    @staticmethod
     def get_available_products_for_seller(seller_id: int, supplier_id: int,
                                           page: int = 1, per_page: int = 50,
                                           search: str = None,
@@ -3316,16 +3340,10 @@ class SupplierService:
         q = q.filter(SupplierProduct.status.in_(['draft', 'validated', 'ready']))
 
         if updates_only:
-            stale_supplier_copy_exists = db.session.query(
-                ImportedProduct.id
-            ).filter(
-                ImportedProduct.seller_id == seller_id,
-                ImportedProduct.supplier_id == supplier_id,
-                ImportedProduct.supplier_product_id == SupplierProduct.id,
-                ImportedProduct.supplier_content_revision
-                < SupplierProduct.content_revision,
-            ).exists()
-            q = q.filter(stale_supplier_copy_exists)
+            stale_source_ids = SupplierService.stale_supplier_product_ids_select(
+                seller_id, supplier_id,
+            )
+            q = q.filter(SupplierProduct.id.in_(stale_source_ids))
 
         # Фильтр по статусу на WB (uses pre-computed set including vendor_code matches)
         if wb_filter in ('on_wb', 'not_on_wb'):

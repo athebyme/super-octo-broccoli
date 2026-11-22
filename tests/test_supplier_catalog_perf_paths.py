@@ -12,6 +12,8 @@ import json
 import os
 import unittest
 
+from sqlalchemy import event, text
+
 
 class _DBTestCase(unittest.TestCase):
     @classmethod
@@ -202,6 +204,156 @@ class TestSupplierCatalogBadges(_DBTestCase):
         ).get_data(as_text=True)
         self.assertIn('Товар свободный', html_off)
         self.assertNotIn('Товар уже на WB', html_off)
+
+
+class TestSupplierCatalogStaleUpdatePlan(_DBTestCase):
+    def test_updates_filter_uses_one_uncorrelated_stale_copy_scan(self):
+        from models import (
+            User, Seller, Supplier, SellerSupplier, SupplierProduct,
+            ImportedProduct,
+        )
+
+        # Match the production indexes used by the bounded query-plan check.
+        self.db.session.execute(text(
+            'CREATE INDEX idx_imported_supplier ON imported_products(supplier_id)'
+        ))
+        self.db.session.execute(text(
+            'CREATE INDEX idx_supplier_product_confidence '
+            'ON supplier_products(supplier_id, parsing_confidence)'
+        ))
+
+        user = User(username='stale_plan_seller', email='stale-plan@example.com',
+                    password_hash='x')
+        other_user = User(username='stale_plan_other',
+                          email='stale-plan-other@example.com', password_hash='x')
+        supplier = Supplier(name='PlanSupplier', code='plan-supplier')
+        other_supplier = Supplier(name='OtherPlanSupplier',
+                                  code='other-plan-supplier')
+        self.db.session.add_all([user, other_user, supplier, other_supplier])
+        self.db.session.flush()
+        seller = Seller(user_id=user.id, company_name='Plan seller')
+        other_seller = Seller(user_id=other_user.id, company_name='Other seller')
+        self.db.session.add_all([seller, other_seller])
+        self.db.session.flush()
+        self.db.session.add(SellerSupplier(
+            seller_id=seller.id, supplier_id=supplier.id, is_active=True,
+        ))
+
+        stale = SupplierProduct(
+            supplier_id=supplier.id, external_id='stale', title='Stale',
+            status='ready', supplier_quantity=4, content_revision=3,
+        )
+        current = SupplierProduct(
+            supplier_id=supplier.id, external_id='current', title='Current',
+            status='ready', supplier_quantity=4, content_revision=3,
+        )
+        other_seller_copy = SupplierProduct(
+            supplier_id=supplier.id, external_id='other-seller',
+            title='Other seller only', status='ready', supplier_quantity=4,
+            content_revision=3,
+        )
+        mismatched_copy = SupplierProduct(
+            supplier_id=supplier.id, external_id='mismatched-copy',
+            title='Mismatched supplier binding', status='ready',
+            supplier_quantity=4, content_revision=3,
+        )
+        foreign_source = SupplierProduct(
+            supplier_id=other_supplier.id, external_id='foreign-source',
+            title='Foreign source', status='ready', supplier_quantity=4,
+            content_revision=3,
+        )
+        self.db.session.add_all([
+            stale, current, other_seller_copy, mismatched_copy, foreign_source,
+        ])
+        self.db.session.flush()
+        self.db.session.add_all([
+            # One stale and one current copy: any valid stale own copy keeps
+            # this source eligible, matching the signed review's copy logic.
+            ImportedProduct(
+                seller_id=seller.id, supplier_id=supplier.id,
+                supplier_product_id=stale.id, supplier_content_revision=2,
+            ),
+            ImportedProduct(
+                seller_id=seller.id, supplier_id=supplier.id,
+                supplier_product_id=stale.id, supplier_content_revision=3,
+            ),
+            ImportedProduct(
+                seller_id=seller.id, supplier_id=supplier.id,
+                supplier_product_id=current.id, supplier_content_revision=3,
+            ),
+            ImportedProduct(
+                seller_id=other_seller.id, supplier_id=supplier.id,
+                supplier_product_id=other_seller_copy.id,
+                supplier_content_revision=1,
+            ),
+            ImportedProduct(
+                seller_id=seller.id, supplier_id=other_supplier.id,
+                supplier_product_id=mismatched_copy.id,
+                supplier_content_revision=1,
+            ),
+            ImportedProduct(
+                seller_id=seller.id, supplier_id=supplier.id,
+                supplier_product_id=foreign_source.id,
+                supplier_content_revision=1,
+            ),
+        ])
+        self.db.session.commit()
+
+        statements = []
+
+        def capture_catalog_select(_conn, _cursor, statement, parameters,
+                                   _context, _executemany):
+            if (statement.lstrip().upper().startswith('SELECT')
+                    and 'supplier_products' in statement
+                    and 'imported_products' in statement):
+                statements.append((statement, parameters))
+
+        event.listen(self._engine, 'before_cursor_execute', capture_catalog_select)
+        try:
+            client = self.app.test_client()
+            with client.session_transaction() as session:
+                session['_user_id'] = str(user.id)
+                session['_fresh'] = True
+            response = client.get(
+                f'/supplier-catalog/{supplier.id}/products'
+                '?updates_only=1&show_imported=1&stock_status=all'
+            )
+        finally:
+            event.remove(
+                self._engine, 'before_cursor_execute', capture_catalog_select,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('Stale', html)
+        self.assertNotIn('Other seller only', html)
+        self.assertNotIn('Mismatched supplier binding', html)
+        self.assertNotIn('Foreign source', html)
+        stale_queries = [
+            item for item in statements
+            if 'supplier_content_revision' in item[0]
+        ]
+        self.assertTrue(stale_queries, 'expected the route stale-source queries')
+
+        # Explain the exact SQL generated by the seller catalog endpoint with
+        # the same bound parameters. The former correlated predicate rescanned
+        # this index for each outer source row; the new plan materializes a list.
+        with self._engine.connect() as connection:
+            for statement, parameters in stale_queries:
+                plan = [
+                    row[3] for row in connection.exec_driver_sql(
+                        'EXPLAIN QUERY PLAN ' + statement, parameters,
+                    ).all()
+                ]
+                self.assertFalse(
+                    any('CORRELATED SCALAR SUBQUERY' in row for row in plan),
+                    plan,
+                )
+                self.assertTrue(any('LIST SUBQUERY' in row for row in plan), plan)
+                imported_scans = [
+                    row for row in plan if 'imported_products' in row.lower()
+                ]
+                self.assertEqual(len(imported_scans), 1, plan)
 
 
 if __name__ == '__main__':

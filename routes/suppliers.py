@@ -2994,18 +2994,14 @@ def register_supplier_routes(app):
             show_imported or wb_filter == 'on_wb' or updates_only
         )
 
-        stale_supplier_copy_exists = db.session.query(
-            ImportedProduct.id
-        ).filter(
-            ImportedProduct.seller_id == seller.id,
-            ImportedProduct.supplier_id == supplier_id,
-            ImportedProduct.supplier_product_id == SupplierProduct.id,
-            ImportedProduct.supplier_content_revision
-            < SupplierProduct.content_revision,
-        ).exists()
+        stale_supplier_product_ids = (
+            SupplierService.stale_supplier_product_ids_select(
+                seller.id, supplier_id,
+            )
+        )
         supplier_update_count = SupplierProduct.query.filter(
             SupplierProduct.supplier_id == supplier_id,
-            stale_supplier_copy_exists,
+            SupplierProduct.id.in_(stale_supplier_product_ids),
         ).count()
 
         # Определение «уже на WB»: по связи ImportedProduct → Product и по
@@ -3147,7 +3143,7 @@ def register_supplier_routes(app):
             for row in db.session.query(SupplierProduct.id).filter(
                 SupplierProduct.supplier_id == supplier_id,
                 SupplierProduct.id.in_(page_sp_ids),
-                stale_supplier_copy_exists,
+                SupplierProduct.id.in_(stale_supplier_product_ids),
             ).all()
         } if page_sp_ids else set()
         selected_import_ids = [
