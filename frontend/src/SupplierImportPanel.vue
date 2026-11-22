@@ -129,12 +129,17 @@ export default {
   watch: {
     open(isOpen) {
       if (!isOpen) return;
+      const hadSupplier = !!this.supplierId;
       this.initializeSupplier();
-      if (this.selectedSupplier && !this.source && !this.loading) this.loadPage(1);
+      if (hadSupplier && this.selectedSupplier && !this.source && !this.loading &&
+          !this.pending && !this.storageProblem) this.loadPage(1);
       this.$nextTick(() => this.$refs.title?.focus({ preventScroll: true }));
     },
     supplierId(next, previous) {
       if (next === previous) return;
+      clearTimeout(this.searchTimer);
+      this.searchTimer = null;
+      this.cancelRead();
       this.selectedIds = [];
       this.source = null;
       this.page = 1;
@@ -152,8 +157,9 @@ export default {
   mounted() {
     this.restorePending();
     if (this.open) {
+      const hadSupplier = !!this.supplierId;
       this.initializeSupplier();
-      if (this.selectedSupplier) this.loadPage(1);
+      if (hadSupplier && this.selectedSupplier && !this.pending && !this.storageProblem) this.loadPage(1);
     }
   },
   beforeUnmount() {
@@ -307,10 +313,13 @@ export default {
     scheduleFilterRead() {
       if (!this.open || this.pending || this.storageProblem || !this.supplierId) return;
       clearTimeout(this.searchTimer);
+      this.cancelRead();
+      this.selectedIds = [];
+      this.page = 1;
+      this.source = null;
+      this.error = '';
+      this.status = '';
       this.searchTimer = setTimeout(() => {
-        this.selectedIds = [];
-        this.page = 1;
-        this.source = null;
         this.loadPage(1);
       }, 250);
     },
@@ -626,7 +635,7 @@ export default {
         <p v-else-if="status" class="mp-import-message" role="status" aria-live="polite">{{ status }}</p>
         <p v-if="selectionReason" class="mp-import-selection-reason" role="status">{{ selectionReason }}</p>
         <p v-else-if="source && filterSelectionCount > 200" class="mp-import-selection-reason" role="status">
-          По текущему фильтру доступно {{ filterSelectionCount }} товаров; за один импорт можно выбрать не больше 200.
+          По текущему фильтру больше 200 строк. Уточните условия или выберите доступные товары на страницах.
         </p>
 
         <div class="mp-import-list-head">
@@ -682,7 +691,7 @@ export default {
           <span>выбрано для импорта</span>
           <button v-if="canSelectAllFiltered" type="button" class="mp-import-all" data-supplier-import-select-filtered
                   :disabled="loadingAll || submitting" @click="selectAllFiltered">
-            {{ loadingAll ? 'Проверяем набор…' : 'Выбрать все ' + filterSelectionCount + ' по фильтру' }}
+            {{ loadingAll ? 'Проверяем набор…' : 'Проверить и выбрать весь список по фильтру' }}
           </button>
         </div>
         <button type="submit" class="sh-btn sh-btn--primary mp-import-submit" data-supplier-import-submit :disabled="!canSubmit">

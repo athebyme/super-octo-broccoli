@@ -248,6 +248,7 @@
     gap: 3px;
     align-items: flex-start;
     min-width: 108px;
+    max-width: 100%;
 }
 .mp-chan {
     display: inline-flex;
@@ -263,6 +264,8 @@
 .mp-chan b { color: var(--text); font-variant-numeric: tabular-nums; }
 .mp-chan--off { color: var(--text-muted); background: transparent; padding-left: 0; }
 .mp-chan--draft { color: var(--text-muted); font-style: italic; }
+.mp-chan--accounted { max-width:100%; flex-wrap:wrap; white-space:normal; overflow-wrap:anywhere; }
+.mp-chan-account { max-width:100%; color:var(--text-muted); font-size:10px; font-style:normal; line-height:1.25; overflow-wrap:anywhere; }
 .mp-dot { width: 6px; height: 6px; border-radius: 50%; }
 .mp-dot--wb { background: var(--mp-wb); }
 .mp-dot--ozon { background: var(--mp-ozon); }
@@ -348,6 +351,18 @@
 .mp-ozon-message { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; margin:12px 0; padding:13px 16px; border:1px solid var(--border); border-left:3px solid var(--warn); border-radius:7px; background:var(--bg-card); color:var(--text-secondary); font-size:13px; line-height:1.5; }
 .mp-ozon-message--error { border-left-color:var(--danger); }
 .mp-ozon-message p { margin:4px 0 0; }
+.mp-ozon-message--prepared { align-items:flex-start; border-left-color:var(--accent); }
+.mp-ozon-receipt-copy { flex:1 1 320px; min-width:0; overflow-wrap:anywhere; }
+.mp-ozon-receipt-copy > strong { color:var(--text); }
+.mp-ozon-receipt-copy [data-ozon-local-prepare-scope] { color:var(--text); font-weight:600; }
+.mp-ozon-message--prepared:focus { outline:2px solid var(--focus-outline); outline-offset:2px; }
+.mp-ozon-message--prepared .mp-ozon-actions { flex:0 1 auto; }
+.mp-ozon-message--prepared .sh-btn { min-height:44px; }
+.mp-ozon-receipt-scope { flex:1 1 100%; min-width:0; }
+.mp-ozon-receipt-scope summary { display:flex; align-items:center; width:max-content; max-width:100%; min-height:44px; color:var(--text-secondary); font-size:12px; cursor:pointer; }
+.mp-ozon-receipt-scope summary:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
+.mp-ozon-receipt-scope ol { max-height:180px; overflow:auto; margin:0; padding:6px 10px 6px 30px; border:1px solid var(--border); border-radius:var(--r-sm); color:var(--text-secondary); font-size:12px; }
+.mp-ozon-receipt-scope li { padding:3px 0; overflow-wrap:anywhere; }
 .mp-ozon-dialog { width:min(94vw,560px); max-height:90vh; padding:25px; border:1px solid var(--border); border-radius:10px; background:var(--bg-card); color:var(--text); box-shadow:0 25px 75px #0005; }
 .mp-ozon-dialog::backdrop { background:#171a1dcc; }
 .mp-ozon-dialog-head { display:flex; justify-content:space-between; align-items:start; gap:12px; }

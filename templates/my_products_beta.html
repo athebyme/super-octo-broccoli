@@ -6,8 +6,8 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261122-ozon-local-prepare-r59') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261122-supplier-import-r60') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261122-unified-import-r60b') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261122-unified-import-r60b') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
     'wbConnected': wb_connected,
@@ -67,19 +67,48 @@
             <strong>{{ supplierImportOutcome.imported > 0 ?
                 (supplierImportOutcome.errors || supplierImportOutcome.skipped ? 'Импорт завершён частично' : 'Импорт завершён') :
                 'Новых товаров не добавлено' }}</strong>
-            <span>Добавлено: {{ supplierImportOutcome.imported }} · пропущено: {{ supplierImportOutcome.skipped }} · ошибок: {{ supplierImportOutcome.errors }}</span>
-            <span v-if="supplierImportOutcome.drafts_status === 'complete'">
+            <span v-if="supplierImportOutcomeIsCompact">Импортировано {{ supplierImportOutcome.imported }} {{ $fmt.plural(supplierImportOutcome.imported, 'товар', 'товара', 'товаров') }}.</span>
+            <span v-else>Добавлено: {{ supplierImportOutcome.imported }} · пропущено: {{ supplierImportOutcome.skipped }} · ошибок: {{ supplierImportOutcome.errors }}</span>
+            <span v-if="supplierImportOutcome.drafts_status === 'complete' && (supplierImportOutcome.drafts_created || supplierImportOutcome.draft_errors)">
                 Черновики Ozon: {{ supplierImportOutcome.drafts_created }} · требуют внимания: {{ supplierImportOutcome.draft_errors }}
             </span>
-            <span v-else>Итог подготовки черновиков Ozon пока не подтверждён. Проверьте раздел «Черновики Ozon».</span>
-            <span v-if="supplierImportOutcome.imported > 0 && importBatchSelectionPending">
+            <span v-else-if="supplierImportOutcome.drafts_status !== 'complete'">Итог подготовки черновиков Ozon пока не подтверждён. Проверьте раздел «Черновики Ozon».</span>
+            <span v-if="supplierImportOutcome.imported > 0 && importBatchSelectionPending && !importBatchSelectionVerified">
                 Проверяем точный список добавленных товаров перед выбором.
             </span>
         </div>
-        <a v-if="supplierImportOutcome.imported > 0 && supplierImportFallbackUrl"
+        <a v-if="supplierImportOutcome.imported > 0 && supplierImportFallbackUrl && !importBatchSelectionVerified"
            class="sh-btn sh-btn--secondary" :href="supplierImportFallbackUrl">Открыть точный список</a>
         <button type="button" class="mp-import-outcome-close" aria-label="Скрыть итог импорта"
                 @click="supplierImportOutcome = null">Скрыть</button>
+    </section>
+    <section v-if="ozonInlineReceiptVisible" ref="ozonInlineReceipt"
+             class="mp-ozon-message mp-ozon-message--prepared" data-ozon-local-prepare-receipt
+             role="region" aria-labelledby="ozon-local-prepare-title" tabindex="-1">
+        <div class="mp-ozon-receipt-copy">
+            <strong id="ozon-local-prepare-title">Подготовка принята</strong>
+            <p>Черновики сохраняются в Seller Hub. На Ozon ничего не отправлено; отправка потребует отдельного подтверждения.</p>
+            <p data-ozon-local-prepare-scope>
+                Этот запуск · {{ ozonInlineReceipt.latest.product_ids.length }} товаров · {{ ozonInlineReceipt.latest.account_label }}.
+            </p>
+            <p v-if="ozonInlineReceiptStorageProblem" role="status">
+                Браузер не сохранил квитанцию для этой вкладки. Откройте запуск или проверьте историю до закрытия страницы.
+            </p>
+        </div>
+        <div class="mp-ozon-actions">
+            <a v-if="ozonInlineReceiptUrl" class="sh-btn sh-btn--secondary"
+               data-ozon-local-prepare-run :href="ozonInlineReceiptUrl">Открыть подготовку</a>
+            <a v-if="ozonInlineReceiptStorageProblem" class="sh-btn sh-btn--secondary"
+               :href="urls.ozonUploads">История запусков</a>
+        </div>
+        <details v-if="ozonInlineReceiptHasScope" class="mp-ozon-receipt-scope">
+            <summary>Состав последнего запуска</summary>
+            <ol>
+                <li v-for="item in ozonInlineReceipt.latest.product_labels" :key="item.id">
+                    {{ item.label }} · ID {{ item.id }}
+                </li>
+            </ol>
+        </details>
     </section>
 
     <header class="shk-head">
@@ -253,10 +282,10 @@
     <div v-if="ozonError" ref="ozonError" class="mp-ozon-message mp-ozon-message--error" role="alert" tabindex="-1">{{ ozonError }}</div>
     <div v-if="ozonPriceError" ref="ozonPriceError" class="mp-ozon-message mp-ozon-message--error" role="alert" tabindex="-1">{{ ozonPriceError }}</div>
     <div v-if="ozonSessionEnded" class="mp-ozon-message" role="status">Действия Ozon остановлены. Войдите снова и проверьте состояние подготовки.</div>
-    <div v-if="ozonStorageProblem" class="mp-ozon-message" role="status"><div><strong>Сохранённый результат подготовки нельзя прочитать.</strong><p>Проверьте историю запусков перед новым действием.</p></div><div class="mp-ozon-actions"><a class="sh-btn sh-btn--secondary" :href="urls.ozonUploads">История запусков</a><button type="button" class="sh-btn sh-btn--secondary" @click="clearOzonStorageProblem">Я проверил историю</button></div></div>
-    <div v-if="ozonPending" class="mp-ozon-message" role="status">
+    <div v-if="ozonStorageProblem" class="mp-ozon-message" data-ozon-preparation-storage-problem role="status"><div><strong>Сохранённый результат подготовки нельзя прочитать.</strong><p>Проверьте историю запусков перед новым действием.</p></div><div class="mp-ozon-actions"><a class="sh-btn sh-btn--secondary" data-ozon-preparation-history :href="urls.ozonUploads">История запусков</a><button type="button" class="sh-btn sh-btn--secondary" @click="clearOzonStorageProblem">Я проверил историю</button></div></div>
+    <div v-if="ozonPending" class="mp-ozon-message" data-ozon-preparation-pending role="status">
         <div><strong>Результат локальной подготовки пока неизвестен.</strong><p>{{ ozonPending.imported_product_ids.length }} товаров · магазин № {{ ozonPending.account_id }}. Сначала проверьте запуск по сохранённому ключу. Повтор возможен только вручную с тем же ключом и набором товаров.</p></div>
-        <div class="mp-ozon-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!ozonBusy || ozonSessionEnded" @click="readOzonPending">{{ ozonBusy === 'read' ? 'Проверяем…' : 'Проверить результат' }}</button><button v-if="ozonRetrySameKey" type="button" class="sh-btn sh-btn--secondary" :disabled="!!ozonBusy || ozonSessionEnded" @click="retryOzonPending">Повторить тот же запрос</button></div>
+        <div class="mp-ozon-actions"><button type="button" class="sh-btn sh-btn--secondary" data-ozon-preparation-reconcile :disabled="!!ozonBusy || ozonSessionEnded" @click="readOzonPending">{{ ozonBusy === 'read' ? 'Проверяем…' : 'Проверить результат' }}</button><button v-if="ozonRetrySameKey" type="button" class="sh-btn sh-btn--secondary" data-ozon-preparation-retry :disabled="!!ozonBusy || ozonSessionEnded" @click="retryOzonPending">Повторить тот же запрос</button></div>
     </div>
 
     <div class="mp-listhead" :class="{'mp-listhead--import-batch': importBatchMode || supplierRefreshBatchMode}" v-if="items.length || loading">
@@ -343,12 +372,20 @@
 
                 <template v-if="ozonEnabled">
                     <span v-for="listing in (item.ozon ? item.ozon.listings : [])" :key="'l' + listing.id"
-                          class="mp-chan mp-chan--ozon" :title="listing.account_label">
-                        <i class="mp-dot mp-dot--ozon"></i>Ozon
+                          class="mp-chan mp-chan--ozon" :class="{'mp-chan--accounted': ozonAccounts.length > 1}"
+                          :title="listing.account_label">
+                        <i class="mp-dot mp-dot--ozon"></i><span>Ozon</span>
+                        <small v-if="ozonAccounts.length > 1" class="mp-chan-account">
+                            {{ listing.account_label || (listing.account_id ? ('Магазин №' + listing.account_id) : 'Магазин Ozon') }}
+                        </small>
                     </span>
                     <span v-for="draft in (item.ozon ? item.ozon.drafts : [])" :key="'d' + draft.id"
-                          class="mp-chan mp-chan--draft" :title="'Черновик · ' + draft.account_label">
-                        черновик
+                          class="mp-chan mp-chan--draft" :class="{'mp-chan--accounted': ozonAccounts.length > 1}"
+                          :title="'Черновик · ' + draft.account_label">
+                        <span>{{ ozonAccounts.length > 1 ? 'Черновик' : 'Черновик Ozon' }}</span>
+                        <small v-if="ozonAccounts.length > 1" class="mp-chan-account">
+                            {{ draft.account_label || (draft.account_id ? ('Магазин №' + draft.account_id) : 'Магазин Ozon') }}
+                        </small>
                     </span>
                 </template>
             </div>
@@ -410,7 +447,29 @@
                     @click="selected = []">Снять</button>
         </div>
         <div class="mp-bulk-intents" role="group" aria-label="Основные действия">
-            <div v-for="group in bulkIntentGroups" :key="group.key" class="mp-bulk-intent-group"
+            <section v-if="showSupplierImportNextSteps" class="mp-import-next-steps"
+                     data-supplier-import-next-steps role="group"
+                     aria-label="Следующие действия для проверенного импорта">
+                <div class="mp-import-next-copy">
+                    <strong>Дальше по этому импорту</strong>
+                    <span data-supplier-import-next-scope>Действие применится к выбранным товарам.</span>
+                </div>
+                <div v-if="supplierImportNextActionGroup && supplierImportNextActionGroup.actions.length"
+                     class="mp-import-next-actions">
+                    <button v-for="action in supplierImportNextActionGroup.actions" :key="action.key"
+                            type="button" class="mp-import-next-action"
+                            :data-supplier-import-next-action="action.key"
+                            :data-bulk-action-key="action.key"
+                            :disabled="action.disabled" :title="action.hint || null"
+                            @click="runBulkIntentAction(action, $event)">
+                        {{ action.shortLabel }}
+                    </button>
+                </div>
+                <p v-else class="mp-import-next-empty">
+                    {{ supplierImportNextActionGroup ? supplierImportNextActionGroup.emptyHint : 'Нет доступных действий для этого выбора.' }}
+                </p>
+            </section>
+            <div v-for="group in bulkIntentGroupsForDisplay" :key="group.key" class="mp-bulk-intent-group"
                  @keydown.esc.stop.prevent="closeBulkActionPanel(true)">
                 <button type="button" class="mp-bulk-intent"
                         :data-bulk-action-group="group.key"
@@ -510,7 +569,7 @@
                     type="button" class="sh-btn sh-btn--primary" disabled>Обновляем…</button>
         </div>
     </dialog>
-    <dialog ref="ozonDialog" class="mp-ozon-dialog mp-ozon-dialog--prepare" aria-labelledby="mp-ozon-dialog-title" aria-describedby="mp-ozon-dialog-help" @cancel.prevent="closeOzonDialog">
+    <dialog ref="ozonDialog" class="mp-ozon-dialog mp-ozon-dialog--prepare" data-ozon-preparation-dialog aria-labelledby="mp-ozon-dialog-title" aria-describedby="mp-ozon-dialog-help" @cancel.prevent="closeOzonDialog">
         <div class="mp-ozon-dialog-head"><div><p class="mp-ozon-eyebrow">Ozon · локальная подготовка</p><h2 id="mp-ozon-dialog-title" ref="ozonDialogTitle" tabindex="-1">Подготовить {{ ozonIds.length }} {{ $fmt.plural(ozonIds.length, 'товар', 'товара', 'товаров') }}</h2></div><button type="button" class="mp-ozon-close" aria-label="Закрыть" :disabled="!!ozonBusy" @click="closeOzonDialog">×</button></div>
         <p id="mp-ozon-dialog-help">Черновики сохранятся в Seller Hub. Отправка на Ozon требует отдельного подтверждения.</p>
         <template v-if="ozonAccounts.length === 1">
@@ -521,7 +580,7 @@
             <label class="mp-ozon-label" for="mp-ozon-account">Магазин Ozon</label>
             <select ref="ozonAccount" id="mp-ozon-account" class="sh-input" v-model="ozonAccountId" :disabled="!!ozonBusy" required><option value="">Выберите магазин</option><option v-for="account in ozonAccounts" :key="account.id" :value="String(account.id)">{{ account.label }}</option></select>
         </template>
-        <div class="mp-ozon-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!ozonBusy" @click="closeOzonDialog">Вернуться</button><button type="button" class="sh-btn sh-btn--primary" :disabled="!ozonAccountId || !!ozonBusy || !!ozonPending || ozonStorageProblem || ozonSessionEnded" @click="prepareOzon">{{ ozonBusy === 'post' ? 'Принимаем…' : 'Подготовить черновики' }}</button></div>
+        <div class="mp-ozon-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!ozonBusy" @click="closeOzonDialog">Вернуться</button><button type="button" class="sh-btn sh-btn--primary" data-ozon-preparation-submit :disabled="!ozonAccountId || !!ozonBusy || !!ozonPending || ozonStorageProblem || ozonSessionEnded" @click="prepareOzon">{{ ozonBusy === 'post' ? 'Принимаем…' : 'Подготовить черновики' }}</button></div>
     </dialog>
     <dialog ref="ozonPriceAccountDialog" class="mp-ozon-dialog"
             aria-labelledby="mp-ozon-price-dialog-title"
@@ -561,6 +620,6 @@
 <script src="{{ url_for('static', filename='vendor/vue-3.5.46.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261122-ozon-update-return-r56') }}"></script>
-<script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261122-supplier-import-r60') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-supplier-import-r60') }}"></script>
+<script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261122-unified-import-r60b') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261122-unified-import-r60b') }}"></script>
 {% endblock %}
