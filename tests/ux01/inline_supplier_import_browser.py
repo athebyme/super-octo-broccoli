@@ -339,6 +339,9 @@ def run():
             panel.locator('[data-supplier-import-submit]').click()
             panel.locator('[data-supplier-import-pending]').wait_for()
             expect(panel.locator('[data-supplier-import-reconcile]')).to_be_enabled()
+            expect(panel.locator('[data-supplier-import-pending]')).to_have_attribute(
+                'data-supplier-import-state', 'unknown',
+            )
             assert state['posts'][-1]['confirmed_committed'] == 1
             assert len(state['posts']) == 2
             with page.expect_response(lambda response: urlsplit(response.url).path == receipt_path) as rec:
@@ -365,6 +368,9 @@ def run():
             panel.locator('[data-supplier-import-submit]').click()
             panel.locator('[data-supplier-import-pending]').wait_for()
             expect(panel.locator('[data-supplier-import-reconcile]')).to_be_enabled()
+            expect(panel.locator('[data-supplier-import-pending]')).to_have_attribute(
+                'data-supplier-import-state', 'unknown',
+            )
             assert len(state['posts']) == 3 and not state['posts'][-1]['status']
             with page.expect_response(lambda response: urlsplit(response.url).path == receipt_path) as rec:
                 panel.locator('[data-supplier-import-reconcile]').click()
