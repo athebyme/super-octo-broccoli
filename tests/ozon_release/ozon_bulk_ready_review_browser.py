@@ -2417,7 +2417,7 @@ def run_review_editor_navigation_journey(page):
     page.wait_for_function(
         "expected => JSON.stringify([...document.querySelectorAll('.our-list input[type=checkbox]:checked')]"
         ".map(node => Number(node.id.replace('our-select-', '')))) === JSON.stringify(expected)",
-        unchanged_ids,
+        arg=unchanged_ids,
     )
     returned_selected = page.locator(
         ".our-list input[type='checkbox']:checked"
