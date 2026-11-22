@@ -78,6 +78,7 @@ REPORT = {
     "fake_wb_write_calls": 0,
     "fake_wb_written_products": [],
     "fake_wb_client_instances": 0,
+    "review_exclusion_observations": None,
     "fake_wb_single_write_calls": 0,
     "fake_wb_single_write_requests": [],
     "single_edit_contrast_diagnostic": [],
@@ -2414,11 +2415,21 @@ def assert_bulk_review_mobile_projection(
     }, focus
     before_scroll = region.evaluate("element => element.scrollTop")
     page.keyboard.press("PageDown")
+    page.wait_for_function("""before => {
+        const target = document.querySelector('[data-review-mobile-region]');
+        return target && document.activeElement === target && target.scrollTop > before;
+    }""", arg=before_scroll, timeout=3000)
     after_scroll = region.evaluate("element => element.scrollTop")
+    focus_retained = region.evaluate("element => document.activeElement === element")
     assert after_scroll > before_scroll, {
         "before_scroll": before_scroll,
         "after_scroll": after_scroll,
         "focus": focus,
+    }
+    assert focus_retained, {
+        "before_scroll": before_scroll,
+        "after_scroll": after_scroll,
+        "focus_retained": focus_retained,
     }
 
     REPORT["bulk_review_mobile_layouts"].append({
@@ -2429,6 +2440,13 @@ def assert_bulk_review_mobile_projection(
         "exclude_button_count": mobile_exclusions.count(),
         "region_vertical_scroll": True,
         "region_horizontal_scroll": False,
+        "region_scroll_width": geometry["regionScrollWidth"],
+        "region_client_width": geometry["regionClientWidth"],
+        "region_scroll_height": geometry["regionScrollHeight"],
+        "region_client_height": geometry["regionClientHeight"],
+        "scroll_top_before": before_scroll,
+        "scroll_top_after": after_scroll,
+        "focus_retained_after_pagedown": focus_retained,
         "touch_targets_at_least_44px": True,
         "layout_settle": settled,
     })
@@ -2444,7 +2462,10 @@ def assert_bulk_review_mobile_projection(
     check(
         "bulk_review_mobile_region_has_visible_keyboard_focus_and_scroll",
         focus_visible=focus["keyboardVisible"],
-        keyboard_scroll_changed=True,
+        keyboard_scroll_changed=after_scroll > before_scroll,
+        focus_retained_after_pagedown=focus_retained,
+        scroll_top_before=before_scroll,
+        scroll_top_after=after_scroll,
     )
     interaction("320px_bulk_review_uses_exact_mobile_cards_with_keyboard_scroll")
     page.set_viewport_size({"width": 1280, "height": 900})
@@ -4484,6 +4505,11 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
                 "mixed_changed_product_ids"
             ]
             remaining_nm_id = fixture["mixed_nm_ids"][1]
+            exclusion_flow_baseline = {
+                "client_instances": REPORT["fake_wb_client_instances"],
+                "write_calls": REPORT["fake_wb_write_calls"],
+                "written_products": len(REPORT["fake_wb_written_products"]),
+            }
             mixed_page.goto(
                 BASE + "/products?search=Mixed&brand=Mixed%20Reviewed%20Brand"
                 "&sort=title&order=asc&page=1&per_page=50",
@@ -4524,6 +4550,10 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
                         'form[action="/products/bulk-edit"] button[type="submit"]',
                     ).click()
             assert exclusion_source_preview.value.status == 200
+            initial_preview_ids = sorted(int(value) for value in mixed_page.locator(
+                "[data-review-product-id]",
+            ).evaluate_all("nodes => nodes.map(node => node.dataset.reviewProductId)"))
+            assert initial_preview_ids == filtered_ids, initial_preview_ids
             assert mixed_page.locator(
                 '[data-review-product-id="' + str(excluded_product_id) + '"]',
             ).count() == 1
@@ -4575,6 +4605,8 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             assert exclude_button.inner_text().strip() == "Исключить из проверки"
             assert REPORT["fake_wb_client_instances"] == mixed_fake_baseline["instances"] + 1
             assert REPORT["fake_wb_write_calls"] == mixed_fake_baseline["write_calls"] + 1
+            assert REPORT["fake_wb_client_instances"] == exclusion_flow_baseline["client_instances"]
+            assert REPORT["fake_wb_write_calls"] == exclusion_flow_baseline["write_calls"]
 
             with mixed_page.expect_response(
                 lambda response: response.request.method == "POST"
@@ -4607,6 +4639,10 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             assert mixed_page.locator("form#wb-review-exclude").count() == 0, (
                 "A one-row preview must not offer an exclusion that would empty the selection"
             )
+            reduced_preview_ids = sorted(int(value) for value in mixed_page.locator(
+                "[data-review-product-id]",
+            ).evaluate_all("nodes => nodes.map(node => node.dataset.reviewProductId)"))
+            assert reduced_preview_ids == [remaining_product_id], reduced_preview_ids
             reduced_summary = mixed_page.locator(
                 "section[aria-label='Сводка предпросмотра'] div.sh-card",
             ).evaluate_all("""cards => Object.fromEntries(cards.map(card => [
@@ -4628,6 +4664,14 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             ).count() == 1
             assert REPORT["fake_wb_client_instances"] == mixed_fake_baseline["instances"] + 1
             assert REPORT["fake_wb_write_calls"] == mixed_fake_baseline["write_calls"] + 1
+            assert REPORT["fake_wb_client_instances"] == exclusion_flow_baseline["client_instances"]
+            assert REPORT["fake_wb_write_calls"] == exclusion_flow_baseline["write_calls"]
+            exclusion_preview_provider_client_delta = (
+                REPORT["fake_wb_client_instances"] - exclusion_flow_baseline["client_instances"]
+            )
+            exclusion_preview_provider_write_delta = (
+                REPORT["fake_wb_write_calls"] - exclusion_flow_baseline["write_calls"]
+            )
             check(
                 "wb_review_exclusion_rebuilds_exact_smaller_preview_without_write",
                 selected=1,
@@ -4655,6 +4699,8 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             assert exclusion_writes == [remaining_nm_id], exclusion_writes
             assert REPORT["fake_wb_write_calls"] - mixed_fake_baseline["write_calls"] == 2
             assert REPORT["fake_wb_client_instances"] - mixed_fake_baseline["instances"] == 2
+            assert REPORT["fake_wb_client_instances"] - exclusion_flow_baseline["client_instances"] == 1
+            assert REPORT["fake_wb_write_calls"] - exclusion_flow_baseline["write_calls"] == 1
             with seller_app.app_context():
                 exclusion_products = Product.query.filter(
                     Product.id.in_(fixture["mixed_changed_product_ids"]),
@@ -4683,12 +4729,69 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
                     "mode": "replace",
                     "subject_id": None,
                 }, exclusion_summary
+                exclusion_local_brands = [product.brand for product in exclusion_products]
+                exclusion_history_observation = {
+                    "status": exclusion_history.status,
+                    "total_products": exclusion_history.total_products,
+                    "success_count": exclusion_history.success_count,
+                    "error_count": exclusion_history.error_count,
+                    "changed_product_ids": exclusion_summary["changed_product_ids"],
+                }
+            assert exclusion_local_brands == [
+                "Mixed Reviewed Brand", "One Product After Exclusion",
+            ], exclusion_local_brands
+            REPORT["review_exclusion_observations"] = {
+                "initial_selected_product_ids": filtered_ids,
+                "initial_preview_product_ids": initial_preview_ids,
+                "initial_preview_summary": {
+                    "selected": initial_exclusion_summary["Выбрано"],
+                    "eligible": initial_exclusion_summary["Подходит для операции"],
+                    "changed": initial_exclusion_summary["Изменится"],
+                    "skipped": initial_exclusion_summary["Пропущено"],
+                    "errors": initial_exclusion_summary["Ошибки"],
+                },
+                "excluded_product_id": excluded_product_id,
+                "exclusion_post_status": exclusion_response.value.status,
+                "exclusion_request_fields": sorted(exclusion_request_fields),
+                "exclusion_request_product_id": int(
+                    exclusion_request_fields["excluded_product_id"][0]
+                ),
+                "selection_token_present": bool(exclusion_request_fields["selection_token"]),
+                "base_preview_token_present": bool(exclusion_request_fields["base_preview_token"]),
+                "rebuilt_preview_product_ids": reduced_preview_ids,
+                "rebuilt_preview_summary": {
+                    "selected": reduced_summary["Выбрано"],
+                    "eligible": reduced_summary["Подходит для операции"],
+                    "changed": reduced_summary["Изменится"],
+                    "skipped": reduced_summary["Пропущено"],
+                    "errors": reduced_summary["Ошибки"],
+                },
+                "excluded_row_absent": mixed_page.locator(
+                    '[data-review-product-id="' + str(excluded_product_id) + '"]',
+                ).count() == 0,
+                "exclude_control_removed_for_one_row": mixed_page.locator(
+                    "form#wb-review-exclude",
+                ).count() == 0,
+                "exclusion_preview_provider_client_delta": exclusion_preview_provider_client_delta,
+                "exclusion_preview_provider_write_delta": exclusion_preview_provider_write_delta,
+                "apply_status": exclusion_apply_response.value.status,
+                "applied_provider_nm_ids": exclusion_writes,
+                "apply_provider_client_delta": (
+                    REPORT["fake_wb_client_instances"] - exclusion_flow_baseline["client_instances"]
+                ),
+                "apply_provider_write_delta": (
+                    REPORT["fake_wb_write_calls"] - exclusion_flow_baseline["write_calls"]
+                ),
+                "local_brand_values_after_apply": exclusion_local_brands,
+                "history": exclusion_history_observation,
+            }
             check(
                 "wb_review_exclusion_apply_reaches_only_remaining_product",
                 selected_product_id=remaining_product_id,
                 excluded_product_id=excluded_product_id,
                 provider_nm_id=remaining_nm_id,
                 local_changes=1,
+                observation=REPORT["review_exclusion_observations"],
             )
             interaction("mixed_review_excludes_exact_product_then_applies_remainder")
             mixed_context.close()

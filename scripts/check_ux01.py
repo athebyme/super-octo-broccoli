@@ -265,7 +265,11 @@ WB_EDIT_REQUIRED_CHECKS = frozenset({
     "single_edit_footer_assistant_clearance_320_360_390_light_dark",
     "mixed_fixture_preview_selected50_eligible2_changed2_skipped48",
     "mixed_fixture_confirm_writes_exact_two_provider_products_with_history_readback",
+    "wb_review_exclusion_rebuilds_exact_smaller_preview_without_write",
+    "wb_review_exclusion_apply_reaches_only_remaining_product",
+    "bulk_review_mobile_region_has_visible_keyboard_focus_and_scroll",
 })
+WB_EDIT_MOBILE_REVIEW_CHECK = "bulk_review_mobile_region_has_visible_keyboard_focus_and_scroll"
 WB_EDIT_CONTRAST_CHECK = "single_edit_enabled_controls_contrast_aa_light_dark"
 WB_EDIT_CONTRAST_THEMES = ("light", "dark")
 WB_EDIT_CONTRAST_CONTROL_NAMES = (
@@ -1060,8 +1064,69 @@ def _wb_edit_protocol_issues(data: dict) -> list[str]:
             )
         if not expected_details:
             issues.append("wb_edit_named_check_missing_or_failed:" + name)
+    mobile_check_rows = [
+        row for row in checks
+        if isinstance(row, dict) and row.get("name") == WB_EDIT_MOBILE_REVIEW_CHECK
+    ] if isinstance(checks, list) else []
+    if len(mobile_check_rows) != 1:
+        issues.append("wb_bulk_review_mobile_keyboard_scroll_incomplete")
+    else:
+        mobile_check = mobile_check_rows[0]
+        before_scroll, after_scroll = (
+            mobile_check.get("scroll_top_before"), mobile_check.get("scroll_top_after"),
+        )
+        if not (
+            mobile_check.get("status") == "passed"
+            and mobile_check.get("focus_visible") is True
+            and mobile_check.get("keyboard_scroll_changed") is True
+            and mobile_check.get("focus_retained_after_pagedown") is True
+            and _finite_json_number(before_scroll)
+            and _finite_json_number(after_scroll)
+            and after_scroll > before_scroll
+        ):
+            issues.append("wb_bulk_review_mobile_keyboard_scroll_incomplete")
     issues.extend(_wb_edit_contrast_protocol_issues(data, checks))
     issues.extend(_wb_edit_footer_clearance_protocol_issues(data, checks))
+
+    mobile_rows = data.get("bulk_review_mobile_layouts")
+    if not isinstance(mobile_rows, list) or len(mobile_rows) != 1:
+        issues.append("wb_bulk_review_mobile_protocol_incomplete")
+    else:
+        mobile = mobile_rows[0]
+        if not isinstance(mobile, dict):
+            issues.append("wb_bulk_review_mobile_protocol_incomplete")
+        else:
+            scroll_before, scroll_after = (
+                mobile.get("scroll_top_before"), mobile.get("scroll_top_after"),
+            )
+            region_width, region_client_width = (
+                mobile.get("region_scroll_width"), mobile.get("region_client_width"),
+            )
+            region_height, region_client_height = (
+                mobile.get("region_scroll_height"), mobile.get("region_client_height"),
+            )
+            if not (
+                mobile.get("viewport_width") == 320
+                and type(mobile.get("document_width")) is int
+                and mobile["document_width"] <= 320
+                and mobile.get("product_count") == 50
+                and mobile.get("change_count") == 50
+                and mobile.get("exclude_button_count") == 50
+                and mobile.get("region_vertical_scroll") is True
+                and mobile.get("region_horizontal_scroll") is False
+                and _finite_json_number(region_width)
+                and _finite_json_number(region_client_width)
+                and region_width <= region_client_width + 1
+                and _finite_json_number(region_height)
+                and _finite_json_number(region_client_height)
+                and region_height > region_client_height
+                and _finite_json_number(scroll_before)
+                and _finite_json_number(scroll_after)
+                and scroll_after > scroll_before
+                and mobile.get("focus_retained_after_pagedown") is True
+                and mobile.get("touch_targets_at_least_44px") is True
+            ):
+                issues.append("wb_bulk_review_mobile_protocol_incomplete")
 
     expected_layouts = {
         (page, theme, width)
@@ -1155,13 +1220,13 @@ def _wb_edit_protocol_issues(data: dict) -> list[str]:
     }
     if data.get("fake_wb_single_write_requests") != [expected_request]:
         issues.append("wb_single_edit_fake_request_unexpected")
-    expected_bulk_written_products = [*range(900000, 900050), 910000, 910001]
+    expected_bulk_written_products = [*range(900000, 900050), 910000, 910001, 910001]
     if (
         type(data.get("fake_wb_write_calls")) is not int
-        or data.get("fake_wb_write_calls") != 2
+        or data.get("fake_wb_write_calls") != 3
         or data.get("fake_wb_written_products") != expected_bulk_written_products
         or type(data.get("fake_wb_client_instances")) is not int
-        or data.get("fake_wb_client_instances") != 3
+        or data.get("fake_wb_client_instances") != 4
     ):
         issues.append("wb_fake_provider_bulk_write_totals_unexpected")
 
@@ -1485,6 +1550,67 @@ def _wb_edit_protocol_issues(data: dict) -> list[str]:
         or mixed.get("history_product_ids") != [20000, 20001]
     ):
         issues.append("wb_mixed_provider_or_history_identity_unexpected")
+
+    exclusion = data.get("review_exclusion_observations")
+    if not isinstance(exclusion, dict):
+        issues.append("wb_review_exclusion_scope_evidence_incomplete")
+    else:
+        expected_initial_summary = {
+            "selected": 2, "eligible": 2, "changed": 2, "skipped": 0, "errors": 0,
+        }
+        expected_rebuilt_summary = {
+            "selected": 1, "eligible": 1, "changed": 1, "skipped": 0, "errors": 0,
+        }
+        expected_exclusion_fields = [
+            "base_preview_token", "csrf_token", "excluded_product_id",
+            "review_exclude", "selection_token",
+        ]
+        history = exclusion.get("history")
+        def exact_counts(value: object, expected: dict[str, int]) -> bool:
+            return (
+                isinstance(value, dict) and set(value) == set(expected)
+                and all(type(value.get(key)) is int and value[key] == count
+                        for key, count in expected.items())
+            )
+        if not (
+            exclusion.get("initial_selected_product_ids") == [20000, 20001]
+            and exclusion.get("initial_preview_product_ids") == [20000, 20001]
+            and exact_counts(exclusion.get("initial_preview_summary"), expected_initial_summary)
+            and exclusion.get("excluded_product_id") == 20000
+            and exclusion.get("exclusion_post_status") == 200
+            and exclusion.get("exclusion_request_fields") == expected_exclusion_fields
+            and exclusion.get("exclusion_request_product_id") == 20000
+            and exclusion.get("selection_token_present") is True
+            and exclusion.get("base_preview_token_present") is True
+            and exclusion.get("rebuilt_preview_product_ids") == [20001]
+            and exact_counts(exclusion.get("rebuilt_preview_summary"), expected_rebuilt_summary)
+            and exclusion.get("excluded_row_absent") is True
+            and exclusion.get("exclude_control_removed_for_one_row") is True
+            and type(exclusion.get("exclusion_preview_provider_client_delta")) is int
+            and exclusion["exclusion_preview_provider_client_delta"] == 0
+            and type(exclusion.get("exclusion_preview_provider_write_delta")) is int
+            and exclusion["exclusion_preview_provider_write_delta"] == 0
+            and exclusion.get("apply_status") == 302
+            and exclusion.get("applied_provider_nm_ids") == [910001]
+            and type(exclusion.get("apply_provider_client_delta")) is int
+            and exclusion["apply_provider_client_delta"] == 1
+            and type(exclusion.get("apply_provider_write_delta")) is int
+            and exclusion["apply_provider_write_delta"] == 1
+            and exclusion.get("local_brand_values_after_apply") == [
+                "Mixed Reviewed Brand", "One Product After Exclusion",
+            ]
+            and isinstance(history, dict)
+            and history.get("status") == "completed"
+            and type(history.get("total_products")) is int
+            and history["total_products"] == 1
+            and type(history.get("success_count")) is int
+            and history["success_count"] == 1
+            and type(history.get("error_count")) is int
+            and history["error_count"] == 0
+            and history.get("changed_product_ids") == [20001]
+        ):
+            issues.append("wb_review_exclusion_scope_evidence_incomplete")
+
     return issues
 
 

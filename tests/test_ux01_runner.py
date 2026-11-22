@@ -40,6 +40,7 @@ from scripts.check_ux01 import (
     WB_EDIT_LAYOUT_WIDTHS,
     WB_EDIT_PAGES,
     WB_EDIT_REQUIRED_CHECKS,
+    WB_EDIT_MOBILE_REVIEW_CHECK,
     WB_EDIT_CONTRAST_CHECK,
     WB_EDIT_CONTRAST_THEMES,
     WB_EDIT_CONTRAST_CONTROL_NAMES,
@@ -1050,6 +1051,15 @@ def _wb_edit_browser_report() -> dict:
                 "no_side_effects": True,
                 "failures": [],
             })
+        elif name == WB_EDIT_MOBILE_REVIEW_CHECK:
+            required_checks.append({
+                "name": name, "status": "passed",
+                "focus_visible": True,
+                "keyboard_scroll_changed": True,
+                "focus_retained_after_pagedown": True,
+                "scroll_top_before": 0,
+                "scroll_top_after": 320,
+            })
         else:
             required_checks.append({"name": name, "status": "passed"})
     generic_checks = [
@@ -1141,9 +1151,26 @@ def _wb_edit_browser_report() -> dict:
         "single_edit_footer_clearance": _wb_footer_clearance_diagnostic(),
         "fake_wb_single_write_calls": 1,
         "fake_wb_single_write_requests": [write_request],
-        "fake_wb_write_calls": 2,
-        "fake_wb_written_products": [*range(900000, 900050), 910000, 910001],
-        "fake_wb_client_instances": 3,
+        "fake_wb_write_calls": 3,
+        "fake_wb_written_products": [*range(900000, 900050), 910000, 910001, 910001],
+        "fake_wb_client_instances": 4,
+        "bulk_review_mobile_layouts": [{
+            "viewport_width": 320,
+            "document_width": 320,
+            "product_count": 50,
+            "change_count": 50,
+            "exclude_button_count": 50,
+            "region_vertical_scroll": True,
+            "region_horizontal_scroll": False,
+            "region_scroll_width": 288,
+            "region_client_width": 288,
+            "region_scroll_height": 2100,
+            "region_client_height": 640,
+            "scroll_top_before": 0,
+            "scroll_top_after": 320,
+            "focus_retained_after_pagedown": True,
+            "touch_targets_at_least_44px": True,
+        }],
         "single_edit_observations": {
             "form_post": {
                 "http_status": 302,
@@ -1368,6 +1395,42 @@ def _wb_edit_browser_report() -> dict:
             "history_id": 123,
             "history_product_ids": [20000, 20001],
             "history_success_count": 2,
+        },
+        "review_exclusion_observations": {
+            "initial_selected_product_ids": [20000, 20001],
+            "initial_preview_product_ids": [20000, 20001],
+            "initial_preview_summary": {
+                "selected": 2, "eligible": 2, "changed": 2, "skipped": 0, "errors": 0,
+            },
+            "excluded_product_id": 20000,
+            "exclusion_post_status": 200,
+            "exclusion_request_fields": [
+                "base_preview_token", "csrf_token", "excluded_product_id",
+                "review_exclude", "selection_token",
+            ],
+            "exclusion_request_product_id": 20000,
+            "selection_token_present": True,
+            "base_preview_token_present": True,
+            "rebuilt_preview_product_ids": [20001],
+            "rebuilt_preview_summary": {
+                "selected": 1, "eligible": 1, "changed": 1, "skipped": 0, "errors": 0,
+            },
+            "excluded_row_absent": True,
+            "exclude_control_removed_for_one_row": True,
+            "exclusion_preview_provider_client_delta": 0,
+            "exclusion_preview_provider_write_delta": 0,
+            "apply_status": 302,
+            "applied_provider_nm_ids": [910001],
+            "apply_provider_client_delta": 1,
+            "apply_provider_write_delta": 1,
+            "local_brand_values_after_apply": [
+                "Mixed Reviewed Brand", "One Product After Exclusion",
+            ],
+            "history": {
+                "status": "completed", "total_products": 1,
+                "success_count": 1, "error_count": 0,
+                "changed_product_ids": [20001],
+            },
         },
     }
 
@@ -2940,6 +3003,36 @@ class Ux01RunnerContractTest(unittest.TestCase):
             extra_fake_write["fake_wb_write_calls"] += 1
             invalid_reports.append(("unexpected extra fake write", extra_fake_write,
                                     "wb_fake_provider_bulk_write_totals_unexpected"))
+
+            excluded_scope_widened = copy.deepcopy(report)
+            excluded_scope_widened["review_exclusion_observations"][
+                "rebuilt_preview_product_ids"
+            ] = [20000]
+            invalid_reports.append((
+                "exclusion preview contains the excluded recipient",
+                excluded_scope_widened,
+                "wb_review_exclusion_scope_evidence_incomplete",
+            ))
+
+            missing_mobile_review = copy.deepcopy(report)
+            missing_mobile_review["bulk_review_mobile_layouts"] = []
+            invalid_reports.append((
+                "missing 320px native review scroll evidence",
+                missing_mobile_review,
+                "wb_bulk_review_mobile_protocol_incomplete",
+            ))
+
+            non_scrolling_mobile_review = copy.deepcopy(report)
+            mobile_check = next(
+                row for row in non_scrolling_mobile_review["checks"]
+                if row["name"] == WB_EDIT_MOBILE_REVIEW_CHECK
+            )
+            mobile_check["scroll_top_after"] = mobile_check["scroll_top_before"]
+            invalid_reports.append((
+                "PageDown did not scroll the focused mobile review region",
+                non_scrolling_mobile_review,
+                "wb_bulk_review_mobile_keyboard_scroll_incomplete",
+            ))
 
             incomplete_layout = copy.deepcopy(report)
             incomplete_layout["layouts"].pop()
