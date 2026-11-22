@@ -230,8 +230,20 @@
             {% else %}
             <input type="hidden" name="value" value="{{ operation_value }}">
             {% endif %}
+            {% set changed_count = preview.changed_count|int %}
+            {% set changed_count_mod100 = changed_count % 100 %}
+            {% set changed_count_mod10 = changed_count % 10 %}
+            {% if changed_count_mod100 >= 11 and changed_count_mod100 <= 14 %}
+                {% set changed_count_noun = 'карточек' %}
+            {% elif changed_count_mod10 == 1 %}
+                {% set changed_count_noun = 'карточка' %}
+            {% elif changed_count_mod10 >= 2 and changed_count_mod10 <= 4 %}
+                {% set changed_count_noun = 'карточки' %}
+            {% else %}
+                {% set changed_count_noun = 'карточек' %}
+            {% endif %}
             <button type="submit" class="sh-btn sh-btn--accent min-h-[46px] w-full whitespace-normal sm:w-auto" data-review-mobile-apply {% if not preview_token %}disabled{% endif %}>
-                Подтвердить и применить {{ preview.changed_count }} карточек
+                Подтвердить и применить {{ changed_count }} {{ changed_count_noun }}
             </button>
         </form>
     </div>

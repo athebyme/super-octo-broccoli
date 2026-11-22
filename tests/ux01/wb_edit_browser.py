@@ -4389,7 +4389,7 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             ) as mixed_apply_post:
                 with mixed_page.expect_navigation(wait_until="domcontentloaded"):
                     mixed_page.get_by_role(
-                        "button", name="Подтвердить и применить 2 карточек", exact=True,
+                        "button", name="Подтвердить и применить 2 карточки", exact=True,
                     ).click()
             assert mixed_apply_post.value.status == 302
             assert "Успешно обновлено товаров: 2" in mixed_page.locator("body").inner_text()
@@ -4645,7 +4645,7 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             ) as exclusion_apply_response:
                 with mixed_page.expect_navigation(wait_until="domcontentloaded"):
                     mixed_page.get_by_role(
-                        "button", name="Подтвердить и применить 1 карточек", exact=True,
+                        "button", name="Подтвердить и применить 1 карточка", exact=True,
                     ).click()
             assert exclusion_apply_response.value.status == 302
             assert "Успешно обновлено товаров: 1" in mixed_page.locator("body").inner_text()
