@@ -5,7 +5,7 @@ queue run against a new synthetic database. Browser and Python network access
 are denied; queued operations are inspected but never dispatched to a provider.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 import logging
@@ -2255,7 +2255,19 @@ def run_review_editor_navigation_journey(page):
     assert initial_review["account_label"] in header_text
     assert f"Карточек в наборе: {len(draft_ids)}" in header_text
     assert "страница 1 из 1" in header_text
-    assert initial_review["checked_at"] in header_text
+    source_checked_at = initial_review["checked_at"]
+    parsed_checked_at = datetime.fromisoformat(source_checked_at)
+    if parsed_checked_at.tzinfo is None:
+        parsed_checked_at = parsed_checked_at.replace(tzinfo=timezone.utc)
+    else:
+        parsed_checked_at = parsed_checked_at.astimezone(timezone.utc)
+    expected_checked_at_label = parsed_checked_at.strftime("%d.%m.%Y, %H:%M UTC")
+    expected_checked_at_datetime = parsed_checked_at.isoformat().replace("+00:00", "Z")
+    checked_at_element = review_header.locator("time")
+    assert checked_at_element.count() == 1
+    assert checked_at_element.inner_text() == expected_checked_at_label
+    assert checked_at_element.get_attribute("datetime") == expected_checked_at_datetime
+    assert source_checked_at not in header_text
     assert review_header.locator("a.our-back").get_attribute("href") == (
         f"/marketplaces/ozon/uploads/{job_uid}"
     )
@@ -2634,6 +2646,8 @@ def run_review_editor_navigation_journey(page):
             "draft_count": len(draft_ids),
             "page": [initial_review["pagination"]["page"], initial_review["pagination"]["pages"]],
             "checked_at": initial_review["checked_at"],
+            "checked_at_label": expected_checked_at_label,
+            "checked_at_datetime": expected_checked_at_datetime,
             "guide_label": guide_summary.inner_text().strip(),
             "guide_opened_and_closed_with_keyboard": True,
             "guide_links": actual_guide_links,

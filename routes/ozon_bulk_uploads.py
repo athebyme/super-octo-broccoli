@@ -3,6 +3,7 @@
 import json
 import re
 import secrets
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlsplit
@@ -76,6 +77,25 @@ def _integer(value: Any, field_name: str) -> int:
             f"{field_name} должен быть положительным целым в пределах int64"
         )
     return parsed
+
+
+def _review_checked_at_html_values(value: Any) -> tuple[str, str]:
+    """Format the review's UTC generation time for HTML without changing its DTO."""
+    if not isinstance(value, str) or not value:
+        raise OzonBulkUploadValidationError("Некорректное время проверки")
+    iso_value = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        checked_at = datetime.fromisoformat(iso_value)
+    except ValueError:
+        raise OzonBulkUploadValidationError("Некорректное время проверки") from None
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=timezone.utc)
+    else:
+        checked_at = checked_at.astimezone(timezone.utc)
+    return (
+        checked_at.strftime("%d.%m.%Y, %H:%M UTC"),
+        checked_at.isoformat().replace("+00:00", "Z"),
+    )
 
 
 def _bounded_integer_list(values: Any, field_name: str) -> list[int]:
@@ -1556,7 +1576,15 @@ def review():
                 str(item["draft_id"]): item["version"] for item in document["items"]
                 if item["selectable"]
             }
-            response = make_response(render_template("ozon_upload_review.html", review=document))
+            checked_at_label, checked_at_datetime = _review_checked_at_html_values(
+                document.get("checked_at"),
+            )
+            response = make_response(render_template(
+                "ozon_upload_review.html",
+                review=document,
+                review_checked_at_label=checked_at_label,
+                review_checked_at_datetime=checked_at_datetime,
+            ))
     except OzonBulkUploadError as exc:
         if not as_json:
             return _error_response(exc)
