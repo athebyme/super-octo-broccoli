@@ -441,7 +441,7 @@
                 </button>
                 <strong v-else-if="item.wb && item.wb.price != null" class="mp-inline-price-value">{{ $fmt.money(item.wb.price) }}</strong>
                 <span v-if="item.wb" class="mp-chan mp-chan--wb" :title="wbTitle(item)">
-                    <i class="mp-dot mp-dot--wb"></i><span>{{ item.import_status === 'imported_pending_sync' ? 'Ждёт артикул' : (item.wb.nm_id ? 'На площадке' : 'Есть связь') }}</span>
+                    <i class="mp-dot mp-dot--wb"></i><span>{{ item.import_status === 'imported_pending_sync' ? 'Ждёт артикул' : (item.import_status === 'imported' && item.wb.product_id > 0 && item.wb.nm_id > 0 ? 'На площадке' : 'Есть связь') }}</span>
                 </span>
                 <span v-else class="mp-chan mp-chan--off">Не связана</span>
                 <details v-if="item.wb && (item.wb.views_30d !== null || item.wb.orders_30d !== null || item.wb.quality_score !== null)" class="mp-row-facts">

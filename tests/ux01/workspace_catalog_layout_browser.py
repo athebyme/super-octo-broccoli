@@ -14,11 +14,21 @@ from models import ImportedProduct, MarketplaceListing, SellerMarketplaceAccount
 
 target = Path(os.getenv("CATALOG_QA_ARTIFACTS", "/artifacts/catalog-layout"))
 target.mkdir(parents=True, exist_ok=True)
+AMBIGUOUS_WB_TITLE = "Связь WB только по nmID"
 scope = seed_bulk_selection()
 with fixture.app.app_context():
     main_row = db.session.get(ImportedProduct, scope["local_id"])
     main_row.supplier_price = 1760
     main_row.supplier_quantity = 32
+    nm_only_row = ImportedProduct(
+        seller_id=main_row.seller_id,
+        external_id="SYNTH-NMID-ONLY-LAYOUT",
+        source_type="manual",
+        title=AMBIGUOUS_WB_TITLE,
+        import_status="imported",
+        wb_nm_id=990001234,
+    )
+    db.session.add(nm_only_row)
     first_account = db.session.get(SellerMarketplaceAccount, fixture.FIXTURE["account_id"])
     first_account.label = "Северный склад"
     second_account = SellerMarketplaceAccount(
@@ -56,6 +66,7 @@ with sync_playwright() as playwright:
             expect(row).to_have_count(1)
             expect(row.get_by_role("heading")).to_have_text(MAIN_TITLE)
             expect(row.locator("[data-common-content-row-link]")).to_have_text(MAIN_TITLE)
+            expect(row.locator('[data-workspace-column="wb"]')).to_contain_text("На площадке")
             expect(row).to_contain_text("Северный склад")
             expect(row).to_contain_text("Южный склад")
             expect(row).to_contain_text("32")
@@ -90,6 +101,15 @@ with sync_playwright() as playwright:
             for group in ("cards", "prices", "create", "refresh"):
                 expect(page.locator(f'[data-bulk-action-group="{group}"]')).to_be_visible()
             checkbox.uncheck()
+            if width == 320 and theme == "light":
+                search = page.get_by_placeholder("Название, бренд или артикул")
+                search.fill(AMBIGUOUS_WB_TITLE)
+                ambiguous_row = page.locator(".mp-row").filter(has_text=AMBIGUOUS_WB_TITLE)
+                expect(ambiguous_row).to_have_count(1)
+                wb_cell = ambiguous_row.locator('[data-workspace-column="wb"]')
+                expect(wb_cell).to_contain_text("Есть связь")
+                expect(wb_cell).not_to_contain_text("На площадке")
+                expect(ambiguous_row.locator('[data-row-price-action="wb"]')).to_have_count(0)
             report["layouts"].append({"width": width, "theme": theme, "screenshot": snapshot, "row_width": cols["right"] - cols["left"]})
             context.unroute_all(behavior="wait")
             context.close()
