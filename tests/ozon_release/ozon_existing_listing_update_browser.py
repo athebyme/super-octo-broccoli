@@ -27,7 +27,8 @@ REPORT = {
     "status": "running", "checks": [], "contexts": [], "local_saves": [],
     "provider_attempts": 0, "unexpected": [], "js_errors": [], "layouts": [],
     "bulk_update": {}, "workspace_update": {}, "signed_import_review_return": {},
-    "publication_attempts_blocked": 0, "failure": None, "stage": "startup",
+    "publication_attempts_blocked": 0, "local_editor_save_posts": 0,
+    "failure": None, "stage": "startup",
 }
 ACTIVE_PAGE = None
 TEMP = tempfile.TemporaryDirectory(prefix="ozon-existing-update-browser-")
@@ -238,6 +239,9 @@ workspace_state = {
 signed_workspace_state = {
     "active": False, "handoff": 0, "preview": 0, "apply": 0,
     "token": None, "confirm_token": None, "return_to": None,
+    "local_save_posts": 0, "local_save_post": None,
+    "local_save_target_id": None, "local_save_description": None,
+    "compact_selection": None, "scope_key": None,
     "listing_ids": signed_workspace_listing_ids[:signed_workspace_selected_count],
     "source_ids": signed_workspace_source_ids[:signed_workspace_selected_count],
     "existing_draft_id": signed_workspace_existing_draft_id,
@@ -249,6 +253,7 @@ active_workspace_state = workspace_state
 bulk_preview_path = "/marketplaces/listings/update-drafts/preview"
 bulk_apply_path = "/marketplaces/listings/update-drafts/apply"
 workspace_handoff_path = "/marketplaces/listings/update-drafts/workspace-handoff"
+selection_apply_path = "/marketplaces/ozon/uploads/selection/repair/apply"
 
 
 def listing_url(listing_id):
@@ -364,7 +369,7 @@ def bridge(route):
         if method not in ("GET", "HEAD") and (method, path) not in {
             ("POST", "/login"), ("POST", "/marketplaces/drafts/"),
             ("POST", bulk_preview_path), ("POST", bulk_apply_path),
-            ("POST", workspace_handoff_path),
+            ("POST", workspace_handoff_path), ("POST", selection_apply_path),
         }:
             REPORT["unexpected"].append((method, path))
             route.abort()
@@ -545,6 +550,53 @@ def bridge(route):
             }
             bulk_state["apply"] += 1
             bulk_state["report"] = report
+        elif method == "POST" and path == selection_apply_path:
+            assert state is signed_workspace_state
+            expected = state.get("local_save_expected")
+            assert isinstance(expected, dict)
+            query = parse_qs(url.query, keep_blank_values=True)
+            assert query == {
+                "account_id": [str(fixture["account_id"])],
+                "workspace_selection": [expected["compact_selection"]],
+            }
+            form = parse_qs(request.post_data or "", keep_blank_values=True)
+            assert request.headers.get("x-csrftoken")
+            assert form.get("csrf_token") and form.get("confirm_local") == ["1"]
+            assert form.get("selected_draft_id") == [str(expected["draft_id"])]
+            prefix = f"row_{expected['draft_id']}_"
+            assert form.get(prefix + "draft_version") == [str(expected["version"])]
+            assert form.get(prefix + "imported_product_id") == [str(expected["source_id"])]
+            assert form.get(prefix + "description") == [expected["description"]]
+            assert all(
+                key in {"csrf_token", "confirm_local", "selected_draft_id"}
+                or key.startswith(prefix)
+                for key in form
+            )
+            assert state["local_save_posts"] == 0
+            assert response.status == 200
+            assert "no-store" in response.headers.get("cache-control", "")
+            result = response.json()
+            assert result["success"] is True
+            assert result["mode"] == "draft_selection"
+            assert result["scope_key"] == expected["scope_key"]
+            report = result["report"]
+            assert report["mode"] == "draft_selection"
+            assert report["scope_key"] == expected["scope_key"]
+            assert report["total"] == report["updated"] == 1
+            assert len(report["rows"]) == 1
+            assert report["rows"][0]["draft_id"] == expected["draft_id"]
+            assert report["rows"][0]["version"] == expected["version"] + 1
+            assert report["rows"][0]["status"] in {"ready_to_retry", "needs_input"}
+            state["local_save_posts"] += 1
+            state["local_save_post"] = {
+                "draft_id": expected["draft_id"],
+                "expected_version": expected["version"],
+                "saved_version": report["rows"][0]["version"],
+                "csrf": True,
+                "compact_scope_exact": True,
+                "status": report["rows"][0]["status"],
+            }
+            REPORT["local_editor_save_posts"] += 1
         elif method == "GET" and path.endswith("/update-draft-context"):
             listing_id = int(path.split("/")[-2])
             result = response.json()
@@ -615,6 +667,27 @@ def batch_snapshots():
             "link_events": MarketplaceListingLinkEvent.query.count(),
             "operations": MarketplaceOperation.query.count(),
             "jobs": BackgroundJob.query.count(),
+        }
+
+
+def draft_business_snapshots():
+    with app.app_context():
+        return {
+            row.id: {
+                "version": row.version,
+                "imported_product_id": row.imported_product_id,
+                "published_listing_id": row.published_listing_id,
+                "status": row.status,
+                "validation_status": row.validation_status,
+                "content_json": row.content_json,
+                "media_json": row.media_json,
+                "dimensions_json": row.dimensions_json,
+                "attributes_json": row.attributes_json,
+                "complex_attributes_json": row.complex_attributes_json,
+                "commercial_json": row.commercial_json,
+                "barcodes_json": row.barcodes_json,
+            }
+            for row in MarketplaceProductDraft.query.order_by(MarketplaceProductDraft.id)
         }
 
 
@@ -935,6 +1008,10 @@ def exercise_signed_import_review_return(page):
     state.update({
         "active": False, "handoff": 0, "preview": 0, "apply": 0,
         "token": None, "confirm_token": None, "return_to": None,
+        "local_save_posts": 0, "local_save_post": None,
+        "local_save_target_id": None, "local_save_description": None,
+        "compact_selection": None, "scope_key": None,
+        "local_save_expected": None,
         "report": None, "catalog_reads": [], "feed_reads": [],
         "review_api_reads": [],
     })
@@ -1032,9 +1109,145 @@ def exercise_signed_import_review_return(page):
         "#ozon-bulk-repair[data-editor-mode=\"draft_selection\"]:not([v-cloak])"
     )
     repair_editor.wait_for()
-    repair_review_link = repair_editor.locator("[data-draft-selection-review]")
-    repair_review_link.wait_for()
-    repair_review_href = urlsplit(repair_review_link.get_attribute("href"))
+    editor_boot = page.evaluate(
+        "() => JSON.parse(document.querySelector('#orb-bootstrap').textContent)"
+    )
+    selection_editor = editor_boot["editor"]
+    assert selection_editor["mode"] == "draft_selection"
+    assert selection_editor["review_draft_ids"] == draft_ids
+    scope_key = selection_editor["scope_key"]
+    assert re.fullmatch(r"[0-9a-f]{64}", scope_key)
+    target_draft_id = draft_ids[0]
+    target_source_id = state["source_ids"][0]
+    target_description = (
+        "R57 synthetic local edit for signed import review return."
+    )
+    state["compact_selection"] = compact_selection
+    state["scope_key"] = scope_key
+    state["local_save_target_id"] = target_draft_id
+    state["local_save_description"] = target_description
+    before_local_save = batch_snapshots()
+    draft_details_before_save = draft_business_snapshots()
+    expected_target = draft_details_before_save[target_draft_id]
+    state["local_save_expected"] = {
+        "draft_id": target_draft_id,
+        "source_id": target_source_id,
+        "version": expected_target["version"],
+        "description": target_description,
+        "compact_selection": compact_selection,
+        "scope_key": scope_key,
+    }
+
+    selected_on_pages = []
+    for page_number in (1, 2):
+        for card in repair_editor.locator(".orb-row").all():
+            row_id = int(card.get_attribute("data-draft"))
+            checkbox = card.locator(".orb-select input[type=checkbox]")
+            if row_id == target_draft_id:
+                if not checkbox.is_checked():
+                    checkbox.check()
+            elif checkbox.is_checked():
+                checkbox.uncheck()
+        selected_on_pages.append(repair_editor.locator(
+            ".orb-row input[type=checkbox]:checked"
+        ).evaluate_all("nodes => nodes.map(node => Number(node.closest('.orb-row').dataset.draft))"))
+        if page_number == 1:
+            repair_editor.locator(".orb-pagination").get_by_role(
+                "button", name="Далее", exact=True,
+            ).click()
+            page.wait_for_function(
+                "document.querySelector('.orb-pagination span')?.textContent.trim() === '2 из 2'"
+            )
+    assert selected_on_pages == [[target_draft_id], []]
+    repair_editor.locator(".orb-pagination").get_by_role(
+        "button", name="Назад", exact=True,
+    ).click()
+    page.wait_for_function(
+        "document.querySelector('.orb-pagination span')?.textContent.trim() === '1 из 2'"
+    )
+    target_row = repair_editor.locator(f'.orb-row[data-draft="{target_draft_id}"]')
+    target_row.wait_for()
+    assert target_row.locator(".orb-select input[type=checkbox]").is_checked()
+    target_row.get_by_role("button", name="Изменить", exact=True).click()
+    target_row.get_by_label("Описание", exact=True).fill(target_description)
+    assert batch_snapshots() == before_local_save
+    assert draft_business_snapshots() == draft_details_before_save
+
+    REPORT["stage"] = "signed_import_local_editor_save"
+    repair_editor.locator("footer [data-draft-selection-save]").click()
+    save_dialog = page.get_by_role("dialog")
+    save_dialog.wait_for()
+    save_button = save_dialog.get_by_role(
+        "button", name="Сохранить локально", exact=True,
+    )
+    with page.expect_response(lambda response: (
+        response.request.method == "POST"
+        and urlsplit(response.url).path == selection_apply_path
+    )) as local_save_info:
+        save_button.click()
+    local_save_response = local_save_info.value
+    assert local_save_response.status == 200
+    assert "no-store" in local_save_response.headers.get("cache-control", "")
+    local_save_result = local_save_response.json()
+    assert local_save_result["success"] is True
+    assert local_save_result["mode"] == "draft_selection"
+    assert local_save_result["scope_key"] == scope_key
+    local_save_report = local_save_result["report"]
+    assert local_save_report["total"] == local_save_report["updated"] == 1
+    assert len(local_save_report["rows"]) == 1
+    assert local_save_report["rows"][0]["draft_id"] == target_draft_id
+    assert local_save_report["rows"][0]["version"] == expected_target["version"] + 1
+    assert local_save_report["rows"][0]["status"] in {"ready_to_retry", "needs_input"}
+    receipt = repair_editor.get_by_role("region", name="Результат сохранения")
+    receipt.wait_for()
+    review_link = receipt.locator("a[data-draft-selection-review]")
+    review_link.wait_for()
+    assert state["local_save_posts"] == 1
+    assert state["local_save_post"]["draft_id"] == target_draft_id
+    assert state["local_save_post"]["csrf"] is True
+    assert state["local_save_post"]["compact_scope_exact"] is True
+    assert REPORT["local_editor_save_posts"] == 1
+
+    after_local_save = batch_snapshots()
+    draft_details_after_save = draft_business_snapshots()
+    assert set(draft_details_after_save) == set(draft_details_before_save)
+    assert all(
+        draft_details_after_save[draft_id] == draft_details_before_save[draft_id]
+        for draft_id in draft_details_before_save if draft_id != target_draft_id
+    )
+    saved_target = draft_details_after_save[target_draft_id]
+    assert saved_target["version"] == expected_target["version"] + 1
+    assert saved_target["imported_product_id"] == expected_target["imported_product_id"]
+    assert saved_target["published_listing_id"] == expected_target["published_listing_id"]
+    assert {
+        key: value for key, value in saved_target.items()
+        if key not in {"version", "content_json"}
+    } == {
+        key: value for key, value in expected_target.items()
+        if key not in {"version", "content_json"}
+    }
+    before_content = json.loads(expected_target["content_json"])
+    after_content = json.loads(saved_target["content_json"])
+    assert after_content["description"] == target_description
+    assert {key: value for key, value in after_content.items() if key != "description"} == {
+        key: value for key, value in before_content.items() if key != "description"
+    }
+    assert after_local_save["links"] == before_local_save["links"]
+    assert after_local_save["link_events"] == before_local_save["link_events"]
+    assert after_local_save["operations"] == before_local_save["operations"]
+    assert after_local_save["jobs"] == before_local_save["jobs"]
+    assert set(after_local_save["drafts"]) == set(before_local_save["drafts"])
+    for draft_id, previous in before_local_save["drafts"].items():
+        current = after_local_save["drafts"][draft_id]
+        if draft_id == target_draft_id:
+            assert current[0] == previous[0] + 1
+            assert current[1:] == previous[1:]
+        else:
+            assert current == previous
+    assert REPORT["provider_attempts"] == provider_before
+    assert REPORT["publication_attempts_blocked"] == publication_before
+
+    repair_review_href = urlsplit(review_link.get_attribute("href"))
     repair_review_query = parse_qs(repair_review_href.query)
     assert repair_review_href.path == "/marketplaces/ozon/uploads/review"
     assert repair_review_query.get("account_id") == [str(fixture["account_id"])]
@@ -1048,7 +1261,7 @@ def exercise_signed_import_review_return(page):
         and response.request.resource_type == "document"
         and urlsplit(response.url).path == "/marketplaces/ozon/uploads/review"
     )) as review_page_one_info:
-        repair_review_link.click()
+        review_link.click()
     review_page_one_response = review_page_one_info.value
     assert review_page_one_response.status == 200
     review_root = page.locator("#ozon-upload-review:not([v-cloak])")
@@ -1244,7 +1457,8 @@ def exercise_signed_import_review_return(page):
         "page": ["1"],
     }
     assert decode_workspace_return(previous_href.fragment) == state["return_to"]
-    assert batch_snapshots() == after_prepare
+    assert batch_snapshots() == after_local_save
+    assert draft_business_snapshots() == draft_details_after_save
     page.screenshot(path=OUT / "workspace-review-return-page-2-390.png", animations="disabled")
 
     REPORT["stage"] = "signed_import_batch_selection_restore"
@@ -1295,7 +1509,8 @@ def exercise_signed_import_review_return(page):
     assert parse_qs(restored_url.query) == {"import_batch": [signed_import_batch]}
     assert re.fullmatch(r"workspace-return=[a-f0-9]{32}", restored_url.fragment)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
-    assert batch_snapshots() == after_prepare
+    assert batch_snapshots() == after_local_save
+    assert draft_business_snapshots() == draft_details_after_save
     assert state["handoff"] == 1 and state["preview"] == 1 and state["apply"] == 1
     assert state["catalog_reads"] == []
     assert state["feed_reads"] and all(
@@ -1349,7 +1564,14 @@ def exercise_signed_import_review_return(page):
             "feed_rows_preserved_in_order": True,
             "selected_source_ids_restored": signed_workspace_source_ids[:signed_workspace_selected_count],
             "unselected_source_id_stayed_unselected": signed_workspace_source_ids[-1],
-            "business_state_unchanged_after_local_prepare": True,
+            "local_editor_save_posts": state["local_save_posts"],
+            "local_editor_save": {
+                "draft_id": target_draft_id,
+                "version_delta": 1,
+                "description_only_changed": True,
+                "compact_scope_exact": True,
+            },
+            "business_state_unchanged_after_local_save": True,
             "provider_attempts": REPORT["provider_attempts"],
             "publication_attempts_blocked": REPORT["publication_attempts_blocked"],
         },
