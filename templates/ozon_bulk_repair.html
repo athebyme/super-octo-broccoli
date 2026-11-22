@@ -3,7 +3,7 @@
 {% block title %}{{ 'Изменение черновиков Ozon' if editor.mode == 'draft_selection' else 'Исправление карточек Ozon' }} — Seller Hub{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-editor.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='ozon-bulk-repair-vue.css', v='20261121-source-prepare-r38') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-bulk-repair-vue.css', v='20261122-ozon-mixed-bulk-mobile-r49') }}">
 {% endblock %}
 {% block content %}
 <script id="orb-bootstrap" type="application/json">{{ {
@@ -127,11 +127,11 @@
     <nav v-if="pages>1" class="orb-pagination" aria-label="Страницы исправления"><button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page<=1" @click="goPage(page-1)">Назад</button><span>{{ page }} из {{ pages }}</span><button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page>=pages" @click="goPage(page+1)">Далее</button></nav>
     <footer v-if="selected.length" class="orb-toolbar"><div><strong>Выбрано {{ selected.length }}</strong><button type="button" class="orb-link" :disabled="busy" @click="clearSelection">Снять выбор</button></div><div class="orb-toolbar-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="locked" @click="openType(selected)">Тип товара</button><button type="button" class="sh-btn sh-btn--secondary" :disabled="locked" @click="openBulk">Заполнить поле</button><button type="button" class="sh-btn sh-btn--primary" :data-source-prepare-save="sourcePrepare ? '' : null" :data-draft-selection-save="draftSelection ? '' : null" :disabled="locked" @click="reviewSave">{{ busy ? 'Проверяем…' : sourcePrepare ? 'Сохранить черновики' : 'Проверить изменения' }}</button></div></footer>
     <dialog ref="modal" class="orb-dialog" aria-labelledby="orb-dialog-title" @cancel.prevent="close">
-        <div class="orb-dialog-head"><h2 id="orb-dialog-title">{{ dialog==='bulk' ? 'Заполнение выбранных карточек' : dialog==='review' ? (draftSelection ? 'Проверка локальных изменений' : 'Сохранение черновиков') : dialog==='conflict' ? 'Сравнение изменений' : picker.kind==='type' ? 'Тип товара Ozon' : 'Значения справочника' }}</h2><button type="button" class="orb-close" :disabled="busy" aria-label="Закрыть диалог" @click="close">×</button></div>
+        <div class="orb-dialog-head"><h2 id="orb-dialog-title">{{ dialog==='bulk' ? 'Заполнить поле' : dialog==='review' ? (draftSelection ? 'Проверка локальных изменений' : 'Сохранение черновиков') : dialog==='conflict' ? 'Сравнение изменений' : picker.kind==='type' ? 'Тип товара Ozon' : 'Значения справочника' }}</h2><button type="button" class="orb-close" :disabled="busy" aria-label="Закрыть диалог" @click="close">×</button></div>
         <p v-if="error" class="orb-inline-warning" role="alert">{{ error }}</p>
         <template v-if="dialog==='bulk'">
             <template v-if="!bulkPlan">
-                <label v-if="bulkAttributeChoices.length > 40" for="orb-bulk-field-query"><span class="orb-label">Найти характеристику</span><input id="orb-bulk-field-query" class="sh-input" type="search" maxlength="200" autocomplete="off" v-model="bulkFieldQuery" placeholder="Часть названия характеристики…"></label>
+                <label v-if="bulkAttributeChoices.length > 40" for="orb-bulk-field-query"><span class="orb-label">Найти характеристику</span><input id="orb-bulk-field-query" class="sh-input" type="search" maxlength="200" autocomplete="off" v-model="bulkFieldQuery" placeholder="Название поля"></label>
                 <label for="orb-bulk-field" class="orb-label">Поле</label><select id="orb-bulk-field" data-bulk-field-choice class="sh-input" v-model="bulkKey" @change="resetBulk">
                     <optgroup v-if="bulkFixedFields.length" label="Основные поля"><option v-for="field in bulkFixedFields" :key="field.key" :value="field.key">{{ field.label }}</option></optgroup>
                     <optgroup label="Характеристики среди выбранных карточек">
@@ -151,7 +151,7 @@
                 </template>
                 <label v-else-if="bulkKey==='schema_cleanup'"><span class="orb-label">Подтверждённая очистка</span><select class="sh-input" v-model="bulkValue"><option value="">Выберите действие</option><option value="true">Подготовить удаление несовместимых характеристик</option><option value="false">Отменить подготовленную очистку</option></select></label>
                 <label v-else><span class="orb-label">Новое значение</span><textarea v-if="bulkKey==='description'" class="sh-input" maxlength="100000" rows="5" v-model="bulkValue"></textarea><input v-else class="sh-input" type="text" inputmode="decimal" maxlength="80" autocomplete="off" v-model="bulkValue"></label>
-                <p class="orb-help">Следующий шаг покажет изменяемые карточки и исключения. Значения справочника проверяются отдельно для каждого типа товара.</p>
+                <p class="orb-help"><template v-if="bulkMode==='copy' && bulkKey.startsWith('attribute:') && bulkField?.dictionary">Справочник проверится отдельно для типов карточек.</template><template v-else>Посмотрите изменения и пропуски перед заполнением.</template></p>
                 <button type="button" class="sh-btn sh-btn--primary" @click="previewBulk">Посмотреть изменения</button>
             </template>
             <template v-else>

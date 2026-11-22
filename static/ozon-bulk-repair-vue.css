@@ -96,6 +96,7 @@
 .orb-close { flex:none; width:34px; height:34px; background:var(--bg-hover); border:1px solid var(--border); border-radius:50%; font-size:24px!important; line-height:1; }
 .orb-close:hover { border-color:var(--accent); }
 .orb-dialog .orb-label { margin-top:12px; }
+.orb-dialog #orb-bulk-field-query { min-height:44px; }
 .orb-dialog-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:10px; margin-top:23px; }
 .orb-review-list { list-style:none; padding:0; margin:15px 0; }
 .orb-review-list > li { padding:14px 0; border-bottom:1px solid var(--border); overflow-wrap:anywhere; content-visibility:auto; contain-intrinsic-size:auto 130px; }
