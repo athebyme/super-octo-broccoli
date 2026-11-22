@@ -499,13 +499,13 @@
         if (rowsById.size !== ids.length || itemCounts.updated !== data.updated ||
             itemCounts.skipped !== data.skipped || itemCounts.error !== data.errors) return null;
 
-        var summary = 'Обновление из поставщика. В запросе товаров: ' + data.requested + '.';
+        var summary = 'В запросе товаров: ' + data.requested + '.';
 
         var title = data.errors
             ? 'Обновление завершено с ошибками'
             : data.updated === 0 && data.skipped > 0
                 ? 'Нет карточек для обновления'
-                : 'Обновление из поставщика завершено';
+                : 'Обновление от поставщика завершено';
         var updatedIds = ids.filter(function (id) {
             return rowsById.get(id).status === 'updated';
         });
@@ -569,8 +569,7 @@
         return {
             kind: kind,
             title: rejected ? 'Выбранные товары не обновлялись' : 'Итог обновления не подтверждён',
-            summary: 'Обновление из поставщика. В запросе товаров: '
-                + requested + '. ' + message,
+            summary: 'В запросе товаров: ' + requested + '. ' + message,
             requested: requested,
             entries: [],
         };

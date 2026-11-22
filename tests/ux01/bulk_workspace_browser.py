@@ -1901,7 +1901,7 @@ def run():
         mixed_result = page.locator(".mp-refresh-result")
         mixed_result.get_by_text("В запросе товаров: 2.", exact=False).wait_for()
         mixed_result.get_by_role(
-            "heading", name="Обновление из поставщика завершено", exact=True,
+            "heading", name="Обновление от поставщика завершено", exact=True,
         ).wait_for()
         assert page.evaluate(
             "document.activeElement === document.querySelector('.mp-refresh-result')"
