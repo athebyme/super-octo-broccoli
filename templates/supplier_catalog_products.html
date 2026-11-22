@@ -186,7 +186,7 @@
         </form>
         <form method="POST" action="{{ url_for('supplier_catalog_update_review') }}" id="supplier-update-form" class="hidden">
             <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
-            <input type="hidden" name="return_to" value="{{ request.full_path }}">
+            <input type="hidden" name="return_to" value="{{ cancel_select_all_url if selection_mode == 'updates' else request.full_path }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         </form>
 
