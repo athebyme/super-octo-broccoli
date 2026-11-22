@@ -650,7 +650,10 @@ class MyProductsOzonPriceHandoffTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
         template = (ROOT / 'templates' / 'my_products_beta.html').read_text()
-        self.assertIn("v='20261122-ozon-local-prepare-r59'", template)
+        self.assertRegex(
+            template,
+            r"filename='my-products-beta\.js', v='\d{8}-[a-z0-9][a-z0-9-]*'",
+        )
         self.assertIn('data-bulk-action-group', template)
         self.assertIn('data-bulk-direct-action', template)
         self.assertIn('data-bulk-action-key', template)
