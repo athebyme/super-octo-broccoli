@@ -710,8 +710,10 @@
 #my-products-app .mp-photo { width:44px; height:44px; }
 #my-products-app .mp-main { gap:3px; }
 #my-products-app .mp-title { font-size:12px; font-weight:620; }
+#my-products-app .mp-title-link { color:inherit; text-decoration:none; text-decoration-color:var(--accent); text-underline-offset:2px; }
+#my-products-app .mp-title-link:hover { color:var(--accent-text); text-decoration:underline; }
+#my-products-app .mp-title-link:focus-visible { outline:2px solid var(--focus-outline); outline-offset:1px; border-radius:2px; }
 #my-products-app .mp-meta { gap:7px; font-size:10px; line-height:1.35; }
-#my-products-app .mp-main > .sh-quiet-link { width:max-content; max-width:100%; font-size:10px; }
 #my-products-app .mp-flags { gap:3px; }
 #my-products-app .mp-flags .shk-badge { font-size:9px; padding:2px 5px; }
 #my-products-app .mp-cell-label { display:none; }
@@ -793,7 +795,8 @@
     #my-products-app .mp-check input { width:18px; height:18px; }
     #my-products-app .mp-photo { grid-area:photo; width:40px; height:40px; }
     #my-products-app .mp-main { grid-area:main; min-height:44px; justify-content:center; padding-right:42px; }
-    #my-products-app .mp-title { white-space:normal; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
+    #my-products-app .mp-title { white-space:normal; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
+    #my-products-app .mp-meta > span { min-width:0; overflow-wrap:anywhere; }
     #my-products-app .mp-category {
         grid-area:category;
         display:grid;
@@ -849,12 +852,21 @@
     #my-products-app .mp-selectall { min-height:44px; font-size:11px; }
     #my-products-app .mp-select-filtered { min-height:44px; font-size:11px; }
     #my-products-app .mp-listhead-count { margin-left:auto; font-size:10px; }
-    #my-products-app .mp-row:not(.mp-row--skeleton) { padding-inline:8px; }
+    #my-products-app .mp-row:not(.mp-row--skeleton) {
+        grid-template-columns:44px 42px repeat(4,minmax(0,1fr));
+        grid-template-areas:
+            "check photo main main main main"
+            "category category category category category category"
+            "supplier supplier supplier supplier supplier supplier"
+            "wb wb wb ozon ozon ozon";
+        padding-inline:8px;
+    }
     #my-products-app .mp-category { grid-template-columns:74px minmax(0,1fr); gap:6px; }
     #my-products-app .mp-supplier { gap:4px; }
     #my-products-app .mp-supplier-fact { gap:3px 5px; }
     #my-products-app .mp-supplier-fact strong { font-size:11px; }
     #my-products-app .mp-channel-column { padding-inline:5px; }
+    #my-products-app .mp-channel-column--wb { border-right:1px solid var(--border-light); }
     #my-products-app .mp-chan { gap:4px; padding:4px 5px; font-size:10px; }
     #my-products-app .mp-chan b { white-space:normal; }
     #my-products-app .mp-row-facts[open] { padding-inline:4px; }

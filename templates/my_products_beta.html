@@ -395,15 +395,16 @@
             </div>
 
             <div class="mp-main">
-                <h3 class="mp-title">{{ item.title || 'Без названия' }}</h3>
+                <h3 class="mp-title">
+                    <a class="mp-title-link" data-common-content-row-link
+                       :href="urls.commonContent + '?product_id=' + encodeURIComponent(item.id)"
+                       @click="openCommonContentRow($event, item)"
+                       :aria-label="'Изменить данные товара ' + (item.title || item.vendor_code)">{{ item.title || 'Без названия' }}</a>
+                </h3>
                 <div class="mp-meta">
                     <span class="mp-mono">{{ item.vendor_code }}</span>
                     <span v-if="item.brand">{{ item.brand }}</span>
                 </div>
-                <a class="sh-quiet-link" data-common-content-row-link
-                   :href="urls.commonContent + '?product_id=' + encodeURIComponent(item.id)"
-                   @click="openCommonContentRow($event, item)"
-                   :aria-label="'Изменить данные товара ' + (item.title || item.vendor_code)">Данные товара</a>
                 <div class="mp-flags">
                     <sh-badge v-if="item.has_supplier_update" label="Есть обновление у поставщика" tone="info"></sh-badge>
                     <sh-badge v-if="!item.photo_count" label="Нет фото" tone="warn"></sh-badge>
