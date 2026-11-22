@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timedelta
 import json
 import os
@@ -38,6 +39,8 @@ LOCAL_WB_BULK_EDIT = "/products/bulk-edit"
 LOCAL_SUPPLIER_IMPORT = "/supplier-catalog/import"
 LOCAL_PRICE_CREATE = "/prices/create-batch"
 LOCAL_PRICE_PREVIEW = "/prices/api/preview"
+WB_THUMBNAIL_ORIGIN = "https://basket-01.wbbasket.ru"
+WB_THUMBNAIL_GIF = base64.b64decode("R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=")
 
 
 def seed_bulk_selection():
@@ -170,6 +173,7 @@ def seed_bulk_selection():
                 "unrelated_price_batch_id": unrelated_price_batch.id,
                 "bulk_ids": [row.id for row in bulk_rows],
                 "preview_wb_ids": [item[0] for item in preview_specs],
+                "preview_nm_ids": [item[1] for item in preview_specs],
                 "preview_local_ids": [source.id for source in preview_sources],
                 "preview_titles": [item[2] for item in preview_specs]}
 
@@ -377,7 +381,8 @@ def run():
     wb_bulk_edit_resolver_posts = []
     wb_bulk_edit_resolver_results = []
     wb_bulk_edit_editor_posts = []
-    wb_bulk_edit_expected = {"source_ids": None, "wb_ids": None}
+    wb_bulk_edit_photo_requests = []
+    wb_bulk_edit_expected = {"source_ids": None, "wb_ids": None, "photo_urls": []}
     wb_bulk_edit_handoff = None
     price_create_posts = []
     price_create_receipts = []
@@ -425,6 +430,11 @@ def run():
         nonlocal override_over_limit_initial, over_limit_initial_total, mock_over_limit_full
         request = route.request
         parsed = urlsplit(request.url)
+        if (request.method == "GET" and request.resource_type == "image"
+                and request.url in wb_bulk_edit_expected["photo_urls"]):
+            wb_bulk_edit_photo_requests.append(request.url)
+            route.fulfill(status=200, body=WB_THUMBNAIL_GIF, content_type="image/gif")
+            return
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "GET":
             if parsed.path == "/api/my-products":
                 query = parse_qs(parsed.query, keep_blank_values=True)
@@ -841,9 +851,16 @@ def run():
             fixture_ids["preview_wb_ids"][2],
             fixture_ids["preview_wb_ids"][0],
         ]
+        expected_photo_urls = [
+            f"{WB_THUMBNAIL_ORIGIN}/vol{fixture_ids['preview_nm_ids'][index] // 100000}"
+            f"/part{fixture_ids['preview_nm_ids'][index] // 1000}/"
+            f"{fixture_ids['preview_nm_ids'][index]}/images/tm/1.webp"
+            for index in (2, 0)
+        ]
         wb_bulk_edit_expected.update({
             "source_ids": expected_workspace_ids,
             "wb_ids": expected_editor_ids,
+            "photo_urls": expected_photo_urls,
         })
         for index in (2, 0):
             wb_page.get_by_role(
@@ -851,6 +868,9 @@ def run():
             ).check()
         assert selected_browser_state(wb_page)["selected"] == expected_workspace_ids
         provider_attempts_before_handoff = fixture.REPORT["provider_attempts"]
+        unexpected_external_before_handoff = len(
+            fixture.REPORT["unexpected_external_requests"]
+        )
         posts_before_handoff = len(posts)
         handoff_watch = begin_domain_write_watch()
         try:
@@ -898,6 +918,10 @@ def run():
         assert handoff_writes == [], handoff_writes
         assert len(posts) == posts_before_handoff
         assert fixture.REPORT["provider_attempts"] == provider_attempts_before_handoff == 0
+        assert sorted(wb_bulk_edit_photo_requests) == sorted(expected_photo_urls), {
+            "synthetic_image_gets": wb_bulk_edit_photo_requests,
+            "expected_image_gets": expected_photo_urls,
+        }
         return_watch = begin_domain_write_watch()
         try:
             with wb_page.expect_response(lambda response: feed_matches(response, {
@@ -937,6 +961,15 @@ def run():
         assert wb_page.evaluate("key => sessionStorage.getItem(key)", capsule_key) is None
         assert return_writes == [], return_writes
         assert fixture.REPORT["provider_attempts"] == provider_attempts_before_handoff == 0
+        unexpected_external_handoff = fixture.REPORT["unexpected_external_requests"][
+            unexpected_external_before_handoff:
+        ]
+        assert unexpected_external_handoff == [], {
+            "unexpected_external_requests": unexpected_external_handoff,
+            "synthetic_image_gets": wb_bulk_edit_photo_requests,
+            "expected_image_gets": expected_photo_urls,
+        }
+        wb_bulk_edit_expected["photo_urls"] = []
         verify_bounds(wb_page)
         returned_screenshot = OUTPUT / "wb-bulk-from-workspace-returned-320.png"
         wb_page.screenshot(path=returned_screenshot, animations="disabled")
@@ -953,6 +986,7 @@ def run():
                 "selected": expected_workspace_ids,
             } and urlsplit(wb_page.url).fragment == return_parts.fragment,
             "editor_form_fields": wb_bulk_edit_editor_posts[-1]["field_names"],
+            "synthetic_image_gets": len(wb_bulk_edit_photo_requests),
             "local_db_write_statements": len(handoff_writes) + len(return_writes),
             "apply_posts": 0,
             "provider_attempts": fixture.REPORT["provider_attempts"] - provider_attempts_before_handoff,
