@@ -1,4 +1,4 @@
-"""Open and save one exact Ozon update draft through the ordinary overview."""
+"""Prepare exact Ozon update drafts through the ordinary overview and catalog."""
 
 from datetime import datetime
 import hashlib
@@ -9,7 +9,7 @@ from pathlib import Path
 import socket
 import tempfile
 import threading
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from cryptography.fernet import Fernet
 from playwright.sync_api import sync_playwright
@@ -22,7 +22,7 @@ OUT.mkdir(parents=True, exist_ok=True)
 ASSETS = Path(__file__).with_name("assets")
 REPORT = {
     "status": "running", "checks": [], "contexts": [], "local_saves": [],
-    "provider_attempts": 0, "unexpected": [], "js_errors": [], "layouts": [],
+    "provider_attempts": 0, "unexpected": [], "js_errors": [], "layouts": [], "bulk_update": {},
 }
 TEMP = tempfile.TemporaryDirectory(prefix="ozon-existing-update-browser-")
 os.environ.update(
@@ -44,7 +44,7 @@ requests.sessions.Session.request = forbid_network
 socket.create_connection = forbid_network
 
 from models import (
-    ImportedProduct, MarketplaceListing, MarketplaceListingLinkEvent,
+    BackgroundJob, ImportedProduct, MarketplaceListing, MarketplaceListingLinkEvent,
     MarketplaceOperation, MarketplaceProductDraft, db,
 )
 from seller_platform import app
@@ -58,9 +58,19 @@ app.config.update(
 )
 fixture = seed(app)
 listing_ids = fixture["listing_ids"][:2]
+bulk_ready_id = fixture["listing_ids"][2]
+bulk_unlinked_id = fixture["listing_ids"][3]
+bulk_listing_ids = {listing_ids[0], bulk_ready_id, bulk_unlinked_id}
+bulk_catalog = "/marketplaces/listings/beta?" + urlencode({
+    "marketplace": "ozon", "account_id": fixture["account_id"],
+    "status": "active", "per_page": 2, "search": "R47 набор",
+})
 source_ids = {}
 with app.app_context():
-    for listing_id in listing_ids:
+    for listing_id in bulk_listing_ids:
+        listing = db.session.get(MarketplaceListing, listing_id)
+        listing.title = f"R47 набор · {listing.offer_id}"
+    for listing_id in [*listing_ids, bulk_ready_id]:
         listing = db.session.get(MarketplaceListing, listing_id)
         source = ImportedProduct(
             seller_id=fixture["seller_id"], source_type="synthetic",
@@ -95,7 +105,7 @@ with app.app_context():
     original_links = {
         listing.id: (listing.imported_product_id, listing.link_version)
         for listing in MarketplaceListing.query.filter(
-            MarketplaceListing.id.in_(listing_ids),
+            MarketplaceListing.id.in_([*listing_ids, bulk_ready_id, bulk_unlinked_id]),
         )
     }
 
@@ -111,6 +121,9 @@ for asset in assets.values():
 contexts = {}
 saved_urls = {}
 lost_response_id = listing_ids[1]
+bulk_state = {"selected": [], "preview": 0, "apply": 0, "token": None, "report": None}
+bulk_preview_path = "/marketplaces/listings/update-drafts/preview"
+bulk_apply_path = "/marketplaces/listings/update-drafts/apply"
 
 
 def listing_url(listing_id):
@@ -125,12 +138,50 @@ def bridge(route):
         path = url.path
         if method not in ("GET", "HEAD") and (method, path) not in {
             ("POST", "/login"), ("POST", "/marketplaces/drafts/"),
+            ("POST", bulk_preview_path), ("POST", bulk_apply_path),
         }:
             REPORT["unexpected"].append((method, path))
             route.abort()
             return
         response = route.fetch(max_redirects=0)
-        if method == "GET" and path.endswith("/update-draft-context"):
+        if method == "POST" and path == bulk_preview_path:
+            body = json.loads(request.post_data or "{}")
+            assert request.headers.get("x-csrftoken")
+            assert set(body) == {"account_id", "listing_ids", "return_to"}
+            assert body["account_id"] == fixture["account_id"]
+            assert body["listing_ids"] == bulk_state["selected"]
+            assert urlsplit(body["return_to"]).path == urlsplit(bulk_catalog).path
+            expected_query = parse_qs(urlsplit(bulk_catalog).query)
+            observed_query = parse_qs(urlsplit(body["return_to"]).query)
+            assert {name: observed_query.get(name) for name in expected_query} == expected_query
+            assert response.status == 200 and "no-store" in response.headers.get("cache-control", "")
+            result = response.json()
+            assert result["success"] is True
+            preview = result["preview"]
+            assert preview["listing_ids"] == bulk_state["selected"]
+            assert preview["account_id"] == fixture["account_id"]
+            assert {row["listing_id"]: row["status"] for row in preview["rows"]} == {
+                listing_ids[0]: "existing", bulk_ready_id: "ready", bulk_unlinked_id: "blocked",
+            }
+            bulk_state["preview"] += 1
+            bulk_state["token"] = preview["token"]
+        elif method == "POST" and path == bulk_apply_path:
+            body = json.loads(request.post_data or "{}")
+            assert request.headers.get("x-csrftoken")
+            assert set(body) == {"token", "confirm_local"}
+            assert body["token"] == bulk_state["token"] and body["confirm_local"] is True
+            assert response.status in (200, 201) and "no-store" in response.headers.get("cache-control", "")
+            result = response.json()
+            assert result["success"] is True
+            report = result["report"]
+            assert report["listing_ids"] == bulk_state["selected"]
+            assert report["account_id"] == fixture["account_id"]
+            assert {row["listing_id"]: row["status"] for row in report["rows"]} == {
+                listing_ids[0]: "existing", bulk_ready_id: "created", bulk_unlinked_id: "blocked",
+            }
+            bulk_state["apply"] += 1
+            bulk_state["report"] = report
+        elif method == "GET" and path.endswith("/update-draft-context"):
             listing_id = int(path.split("/")[-2])
             result = response.json()
             assert response.status == 200 and result["success"] is True, result
@@ -184,6 +235,129 @@ def open_overview(page, listing_id):
     action = page.get_by_role("button", name="Подготовить обновление", exact=True)
     action.wait_for()
     return action
+
+
+def batch_snapshots():
+    with app.app_context():
+        return {
+            "drafts": {
+                row.id: (row.version, row.imported_product_id, row.published_listing_id)
+                for row in MarketplaceProductDraft.query.order_by(MarketplaceProductDraft.id)
+            },
+            "links": {
+                row.id: (row.imported_product_id, row.link_version)
+                for row in MarketplaceListing.query.order_by(MarketplaceListing.id)
+            },
+            "link_events": MarketplaceListingLinkEvent.query.count(),
+            "operations": MarketplaceOperation.query.count(),
+            "jobs": BackgroundJob.query.count(),
+        }
+
+
+def exercise_catalog_batch(page):
+    before = batch_snapshots()
+    page.set_viewport_size({"width": 320, "height": 850})
+    page.goto(base + bulk_catalog)
+    catalog = page.locator("#marketplace-catalog-app:not([v-cloak])")
+    catalog.wait_for()
+    toggle = catalog.locator("[data-listing-update-toggle]")
+    toggle.press("Enter")
+    checks = catalog.locator("[data-listing-update-select]")
+    checks.first.wait_for()
+    assert checks.count() == 2
+    for candidate in checks.all():
+        listing_id = int(candidate.get_attribute("data-listing-update-select"))
+        candidate.press("Space")
+        assert candidate.is_checked()
+        bulk_state["selected"].append(listing_id)
+
+    catalog.get_by_role("button", name="Показать ещё", exact=True).click()
+    checks.nth(2).wait_for()
+    assert checks.count() == 3
+    for candidate in checks.all():
+        listing_id = int(candidate.get_attribute("data-listing-update-select"))
+        if listing_id in bulk_state["selected"]:
+            assert candidate.is_checked()
+        else:
+            candidate.check()
+            bulk_state["selected"].append(listing_id)
+    assert set(bulk_state["selected"]) == bulk_listing_ids
+    # Supported exclusions stay exact even after fetching another page.
+    last = checks.nth(2)
+    last.uncheck()
+    assert not last.is_checked()
+    last.check()
+
+    preview_action = catalog.locator("[data-listing-update-preview]")
+    preview_action.scroll_into_view_if_needed()
+    size = preview_action.bounding_box()
+    assert size and size["height"] >= 44 and size["width"] >= 44
+    preview_action.press("Enter")
+    dialog = page.locator("dialog[open]")
+    confirm = dialog.locator("[data-listing-update-confirm]")
+    confirm.wait_for()
+    preview_text = dialog.inner_text()
+    assert "Ozon CI 0" in preview_text
+    assert all(f"CI-{number:03}" in preview_text for number in (0, 2, 3))
+    assert bulk_state["preview"] == 1 and bulk_state["apply"] == 0
+    assert batch_snapshots() == before
+    page.keyboard.press("Escape")
+    dialog.wait_for(state="hidden")
+    assert preview_action.evaluate("element => element === document.activeElement")
+    assert batch_snapshots() == before
+
+    preview_action.click()
+    confirm.wait_for()
+    sizes = []
+    for theme in ("light", "dark"):
+        page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+        confirm_size = confirm.bounding_box()
+        assert confirm_size and confirm_size["height"] >= 44 and confirm_size["width"] >= 44
+        assert confirm_size["x"] >= 0 and confirm_size["x"] + confirm_size["width"] <= 321
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+        assert dialog.evaluate("element => element.scrollWidth <= element.clientWidth + 1")
+        sizes.append({"width": 320, "theme": theme, "confirm_height": confirm_size["height"]})
+        page.screenshot(path=OUT / f"bulk-existing-update-review-320-{theme}.png", animations="disabled")
+    confirm.click()
+    editor_link = page.locator("[data-listing-update-editor]")
+    editor_link.wait_for()
+    assert bulk_state["preview"] == 2 and bulk_state["apply"] == 1
+    report = bulk_state["report"]
+    existing = int(saved_urls[listing_ids[0]].split("/")[-1])
+    created = next(row["draft_id"] for row in report["rows"] if row["status"] == "created")
+    after = batch_snapshots()
+    assert after["drafts"].keys() - before["drafts"].keys() == {created}
+    assert {key: after["drafts"][key] for key in before["drafts"]} == before["drafts"]
+    assert after["drafts"][created][1:] == (source_ids[bulk_ready_id], bulk_ready_id)
+    assert {key: value for key, value in after.items() if key != "drafts"} == {
+        key: value for key, value in before.items() if key != "drafts"
+    }
+    href = editor_link.get_attribute("href")
+    assert href == report["editor_url"]
+    editor_target = urlsplit(href)
+    assert editor_target.path == "/marketplaces/ozon/uploads/selection/repair"
+    editor_query = parse_qs(editor_target.query)
+    assert editor_query["account_id"] == [str(fixture["account_id"])]
+    assert set(map(int, editor_query["draft_ids"][0].split(","))) == {existing, created}
+    page.screenshot(path=OUT / "bulk-existing-update-receipt-320.png", animations="disabled")
+    editor_link.click()
+    editor = page.locator("[data-draft-selection-editor]:not([v-cloak])")
+    editor.wait_for()
+    assert {int(row.get_attribute("data-draft")) for row in editor.locator(".orb-row").all()} == {existing, created}
+    return_to_catalog = editor.get_by_role("link", name="К каталогу Ozon", exact=True)
+    return_to_catalog.click()
+    catalog.wait_for()
+    return_query = parse_qs(urlsplit(page.url).query)
+    assert urlsplit(page.url).path == urlsplit(bulk_catalog).path
+    expected_query = parse_qs(urlsplit(bulk_catalog).query)
+    assert {name: return_query.get(name) for name in expected_query} == expected_query
+    assert batch_snapshots() == after
+    REPORT["bulk_update"] = {
+        "selected": len(bulk_state["selected"]), "created": 1, "existing": 1, "blocked": 1,
+        "preview_requests": bulk_state["preview"], "confirm_requests": bulk_state["apply"],
+        "layouts": sizes, "catalog_scope_preserved": True, "operation_delta": 0,
+    }
+    REPORT["checks"].append("catalog_selected_update_reuses_guarded_drafts_and_preserves_filtered_return")
 
 
 def test_browser():
@@ -256,13 +430,14 @@ def test_browser():
             [lost_response_id, "ready"], [lost_response_id, "existing"],
         ]
         REPORT["checks"].append("lost_response_read_recovery_opens_same_draft_without_resending")
+        exercise_catalog_batch(page)
         browser.close()
 
 
 try:
     test_browser()
     with app.app_context():
-        assert MarketplaceProductDraft.query.count() == initial_draft_count + 2
+        assert MarketplaceProductDraft.query.count() == initial_draft_count + 3
         for listing_id, draft_id in REPORT["local_saves"]:
             draft = db.session.get(MarketplaceProductDraft, draft_id)
             assert draft.seller_id == fixture["seller_id"]
