@@ -3,7 +3,9 @@
 from datetime import datetime, timedelta
 from dataclasses import replace
 import json
+import time
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from flask import Flask
 import pytest
@@ -14,6 +16,7 @@ from models import (
     Marketplace,
     MarketplaceCategoryMapping,
     MarketplaceListing,
+    MarketplaceOperation,
     MarketplaceProductDraft,
     MarketplaceProductType,
     MarketplaceTaxonomyCategory,
@@ -28,6 +31,8 @@ from models import (
 )
 from services.marketplace_fact_pack import MarketplaceFactPackBuilder
 from services.marketplace_drafts import MarketplaceDraftService
+from services.ozon_bulk_upload import OzonBulkUploadService
+from services.ozon_upload_queue import OzonUploadQueueService
 from services.openai_decisions import DecisionAnswer, DecisionOutcome
 from services.openai_decisions_cache import OpenAIDecisionsCache
 from services.openai_decisions_pipeline import OpenAIDecisionsPipeline
@@ -111,6 +116,7 @@ def case():
         "title": SOURCE_TITLE,
         "category": SOURCE_PATH,
         "all_categories": [SOURCE_PATH],
+        "vendor_code": "SKU-001",
     }
     raw_json = json.dumps(source_raw, ensure_ascii=False, sort_keys=True)
     supplier_product = SupplierProduct(
@@ -615,12 +621,10 @@ def test_any_supplier_or_wb_mapping_blocks_and_existing_wb_projection_alone_does
     assert build_candidate(case) is None
 
 
-@pytest.mark.parametrize("parity_change", ["revision", "sku", "snapshot"])
-def test_supplier_revision_sku_or_original_snapshot_mismatch_rejects(parity_change, case):
+@pytest.mark.parametrize("parity_change", ["revision", "snapshot"])
+def test_supplier_revision_or_original_snapshot_mismatch_rejects(parity_change, case):
     if parity_change == "revision":
         case.supplier_product.content_revision += 1
-    elif parity_change == "sku":
-        case.product.external_vendor_code = "DIFFERENT-SKU"
     else:
         case.product.original_data = json.dumps({
             "title": SOURCE_TITLE,
@@ -628,6 +632,342 @@ def test_supplier_revision_sku_or_original_snapshot_mismatch_rejects(parity_chan
         }, ensure_ascii=False)
     db.session.commit()
     assert build_candidate(case) is None
+
+
+def test_missing_copy_vendor_requires_exact_current_source_proof_without_prompt_leak(case, tmp_path):
+    exact_copy = build_candidate(case)
+    assert exact_copy is not None
+
+    case.product.external_vendor_code = None
+    db.session.commit()
+    candidate = build_candidate(case)
+
+    assert candidate is not None
+    assert candidate.question_fingerprint == exact_copy.question_fingerprint
+    assert candidate.context.source_fields == {
+        "name": SOURCE_TITLE,
+        "category": SOURCE_PATH,
+    }
+    assert case.draft.offer_id == "SKU-001"
+
+    client = FakeDecisionsClient()
+    pipeline = OpenAIDecisionsPipeline(
+        OpenAIDecisionsCache(
+            str(tmp_path / "private" / "decisions.sqlite3"),
+            max_calls_per_day=5,
+        ),
+        client,
+    )
+    pipeline.run_category_phase([candidate.context], now=case.now)
+    assert len(client.calls) == 1
+    request_capture = json.dumps(
+        client.calls[0][0], ensure_ascii=False, sort_keys=True,
+    ) + "\n" + "\n".join(
+        json.dumps({
+            "name": question.name,
+            "instructions": question.instructions,
+            "choices": [
+                {"value": choice.value, "description": choice.description}
+                for choice in question.choices
+            ],
+        }, ensure_ascii=False, sort_keys=True)
+        for question in client.calls[0][1]
+    )
+    assert "SKU-001" not in request_capture
+    assert "supplier-product-1" not in request_capture
+
+
+def test_null_copy_and_null_supplier_vendor_keep_the_old_exact_equality_behavior(case):
+    # The pre-existing exact-equality path allowed a missing vendor on both
+    # rows when the source external ID was present. Preserve that case.
+    case.product.external_vendor_code = None
+    case.supplier_product.vendor_code = None
+    db.session.commit()
+
+    assert case.product.external_id == case.supplier_product.external_id
+    assert build_candidate(case) is not None
+
+
+@pytest.mark.parametrize("invalid_proof", [
+    "missing_copy_external_id",
+    "missing_supplier_external_id",
+    "mismatched_external_id",
+    "missing_vendor_snapshot",
+    "blank_vendor_snapshot",
+    "mismatched_vendor_snapshot",
+    "supplier_vendor_changed_without_snapshot",
+    "blank_supplier_vendor_code",
+])
+def test_null_copy_vendor_requires_exact_external_id_and_supplier_snapshot(
+    invalid_proof,
+    case,
+):
+    case.product.external_vendor_code = None
+    source_snapshot = json.loads(case.supplier_product.original_data_json)
+    if invalid_proof == "missing_copy_external_id":
+        case.product.external_id = None
+    elif invalid_proof == "missing_supplier_external_id":
+        case.supplier_product.external_id = None
+    elif invalid_proof == "mismatched_external_id":
+        case.product.external_id = "other-source-id"
+    elif invalid_proof == "missing_vendor_snapshot":
+        source_snapshot.pop("vendor_code")
+    elif invalid_proof == "blank_vendor_snapshot":
+        source_snapshot["vendor_code"] = "   "
+    elif invalid_proof == "mismatched_vendor_snapshot":
+        source_snapshot["vendor_code"] = "OTHER-SKU"
+    elif invalid_proof == "supplier_vendor_changed_without_snapshot":
+        case.supplier_product.vendor_code = "OTHER-SKU"
+    elif invalid_proof == "blank_supplier_vendor_code":
+        case.supplier_product.vendor_code = ""
+    case.supplier_product.original_data_json = json.dumps(
+        source_snapshot,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    db.session.commit()
+
+    assert build_candidate(case) is None
+
+
+@pytest.mark.parametrize("copy_vendor_code", ["DIFFERENT-SKU", ""])
+def test_populated_contradictory_copy_vendor_never_uses_missing_code_proof(
+    copy_vendor_code,
+    case,
+):
+    case.product.external_vendor_code = copy_vendor_code
+    db.session.commit()
+
+    assert build_candidate(case) is None
+
+
+def test_rebuilt_scope_binds_current_supplier_vendor_snapshot_proof(case):
+    case.product.external_vendor_code = None
+    db.session.commit()
+    before = build_candidate(case)
+    assert before is not None
+
+    supplier_snapshot = json.loads(case.supplier_product.original_data_json)
+    supplier_snapshot["vendor_code"] = "SKU-UPDATED"
+    case.supplier_product.vendor_code = "SKU-UPDATED"
+    case.supplier_product.original_data_json = json.dumps(
+        supplier_snapshot,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    db.session.commit()
+
+    after = build_candidate(case)
+    assert after is not None
+    assert after.question_fingerprint == before.question_fingerprint
+    assert after.scope_signature != before.scope_signature
+    assert not same_ozon_prepare_category_scope(before, after)
+
+
+@pytest.mark.parametrize("drift", ["title", "category", "fact"])
+def test_rebuilt_scope_rejects_title_category_or_fact_drift_after_request(drift, case):
+    case.product.external_vendor_code = None
+    db.session.commit()
+    before = build_candidate(case)
+    assert before is not None
+    captured_fact_hash = case.draft.source_fact_hash
+
+    imported_snapshot = json.loads(case.product.original_data)
+    supplier_snapshot = json.loads(case.supplier_product.original_data_json)
+    if drift == "title":
+        imported_snapshot["title"] = "Новый складной органайзер для дома"
+        supplier_snapshot["title"] = imported_snapshot["title"]
+        case.product.title = imported_snapshot["title"]
+        case.supplier_product.title = imported_snapshot["title"]
+    elif drift == "category":
+        imported_snapshot["category"] = "Органайзеры"
+        supplier_snapshot["category"] = imported_snapshot["category"]
+        case.product.category = imported_snapshot["category"]
+        case.supplier_product.category = imported_snapshot["category"]
+    else:
+        imported_snapshot["characteristics"] = {"Материал": "Лён"}
+        supplier_snapshot["characteristics"] = {"Материал": "Лён"}
+    case.product.original_data = json.dumps(
+        imported_snapshot,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    case.supplier_product.original_data_json = json.dumps(
+        supplier_snapshot,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    db.session.commit()
+
+    after = build_candidate(case)
+    # The worker's captured draft hash and item version remain unchanged. Source
+    # title/category/fact drift makes a fresh candidate ineligible, which is a
+    # hard denial before any response can be applied.
+    assert MarketplaceFactPackBuilder.build(case.product)["fact_hash"] != captured_fact_hash
+    assert after is None
+
+
+def _queue_source_product(case, *, external_id, vendor_code, copied_vendor_code):
+    raw = json.dumps({
+        "title": SOURCE_TITLE,
+        "category": SOURCE_PATH,
+        "all_categories": [SOURCE_PATH],
+        "vendor_code": vendor_code,
+    }, ensure_ascii=False, sort_keys=True)
+    supplier_product = SupplierProduct(
+        supplier_id=case.supplier.id,
+        external_id=external_id,
+        vendor_code=vendor_code,
+        title=SOURCE_TITLE,
+        category=SOURCE_PATH,
+        content_revision=4,
+        original_data_json=raw,
+    )
+    db.session.add(supplier_product)
+    db.session.flush()
+    product = ImportedProduct(
+        seller_id=case.seller.id,
+        supplier_id=case.supplier.id,
+        supplier_product_id=supplier_product.id,
+        supplier_content_revision=4,
+        source_type=case.supplier.code,
+        external_id=external_id,
+        external_vendor_code=copied_vendor_code,
+        title=SOURCE_TITLE,
+        category=SOURCE_PATH,
+        original_data=raw,
+        import_status="pending",
+    )
+    db.session.add(product)
+    db.session.flush()
+    return product
+
+
+@pytest.mark.parametrize(
+    "proof_drift_during_answer",
+    [False, True],
+    ids=["stable-proof", "proof-drifts-mid-answer"],
+)
+def test_ordinary_source_prepare_queue_fences_vendor_proof_and_reuses_sibling_cache(
+    case,
+    tmp_path,
+    proof_drift_during_answer,
+):
+    # The ordinary service path creates the draft itself. Only the current item
+    # has a missing copied code; both source snapshots are exact and current.
+    case.run.state = "completed"
+    case.run.next_due_at = None
+    case.run.lease_token = None
+    case.run.lease_until = None
+    case.marketplace.categories_synced_at = datetime.utcnow()
+    current = _queue_source_product(
+        case,
+        external_id="queue-source-current",
+        vendor_code="QUEUE-SKU-CURRENT",
+        copied_vendor_code=None,
+    )
+    sibling = _queue_source_product(
+        case,
+        external_id="queue-source-sibling",
+        vendor_code="QUEUE-SKU-SIBLING",
+        copied_vendor_code="QUEUE-SKU-SIBLING",
+    )
+    db.session.commit()
+    case.app.config["MARKETPLACE_OZON_ENABLED"] = True
+    accepted = OzonBulkUploadService.accept_source_prepare(
+        seller_id=case.seller.id,
+        account_id=case.account.id,
+        imported_product_ids=[current.id, sibling.id],
+        request_key="local-r80-null-copy-queue-0001",
+    )
+    run = OzonBulkUploadRun.query.filter_by(job_id=accepted.job.id).one()
+    claimed = OzonUploadQueueService.claim_due_run(
+        now=datetime.utcnow(), exclude_run_ids=set(),
+    )
+    assert claimed is not None
+    run_id, lease_token = claimed
+    assert run_id == run.id
+    if proof_drift_during_answer:
+        class ProofDriftingDecisionsClient(FakeDecisionsClient):
+            def decide(self, *, input_json, questions):
+                outcome = super().decide(
+                    input_json=input_json,
+                    questions=questions,
+                )
+                source = SupplierProduct.query.filter_by(
+                    external_id="queue-source-current",
+                ).one()
+                snapshot = json.loads(source.original_data_json)
+                snapshot["vendor_code"] = "QUEUE-SKU-CURRENT-UPDATED"
+                source.vendor_code = "QUEUE-SKU-CURRENT-UPDATED"
+                source.original_data_json = json.dumps(
+                    snapshot,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                # Keep the source revision fixed to exercise the private
+                # vendor-proof scope signature after the fake response.
+                db.session.commit()
+                return outcome
+
+        client = ProofDriftingDecisionsClient(confidence=0.99)
+    else:
+        client = FakeDecisionsClient(confidence=0.99)
+    pipeline = OpenAIDecisionsPipeline(
+        OpenAIDecisionsCache(
+            str(tmp_path / "queue-cache" / "decisions.sqlite3"),
+            max_calls_per_day=5,
+        ),
+        client,
+    )
+
+    def advance(product):
+        item = OzonBulkUploadItem.query.filter_by(
+            run_id=run.id, imported_product_id=product.id,
+        ).one()
+        result = OzonUploadQueueService.advance_item(
+            run_id=run.id,
+            item_id=item.id,
+            lease_token=lease_token,
+            now=datetime.utcnow(),
+            deadline_monotonic=time.monotonic() + 35,
+        )
+        db.session.refresh(item)
+        return item, result
+
+    with patch(
+        "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+        return_value=pipeline,
+    ):
+        current_item, _current_result = advance(current)
+        current_draft = MarketplaceDraftService.get_draft(
+            seller_id=case.seller.id, draft_id=current_item.draft_id,
+        )
+        if proof_drift_during_answer:
+            assert current_draft.product_type_id is None
+            current_source = SupplierProduct.query.filter_by(
+                external_id="queue-source-current",
+            ).one()
+            assert current_source.vendor_code == "QUEUE-SKU-CURRENT-UPDATED"
+        else:
+            assert current_draft.product_type_id == case.type_a.id
+        # Draft identity still comes from the exact imported source facts; the
+        # queue does not copy or rewrite ImportedProduct.external_vendor_code.
+        assert current_draft.offer_id == "QUEUE-SKU-CURRENT"
+        assert current.external_vendor_code is None
+        assert len(client.calls) == 1
+        assert len(client.calls[0][0]["products"]) == 2
+
+        sibling_item, _sibling_result = advance(sibling)
+        sibling_draft = MarketplaceDraftService.get_draft(
+            seller_id=case.seller.id, draft_id=sibling_item.draft_id,
+        )
+        assert sibling_draft.product_type_id == case.type_a.id
+        assert sibling_draft.offer_id == "QUEUE-SKU-SIBLING"
+        assert len(client.calls) == 1
+
+    assert current.external_vendor_code is None
+    assert MarketplaceOperation.query.count() == 0
 
 
 def test_tree_freshness_unique_leaf_ambiguity_and_shortlist_bounds(case):

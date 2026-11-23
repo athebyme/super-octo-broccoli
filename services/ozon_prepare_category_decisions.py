@@ -172,7 +172,13 @@ def _sha256(value: object) -> str:
 def _source_observation(
     product: ImportedProduct,
 ) -> Optional[Tuple[str, str, str, str]]:
-    """Require exact linked supplier snapshot, current revision, and SKU parity."""
+    """Require an exact linked supplier snapshot and current revision.
+
+    A missing copied vendor code is usable only when the supplier's current
+    serialized source snapshot independently proves that code for the exact
+    shared external ID. The proof is folded into the private scope signature;
+    it is never added to the model context.
+    """
     supplier_product = product.supplier_product
     supplier = supplier_product.supplier if supplier_product is not None else None
     if (
@@ -184,7 +190,6 @@ def _source_observation(
         or product.supplier_content_revision != supplier_product.content_revision
         or product.source_type != supplier.code
         or product.external_id != supplier_product.external_id
-        or product.external_vendor_code != supplier_product.vendor_code
         or not any((supplier_product.external_id, supplier_product.vendor_code))
     ):
         return None
@@ -195,6 +200,39 @@ def _source_observation(
         return None
     if not isinstance(imported_original, dict) or not isinstance(supplier_original, dict):
         return None
+
+    supplier_vendor_proof_signature = None
+    copied_vendor_code = product.external_vendor_code
+    supplier_vendor_code = supplier_product.vendor_code
+    if copied_vendor_code != supplier_vendor_code:
+        if copied_vendor_code is not None:
+            # A populated (including empty-string) contradictory copy is never
+            # treated as a missing value.
+            return None
+        # SQL NULL is the only missing-copy case. Require the exact same
+        # nonblank source ID and an exact nonblank vendor code in the supplier's
+        # raw current snapshot; do not trim or normalize identity values.
+        source_external_id = supplier_product.external_id
+        snapshot_vendor_code = supplier_original.get("vendor_code")
+        if not (
+            type(product.external_id) is str
+            and product.external_id.strip()
+            and type(source_external_id) is str
+            and source_external_id.strip()
+            and product.external_id == source_external_id
+            and type(supplier_vendor_code) is str
+            and supplier_vendor_code.strip()
+            and type(snapshot_vendor_code) is str
+            and snapshot_vendor_code.strip()
+            and snapshot_vendor_code == supplier_vendor_code
+        ):
+            return None
+        supplier_vendor_proof_signature = _sha256({
+            "external_id": source_external_id,
+            "supplier_vendor_code": supplier_vendor_code,
+            "snapshot_vendor_code": snapshot_vendor_code,
+        })
+
     source_title = supplier_original.get("title")
     source_category = supplier_original.get("category")
     if (
@@ -242,13 +280,18 @@ def _source_observation(
         or len(clean_category.encode("utf-8")) > 300
     ):
         return None
-    fact_signature = _sha256({
+    signature_document = {
         "fact_hash": pack.get("fact_hash"),
         "source_title": clean_title,
         "source_category": clean_category,
         "title_source": title_provenance.get("source"),
         "category_source": category_provenance.get("source"),
-    })
+    }
+    if supplier_vendor_proof_signature is not None:
+        signature_document["supplier_vendor_proof_signature"] = (
+            supplier_vendor_proof_signature
+        )
+    fact_signature = _sha256(signature_document)
     fact_hash = pack.get("fact_hash")
     if type(fact_hash) is not str or re.fullmatch(r"[0-9a-f]{64}", fact_hash) is None:
         return None
