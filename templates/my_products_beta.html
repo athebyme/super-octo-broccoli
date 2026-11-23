@@ -321,7 +321,7 @@
         </button>
     </nav>
 
-    <sh-filter-bar v-if="!importBatchMode && !supplierRefreshBatchMode && !selectionReviewActive" v-model="searchInput" placeholder="Название, бренд или артикул"
+    <sh-filter-bar ref="catalogSearch" v-if="!importBatchMode && !supplierRefreshBatchMode && !selectionReviewActive" v-model="searchInput" placeholder="Название, бренд или артикул"
                    :chips="[]" :sticky="true">
         <select v-model="filters.supplier" class="mp-select" aria-label="Поставщик">
             <option value="">Все поставщики</option>

@@ -2053,11 +2053,25 @@
                     return !!(result && result.ok);
                 });
             },
+            focusCatalogAfterSelectionReview: function () {
+                var list = this.$refs.catalogListFocus;
+                if (list && typeof list.focus === 'function') {
+                    list.focus({ preventScroll: true });
+                    return true;
+                }
+                var filter = this.$refs.catalogSearch;
+                var search = filter && filter.$refs && filter.$refs.search;
+                if (search && typeof search.focus === 'function') {
+                    search.focus({ preventScroll: true });
+                    return true;
+                }
+                return false;
+            },
             returnToCatalog: function () {
                 this.selectionReviewActive = false;
                 this.selectionReviewError = '';
                 this.$nextTick(function () {
-                    this.$refs.catalogListFocus?.focus({ preventScroll: true });
+                    this.focusCatalogAfterSelectionReview();
                 });
             },
             onProductSelectionChange: function (id, event) {
@@ -4599,7 +4613,7 @@
                 this.markWbCreateSelectionIntent();
                 this.cancelSelectionReview({ clearRows: true });
                 this.$nextTick(function () {
-                    this.$refs.catalogListFocus?.focus({ preventScroll: true });
+                    this.focusCatalogAfterSelectionReview();
                 });
             },
             wbCreateActionUrl: function (kind) {

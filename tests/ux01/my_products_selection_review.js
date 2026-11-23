@@ -106,6 +106,7 @@ function makeApp() {
   app.$refs = {
     moreActions: {open: false},
     catalogListFocus: {focus() {}},
+    catalogSearch: {$refs: {search: {focus() {}}}},
     selectionReviewHeading: {focus() {}},
   };
   app.$nextTick = callback => { if (callback) callback.call(app); };
@@ -196,15 +197,43 @@ async function main() {
   sameJson(app.selected, [11]);
   sameJson(app.visibleItems.map(item => item.id), [11]);
   assert.equal(app.selectionRowsVerified, true, 'the remaining subset is still covered by the exact response');
+  let listFocusCount = 0;
+  app.$refs.catalogListFocus.focus = () => { listFocusCount += 1; };
   app.returnToCatalog();
   assert.equal(app.selectionReviewActive, false);
   assert.equal(app.items, sourceRows);
   assert.equal(app.pagination, sourcePagination);
+  assert.equal(listFocusCount, 1, 'a nonempty catalog keeps its existing return focus');
   sameJson(app.selectedItems.map(item => item.id), [11]);
   app.clearSelection();
   sameJson(app.selected, []);
   assert.equal(app.items, sourceRows);
   assert.equal(app.pagination, sourcePagination);
+
+  const emptyFilteredReturn = makeApp();
+  emptyFilteredReturn.items = [];
+  emptyFilteredReturn.selectionReviewActive = true;
+  emptyFilteredReturn.$refs.catalogListFocus = null;
+  let searchFocusCount = 0;
+  emptyFilteredReturn.$refs.catalogSearch.$refs.search.focus = options => {
+    assert.equal(options.preventScroll, true);
+    searchFocusCount += 1;
+  };
+  emptyFilteredReturn.returnToCatalog();
+  assert.equal(searchFocusCount, 1,
+    'zero-result filters restore focus to the rendered search input');
+
+  const emptyClear = makeApp();
+  emptyClear.items = [];
+  emptyClear.selected = [11];
+  emptyClear.selectionReviewActive = true;
+  emptyClear.$refs.catalogListFocus = null;
+  let clearSearchFocusCount = 0;
+  emptyClear.$refs.catalogSearch.$refs.search.focus = () => { clearSearchFocusCount += 1; };
+  emptyClear.clearSelection();
+  assert.equal(emptyClear.selectionReviewActive, false);
+  assert.equal(clearSearchFocusCount, 1,
+    'clearing the reviewed selection also falls back to search when the list is empty');
 
   const pageSelection = makeApp();
   pageSelection.items = [row(30), row(31)];
@@ -361,6 +390,7 @@ async function main() {
   assert.match(template, /data-selection-review-return/);
   assert.match(template, /data-selection-outside-count/);
   assert.match(template, /data-selection-review-row/);
+  assert.match(template, /<sh-filter-bar ref="catalogSearch"/);
   assert.match(css, /\.mp-selection-review[\s\S]*--focus-outline/);
   assert.match(template, /filename='my-products-beta\.css', v='20261123-workspace-selection-r70'/);
   assert.match(template, /filename='my-products-beta\.js', v='20261123-workspace-selection-r70'/);
