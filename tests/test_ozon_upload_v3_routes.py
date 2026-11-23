@@ -59,6 +59,157 @@ class OzonUploadV3RoutesTest(OzonPublicationFixture, unittest.TestCase):
         value.update(changes)
         return value
 
+    def completed_source_prepare(self, *, phases=("needs_input",), key=None):
+        products = [self.source]
+        for index in range(1, len(phases)):
+            product = ImportedProduct(
+                seller_id=self.seller.id,
+                external_id=f"retry-route-source-{index}",
+                source_type="synthetic",
+                title=f"Товар для повтора {index}",
+            )
+            db.session.add(product)
+            products.append(product)
+        db.session.flush()
+        accepted = OzonBulkUploadService.accept_source_prepare(
+            seller_id=self.seller.id,
+            account_id=self.account.id,
+            imported_product_ids=[product.id for product in products],
+            request_key=key or self.key,
+            created_by_user_id=self.user.id,
+        )
+        run = OzonBulkUploadRun.query.filter_by(job_id=accepted.job.id).one()
+        items = OzonBulkUploadItem.query.filter_by(run_id=run.id).order_by(
+            OzonBulkUploadItem.ordinal.asc(),
+        ).all()
+        run.state = "completed"
+        run.next_due_at = None
+        for item, phase in zip(items, phases):
+            if phase == "prepared":
+                item.draft_id = self.draft.id
+                item.prepared_version = self.draft.version
+            item.phase = phase
+            item.next_due_at = None
+        db.session.commit()
+        return accepted, run, items, products
+
+    def test_source_retry_detail_binds_form_to_visible_exact_scope(self):
+        accepted, parent, _items, _products = self.completed_source_prepare(
+            phases=("needs_input", "excluded"),
+        )
+        before = (
+            BackgroundJob.query.count(), OzonBulkUploadRun.query.count(),
+            OzonBulkUploadItem.query.count(), MarketplaceOperation.query.count(),
+            accepted.job.updated_at,
+        )
+
+        response = self.client.get(
+            f"/marketplaces/ozon/uploads/{accepted.job.job_uid}",
+            headers={"Accept": "application/json"},
+        )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.json["run"]["prepare_retry_count"], 1)
+        document = response.json["run"]
+
+        with patch("routes.ozon_bulk_uploads.render_template", return_value="detail") as render:
+            html = self.client.get(
+                f"/marketplaces/ozon/uploads/{accepted.job.job_uid}",
+                headers={"Accept": "text/html"},
+            )
+        self.assertEqual(html.status_code, 200)
+        self.assertEqual(html.get_data(as_text=True), "detail")
+        context = render.call_args.kwargs
+        self.assertEqual(context["run"]["prepare_retry_count"], 1)
+        request_key = context["prepare_retry_request_key"]
+        self.assertEqual(
+            request_key,
+            OzonBulkUploadService.prepare_retry_request_key_for_document(
+                seller_id=self.seller.id,
+                document=document,
+            ),
+        )
+        self.assertIsNone(context["prepare_retry_parent_url"])
+        self.assertEqual(before, (
+            BackgroundJob.query.count(), OzonBulkUploadRun.query.count(),
+            OzonBulkUploadItem.query.count(), MarketplaceOperation.query.count(),
+            BackgroundJob.query.filter_by(id=accepted.job.id).one().updated_at,
+        ), "detail GET must remain read-only while publishing the retry scope")
+
+        form_data = {"confirm_prepare": "1", "request_key": request_key}
+        first = self.client.post(
+            f"/marketplaces/ozon/uploads/{accepted.job.job_uid}/retry",
+            data=form_data,
+            headers={"Accept": "text/html"},
+        )
+        self.assertEqual(first.status_code, 303)
+        child_uid = urlsplit(first.headers["Location"]).path.rsplit("/", 1)[-1]
+        child = OzonBulkUploadRun.query.join(
+            BackgroundJob, BackgroundJob.id == OzonBulkUploadRun.job_id,
+        ).filter(BackgroundJob.job_uid == child_uid).one()
+        self.assertEqual(child.parent_prepare_run_id, parent.id)
+        self.assertEqual(OzonBulkUploadRun.query.count(), 2)
+
+        with patch("routes.ozon_bulk_uploads.flash") as flash:
+            replay = self.client.post(
+                f"/marketplaces/ozon/uploads/{accepted.job.job_uid}/retry",
+                data=form_data,
+                headers={"Accept": "text/html"},
+            )
+        self.assertEqual(replay.status_code, 303)
+        self.assertEqual(OzonBulkUploadRun.query.count(), 2)
+        self.assertIn("Открыт ранее принятый запуск", flash.call_args.args[0])
+        self.assertNotIn("начата", flash.call_args.args[0])
+
+        with patch("routes.ozon_bulk_uploads.render_template", return_value="child") as child_render:
+            self.client.get(
+                f"/marketplaces/ozon/uploads/{child_uid}",
+                headers={"Accept": "text/html"},
+            )
+        self.assertEqual(
+            child_render.call_args.kwargs["prepare_retry_parent_url"],
+            f"/marketplaces/ozon/uploads/{accepted.job.job_uid}",
+        )
+
+    def test_source_retry_form_rejects_legacy_key_but_json_keeps_legacy_replay(self):
+        accepted, _parent, _items, _products = self.completed_source_prepare(
+            phases=("needs_input",),
+        )
+        form_url = f"/marketplaces/ozon/uploads/{accepted.job.job_uid}/retry"
+        before_runs = OzonBulkUploadRun.query.count()
+        legacy_key = "historical-json-retry-key-0001"
+        malformed_form = self.client.post(
+            form_url,
+            data={"confirm_prepare": "1", "request_key": legacy_key},
+            headers={"Accept": "text/html"},
+        )
+        self.assertIn(malformed_form.status_code, {302, 303})
+        self.assertEqual(OzonBulkUploadRun.query.count(), before_runs)
+
+        first = self.client.post(
+            form_url,
+            json={"confirm_prepare": True, "request_key": legacy_key},
+            headers={"Accept": "application/json"},
+        )
+        self.assertEqual(first.status_code, 202, first.get_json())
+        self.assertFalse(first.json["replayed"])
+        child_uid = first.json["run"]["job_uid"]
+        child = OzonBulkUploadRun.query.join(
+            BackgroundJob, BackgroundJob.id == OzonBulkUploadRun.job_id,
+        ).filter(BackgroundJob.job_uid == child_uid).one()
+        self.assertEqual(child.parent_prepare_run_id, OzonBulkUploadRun.query.filter_by(
+            job_id=accepted.job.id,
+        ).one().id)
+
+        second = self.client.post(
+            form_url,
+            json={"confirm_prepare": True, "request_key": legacy_key},
+            headers={"Accept": "application/json"},
+        )
+        self.assertEqual(second.status_code, 202, second.get_json())
+        self.assertTrue(second.json["replayed"])
+        self.assertEqual(second.json["run"]["job_uid"], child_uid)
+        self.assertEqual(OzonBulkUploadRun.query.count(), before_runs + 1)
+
     def test_prepare_acceptance_is_fast_local_and_exact_replay(self):
         # No draft mutation/preparation is performed by the request itself.
         before_version = self.draft.version

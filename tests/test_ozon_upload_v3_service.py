@@ -17,6 +17,7 @@ from services.marketplace_product_links import MarketplaceProductLinkService
 from services.marketplace_publications import MarketplacePublicationService
 from services.ozon_bulk_upload import (
     OzonBulkUploadConflict, OzonBulkUploadService,
+    OzonBulkUploadValidationError,
 )
 from services.ozon_upload_queue import (
     ItemAdvanceResult, OzonUploadLeaseLost, OzonUploadQueueService,
@@ -43,6 +44,63 @@ class OzonUploadV3ServiceTest(OzonPublicationFixture, unittest.TestCase):
             imported_product_ids=[self.source.id], request_key=key,
             created_by_user_id=self.user.id,
         )
+
+    def _retry_parent(self, phases, *, key):
+        products = [self.source]
+        for index in range(1, len(phases)):
+            product = ImportedProduct(
+                seller_id=self.seller.id,
+                external_id=f"retry-source-{index}-{key[:4]}",
+                external_vendor_code=f"retry-offer-{index}-{key[:4]}",
+                source_type="synthetic",
+                title=f"Товар для повтора {index}",
+                description="Наблюдаемое описание",
+                category="Категория",
+            )
+            db.session.add(product)
+            products.append(product)
+        db.session.flush()
+
+        prepared_drafts = {}
+        for product, phase in zip(products, phases):
+            if phase != "prepared" or product.id == self.source.id:
+                continue
+            draft = MarketplaceDraftService.create_draft(
+                seller_id=self.seller.id,
+                account_id=self.account.id,
+                imported_product_id=product.id,
+                product_type_id=self.product_type.id,
+            )
+            prepared_drafts[product.id] = draft
+
+        accepted = OzonBulkUploadService.accept_source_prepare(
+            seller_id=self.seller.id,
+            account_id=self.account.id,
+            imported_product_ids=[product.id for product in products],
+            request_key=key,
+            created_by_user_id=self.user.id,
+        )
+        run = OzonBulkUploadRun.query.filter_by(job_id=accepted.job.id).one()
+        items = OzonBulkUploadItem.query.filter_by(run_id=run.id).order_by(
+            OzonBulkUploadItem.ordinal.asc(),
+        ).all()
+        run.state = "completed"
+        run.next_due_at = None
+        for item, phase, product in zip(items, phases, products):
+            if phase == "prepared":
+                draft = (
+                    prepared_drafts.get(product.id)
+                    or MarketplaceDraftService.get_draft(
+                        seller_id=self.seller.id,
+                        draft_id=self.draft.id,
+                    )
+                )
+                item.draft_id = draft.id
+                item.prepared_version = draft.version
+            item.phase = phase
+            item.next_due_at = None
+        db.session.commit()
+        return accepted, run, items, products
 
     def _reviewed(self, key="r" * 24):
         return OzonBulkUploadService.accept_reviewed_publish(
@@ -164,6 +222,169 @@ class OzonUploadV3ServiceTest(OzonPublicationFixture, unittest.TestCase):
         document = OzonBulkUploadService.public_document(accepted.job, detail=True)
         self.assertEqual(document["mode"], "source_prepare")
         self.assertEqual(document["items"][0]["phase"], "pending")
+
+    def test_source_retry_selects_exact_terminal_local_problems_and_replays(self):
+        accepted, parent, items, products = self._retry_parent(
+            ["needs_input", "failed_local", "excluded", "prepared"],
+            key="prepare-retry-parent-001",
+        )
+        parent_document = OzonBulkUploadService.public_document(
+            accepted.job, detail=True,
+        )
+        self.assertEqual(parent_document["prepare_retry_count"], 2)
+        request_key = OzonBulkUploadService.prepare_retry_request_key_for_document(
+            seller_id=self.seller.id,
+            document=parent_document,
+        )
+        self.assertRegex(request_key, r"^prepare-retry-v1-[0-9a-f]{64}$")
+
+        first = OzonBulkUploadService.retry_run(
+            seller_id=self.seller.id,
+            job_uid=accepted.job.job_uid,
+            request_key=request_key,
+            created_by_user_id=self.user.id,
+            canonical_scope=True,
+        )
+        child = OzonBulkUploadRun.query.filter_by(job_id=first.job.id).one()
+        child_items = OzonBulkUploadItem.query.filter_by(
+            run_id=child.id,
+        ).order_by(OzonBulkUploadItem.ordinal.asc()).all()
+        self.assertEqual(child.mode, "source_prepare")
+        self.assertEqual(child.parent_prepare_run_id, parent.id)
+        self.assertEqual(
+            [item.imported_product_id for item in child_items],
+            [products[0].id, products[1].id],
+        )
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+
+        replay = OzonBulkUploadService.retry_run(
+            seller_id=self.seller.id,
+            job_uid=accepted.job.job_uid,
+            request_key=request_key,
+            created_by_user_id=self.user.id,
+            canonical_scope=True,
+        )
+        self.assertTrue(replay.replayed)
+        self.assertEqual(replay.job.id, first.job.id)
+        self.assertEqual(OzonBulkUploadRun.query.count(), 2)
+        child_document = OzonBulkUploadService.public_document(
+            replay.job, detail=True,
+        )
+        self.assertEqual(child_document["prepare_retry_count"], 0)
+        self.assertEqual(
+            child_document["previous_prepare_job_uid"],
+            accepted.job.job_uid,
+        )
+
+    def test_source_retry_digest_denies_same_count_scope_drift_and_replays_exact_child(self):
+        accepted, parent, items, products = self._retry_parent(
+            ["needs_input", "prepared"],
+            key="prepare-retry-drift-scope-001",
+        )
+        parent_document = OzonBulkUploadService.public_document(
+            accepted.job, detail=True,
+        )
+        self.assertEqual(parent_document["prepare_retry_count"], 1)
+        stale_key = OzonBulkUploadService.prepare_retry_request_key_for_document(
+            seller_id=self.seller.id,
+            document=parent_document,
+        )
+
+        # Keep the count at one but replace the exact eligible product.
+        items[0].draft_id = self.draft.id
+        items[0].prepared_version = self.draft.version
+        items[0].phase = "prepared"
+        items[1].phase = "needs_input"
+        db.session.commit()
+        changed_document = OzonBulkUploadService.public_document(
+            accepted.job, detail=True,
+        )
+        self.assertEqual(changed_document["prepare_retry_count"], 1)
+        changed_key = OzonBulkUploadService.prepare_retry_request_key_for_document(
+            seller_id=self.seller.id,
+            document=changed_document,
+        )
+        self.assertNotEqual(stale_key, changed_key)
+        with self.assertRaises(OzonBulkUploadConflict) as changed:
+            OzonBulkUploadService.retry_run(
+                seller_id=self.seller.id,
+                job_uid=accepted.job.job_uid,
+                request_key=stale_key,
+                created_by_user_id=self.user.id,
+                canonical_scope=True,
+            )
+        self.assertEqual(
+            changed.exception.code,
+            "ozon_prepare_retry_scope_changed",
+        )
+        self.assertEqual(OzonBulkUploadRun.query.count(), 1)
+
+        # The scope shown by a fresh GET accepts exactly the new eligible row.
+        first = OzonBulkUploadService.retry_run(
+            seller_id=self.seller.id,
+            job_uid=accepted.job.job_uid,
+            request_key=changed_key,
+            created_by_user_id=self.user.id,
+            canonical_scope=True,
+        )
+        child = OzonBulkUploadRun.query.filter_by(job_id=first.job.id).one()
+        child_items = OzonBulkUploadItem.query.filter_by(run_id=child.id).all()
+        self.assertEqual(
+            [item.imported_product_id for item in child_items],
+            [products[1].id],
+        )
+
+        # A second POST with that key replays its exact accepted child even if
+        # the parent scope later changes again.
+        items[0].phase = "needs_input"
+        items[0].draft_id = None
+        items[0].prepared_version = None
+        items[1].phase = "prepared"
+        items[1].draft_id = self.draft.id
+        items[1].prepared_version = self.draft.version
+        db.session.commit()
+        replay = OzonBulkUploadService.retry_run(
+            seller_id=self.seller.id,
+            job_uid=accepted.job.job_uid,
+            request_key=changed_key,
+            created_by_user_id=self.user.id,
+            canonical_scope=True,
+        )
+        self.assertTrue(replay.replayed)
+        self.assertEqual(replay.job.id, first.job.id)
+        self.assertEqual(OzonBulkUploadRun.query.count(), 2)
+        replayed_ids = [item.imported_product_id for item in
+                        OzonBulkUploadItem.query.filter_by(run_id=child.id).all()]
+        self.assertEqual(replayed_ids, [products[1].id])
+
+    def test_source_retry_requires_completed_source_run_and_nonempty_problem_scope(self):
+        active = self._source(key="prepare-retry-active-scope-01")
+        with self.assertRaises(OzonBulkUploadConflict):
+            OzonBulkUploadService.retry_run(
+                seller_id=self.seller.id,
+                job_uid=active.job.job_uid,
+                request_key="legacy-active-retry-key-001",
+            )
+
+        completed, _run, _items, _products = self._retry_parent(
+            ["prepared"],
+            key="prepare-retry-no-target-01",
+        )
+        with self.assertRaises(OzonBulkUploadValidationError):
+            OzonBulkUploadService.retry_run(
+                seller_id=self.seller.id,
+                job_uid=completed.job.job_uid,
+                request_key="legacy-empty-retry-key-001",
+            )
+
+        reviewed = self._reviewed(key="prepare-retry-reviewed-01")
+        with self.assertRaises(OzonBulkUploadConflict) as wrong_mode:
+            OzonBulkUploadService.retry_run(
+                seller_id=self.seller.id,
+                job_uid=reviewed.job.job_uid,
+                request_key="legacy-reviewed-retry-001",
+            )
+        self.assertEqual(wrong_mode.exception.code, "draft_review_required")
 
     def test_request_key_conflict_and_account_scoped_readback(self):
         self._source()

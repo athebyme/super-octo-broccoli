@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from flask import current_app
 from sqlalchemy import case, func, or_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import selectinload
 
 from models import (
@@ -105,6 +105,11 @@ class OzonBulkUploadService:
     REFERENCE_WAIT_TIMEOUT_SECONDS = 6 * 60 * 60
     WAITING_ITEMS_PER_TICK = 50
     JOB_UID_PATTERN = re.compile(r"^ozon-upload-[0-9a-f]{32}$")
+    PREPARE_RETRY_KEY_PREFIX = "prepare-retry-v1-"
+    PREPARE_RETRY_KEY_PATTERN = re.compile(
+        r"^prepare-retry-v1-[0-9a-f]{64}$"
+    )
+    PREPARE_RETRY_PHASES = frozenset({"needs_input", "failed_local"})
     REFERENCE_ERROR_CODES = {"schema_stale", "dictionary_stale"}
     REQUEST_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]{24,128}$")
 
@@ -126,6 +131,222 @@ class OzonBulkUploadService:
         return hashlib.sha256(json.dumps(
             document, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         ).encode("utf-8")).hexdigest()
+
+    @classmethod
+    def prepare_retry_product_ids(
+        cls, *, mode: Any, state: Any, items: Any,
+    ) -> List[int]:
+        """Return the one exact retryable source-prepare selection.
+
+        This accepts the same rows as ORM objects or the public V3 projection,
+        so the read-only result and retry POST cannot drift to separate phase
+        rules. Reviewed rows, excluded rows, operation-linked rows, and active
+        runs are never eligible.
+        """
+        if mode != "source_prepare" or state != "completed":
+            return []
+        if not isinstance(items, (list, tuple)):
+            return []
+
+        product_ids = []
+        for item in items:
+            if isinstance(item, dict):
+                phase = item.get("phase", item.get("status"))
+                product_id = item.get("imported_product_id")
+                operation_id = item.get("operation_id")
+                reviewed_draft_id = item.get("reviewed_draft_id")
+                reviewed_version = item.get("reviewed_version")
+            else:
+                phase = getattr(item, "phase", None)
+                product_id = getattr(item, "imported_product_id", None)
+                operation_id = getattr(item, "operation_id", None)
+                reviewed_draft_id = getattr(item, "reviewed_draft_id", None)
+                reviewed_version = getattr(item, "reviewed_version", None)
+            if (
+                phase not in cls.PREPARE_RETRY_PHASES
+                or operation_id is not None
+                or reviewed_draft_id is not None
+                or reviewed_version is not None
+                or type(product_id) is not int
+                or product_id <= 0
+            ):
+                continue
+            if product_id in product_ids:
+                return []
+            product_ids.append(product_id)
+        if len(product_ids) > cls.MAX_ITEMS:
+            return []
+        return product_ids
+
+    @classmethod
+    def _prepare_retry_request_key(
+        cls, *, seller_id: int, account_id: int, parent_job_uid: str,
+        product_ids: Sequence[int],
+    ) -> str:
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        account_id = cls._positive_integer(account_id, "account_id")
+        if (
+            not isinstance(parent_job_uid, str)
+            or not cls.JOB_UID_PATTERN.fullmatch(parent_job_uid)
+        ):
+            raise OzonBulkUploadValidationError(
+                "Некорректный исходный запуск подготовки"
+            )
+        normalized_ids = cls._prepared_product_ids(list(product_ids))
+        identity = {
+            "version": 1,
+            "seller_id": seller_id,
+            "account_id": account_id,
+            "parent_job_uid": parent_job_uid,
+            "imported_product_ids": normalized_ids,
+        }
+        digest = hashlib.sha256(json.dumps(
+            identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        return f"{cls.PREPARE_RETRY_KEY_PREFIX}{digest}"
+
+    @classmethod
+    def prepare_retry_request_key_for_document(
+        cls, *, seller_id: int, document: Any,
+    ) -> Optional[str]:
+        """Bind the HTML key to the same public item snapshot as its count."""
+        if not isinstance(document, dict) or document.get("mode") != "source_prepare":
+            return None
+        items = document.get("items")
+        product_ids = cls.prepare_retry_product_ids(
+            mode=document.get("mode"), state=document.get("status"),
+            items=items,
+        )
+        retry_count = document.get("prepare_retry_count")
+        if (
+            type(retry_count) is not int
+            or retry_count <= 0
+            or retry_count != len(product_ids)
+        ):
+            return None
+        return cls._prepare_retry_request_key(
+            seller_id=seller_id,
+            account_id=cls._positive_integer(
+                document.get("account_id"), "account_id",
+            ),
+            parent_job_uid=document.get("job_uid"),
+            product_ids=product_ids,
+        )
+
+    @classmethod
+    def _trusted_previous_prepare_job_uid(
+        cls, run: OzonBulkUploadRun,
+    ) -> Optional[str]:
+        parent_id = getattr(run, "parent_prepare_run_id", None)
+        if type(parent_id) is not int or parent_id <= 0 or parent_id == run.id:
+            return None
+        row = db.session.query(BackgroundJob.job_uid).join(
+            OzonBulkUploadRun,
+            OzonBulkUploadRun.job_id == BackgroundJob.id,
+        ).filter(
+            OzonBulkUploadRun.id == parent_id,
+            OzonBulkUploadRun.seller_id == run.seller_id,
+            OzonBulkUploadRun.account_id == run.account_id,
+            OzonBulkUploadRun.mode == "source_prepare",
+            OzonBulkUploadRun.state == "completed",
+            BackgroundJob.seller_id == run.seller_id,
+            BackgroundJob.job_type == cls.JOB_TYPE,
+        ).first()
+        job_uid = row[0] if row is not None else None
+        if (
+            isinstance(job_uid, str)
+            and cls.JOB_UID_PATTERN.fullmatch(job_uid)
+        ):
+            return job_uid
+        return None
+
+    @classmethod
+    def _lock_prepare_retry_parent(cls, *, job: BackgroundJob) -> None:
+        """Serialize retry selection against repair's parent-job receipt commit.
+
+        Source repair updates its item phase and rotates this same job row in
+        one transaction. The no-op update acquires the database write/row lock
+        before we re-read the selector and keeps it through child acceptance.
+        """
+        locked = BackgroundJob.query.filter_by(
+            id=job.id,
+            seller_id=job.seller_id,
+            job_type=cls.JOB_TYPE,
+        ).update({
+            BackgroundJob.updated_at: BackgroundJob.updated_at,
+        }, synchronize_session=False)
+        if locked != 1:
+            error = OzonBulkUploadConflict(
+                "Не удалось подтвердить текущий состав повтора; обновите страницу"
+            )
+            error.code = "ozon_prepare_retry_scope_changed"
+            raise error
+
+    @classmethod
+    def _scope_changed_retry_error(cls) -> OzonBulkUploadConflict:
+        error = OzonBulkUploadConflict(
+            "Состав карточек изменился после открытия результата; обновите страницу и повторите"
+        )
+        error.code = "ozon_prepare_retry_scope_changed"
+        return error
+
+    @classmethod
+    def _existing_canonical_prepare_retry(
+        cls, *, seller_id: int, parent: OzonBulkUploadRun,
+        parent_job_uid: str, request_key: str, request_key_hash: str,
+    ) -> Optional[UploadRunAcceptance]:
+        retry = OzonBulkUploadRun.query.filter_by(
+            seller_id=seller_id,
+            request_key_hash=request_key_hash,
+        ).first()
+        if retry is None:
+            return None
+        if (
+            retry.account_id != parent.account_id
+            or retry.mode != "source_prepare"
+            or retry.parent_prepare_run_id != parent.id
+        ):
+            error = OzonBulkUploadConflict(
+                "Ключ повтора уже использован для другого запуска"
+            )
+            error.code = "upload_request_key_conflict"
+            raise error
+        retry_items = OzonBulkUploadItem.query.filter_by(
+            run_id=retry.id,
+        ).order_by(OzonBulkUploadItem.ordinal.asc()).all()
+        product_ids = [item.imported_product_id for item in retry_items]
+        expected_fingerprint = cls._run_fingerprint({
+            "version": 3,
+            "mode": "source_prepare",
+            "account_id": retry.account_id,
+            "imported_product_ids": product_ids,
+        }) if product_ids else None
+        if (
+            not product_ids
+            or len(product_ids) > cls.MAX_ITEMS
+            or len(set(product_ids)) != len(product_ids)
+            or retry.request_fingerprint != expected_fingerprint
+            or cls._prepare_retry_request_key(
+                seller_id=seller_id, account_id=retry.account_id,
+                parent_job_uid=parent_job_uid,
+                product_ids=product_ids,
+            ) != request_key
+        ):
+            error = OzonBulkUploadConflict(
+                "Сохранённый повтор не совпадает с точным запуском; проверьте историю"
+            )
+            error.code = "upload_request_key_conflict"
+            raise error
+        job = BackgroundJob.query.filter_by(
+            id=retry.job_id,
+            seller_id=seller_id,
+            job_type=cls.JOB_TYPE,
+        ).first()
+        if job is None:
+            raise OzonBulkUploadConflict(
+                "Журнал подтверждённого повтора недоступен"
+            )
+        return UploadRunAcceptance(job=job, replayed=True)
 
     @classmethod
     def _existing_acceptance(
@@ -224,10 +445,17 @@ class OzonBulkUploadService:
         cls, *, seller_id: int, account_id: int,
         imported_product_ids: Any, request_key: str,
         created_by_user_id: Optional[int] = None,
+        _parent_prepare_run_id: Optional[int] = None,
     ) -> UploadRunAcceptance:
         seller_id = cls._positive_integer(seller_id, "seller_id")
         account_id = cls._positive_integer(account_id, "account_id")
         product_ids = cls._prepared_product_ids(imported_product_ids)
+        if _parent_prepare_run_id is not None and (
+            type(_parent_prepare_run_id) is not int or _parent_prepare_run_id <= 0
+        ):
+            raise OzonBulkUploadValidationError(
+                "Некорректный исходный запуск подготовки"
+            )
         key_hash = cls._request_identity(
             seller_id=seller_id, request_key=request_key,
         )
@@ -242,6 +470,18 @@ class OzonBulkUploadService:
             )
         except MarketplaceAccountError as exc:
             raise cls._translate_account_error(exc) from None
+        if _parent_prepare_run_id is not None:
+            parent = OzonBulkUploadRun.query.filter_by(
+                id=_parent_prepare_run_id,
+                seller_id=seller_id,
+                account_id=account_id,
+                mode="source_prepare",
+                state="completed",
+            ).first()
+            if parent is None:
+                raise OzonBulkUploadConflict(
+                    "Исходный запуск подготовки недоступен"
+                )
         replay = cls._existing_acceptance(
             seller_id=seller_id, account_id=account_id,
             request_key_hash=key_hash, fingerprint=fingerprint,
@@ -272,6 +512,7 @@ class OzonBulkUploadService:
             seller_id=seller_id, account=account, mode="source_prepare",
             request_key_hash=key_hash, fingerprint=fingerprint,
             created_by_user_id=created_by_user_id, item_specs=specs,
+            parent_prepare_run_id=_parent_prepare_run_id,
         )
 
     @classmethod
@@ -2380,6 +2621,7 @@ class OzonBulkUploadService:
         job_uid: str,
         request_key: str,
         created_by_user_id: Optional[int] = None,
+        canonical_scope: bool = False,
     ) -> UploadRunAcceptance:
         """Only local source preparation can be retried without new review."""
         previous = cls._owned_job(seller_id=seller_id, job_uid=job_uid)
@@ -2396,24 +2638,92 @@ class OzonBulkUploadService:
             raise OzonBulkUploadConflict(
                 "Подготовка ещё выполняется; дождитесь её результата"
             )
-        product_ids = [row.imported_product_id for row in
-                       OzonBulkUploadItem.query.filter(
-                           OzonBulkUploadItem.run_id == run.id,
-                           OzonBulkUploadItem.phase.in_((
-                               "needs_input", "failed_local", "excluded",
-                           )),
-                       ).order_by(OzonBulkUploadItem.ordinal).all()]
-        if not product_ids:
+        if not isinstance(canonical_scope, bool):
             raise OzonBulkUploadValidationError(
-                "В этом запуске нет карточек для повторной локальной подготовки"
+                "canonical_scope должен быть boolean"
             )
-        return cls.accept_source_prepare(
-            seller_id=seller_id,
-            account_id=run.account_id,
-            imported_product_ids=product_ids,
-            request_key=request_key,
-            created_by_user_id=created_by_user_id,
+        request_key_hash = cls._request_identity(
+            seller_id=seller_id, request_key=request_key,
         )
+        if canonical_scope:
+            if not cls.PREPARE_RETRY_KEY_PATTERN.fullmatch(request_key):
+                raise OzonBulkUploadValidationError(
+                    "Ключ повтора не соответствует выбранным карточкам"
+                )
+            replay = cls._existing_canonical_prepare_retry(
+                seller_id=seller_id, parent=run,
+                parent_job_uid=previous.job_uid,
+                request_key=request_key,
+                request_key_hash=request_key_hash,
+            )
+            if replay is not None:
+                return replay
+
+        try:
+            cls._lock_prepare_retry_parent(job=previous)
+            run = OzonBulkUploadRun.query.populate_existing().filter_by(
+                job_id=previous.id, seller_id=seller_id,
+            ).first()
+            if run is None or run.mode != "source_prepare":
+                raise cls._scope_changed_retry_error()
+            if run.state != "completed":
+                raise OzonBulkUploadConflict(
+                    "Подготовка ещё выполняется; дождитесь её результата"
+                )
+            if canonical_scope:
+                replay = cls._existing_canonical_prepare_retry(
+                    seller_id=seller_id, parent=run,
+                    parent_job_uid=previous.job_uid,
+                    request_key=request_key,
+                    request_key_hash=request_key_hash,
+                )
+                if replay is not None:
+                    db.session.rollback()
+                    return replay
+
+            items = OzonBulkUploadItem.query.populate_existing().filter_by(
+                run_id=run.id,
+            ).order_by(OzonBulkUploadItem.ordinal.asc()).all()
+            product_ids = cls.prepare_retry_product_ids(
+                mode=run.mode, state=run.state, items=items,
+            )
+            if not product_ids:
+                db.session.rollback()
+                raise OzonBulkUploadValidationError(
+                    "В этом запуске нет карточек для повторной локальной подготовки"
+                )
+            if canonical_scope:
+                expected_key = cls._prepare_retry_request_key(
+                    seller_id=seller_id, account_id=run.account_id,
+                    parent_job_uid=previous.job_uid,
+                    product_ids=product_ids,
+                )
+                if expected_key != request_key:
+                    raise cls._scope_changed_retry_error()
+            acceptance = cls.accept_source_prepare(
+                seller_id=seller_id,
+                account_id=run.account_id,
+                imported_product_ids=product_ids,
+                request_key=request_key,
+                created_by_user_id=created_by_user_id,
+                _parent_prepare_run_id=run.id,
+            )
+            if acceptance.replayed:
+                db.session.rollback()
+            return acceptance
+        except OperationalError:
+            db.session.rollback()
+            error = OzonBulkUploadConflict(
+                "Не удалось подтвердить состав карточек для повтора; обновите страницу и проверьте результат"
+            )
+            error.code = "ozon_prepare_retry_scope_unavailable"
+            raise error from None
+        except Exception:
+            # The parent lock and any attempted child acceptance share this
+            # transaction. Always release it when validation or construction
+            # fails so a later normal retry/read is not left behind a write.
+            db.session.rollback()
+            raise
 
     @classmethod
     def list_runs(
@@ -2481,6 +2791,14 @@ class OzonBulkUploadService:
                 "created_at": job.created_at.isoformat() if job.created_at else None,
                 "updated_at": job.updated_at.isoformat() if job.updated_at else None,
             }
+            if detail and run.mode == "source_prepare":
+                retry_product_ids = cls.prepare_retry_product_ids(
+                    mode=run.mode, state=run.state, items=observed["items"],
+                )
+                document["prepare_retry_count"] = len(retry_product_ids)
+                parent_job_uid = cls._trusted_previous_prepare_job_uid(run)
+                if parent_job_uid is not None:
+                    document["previous_prepare_job_uid"] = parent_job_uid
             if detail:
                 document["items"] = observed["items"]
                 if run.mode == "reviewed_drafts":

@@ -210,12 +210,19 @@ def _created_response(acceptance):
         response.headers["Location"] = location
         response.headers["Cache-Control"] = "private, no-store"
         return response
-    flash(
-        "Подготовка черновиков начата. После неё проверьте карточки перед отправкой."
-        if document.get("mode") == "source_prepare" else
-        "Проверенные версии карточек приняты в очередь отправки Ozon.",
-        "success",
-    )
+    if acceptance.replayed:
+        message = (
+            "Открыт ранее принятый запуск подготовки."
+            if document.get("mode") == "source_prepare"
+            else "Открыт ранее принятый запуск отправки."
+        )
+    else:
+        message = (
+            "Подготовка черновиков начата. После неё проверьте карточки перед отправкой."
+            if document.get("mode") == "source_prepare" else
+            "Проверенные версии карточек приняты в очередь отправки Ozon."
+        )
+    flash(message, "success")
     return redirect(location, code=303)
 
 
@@ -909,12 +916,28 @@ def _detail_response(job_uid: str, *, force_json: bool = False):
                 "code": exc.code,
             }), exc.status_code
         return _error_response(exc)
-    if force_json or _wants_json():
+    wants_json = force_json or _wants_json()
+    if wants_json:
         response = jsonify({"success": True, "run": document})
     else:
+        prepare_retry_request_key = (
+            OzonBulkUploadService.prepare_retry_request_key_for_document(
+                seller_id=seller_id,
+                document=document,
+            )
+        )
+        previous_job_uid = document.get("previous_prepare_job_uid")
+        prepare_retry_parent_url = (
+            url_for("ozon_bulk_uploads.detail", job_uid=previous_job_uid)
+            if isinstance(previous_job_uid, str)
+            and OzonBulkUploadService.JOB_UID_PATTERN.fullmatch(previous_job_uid)
+            else None
+        )
         response = make_response(render_template(
             "ozon_bulk_upload_detail.html",
             run=document,
+            prepare_retry_request_key=prepare_retry_request_key,
+            prepare_retry_parent_url=prepare_retry_parent_url,
         ))
     if document.get("mode") in {"source_prepare", "reviewed_drafts"}:
         response.headers["Cache-Control"] = "private, no-store"
@@ -1552,11 +1575,18 @@ def retry(job_uid: str):
     try:
         data = _request_payload({"confirm_prepare", "request_key"})
         _require_prepare_confirmation(data.get("confirm_prepare"))
+        request_key = _request_key(data.get("request_key"))
         acceptance = OzonBulkUploadService.retry_run(
             seller_id=seller_id,
             job_uid=job_uid,
-            request_key=_request_key(data.get("request_key")),
+            request_key=request_key,
             created_by_user_id=getattr(current_user, "id", None),
+            canonical_scope=(
+                not request.is_json
+                or bool(OzonBulkUploadService.PREPARE_RETRY_KEY_PATTERN.fullmatch(
+                    request_key,
+                ))
+            ),
         )
     except OzonBulkUploadError as exc:
         if _wants_json():
