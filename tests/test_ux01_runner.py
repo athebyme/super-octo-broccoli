@@ -1881,6 +1881,13 @@ class Ux01RunnerContractTest(unittest.TestCase):
                     self.assertIn(expected_issue, rejected["workspace_protocol_issues"])
 
     def test_operations_pricing_requires_single_load_receipts_and_original_matrix(self):
+        self.assertEqual(WB_HISTORY_DOMAIN_COUNTS, {
+            "bulk_edit_history": 4,
+            "card_edit_history": 36,
+            "products": 36,
+            "wb_reference_categories": 1,
+            "wb_reference_characteristics": 3,
+        })
         with tempfile.TemporaryDirectory() as temp_name:
             path = Path(temp_name) / "operations-pricing.json"
             minimums = BROWSER_MINIMUMS["operations_pricing_browser"]
@@ -2137,6 +2144,24 @@ class Ux01RunnerContractTest(unittest.TestCase):
             changed_history_state = copy.deepcopy(report)
             changed_history_state["history_domain_state"]["after"]["products"] = 1
             invalid_reports.append(("history domain count changed", changed_history_state,
+                                    "ops_history_domain_state_changed_or_write_attempted"))
+
+            wrong_scoped_history_counts = copy.deepcopy(report)
+            for side in ("before", "after"):
+                wrong_scoped_history_counts["history_domain_state"][side][
+                    "bulk_edit_history"
+                ] = 5
+            invalid_reports.append(("unchanged but unexpected history fixture count",
+                                    wrong_scoped_history_counts,
+                                    "ops_history_domain_state_changed_or_write_attempted"))
+
+            missing_reference_history_count = copy.deepcopy(report)
+            for side in ("before", "after"):
+                missing_reference_history_count["history_domain_state"][side].pop(
+                    "wb_reference_characteristics",
+                )
+            invalid_reports.append(("WB reference count omitted from history snapshot",
+                                    missing_reference_history_count,
                                     "ops_history_domain_state_changed_or_write_attempted"))
 
             extra_history_write = copy.deepcopy(report)

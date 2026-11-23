@@ -190,9 +190,13 @@ WB_QUANTITY_ROLLBACK_NOTE = (
     "Безопасный откат для этой операции недоступен. Проверьте результаты строк выше."
 )
 WB_HISTORY_DOMAIN_COUNTS = {
-    "bulk_edit_history": 2,
-    "card_edit_history": 32,
-    "products": 32,
+    # batch31 + quantity rollback + the two reviewed 50/2/48 receipts;
+    # the exact WB reference snapshot is included in the same read-only probe.
+    "bulk_edit_history": 4,
+    "card_edit_history": 36,
+    "products": 36,
+    "wb_reference_categories": 1,
+    "wb_reference_characteristics": 3,
 }
 WB_HISTORY_READABLE_STATUS_TEXT = {
     "success": "Результат WB: WB сообщил об успехе.",
@@ -3023,9 +3027,9 @@ def _history_scenario_protocol_issues(data: dict) -> list[str]:
         issues.append("ops_history_unresolved_retry_or_revert_affordance_present")
 
     if (data.get("history_domain_sql_writes") != []
-            or not _count_snapshot_unchanged(data, "history_domain_state", {
-                "bulk_edit_history", "card_edit_history", "products",
-            })
+            or not _count_snapshot_unchanged(
+                data, "history_domain_state", set(WB_HISTORY_DOMAIN_COUNTS),
+            )
             or (isinstance(data.get("history_domain_state"), dict)
                 and data["history_domain_state"].get("before") != WB_HISTORY_DOMAIN_COUNTS)
             or data.get("writes") != []
