@@ -1032,6 +1032,7 @@ class MarketplacePublicationService:
         parent_operation: Optional[MarketplaceOperation] = None,
         expected_before_fingerprint: Optional[str] = None,
         commit: bool = True,
+        uses_ozon_brand_search: bool = False,
     ) -> MarketplaceOperation:
         if operation_kind not in cls.ASYNC_IMPORT_KINDS:
             raise MarketplacePublicationValidationError(
@@ -1120,6 +1121,8 @@ class MarketplacePublicationService:
         summary["operation_mode"] = (
             "update" if operation_kind in cls.UPDATE_KINDS else "create"
         )
+        if operation_kind == "product_import" and uses_ozon_brand_search:
+            summary["uses_ozon_brand_search"] = True
         if listing is not None:
             summary.update({
                 "listing_id": listing.id,
@@ -2169,6 +2172,46 @@ class MarketplacePublicationService:
         return True
 
     @classmethod
+    def _stop_stale_brand_search(
+        cls,
+        operation: MarketplaceOperation,
+        *,
+        payload: dict,
+        now: datetime,
+    ) -> bool:
+        """Keep a search-confirmed brand valid through the untouched write."""
+        db.session.expire_all()
+        try:
+            draft, current_payload, _ = cls._publication_payload(
+                seller_id=operation.seller_id,
+                draft_id=operation.draft_id,
+                expected_version=operation.draft_version,
+            )
+            current_item = current_payload["items"][0]
+            frozen_item = payload["items"][0]
+            if (
+                draft.account_id == operation.account_id
+                and draft.marketplace_id == operation.marketplace_id
+                and all(
+                    current_item[key] == frozen_item[key]
+                    for key in ("offer_id", "description_category_id", "type_id", "attributes")
+                )
+            ):
+                return False
+        except (MarketplaceDraftError, MarketplacePublicationError):
+            pass
+        cls._mark_failed(
+            operation,
+            code="ozon_brand_search_stale",
+            message=(
+                "Карточка больше не проходит проверку перед отправкой. "
+                "Подготовьте её заново и проверьте бренд и остальные данные."
+            ),
+            now=now,
+        )
+        return True
+
+    @classmethod
     def _reserve_quota(
         cls,
         operation: MarketplaceOperation,
@@ -2176,6 +2219,7 @@ class MarketplacePublicationService:
         adapter,
         credentials: MarketplaceCredentials,
         now: datetime,
+        brand_search_payload: Optional[dict] = None,
     ) -> bool:
         if cls._stop_quarantined_write(operation, now=now):
             return False
@@ -2249,6 +2293,11 @@ class MarketplacePublicationService:
                     now=now,
                 )
                 return False
+
+        if brand_search_payload is not None and cls._stop_stale_brand_search(
+            operation, payload=brand_search_payload, now=datetime.utcnow(),
+        ):
+            return False
 
         locally_reserved = db.session.query(
             func.coalesce(func.sum(MarketplaceOperation.quota_reserved), 0)
@@ -2375,7 +2424,7 @@ class MarketplacePublicationService:
                 seller_id=seller_id, operation_id=operation_id,
             )
         try:
-            cls._operation_summary(operation)
+            summary = cls._operation_summary(operation)
             payload = cls._submitted_payload(operation)
         except MarketplacePublicationError as exc:
             cls._mark_failed(
@@ -2388,6 +2437,13 @@ class MarketplacePublicationService:
                 seller_id=operation.seller_id,
                 operation_id=operation.id,
             )
+        brand_search_payload = (
+            payload if summary.get("uses_ozon_brand_search") is True else None
+        )
+        if brand_search_payload is not None and cls._stop_stale_brand_search(
+            operation, payload=brand_search_payload, now=datetime.utcnow(),
+        ):
+            return cls._owned_operation(seller_id=seller_id, operation_id=operation_id)
         try:
             preflight_ok = cls._live_preflight(
                 operation,
@@ -2440,6 +2496,7 @@ class MarketplacePublicationService:
             adapter=adapter,
             credentials=credentials,
             now=now,
+            brand_search_payload=brand_search_payload,
         ):
             return cls._owned_operation(
                 seller_id=operation.seller_id,
@@ -2777,7 +2834,7 @@ class MarketplacePublicationService:
             )
         try:
             db.session.expire_all()
-            draft, payload, _ = cls._publication_payload(
+            draft, payload, validation = cls._publication_payload(
                 seller_id=seller_id,
                 draft_id=draft_id,
                 expected_version=expected_version,
@@ -2801,6 +2858,7 @@ class MarketplacePublicationService:
                 idempotency_key=idempotency_key,
                 created_by_user_id=created_by_user_id,
                 now=current_time,
+                uses_ozon_brand_search=validation.get("uses_ozon_brand_search") is True,
             )
             if operation.status != "queued":
                 return operation
@@ -2893,7 +2951,7 @@ class MarketplacePublicationService:
                 _skip(draft_id, "По черновику уже есть активная операция")
                 continue
             try:
-                draft, payload, _ = cls._publication_payload(
+                draft, payload, validation = cls._publication_payload(
                     seller_id=seller_id,
                     draft_id=draft_id,
                     expected_version=(expected_versions.get(draft_id)
@@ -2913,6 +2971,7 @@ class MarketplacePublicationService:
                     ),
                     created_by_user_id=created_by_user_id,
                     now=current_time,
+                    uses_ozon_brand_search=validation.get("uses_ozon_brand_search") is True,
                 )
                 db.session.commit()
             except (MarketplaceDraftError, MarketplacePublicationError) as exc:
@@ -3305,6 +3364,7 @@ class MarketplacePublicationService:
                     created_by_user_id=created_by_user_id,
                 ),
                 now=check_now, operation_kind=kind, listing=fresh_listing,
+                uses_ozon_brand_search=fresh_validation.get("uses_ozon_brand_search") is True,
                 expected_before_fingerprint=(
                     fresh_validation["update_baseline"]["fingerprint"]
                     if kind == "product_update" else None

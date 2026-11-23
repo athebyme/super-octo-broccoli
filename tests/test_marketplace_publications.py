@@ -3889,6 +3889,34 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
         self.assertEqual(selected['selected'], 20)
         self.assertEqual(poll.call_count, 20)
 
+    def test_brand_search_is_rechecked_after_quota_before_physical_write(self):
+        adapter = SyntheticPublicationAdapter()
+        validation = self.validation_result()
+        validation["uses_ozon_brand_search"] = True
+        original_quota = adapter.get_operation_limits
+
+        def quota_after_brand_evidence_expires(credentials):
+            validation["publishable"] = False
+            return original_quota(credentials)
+
+        with (
+            patch.object(self, "validation_result", return_value=validation),
+            patch.object(
+                adapter, "get_operation_limits",
+                side_effect=quota_after_brand_evidence_expires,
+            ) as quota,
+        ):
+            operation = self.start(adapter, key="brand-search-evidence-expired")
+
+        quota.assert_called_once_with(SYNTHETIC_CREDENTIALS)
+        self.assertTrue(adapter.list_calls)
+        self.assertEqual(adapter.submitted_payloads, [])
+        self.assertEqual(operation.attempt_count, 0)
+        self.assertEqual(operation.quota_reserved, 0)
+        self.assertEqual(operation.status, "failed")
+        self.assertEqual(operation.error_code, "ozon_brand_search_stale")
+        self.assertIs(json.loads(operation.request_summary_json)["uses_ozon_brand_search"], True)
+
     def test_quota_rate_limit_defers_without_provider_write(self):
         adapter = SyntheticPublicationAdapter()
         before = datetime.utcnow()
