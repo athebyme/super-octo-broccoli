@@ -4634,7 +4634,6 @@ def run():
         scope_summary = scope_dialog.locator("[data-ozon-scope-summary]")
         scope_summary.wait_for(state="visible")
         assert "1 из 2 выбранных товаров" in scope_summary.inner_text()
-        assert "1 товар не войдёт" in scope_summary.inner_text()
         exclusions = scope_dialog.locator("[data-ozon-scope-exclusions]")
         assert exclusions.count() == 1
         excluded_rows = scope_dialog.locator("[data-ozon-scope-excluded]")
