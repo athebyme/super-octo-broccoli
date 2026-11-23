@@ -10,6 +10,7 @@ import uuid
 
 from flask import Flask
 import pytest
+from sqlalchemy import event
 
 from models import AdminAuditLog, Supplier, User, db
 from services.supplier_catalog_refresh import (
@@ -1019,6 +1020,43 @@ def test_scheduled_admission_guard_and_missed_interval_coalescing(
         receipt = get_catalog_refresh(refresh_db["supplier_id"], run_id)
         assert receipt["due_at"] == old_due.isoformat()
         assert admitted_due == old_due
+
+
+def test_scheduled_admission_inserts_run_before_extension_with_sqlite_fks(
+    refresh_db, stable_catalog_config,
+):
+    del stable_catalog_config
+    schedule = _set_schedule(refresh_db)
+    with refresh_db["app"].app_context():
+        engine = db.engine
+
+        def enforce_foreign_keys(connection, _record):
+            cursor = connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        event.listen(engine, "connect", enforce_foreign_keys)
+        engine.dispose()
+        try:
+            probe = engine.connect()
+            assert probe.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+            probe.close()
+            db.session.remove()
+
+            scheduled_module = __import__(
+                "services.supplier_catalog_refresh", fromlist=["_admit_due_schedule"],
+            )
+            admitted = scheduled_module._admit_due_schedule(
+                refresh_db["supplier_id"], schedule["revision"],
+            )
+            assert admitted is not None
+            run_id, _due_at = admitted
+            assert db.session.get(SupplierCatalogRefreshRun, run_id) is not None
+            assert db.session.get(SupplierCatalogScheduledRun, run_id) is not None
+        finally:
+            db.session.remove()
+            event.remove(engine, "connect", enforce_foreign_keys)
+            engine.dispose()
 
 
 @pytest.mark.parametrize("crash", ["before_commit", "after_commit"])

@@ -955,7 +955,12 @@ def _admit_due_schedule(
             schedule_revision=schedule.revision,
             due_at=due_at,
         )
-        db.session.add_all([run, schedule_run])
+        db.session.add(run)
+        # The scheduled extension has an immediate FK to the legacy receipt.
+        # Flush its parent explicitly instead of depending on ORM statement
+        # ordering or a connection with SQLite foreign keys disabled.
+        db.session.flush()
+        db.session.add(schedule_run)
         # Missed intervals are coalesced into one current run. Never queue a
         # burst of catch-up receipts after the application was offline.
         schedule.next_due_at = now + timedelta(hours=schedule.interval_hours)
