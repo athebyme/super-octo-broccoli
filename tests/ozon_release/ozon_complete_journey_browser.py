@@ -1547,6 +1547,16 @@ try:
             assert page.locator("[data-source-prepare-retry]").count() == 0
             initial_regions = page.locator("[data-source-prepare-region]")
             assert initial_regions.count() == 2
+            region_content = page.evaluate("""() => Array.from(document.querySelectorAll(
+                '[data-source-prepare-region]'
+            )).map(region => ({
+                name:region.getAttribute('data-source-prepare-region'),
+                forbidden:Array.from(region.querySelectorAll(
+                    'script,link,iframe,object,embed'
+                )).map(node => node.tagName.toLowerCase()),
+            }))""")
+            assert len(region_content) == 2, region_content
+            assert all(not row["forbidden"] for row in region_content), region_content
             for region_name in ("header", "body"):
                 region = page.locator(
                     f'[data-source-prepare-region="{region_name}"]',
