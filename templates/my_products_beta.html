@@ -897,6 +897,10 @@
             <button type="button" class="mp-ozon-close" aria-label="Закрыть"
                     @click="closeOzonPriceHandoff">×</button>
         </div>
+        <p v-if="ozonChooserReview && ozonChooserReview.total > ozonChooserReview.limit"
+           data-ozon-scope-limit-help>
+            Для сравнения цен Ozon можно выбрать не больше {{ ozonChooserReview.limit }} товаров; остальные отметки сохранятся.
+        </p>
         <p id="mp-ozon-price-dialog-help" v-if="ozonChooserReview && !ozonChooserIsPartial && ozonAccountChooserKind === 'workspace_update'">
             Для всех {{ ozonChooserReview.total }} выбранных товаров доступны несколько магазинов. Выберите магазин, чтобы проверить карточки; изменения не применятся автоматически.
         </p>
