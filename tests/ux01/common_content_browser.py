@@ -1938,9 +1938,9 @@ def _run_bulk_50_case(page) -> None:
         return proxy && proxy.activeTab === 'validated' && !proxy.loading &&
             proxy.itemsScope === proxy.feedScopeKey();
     }""")
-    page.get_by_label("Фото").select_option("no")
-    page.get_by_label("Остаток у поставщика").select_option("out_of_stock")
-    page.get_by_label("Сортировка").select_option("title")
+    page.get_by_label("Фото", exact=True).select_option("no")
+    page.get_by_label("Остаток у поставщика", exact=True).select_option("out_of_stock")
+    page.get_by_label("Сортировка", exact=True).select_option("title")
     page.get_by_placeholder("Название, бренд или артикул").fill("COMMON-CONTENT-BULK-")
     page.wait_for_function("""() => {
         const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
@@ -2276,8 +2276,8 @@ def _run_bulk_50_case(page) -> None:
     assert not restored_extra_filters.evaluate("details => details.open")
     restored_extra_filters.locator("summary").click()
     assert page.locator("[data-catalog-wb-status]").input_value() == "validated"
-    assert page.get_by_label("Фото").input_value() == "no"
-    assert page.get_by_label("Остаток у поставщика").input_value() == "out_of_stock"
+    assert page.get_by_label("Фото", exact=True).input_value() == "no"
+    assert page.get_by_label("Остаток у поставщика", exact=True).input_value() == "out_of_stock"
     assert page.locator("[data-catalog-sort]").input_value() == "title"
     REPORT["checks"].append(
         "common_50_return_remounts_collapsed_disclosure_with_native_filters_restored"

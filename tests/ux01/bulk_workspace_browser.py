@@ -476,12 +476,12 @@ def assert_supplier_refresh_token_applied(preview, apply_tokens):
 def filter_bulk_results(page):
     ensure_catalog_extra_filters_open(page)
     with page.expect_response(lambda response: feed_matches(response, {"has_photos": "yes"})) as photos:
-        page.get_by_label("Фото").select_option("yes")
+        page.get_by_label("Фото", exact=True).select_option("yes")
     assert photos.value.status == 200
     with page.expect_response(lambda response: feed_matches(response, {
             "has_photos": "yes", "sort": "title",
     })) as sorting:
-        page.get_by_label("Сортировка").select_option("title")
+        page.get_by_label("Сортировка", exact=True).select_option("title")
     assert sorting.value.status == 200
     with page.expect_response(lambda response: feed_matches(response, {
             "search": "UX-BULK-OWNED", "has_photos": "yes", "sort": "title",
@@ -516,8 +516,8 @@ def assert_catalog_extra_filter_scope(page, *, opened, ozon):
     details = page.locator("[data-catalog-extra-filters]")
     assert details.evaluate("element => element.open") is opened
     shared_controls = (
-        page.get_by_label("Фото"),
-        page.get_by_label("Остаток у поставщика"),
+        page.get_by_label("Фото", exact=True),
+        page.get_by_label("Остаток у поставщика", exact=True),
         page.locator("[data-catalog-sort]"),
     )
     for control in shared_controls:
@@ -693,7 +693,7 @@ def exercise_marketplace_filters(browser, bridge, errors):
             apply_case("all_products", ids, lambda: page.get_by_placeholder(
                 "Название, бренд или артикул",
             ).fill(source_search))
-            photo_filter = page.get_by_label("Фото")
+            photo_filter = page.get_by_label("Фото", exact=True)
             with page.expect_response(lambda response: feed_matches(response, {
                     "search": source_search, "has_photos": "no",
             })) as photo_response:
@@ -701,7 +701,7 @@ def exercise_marketplace_filters(browser, bridge, errors):
             assert photo_response.value.status == 200
             common_filters["has_photos"] = "no"
             assert_catalog_filter_query(photo_response.value, common_filters)
-            stock_filter = page.get_by_label("Остаток у поставщика")
+            stock_filter = page.get_by_label("Остаток у поставщика", exact=True)
             with page.expect_response(lambda response: feed_matches(response, {
                     "search": source_search, "has_photos": "no", "stock": "in_stock",
             })) as stock_response:
@@ -1507,7 +1507,7 @@ def run():
             with review_page.expect_response(lambda response: feed_matches(response, {
                     "search": hidden_title, "has_photos": "no",
             })) as no_photo_filter:
-                review_page.get_by_label("Фото").select_option("no")
+                review_page.get_by_label("Фото", exact=True).select_option("no")
             assert no_photo_filter.value.status == 200
             review_page.get_by_role(
                 "checkbox", name=f"Выбрать {hidden_title}", exact=True,
@@ -1521,12 +1521,12 @@ def run():
             with review_page.expect_response(lambda response: feed_matches(response, {
                     "search": "UX-BULK-OWNED", "has_photos": "yes",
             })) as photo_filter:
-                review_page.get_by_label("Фото").select_option("yes")
+                review_page.get_by_label("Фото", exact=True).select_option("yes")
             assert photo_filter.value.status == 200
             with review_page.expect_response(lambda response: feed_matches(response, {
                     "search": "UX-BULK-OWNED", "has_photos": "yes", "sort": "title",
             })) as title_sort:
-                review_page.get_by_label("Сортировка").select_option("title")
+                review_page.get_by_label("Сортировка", exact=True).select_option("title")
             assert title_sort.value.status == 200
             with review_page.expect_response(lambda response: feed_matches(response, {
                     "search": "UX-BULK-OWNED", "has_photos": "yes", "sort": "title",
@@ -1716,7 +1716,7 @@ def run():
         with wb_page.expect_response(lambda response: feed_matches(response, {
                 "search": "Сравнение цен WB", "sort": "title",
         })) as wb_handoff_sorted:
-            wb_page.get_by_label("Сортировка").select_option("title")
+            wb_page.get_by_label("Сортировка", exact=True).select_option("title")
         assert wb_handoff_sorted.value.status == 200
         marketplace_scope = {"marketplace": "ozon", "marketplace_state": "active"}
         handoff_feed_scope = {
@@ -2243,7 +2243,7 @@ def run():
         race_page.wait_for_timeout(600)
         assert race_page.locator(".mp-list article.mp-row").count() == 0
         assert race_page.locator(".mp-list article.mp-row input[type=checkbox]:checked").count() == 0
-        empty_output_sort = race_page.get_by_label("Сортировка")
+        empty_output_sort = race_page.get_by_label("Сортировка", exact=True)
         assert empty_output_sort.count() == 1 and empty_output_sort.is_visible()
         assert empty_output_sort.get_attribute("data-catalog-sort") is not None
         assert empty_output_sort.input_value() == "title"
@@ -2268,7 +2268,7 @@ def run():
         with page.expect_response(lambda response: feed_matches(response, {
                 "search": MAIN_TITLE, "sort": "title",
         })) as sorted_feed:
-            page.get_by_label("Сортировка").select_option("title")
+            page.get_by_label("Сортировка", exact=True).select_option("title")
         assert sorted_feed.value.status == 200
         page.evaluate("localStorage.setItem('price_change_selected', '[999999]')")
         page.get_by_role("checkbox", name=f"Выбрать {MAIN_TITLE}").check()
@@ -2393,7 +2393,7 @@ def run():
         with page.expect_response(lambda response: feed_matches(response, {
                 "search": MAIN_TITLE, "sort": "title",
         })) as price_sort:
-            page.get_by_label("Сортировка").select_option("title")
+            page.get_by_label("Сортировка", exact=True).select_option("title")
         assert price_sort.value.status == 200
         page.get_by_role("checkbox", name=f"Выбрать {MAIN_TITLE}").check()
 

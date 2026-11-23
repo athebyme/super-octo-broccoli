@@ -203,8 +203,8 @@ with sync_playwright() as playwright:
             set_catalog_extra_filters_open_by_keyboard(page, opened=True)
             assert_catalog_extra_filter_scope(page, opened=True, ozon=False)
             expanded_controls = {
-                "photo": page.get_by_label("Фото"),
-                "supplier_stock": page.get_by_label("Остаток у поставщика"),
+                "photo": page.get_by_label("Фото", exact=True),
+                "supplier_stock": page.get_by_label("Остаток у поставщика", exact=True),
                 "sort": page.locator("[data-catalog-sort]"),
                 "wb_status": page.locator("[data-catalog-wb-status]"),
             }
@@ -262,7 +262,7 @@ with sync_playwright() as playwright:
 
                 before_url = page.url
                 ensure_catalog_extra_filters_open(page)
-                photo_filter = page.get_by_label("Фото")
+                photo_filter = page.get_by_label("Фото", exact=True)
                 baseline_feed_reads = len(feed_requests)
                 with page.expect_response(lambda response: feed_response(response, False)) as photo_response:
                     photo_filter.select_option("yes")
@@ -276,7 +276,7 @@ with sync_playwright() as playwright:
                 }, photo_query
                 assert photo_query.get("page") == ["1"] and photo_query.get("per_page") == ["50"], photo_query
 
-                stock_filter = page.get_by_label("Остаток у поставщика")
+                stock_filter = page.get_by_label("Остаток у поставщика", exact=True)
                 baseline_feed_reads = len(feed_requests)
                 with page.expect_response(lambda response: feed_response(response, False)) as stock_response:
                     stock_filter.select_option("in_stock")
