@@ -2556,23 +2556,104 @@ def assert_bulk_supplier_source_review(page, fixture: dict[str, int]) -> None:
     """Exercise exact source comparisons and per-field required acknowledgements."""
     form = page.locator("form[x-data='bulkEditFormData()']")
     assert form.count() == 1
+    operation = form.locator('input[name="operation"][value="update_characteristic"]')
+    operation.check()
+
+    category_state = form.evaluate("""form => {
+        const state = Alpine.$data(form);
+        return {
+            selected: String(state.selectedCategory ?? ''),
+            categories: state.categories.map(category => ({
+                subject_id: String(category.subject_id ?? ''),
+                name: String(category.name ?? ''),
+                count: String(category.count ?? ''),
+            })),
+        };
+    }""")
+    target_category = next(
+        (category for category in category_state["categories"] if category["subject_id"] == "5880"),
+        None,
+    )
+    assert target_category is not None, category_state
+    if category_state["selected"] != "5880":
+        category_button = form.get_by_role(
+            "button",
+            name=re.compile(
+                rf"^{re.escape(target_category['name'])}\s+{re.escape(target_category['count'])}$"
+            ),
+        )
+        assert category_button.count() == 1, category_state
+        category_button.click()
+
+    page.wait_for_function("""() => {
+        const form = document.querySelector("form[x-data='bulkEditFormData()']");
+        const state = form && Alpine.$data(form);
+        return !!state
+            && state.operation === 'update_characteristic'
+            && String(state.selectedCategory ?? '') === '5880'
+            && !state.loading
+            && state.characteristics.some(item => String(item.id) === '527')
+            && state.characteristics.some(item => String(item.id) === '202');
+    }""", timeout=10000)
+
+    def add_characteristic_value(char_id: str, expected_label: str) -> str:
+        field_picker = form.locator('select[x-model="addingCharId"]')
+        field_picker.select_option(char_id)
+        value_picker = form.locator('select[x-model="addingValue"]')
+        value_picker.wait_for(state="visible", timeout=5000)
+        value_picker.select_option(label=expected_label)
+        selected_label = value_picker.locator("option:checked").inner_text().strip()
+        assert selected_label == expected_label, {
+            "characteristic_id": char_id,
+            "expected_label": expected_label,
+            "selected_label": selected_label,
+        }
+        submitted_value = value_picker.input_value()
+        add_button = form.get_by_role(
+            "button", name="Добавить к изменениям", exact=True
+        )
+        assert add_button.is_enabled()
+        add_button.click()
+        page.wait_for_function("""expected => {
+            const form = document.querySelector("form[x-data='bulkEditFormData()']");
+            const state = form && Alpine.$data(form);
+            return !!state && state.pendingChanges.some(change =>
+                String(change.charId) === expected.char_id
+                && String(change.displayValue) === expected.label
+            );
+        }""", arg={"char_id": char_id, "label": expected_label}, timeout=5000)
+        return submitted_value
+
+    color_value = add_characteristic_value("527", "Чёрный")
+    country_value = add_characteristic_value("202", "Китай")
+    queued_changes = form.evaluate("""form => Alpine.$data(form).pendingChanges.map(change => ({
+        char_id: String(change.charId),
+        display_value: String(change.displayValue),
+    }))""")
+    assert queued_changes == [
+        {"char_id": "527", "display_value": "Чёрный"},
+        {"char_id": "202", "display_value": "Китай"},
+    ], queued_changes
+
     with page.expect_response(
         lambda response: response.request.method == "POST"
         and response.url == BASE + "/products/bulk-edit",
         timeout=10000,
     ) as source_preview_response:
         with page.expect_navigation(wait_until="domcontentloaded", timeout=10000):
-            form.evaluate("""form => {
-                const state = Alpine.$data(form);
-                state.operation = 'update_characteristic';
-                state.selectedCategory = '5880';
-                state.pendingChanges = [
-                    {charId: '527', charName: 'Цвет', value: 'Чёрный', displayValue: 'Чёрный'},
-                    {charId: '202', charName: 'Страна производства', value: 'Китай', displayValue: 'Китай'},
-                ];
-                form.requestSubmit(form.querySelector('button[type="submit"]'));
-            }""")
+            form.locator('button[type="submit"]').last.click()
     assert source_preview_response.value.status == 200
+    submitted_fields = parse_qs(
+        source_preview_response.value.request.post_data or "",
+        keep_blank_values=True,
+    )
+    assert submitted_fields.get("operation") == ["update_characteristic"], submitted_fields
+    assert submitted_fields.get("selected_category") == ["5880"], submitted_fields
+    submitted_batch = json.loads(submitted_fields["characteristics_batch"][0])
+    assert submitted_batch == [
+        {"char_id": "527", "value": color_value},
+        {"char_id": "202", "value": country_value},
+    ], submitted_batch
     assert_review_summary(page, changed="50")
 
     expected_product_id = str(fixture["product_id"])
