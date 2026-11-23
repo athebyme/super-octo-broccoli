@@ -451,6 +451,38 @@ def test_empty_success_records_no_read_and_fresh_empty_snapshot(tmp_path):
     assert status["last_snapshot"]["observation_count"] == 0
 
 
+def test_cleared_without_read_requires_an_empty_replacement(tmp_path):
+    path = tmp_path / "private.sqlite3"
+    store = SupplierColorObservationStore(path)
+    token = store.reserve(9, CONFIG_A, now=_at())
+    assert token
+    assert not store.finish(
+        9, token, CONFIG_A, _observation(),
+        observed_at=_at(minutes=1), fetch_attempted=False,
+    )
+    assert store.read_status(9, CONFIG_A, now=_at(minutes=1))[
+        "last_attempt"]["status"] == "unconfirmed"
+
+    assert store.finish(
+        9, token, CONFIG_A, {},
+        observed_at=_at(minutes=2), fetch_attempted=False,
+    )
+    connection = sqlite3.connect(path)
+    try:
+        # Simulate a contradictory receipt/batch state. The read-side check
+        # must not report cleared_without_read as a confirmed success.
+        connection.execute(
+            "UPDATE observation_batches SET row_count = 1 WHERE supplier_id = ?",
+            (9,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    status = store.read_status(9, CONFIG_A, now=_at(minutes=3))
+    assert status["last_attempt"]["status"] == "unconfirmed"
+    assert status["last_attempt"]["outcome"] is None
+
+
 def test_legacy_v1_receipts_remain_readable_and_read_status_does_not_migrate(tmp_path):
     path = tmp_path / "private.sqlite3"
     store = SupplierColorObservationStore(path)

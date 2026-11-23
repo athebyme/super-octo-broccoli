@@ -247,6 +247,7 @@ class SupplierColorObservationStore:
                 fetch_attempted is not None
                 and type(fetch_attempted) is not bool
             )
+            or (fetch_attempted is False and rows)
         ):
             return False
         connection = None
@@ -658,6 +659,7 @@ class SupplierColorObservationStore:
                                     or (
                                         outcome == "cleared_without_read"
                                         and fetch_value == 0
+                                        and batch[3] == 0
                                     )
                                 )
                             )
@@ -675,6 +677,11 @@ class SupplierColorObservationStore:
                         finished_at = _iso_utc(finished_us)
                 if (
                     attempt_status == "unconfirmed"
+                    and not (
+                        receipt is not None
+                        and receipt[0] == token
+                        and receipt[1] == reserved_digest
+                    )
                     and reservation_status == "finished"
                     and batch is not None
                     and batch[0] == token
