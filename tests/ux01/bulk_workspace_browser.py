@@ -340,7 +340,7 @@ def assert_catalog_filter_query(response, expected_filters, *, page_number="1"):
     query = parse_qs(urlsplit(response.url).query)
     filter_keys = {
         "search", "supplier", "has_photos", "stock", "sort",
-        "marketplace", "marketplace_state", "status", "updates",
+        "marketplace", "marketplace_state", "catalog_category", "status", "updates",
     }
     actual_filters = {
         key: values[-1] for key, values in query.items() if key in filter_keys
@@ -560,6 +560,9 @@ def seed_marketplace_filter_rows():
                 seller_id=seller_id, external_id=f"UX-R71-{key}",
                 source_type="manual", title=title, photo_urls="[]",
                 supplier_quantity=5, import_status=state,
+                category=(None if key == "unlinked" else
+                          "Группа R73 · Основная" if key in ("wb_active", "ozon_active") else
+                          "Группа R73 · Дополнительная"),
             )
             if key == "wb_active":
                 row.product_id = wb_card.id
@@ -618,8 +621,10 @@ def exercise_marketplace_filters(browser, bridge, errors):
         set_catalog_extra_filters_open_by_keyboard(page, opened=True)
         assert_catalog_extra_filter_scope(page, opened=True, ozon=False)
 
-        def apply_case(name, expected, action, *, marketplace="", state=""):
+        def apply_case(name, expected, action, *, marketplace="", state="", category=""):
             query = {"search": source_search}
+            if category:
+                query["catalog_category"] = category
             if marketplace:
                 query["marketplace"] = marketplace
             if state:
@@ -628,6 +633,8 @@ def exercise_marketplace_filters(browser, bridge, errors):
                 action()
             assert response.value.status == 200
             expected_filter_query = dict(common_filters)
+            if category:
+                expected_filter_query["catalog_category"] = category
             if marketplace:
                 expected_filter_query["marketplace"] = marketplace
             if state:
@@ -791,6 +798,19 @@ def exercise_marketplace_filters(browser, bridge, errors):
             apply_case("ozon_associated", [
                 "ozon_active", "ozon_preparation", "ozon_attention", "ozon_unknown",
             ], lambda: pick_state(""), marketplace="ozon")
+
+            category_filter = page.locator("[data-catalog-category]")
+            primary_category = "label:Группа R73 · Основная"
+            apply_case("ozon_catalog_category", ["ozon_active"],
+                       lambda: category_filter.select_option(primary_category),
+                       marketplace="ozon", category=primary_category)
+            apply_case("all_catalog_category", ["wb_active", "ozon_active"],
+                       lambda: click_marketplace("all"), category=primary_category)
+            apply_case("missing_catalog_category", ["unlinked"],
+                       lambda: category_filter.select_option("missing"), category="missing")
+            assert selected_browser_state(page)["selected"] == [ids["wb_active"]]
+            assert page.locator("[data-selection-outside-count]").inner_text() == "1 вне текущего списка"
+            apply_case("clear_catalog_category", ids, lambda: category_filter.select_option(""))
         finally:
             writes = end_domain_write_watch(watch)
         assert writes == []
