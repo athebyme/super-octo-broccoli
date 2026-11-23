@@ -1497,6 +1497,74 @@ try:
             parent_result_path = f"/marketplaces/ozon/uploads/{prepare_uid}"
             page.goto(base + parent_result_path)
             assert page.locator("[data-source-prepare-retry]").count() == 0
+            initial_regions = page.locator("[data-source-prepare-region]")
+            assert initial_regions.count() == 2
+            for region_name in ("header", "body"):
+                region = page.locator(
+                    f'[data-source-prepare-region="{region_name}"]',
+                )
+                assert region.count() == 1
+                assert region.get_attribute("data-source-prepare-job") == prepare_uid
+                assert region.get_attribute("data-source-prepare-account") == str(account_id)
+                assert region.get_attribute("data-source-prepare-complete") == "0"
+            return_link = page.locator("a[data-source-prepare-products]")
+            return_link.wait_for()
+            page.wait_for_function(
+                "document.querySelector('a[data-source-prepare-products]')"
+                "?.dataset.workspaceReturn === 'verified'",
+            )
+            return_identity = page.evaluate("""() => {
+                const link = document.querySelector('a[data-source-prepare-products]');
+                window.__r90PrepareDocument = {};
+                window.__r90WorkspaceReturnNode = link;
+                window.__r90WorkspaceReturnHref = link?.getAttribute('href') || '';
+                window.__r90TerminalHtmlFetches = [];
+                const originalFetch = window.fetch.bind(window);
+                window.fetch = async function(input, init) {
+                    const inputUrl = typeof input === 'string' ? input : input?.url;
+                    const inputMethod = init?.method ||
+                        (input instanceof Request ? input.method : 'GET');
+                    const parsed = new URL(inputUrl, window.location.href);
+                    const response = await originalFetch(input, init);
+                    if (parsed.pathname === window.location.pathname &&
+                        String(inputMethod).toUpperCase() === 'GET') {
+                        window.__r90TerminalHtmlFetches.push({
+                            status:response.status,
+                            content_type:response.headers.get('content-type') || '',
+                        });
+                    }
+                    return response;
+                };
+                return {
+                    href:link?.getAttribute('href') || '',
+                    label:link?.getAttribute('aria-label') || '',
+                    title:link?.getAttribute('title') || '',
+                    workspace_return:link?.dataset.workspaceReturn || '',
+                };
+            }""")
+            assert return_identity["href"].startswith("/my-products/beta")
+            assert return_identity["workspace_return"] == "verified"
+            return_link.focus()
+            assert page.evaluate(
+                "document.activeElement === window.__r90WorkspaceReturnNode",
+            )
+            source_prepare_browser_requests = []
+            source_prepare_navigations = []
+
+            def capture_source_prepare_request(request):
+                parsed = urlsplit(request.url)
+                source_prepare_browser_requests.append({
+                    "method": request.method,
+                    "path": parsed.path,
+                    "resource_type": request.resource_type,
+                })
+
+            def capture_source_prepare_navigation(frame):
+                if frame == page.main_frame:
+                    source_prepare_navigations.append(frame.url)
+
+            page.on("request", capture_source_prepare_request)
+            page.on("framenavigated", capture_source_prepare_navigation)
             with app.app_context():
                 prepare_stats = OzonBulkUploadService.run_due_preparation()
             assert prepare_stats["needs_input"] == 1, prepare_stats
@@ -1505,11 +1573,174 @@ try:
                 page, "/marketplaces/ozon/uploads/api/" + prepare_uid,
             )
             assert source_read["status"] == 200
-            original_items = source_read["document"]["run"]["items"]
+            source_run = source_read["document"]["run"]
+            assert source_run["source_prepare_complete"] is True, source_run
+            original_items = source_run["items"]
             assert [item["status"] for item in original_items] == [
                 "needs_input", "prepared",
             ], original_items
-            page.reload()
+            assert source_run["summary"]["prepared"] == 1, source_run["summary"]
+            assert source_run["summary"]["needs_input"] == 1, source_run["summary"]
+            assert source_run["summary"]["total"] == 2, source_run["summary"]
+            assert source_run["summary"]["active"] == 0, source_run["summary"]
+            review_draft_ids = [
+                str(item["draft_id"])
+                for item in original_items
+                if item.get("draft_id") is not None
+            ]
+            assert len(review_draft_ids) == 2, original_items
+            page.wait_for_function(
+                "window.__r90TerminalHtmlFetches?.length === 1",
+                timeout=30000,
+            )
+            deferred_state = page.evaluate("""() => ({
+                fetches:window.__r90TerminalHtmlFetches,
+                focused_old_return:document.activeElement === window.__r90WorkspaceReturnNode,
+                same_old_return:document.querySelector('a[data-source-prepare-products]') ===
+                    window.__r90WorkspaceReturnNode,
+                header_complete:document.querySelector(
+                    '[data-source-prepare-region="header"]'
+                )?.getAttribute('data-source-prepare-complete') || null,
+                body_complete:document.querySelector(
+                    '[data-source-prepare-region="body"]'
+                )?.getAttribute('data-source-prepare-complete') || null,
+                retry_count:document.querySelectorAll('[data-source-prepare-retry]').length,
+            })""")
+            assert deferred_state["fetches"] == [{
+                "status": 200,
+                "content_type": "text/html; charset=utf-8",
+            }], deferred_state
+            assert deferred_state["focused_old_return"], deferred_state
+            assert deferred_state["same_old_return"], deferred_state
+            assert deferred_state["header_complete"] == "0", deferred_state
+            assert deferred_state["body_complete"] == "0", deferred_state
+            assert deferred_state["retry_count"] == 0, deferred_state
+            assert page.locator(
+                "#ozon-result-status a.sh-btn--primary",
+            ).count() == 1
+            page.locator("#ozon-result-status a.sh-btn--primary").focus()
+            page.wait_for_function("""() => {
+                const regions = Array.from(document.querySelectorAll(
+                    '[data-source-prepare-region]'
+                ));
+                return regions.length === 2 && regions.every(region =>
+                    region.getAttribute('data-source-prepare-complete') === '1'
+                );
+            }""", timeout=10000)
+            terminal_state = page.evaluate("""() => {
+                const regions = Array.from(document.querySelectorAll(
+                    '[data-source-prepare-region]'
+                ));
+                const link = document.querySelector('a[data-source-prepare-products]');
+                const slot = document.querySelector('[data-source-prepare-products-slot]');
+                const body = document.querySelector(
+                    '[data-source-prepare-region="body"]'
+                );
+                const counts = {};
+                for (const node of body.querySelectorAll('div')) {
+                    const label = node.querySelector(':scope > span');
+                    const value = node.querySelector(':scope > strong');
+                    if (label && value) counts[label.innerText.trim()] = value.innerText.trim();
+                }
+                return {
+                    fetches:window.__r90TerminalHtmlFetches,
+                    regions:regions.map(region => ({
+                        name:region.getAttribute('data-source-prepare-region'),
+                        job:region.getAttribute('data-source-prepare-job'),
+                        account:region.getAttribute('data-source-prepare-account'),
+                        complete:region.getAttribute('data-source-prepare-complete'),
+                    })),
+                    counts,
+                    row_text:Array.from(body.querySelectorAll('article')).map(row => row.innerText),
+                    retry_count:document.querySelectorAll('[data-source-prepare-retry]').length,
+                    retry_total:document.querySelector(
+                        '[data-source-prepare-retry-count]'
+                    )?.innerText.trim() || null,
+                    review_count:document.querySelectorAll(
+                        '[data-source-prepare-review]'
+                    ).length,
+                    review_href:document.querySelector(
+                        '[data-source-prepare-review]'
+                    )?.getAttribute('href') || '',
+                    repair_count:document.querySelectorAll(
+                        '[data-source-prepare-repair]'
+                    ).length,
+                    repair_href:document.querySelector(
+                        '[data-source-prepare-repair]'
+                    )?.getAttribute('href') || '',
+                    same_return_node:link === window.__r90WorkspaceReturnNode,
+                    return_href:link?.getAttribute('href') || '',
+                    return_label:link?.getAttribute('aria-label') || '',
+                    return_title:link?.getAttribute('title') || '',
+                    return_verified:link?.dataset.workspaceReturn || '',
+                    return_in_slot:!!slot && slot.contains(link),
+                    same_document:window.__r90PrepareDocument !== undefined,
+                    focus_outside_regions:!regions.some(region =>
+                        region.contains(document.activeElement)
+                    ),
+                    pathname:window.location.pathname,
+                };
+            }""")
+            assert terminal_state["fetches"] == deferred_state["fetches"], terminal_state
+            assert terminal_state["regions"] == [
+                {"name": "header", "job": prepare_uid,
+                 "account": str(account_id), "complete": "1"},
+                {"name": "body", "job": prepare_uid,
+                 "account": str(account_id), "complete": "1"},
+            ], terminal_state
+            assert terminal_state["counts"].get("Всего") == "2", terminal_state
+            assert terminal_state["counts"].get("Подготовлено локально") == "1", terminal_state
+            assert terminal_state["counts"].get("Нужно заполнить") == "1", terminal_state
+            assert len(terminal_state["row_text"]) == 2, terminal_state
+            assert any("Подготовлена" in row for row in terminal_state["row_text"]), terminal_state
+            assert any("Нужно заполнить" in row for row in terminal_state["row_text"]), terminal_state
+            assert terminal_state["retry_count"] == 1, terminal_state
+            assert terminal_state["retry_total"] == "1", terminal_state
+            assert terminal_state["review_count"] == 1, terminal_state
+            assert terminal_state["repair_count"] == 1, terminal_state
+            review_parts = urlsplit(terminal_state["review_href"])
+            review_query = parse_qs(review_parts.query)
+            assert review_parts.path == "/marketplaces/ozon/uploads/review", terminal_state
+            assert review_query.get("account_id") == [str(account_id)], terminal_state
+            assert review_query.get("draft_ids") == [",".join(review_draft_ids)], terminal_state
+            assert review_query.get("parent_prepare_job_uid") == [prepare_uid], terminal_state
+            assert urlsplit(terminal_state["repair_href"]).path == (
+                parent_result_path + "/repair"
+            ), terminal_state
+            assert terminal_state["same_return_node"], terminal_state
+            assert terminal_state["return_href"] == return_identity["href"], terminal_state
+            assert terminal_state["return_label"] == return_identity["label"], terminal_state
+            assert terminal_state["return_title"] == return_identity["title"], terminal_state
+            assert terminal_state["return_verified"] == "verified", terminal_state
+            assert terminal_state["return_in_slot"], terminal_state
+            assert terminal_state["same_document"], terminal_state
+            assert terminal_state["focus_outside_regions"], terminal_state
+            assert terminal_state["pathname"] == parent_result_path, terminal_state
+            assert source_prepare_navigations == [], source_prepare_navigations
+            assert [request for request in source_prepare_browser_requests
+                    if request["method"] == "GET"
+                    and request["path"] == parent_result_path
+                    and request["resource_type"] == "fetch"] == [{
+                        "method": "GET",
+                        "path": parent_result_path,
+                        "resource_type": "fetch",
+                    }], source_prepare_browser_requests
+            assert not [request for request in source_prepare_browser_requests
+                        if request["method"] == "POST"], source_prepare_browser_requests
+            assert report["provider_attempts"] == 0
+            assert provider.physical_writes == 0 and not provider.full_read_calls
+            report["source_prepare_inline"] = {
+                "terminal_html_gets": len(deferred_state["fetches"]),
+                "focused_region_deferred_swap": True,
+                "same_document_and_return_node": True,
+                "mixed_prepared_needs_input_counts": {
+                    "prepared": terminal_state["counts"]["Подготовлено локально"],
+                    "needs_input": terminal_state["counts"]["Нужно заполнить"],
+                },
+                "automatic_transition_posts": 0,
+                "provider_attempts": report["provider_attempts"],
+            }
+            passed("inline_source_prepare_terminal_result_focus_deferred_workspace_return_retry")
             retry_form = page.locator("[data-source-prepare-retry]")
             assert retry_form.count() == 1
             assert page.locator("[data-source-prepare-parent]").count() == 0
@@ -1531,7 +1762,9 @@ try:
             retry_request_key = retry_form.locator(
                 'input[name="request_key"]',
             ).input_value()
-            assert retry_request_key
+            assert re.fullmatch(
+                r"prepare-retry-v1-[0-9a-f]{64}", retry_request_key,
+            ), retry_request_key
             assert retry_form.get_by_role(
                 "button", name="Подготовить повторно", exact=True,
             ).count() == 1
