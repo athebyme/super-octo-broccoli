@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-23T03:18:32.681197+00:00",
+  "generated_at": "2026-11-23T03:49:23.025278+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "31497a97b5eff3483032d8f4c1914a5877ea1bc6db8b6e54aeb4bf6ddb255eb7"
+      "sha256": "1747533555d809f65a673dab655af7398504d902c263e810bdfd4af0bb6b93ad"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -494,6 +494,10 @@
     {
       "path": "docs/design/startup-migration-performance.md",
       "sha256": "bc610c8859ab19b50f904f7d967c097a7d12295322e779512ae25e4b75f17c0b"
+    },
+    {
+      "path": "docs/design/ux-01-action-map.md",
+      "sha256": "eecb498b33836e8f8552f620b10a5508bda5eb87dd69d47373ee7d5c47ab1bff"
     },
     {
       "path": "docs/design/ux-01-preview-artifacts/dark-1440-card.png",
@@ -1553,7 +1557,7 @@
     },
     {
       "path": "routes/suppliers.py",
-      "sha256": "0314004d58050a94b66bbbef4a41f9f9c4674d3ba7b54d03d71595ae9a63b17c"
+      "sha256": "cd7d71b3b8c7c90eeb45d07d9c89499ad22d0d5fd380e9f672167f362c1399fe"
     },
     {
       "path": "routes/telegram_alerts.py",
@@ -2197,7 +2201,7 @@
     },
     {
       "path": "services/my_products_feed.py",
-      "sha256": "40ae816c5583905d1aacd8274ceae69a447bbbc3366f1b09556d6d6f83a02deb"
+      "sha256": "99570c445adfde97a9f53f21f355d0035c584b7b01e92ca8d57d091c7f1cbbf7"
     },
     {
       "path": "services/ozon_account_health.py",
@@ -2677,11 +2681,11 @@
     },
     {
       "path": "static/my-products-beta.css",
-      "sha256": "1f9eb611e786c9402b26a42e45540bb3b1ff1c545af8d0eb5fa9890b572df252"
+      "sha256": "1872e197c15708c42e7c064a90cc75d7933a8b3d99de5db8128e339ba672e66b"
     },
     {
       "path": "static/my-products-beta.js",
-      "sha256": "06d9d996fc5a4a45d493a81ed561648d0025d97bf65297e8eb5b89c3a4757553"
+      "sha256": "8f26ccf1c60ddcc0759b390e77c4326f767de9057526f27cb923fe0e8f2f2735"
     },
     {
       "path": "static/operations-workspace.css",
@@ -3357,7 +3361,7 @@
     },
     {
       "path": "templates/my_products_beta.html",
-      "sha256": "88da009bb05740fdaa5da7dfe03573282a4f546e8034ffcb676ef6e64f668869"
+      "sha256": "f623ed34b0a77ca61e5fb8947cc2f77419d04715872e9316272b0727a516d00c"
     },
     {
       "path": "templates/notifications.html",
@@ -4521,7 +4525,7 @@
     },
     {
       "path": "tests/test_my_products_feed.py",
-      "sha256": "3019ef13821fd79b4226232e6581ed09d2186e67575b40ef5219d87950d724b2"
+      "sha256": "eba6c876b36b64ec47354204d9701ac2f0552900cf28608b5336124968b45bb6"
     },
     {
       "path": "tests/test_my_products_filters.py",
@@ -5285,7 +5289,7 @@
     },
     {
       "path": "tests/ux01/bulk_workspace_browser.py",
-      "sha256": "01e9f66eed396e794dc1e042cf00e13caced57d22deafab5d14584c4b9ec1721"
+      "sha256": "73d05c9d2b98eba6f338a705510065dc76bea30fe22443fe909ab5a9a02ef21e"
     },
     {
       "path": "tests/ux01/common_content_browser.py",
@@ -5313,7 +5317,7 @@
     },
     {
       "path": "tests/ux01/my_products_selection_review.js",
-      "sha256": "5b568f50161e7d89dcf0fb2c1354c9b39c91d87d03ff8c0e880195ceea6f386d"
+      "sha256": "25aee8b83bb8e75a65fac6fa250c4e2555db10d531a8e26e1ed3585b52b757fb"
     },
     {
       "path": "tests/ux01/operations_pricing_browser.py",
@@ -5337,12 +5341,12 @@
     },
     {
       "path": "tests/ux01/workspace_catalog_layout_browser.py",
-      "sha256": "7bf33fab7c32fa8671f3135fc33a26356cf98b0a574634bd455490ceb9281fa6"
+      "sha256": "b1a4b937def5b6c32fb858599cb45c1789e15a0f83c691dabe460eb795b1311e"
     },
     {
       "path": "tests/ux01/workspace_catalog_price_browser.py",
       "sha256": "6f39e443d991ebaa3f7ff379c1051438fd727de24a3d7ba25764acfa5691f63d"
     }
   ],
-  "aggregate_sha256": "f91ee59b795ef48ab625424ac20407c6cb868278c00c3b0df7e22365d5c1d443"
+  "aggregate_sha256": "ea4b7c80dbf5e9e25a4834e268bab6428bc57bd839dd250d0104e9db85875209"
 }
