@@ -205,6 +205,45 @@ class MarketplaceFinanceServiceTest(unittest.TestCase):
             **kwargs,
         )
 
+    def test_resume_sync_id_only_continues_the_exact_running_snapshot(self):
+        now = datetime(2026, 7, 15, 12, 0, 0)
+        period_code, period_start, period_end = MarketplaceFinanceService._period(
+            "7d", today=now.date())
+        snapshot = MarketplaceFinanceService._create_run(
+            account=self.account, period_code=period_code,
+            period_start=period_start, period_end=period_end, now=now,
+        )
+
+        mismatch_adapter = SyntheticFinanceAdapter()
+        mismatch = self._sync(
+            mismatch_adapter, resume_sync_id=snapshot.id + 100,
+            now=now, today=now.date())
+        self.assertIsNone(mismatch)
+        self.assertEqual(snapshot.status, "running")
+        self.assertEqual(mismatch_adapter.calls, [])
+        self.assertEqual(MarketplaceFinanceSync.query.count(), 1)
+
+        continuation_adapter = SyntheticFinanceAdapter()
+        continuation = self._sync(
+            continuation_adapter, resume_sync_id=snapshot.id,
+            max_pages=1, now=now, today=now.date())
+        self.assertEqual(continuation.id, snapshot.id)
+        self.assertEqual(continuation.status, "running")
+        self.assertEqual([kind for kind, _payload in continuation_adapter.calls], ["types"])
+        self.assertEqual(MarketplaceFinanceSync.query.count(), 1)
+
+        snapshot.status = "completed"
+        snapshot.phase = "completed"
+        snapshot.completed_at = now
+        db.session.commit()
+        stale_adapter = SyntheticFinanceAdapter()
+        stale = self._sync(
+            stale_adapter, resume_sync_id=snapshot.id,
+            now=now, today=now.date())
+        self.assertIsNone(stale)
+        self.assertEqual(stale_adapter.calls, [])
+        self.assertEqual(MarketplaceFinanceSync.query.count(), 1)
+
     def test_completed_snapshot_persists_exact_safe_facts(self):
         adapter = SyntheticFinanceAdapter()
         run = self._sync(adapter)

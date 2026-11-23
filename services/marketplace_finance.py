@@ -383,12 +383,21 @@ class MarketplaceFinanceService:
         account_id: int,
         now: datetime,
         recover_abandoned: bool = False,
+        marketplace_id: Optional[int] = None,
+        run_id: Optional[int] = None,
     ) -> Optional[MarketplaceFinanceSync]:
-        run = MarketplaceFinanceSync.query.filter(
+        filters = [
             MarketplaceFinanceSync.seller_id == seller_id,
             MarketplaceFinanceSync.account_id == account_id,
             MarketplaceFinanceSync.status == "running",
-        ).order_by(MarketplaceFinanceSync.id.desc()).first()
+        ]
+        if marketplace_id is not None:
+            filters.append(MarketplaceFinanceSync.marketplace_id == marketplace_id)
+        if run_id is not None:
+            filters.append(MarketplaceFinanceSync.id == run_id)
+        run = MarketplaceFinanceSync.query.filter(*filters).order_by(
+            MarketplaceFinanceSync.id.desc()
+        ).first()
         if run is None:
             return None
         heartbeat = run.last_page_at or run.started_at
@@ -673,11 +682,17 @@ class MarketplaceFinanceService:
         credentials: Optional[MarketplaceCredentials] = None,
         now: Optional[datetime] = None,
         today: Optional[date] = None,
-    ) -> MarketplaceFinanceSync:
+        resume_sync_id: Optional[int] = None,
+    ) -> Optional[MarketplaceFinanceSync]:
         if not isinstance(force, bool):
             raise MarketplaceFinanceValidationError("force должен быть boolean")
         if not isinstance(recover_abandoned, bool):
             raise MarketplaceFinanceValidationError("recover_abandoned должен быть boolean")
+        if resume_sync_id is not None:
+            resume_sync_id = cls._positive_integer(resume_sync_id, "resume_sync_id")
+            # A resume intent is never allowed to use the ordinary cache/start
+            # path. It may only continue the exact snapshot named by its caller.
+            force = True
         max_pages = cls._positive_integer(
             max_pages,
             "max_pages",
@@ -730,7 +745,23 @@ class MarketplaceFinanceService:
                 account_id=account.id,
                 now=current_time,
                 recover_abandoned=recover_abandoned,
+                marketplace_id=(account.marketplace_id
+                                if resume_sync_id is not None else None),
+                run_id=resume_sync_id,
             )
+            if resume_sync_id is not None:
+                if (
+                    run is None
+                    or run.id != resume_sync_id
+                    or run.period_code != period_code
+                    or run.period_start != period_start
+                    or run.period_end != period_end
+                ):
+                    # The scheduler can race a completion, cancellation or
+                    # contract recovery after its candidate query. While this
+                    # service's account claim is held, refuse to start or
+                    # replace a snapshot for that stale resume intent.
+                    return None
             if run is not None and (
                 run.period_code != period_code
                 or run.period_start != period_start

@@ -5,7 +5,7 @@
 import logging
 import os
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -612,12 +612,28 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
     # Ozon finance is an immutable snapshot projection. The runner only reads
     # current accrual endpoints and keeps partial snapshots invisible until all
     # requested days have passed strict normalization.
+    finance_sync_trigger = IntervalTrigger(minutes=10, timezone=timezone.utc)
     scheduler.add_job(
         func=lambda: sync_ozon_finance_accounts(flask_app),
-        trigger=IntervalTrigger(minutes=10),
+        trigger=finance_sync_trigger,
         id='ozon_finance_sync',
         name='Sync account-scoped Ozon accrual facts (read-only)',
         replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Continue only exact durable finance snapshots between cold/normal
+    # ten-minute scans. The 30s initial offset avoids lining up with those
+    # scans; the resume worker still uses the same account/domain claims and
+    # per-attempt API budget.
+    scheduler.add_job(
+        func=lambda: resume_ozon_finance_accounts(flask_app),
+        trigger=IntervalTrigger(minutes=2, timezone=timezone.utc),
+        id='ozon_finance_resume',
+        name='Resume active Ozon finance snapshots (read-only)',
+        replace_existing=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=30),
         max_instances=1,
         coalesce=True,
     )
@@ -1967,6 +1983,22 @@ def sync_ozon_finance_accounts(flask_app, limit=2):
                 result['completed'],
                 result['running'],
                 result['failed'],
+            )
+        return result
+
+
+def resume_ozon_finance_accounts(flask_app):
+    """Advance one already-running finance snapshot in a shorter slot."""
+    with flask_app.app_context():
+        if not flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
+            return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 0, 'unavailable': 0}
+        from services.ozon_read_scheduler import run_due_finance_resumes
+
+        result = run_due_finance_resumes()
+        if result['selected'] or result['failed']:
+            logger.info(
+                'Ozon finance resume scheduler: selected=%s completed=%s running=%s failed=%s',
+                result['selected'], result['completed'], result['running'], result['failed'],
             )
         return result
 

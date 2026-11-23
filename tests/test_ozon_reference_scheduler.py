@@ -20,6 +20,7 @@ from models import (
     User,
     db,
 )
+from services import product_sync_scheduler
 from services.product_sync_scheduler import (
     poll_ozon_commercial_operations,
     poll_ozon_marketplace_operations,
@@ -32,6 +33,7 @@ from services.product_sync_scheduler import (
     sync_ozon_finance_accounts,
     sync_ozon_fulfillment_accounts,
     sync_ozon_inbox_accounts,
+    resume_ozon_finance_accounts,
 )
 
 
@@ -537,6 +539,72 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
             result = sync_ozon_finance_accounts(self.app)
         self.assertEqual(result["selected"], 0)
         sync.assert_not_called()
+
+    def test_finance_resume_runner_is_flagged_and_uses_resume_only_lane(self):
+        expected = {
+            'selected': 1, 'completed': 0, 'running': 1,
+            'failed': 0, 'unavailable': 0,
+        }
+        with patch(
+            'services.ozon_read_scheduler.run_due_finance_resumes',
+            return_value=expected,
+        ) as resume:
+            result = resume_ozon_finance_accounts(self.app)
+        self.assertEqual(result, expected)
+        resume.assert_called_once_with()
+
+        self.app.config['MARKETPLACE_OZON_ENABLED'] = False
+        with patch(
+            'services.ozon_read_scheduler.run_due_finance_resumes',
+        ) as resume:
+            result = resume_ozon_finance_accounts(self.app)
+        self.assertEqual(result['selected'], 0)
+        resume.assert_not_called()
+
+    def test_finance_resume_job_is_offset_from_regular_ten_minute_scan(self):
+        class RecordingScheduler:
+            def __init__(self, **_kwargs):
+                self.jobs = {}
+                self.running = False
+
+            def add_job(self, func, trigger, **kwargs):
+                job_id = kwargs['id']
+                self.jobs[job_id] = SimpleNamespace(
+                    func=func, trigger=trigger, **kwargs)
+
+            def start(self):
+                self.running = True
+
+        prior_scheduler = product_sync_scheduler.scheduler
+        prior_handle = product_sync_scheduler._scheduler_lock_handle
+        product_sync_scheduler.scheduler = None
+        product_sync_scheduler._scheduler_lock_handle = None
+        fake = RecordingScheduler()
+        try:
+            with patch.object(
+                product_sync_scheduler, 'BackgroundScheduler', return_value=fake,
+            ), patch.object(
+                product_sync_scheduler, '_acquire_scheduler_process_lock', return_value=True,
+            ), patch.object(
+                product_sync_scheduler, 'publish_scheduler_heartbeat',
+            ), patch(
+                'services.auto_publish_service.reset_stuck_auto_publish',
+            ):
+                product_sync_scheduler.init_scheduler(self.app)
+
+            regular = fake.jobs['ozon_finance_sync']
+            resume = fake.jobs['ozon_finance_resume']
+            self.assertEqual(regular.trigger.interval.total_seconds(), 600)
+            self.assertEqual(resume.trigger.interval.total_seconds(), 120)
+            self.assertEqual(resume.max_instances, 1)
+            self.assertTrue(resume.coalesce)
+            self.assertEqual(resume.next_run_time.utcoffset(), timedelta(0))
+            separation = resume.next_run_time.timestamp() - regular.trigger.start_date.timestamp()
+            self.assertGreater(separation, -600)
+            self.assertLess(separation, -540)
+        finally:
+            product_sync_scheduler.scheduler = prior_scheduler
+            product_sync_scheduler._scheduler_lock_handle = prior_handle
 
     def test_inbox_scheduler_requires_capability_and_is_bounded_read_only(self):
         with self.app.app_context():

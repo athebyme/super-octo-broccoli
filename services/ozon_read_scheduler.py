@@ -202,6 +202,16 @@ def _claim(row, now):
     return token if claimed == 1 else None
 
 
+def _active_request_condition():
+    return select(MarketplaceReadRequest.id).where(
+        MarketplaceReadRequest.seller_id == MarketplaceReadSchedule.seller_id,
+        MarketplaceReadRequest.marketplace_id == MarketplaceReadSchedule.marketplace_id,
+        MarketplaceReadRequest.account_id == MarketplaceReadSchedule.account_id,
+        MarketplaceReadRequest.domain == MarketplaceReadSchedule.domain,
+        MarketplaceReadRequest.status.in_(ACTIVE),
+    ).exists()
+
+
 def _finish(row, token, now, **values):
     # The HTTP enqueue can happen while this worker is reading Ozon. Evaluate
     # pending intent in the UPDATE itself so neither ordering can lose its due.
@@ -327,7 +337,8 @@ def _failed(row, token, spec, exc, adapter, now, request=None):
     return code
 
 
-def _advance(row, spec, now, adapter_factory, *, requested_only=False):
+def _advance(row, spec, now, adapter_factory, *, requested_only=False,
+             resume_run_id=None):
     """Hold host claims across I/O, but commit the durable lease beforehand."""
     claim = _try_operation_lock('ozon-read-' + row.domain, row.account_id)
     if claim is None:
@@ -357,11 +368,32 @@ def _advance(row, spec, now, adapter_factory, *, requested_only=False):
             _finish(row, token, now, status='waiting', next_due_at=now + timedelta(minutes=10),
                     last_error_code='account_unavailable')
             return 'skipped'
-        request = worker_request(row, account, now)
-        if requested_only and request is None:
-            _finish(row, token, now, status='idle', next_due_at=now + timedelta(minutes=10))
-            return 'skipped'
-        running = _current_run(spec, row)
+        if resume_run_id is not None:
+            active_request = MarketplaceReadRequest.query.filter_by(
+                seller_id=row.seller_id, marketplace_id=row.marketplace_id,
+                account_id=row.account_id, domain=row.domain,
+            ).filter(MarketplaceReadRequest.status.in_(ACTIVE)).first()
+            if active_request is not None:
+                _finish(row, token, now, status='pending',
+                        next_due_at=now + timedelta(seconds=60))
+                return 'skipped'
+            running = _current_run(spec, row)
+            # A resume candidate must remain the exact run selected from the
+            # durable table. If it completed, was invalidated, or was replaced
+            # while this worker acquired its claims, do not turn this fast lane
+            # into a new snapshot start.
+            if running is None or running.id != resume_run_id:
+                _finish(row, token, now, status='waiting',
+                        next_due_at=now + timedelta(seconds=60),
+                        consecutive_failures=row.consecutive_failures)
+                return 'skipped'
+            request = None
+        else:
+            request = worker_request(row, account, now)
+            if requested_only and request is None:
+                _finish(row, token, now, status='idle', next_due_at=now + timedelta(minutes=10))
+                return 'skipped'
+            running = _current_run(spec, row)
         cached = _cached(spec, row, now, request) if running is None else None
         if cached is not None:
             record_request(row, request, cached, now)
@@ -380,8 +412,17 @@ def _advance(row, spec, now, adapter_factory, *, requested_only=False):
             adapter=adapter, credentials=credentials, recover_abandoned=True,
             now=now, today=(running.period_end if running is not None else
                             request.period_end if request is not None else now.date()),
+            **({'resume_sync_id': resume_run_id} if resume_run_id is not None else {}),
         )
         finished = now + timedelta(seconds=time.monotonic() - started)
+        if resume_run_id is not None and run is None:
+            # The finance service rechecks the run ID under its own claim. A
+            # changed run is deferred for the normal lane; it is not a failed
+            # provider attempt and must not create a replacement snapshot here.
+            _finish(row, token, finished, status='pending',
+                    next_due_at=finished + timedelta(seconds=60),
+                    consecutive_failures=row.consecutive_failures)
+            return 'skipped'
         record_request(row, request, run, finished)
         if run.status == 'completed':
             _success(row, token, spec, run, finished)
@@ -416,32 +457,63 @@ def run_due_reads(*, domain, limit, now=None, adapter_factory=None):
     return _run_due_domains((domain,), limit=limit, now=now, adapter_factory=adapter_factory)
 
 
+def run_due_finance_resumes(*, now=None, adapter_factory=None):
+    """Resume at most one exact running finance snapshot per fast tick."""
+    return _run_due_domains(('finance',), limit=1, now=now,
+                            adapter_factory=adapter_factory, resume_only=True)
+
+
 def run_due_inbox_reads(*, limit=2, now=None, adapter_factory=None):
     return _run_due_domains(('reviews', 'questions'), limit=limit, now=now, adapter_factory=adapter_factory)
 
 
-def _run_due_domains(domains, *, limit, now=None, adapter_factory=None):
+def _run_due_domains(domains, *, limit, now=None, adapter_factory=None,
+                     resume_only=False):
     """Called in the singleton scheduler's app context; never a provider write."""
     specs = {name: _domain(name) for name in domains}
     if type(limit) is not int or not 1 <= limit <= 10:
         raise ValueError('Read scheduler limit must be between 1 and 10')
     now = now or datetime.utcnow()
-    for domain in domains:
-        _discover(domain, now)
+    if not resume_only:
+        for domain in domains:
+            _discover(domain, now)
     candidates = _eligible_accounts(now).join(MarketplaceReadSchedule, and_(
         MarketplaceReadSchedule.account_id == SellerMarketplaceAccount.id,
         MarketplaceReadSchedule.seller_id == SellerMarketplaceAccount.seller_id,
         MarketplaceReadSchedule.marketplace_id == SellerMarketplaceAccount.marketplace_id,
-    )).filter(
+    ))
+    if resume_only:
+        if domains != ('finance',):
+            raise ValueError('Resume-only scheduling is supported only for finance')
+        finance_run = specs['finance'].model
+        candidates = candidates.join(finance_run, and_(
+            finance_run.seller_id == MarketplaceReadSchedule.seller_id,
+            finance_run.marketplace_id == MarketplaceReadSchedule.marketplace_id,
+            finance_run.account_id == MarketplaceReadSchedule.account_id,
+            finance_run.status == 'running',
+        )).filter(~_active_request_condition())
+    candidates = candidates.filter(
         MarketplaceReadSchedule.domain.in_(domains), *_due_conditions(now),
         _capability_condition(MarketplaceReadSchedule.domain),
-    ).with_entities(MarketplaceReadSchedule).order_by(
+    )
+    if resume_only:
+        candidates = candidates.with_entities(MarketplaceReadSchedule, finance_run.id)
+    else:
+        candidates = candidates.with_entities(MarketplaceReadSchedule)
+    candidates = candidates.order_by(
         MarketplaceReadSchedule.next_due_at, MarketplaceReadSchedule.last_attempt_at,
         MarketplaceReadSchedule.id,
     ).limit(CANDIDATE_LIMIT).all()
     result = {'selected': 0, 'completed': 0, 'running': 0, 'failed': 0, 'unavailable': 0}
-    for row in candidates:
-        outcome = _advance(row, specs[row.domain], now, adapter_factory or _ReadAdapter)
+    for candidate in candidates:
+        if resume_only:
+            row, resume_run_id = candidate
+        else:
+            row = candidate
+            resume_run_id = None
+        outcome = _advance(row, specs[row.domain], now,
+                           adapter_factory or _ReadAdapter,
+                           resume_run_id=resume_run_id)
         if outcome != 'skipped':
             result['selected'] += 1
             result[outcome] += 1
@@ -452,18 +524,12 @@ def _run_due_domains(domains, *, limit, now=None, adapter_factory=None):
 
 def _requested_candidate(now, exclude_account_ids=()):
     """Earliest eligible period request, with exclusions applied before LIMIT."""
-    active = select(MarketplaceReadRequest.id).where(
-        MarketplaceReadRequest.seller_id == MarketplaceReadSchedule.seller_id,
-        MarketplaceReadRequest.marketplace_id == MarketplaceReadSchedule.marketplace_id,
-        MarketplaceReadRequest.account_id == MarketplaceReadSchedule.account_id,
-        MarketplaceReadRequest.domain == MarketplaceReadSchedule.domain,
-        MarketplaceReadRequest.status.in_(ACTIVE),
-    ).exists()
     candidates = _eligible_accounts(now).join(MarketplaceReadSchedule, and_(
         MarketplaceReadSchedule.account_id == SellerMarketplaceAccount.id,
         MarketplaceReadSchedule.seller_id == SellerMarketplaceAccount.seller_id,
         MarketplaceReadSchedule.marketplace_id == SellerMarketplaceAccount.marketplace_id,
-    )).filter(active, *_due_conditions(now), _capability_condition(MarketplaceReadSchedule.domain))
+    )).filter(_active_request_condition(), *_due_conditions(now),
+              _capability_condition(MarketplaceReadSchedule.domain))
     if exclude_account_ids:
         candidates = candidates.filter(SellerMarketplaceAccount.id.notin_(exclude_account_ids))
     return candidates.with_entities(MarketplaceReadSchedule).order_by(

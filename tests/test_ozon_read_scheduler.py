@@ -8,9 +8,13 @@ from cryptography.fernet import Fernet
 from flask import Flask
 import pytest
 
-from models import Marketplace, MarketplaceReadSchedule, Seller, SellerMarketplaceAccount, User, db
+from models import (
+    Marketplace, MarketplaceFinanceSync, MarketplaceReadRequest,
+    MarketplaceReadSchedule, Seller, SellerMarketplaceAccount, User, db,
+)
 from services import ozon_read_scheduler as scheduler
 from services.marketplace_adapters import MarketplaceCredentials
+from services.ozon_read_requests import enqueue_read
 from services.marketplace_operation_locks import _try_operation_lock, try_account_operation_lock
 from services.ozon_api_client import OzonAPIError, OzonRateLimitError, OzonSellerAPIClient
 
@@ -61,6 +65,22 @@ def scope(monkeypatch):
 def run(domain='analytics', **kwargs):
     return scheduler.run_due_reads(domain=domain, limit=kwargs.pop('limit', 1),
                                   now=kwargs.pop('now', NOW), **kwargs)
+
+
+def _finance_run(scope, account_id, *, now=NOW):
+    period_code, period_start, period_end = scheduler._domain('finance').service._period(
+        '30d', today=now.date())
+    run = MarketplaceFinanceSync(
+        seller_id=scope.seller_id, marketplace_id=scope.marketplace_id,
+        account_id=account_id, period_code=period_code,
+        period_start=period_start, period_end=period_end,
+        current_date=period_start, status='running', phase='accruals',
+        next_cursor='synthetic-finance-cursor', page_count=30,
+        request_fingerprint='f' * 64,
+    )
+    db.session.add(run)
+    db.session.commit()
+    return run
 
 
 def completed(**kwargs):
@@ -143,6 +163,185 @@ def test_missing_accounts_are_discovered_beyond_enrollment_limit(scope, monkeypa
     assert MarketplaceReadSchedule.query.count() == scheduler.DISCOVERY_LIMIT
     run()
     assert MarketplaceReadSchedule.query.count() == len(scope.ids)
+
+
+def test_finance_resume_filters_cold_and_fresh_rows_before_candidate_limit(scope, monkeypatch):
+    monkeypatch.setattr(scheduler, 'CANDIDATE_LIMIT', 2)
+    fresh_account = scope.ids[0]
+    cold_ids = [scope.add(), scope.add()]
+    target = scope.add()
+    scheduler._discover('finance', NOW)
+    fresh = MarketplaceReadSchedule.query.filter_by(
+        account_id=fresh_account, domain='finance').one()
+    fresh.status = 'idle'
+    fresh.next_due_at = NOW + timedelta(hours=1)
+    snapshot = _finance_run(scope, target)
+    due = MarketplaceReadSchedule.query.filter_by(
+        account_id=target, domain='finance').one()
+    due.next_due_at = NOW
+    due.last_run_id = snapshot.id
+    db.session.commit()
+
+    sync = Mock(return_value=snapshot)
+    monkeypatch.setattr(scheduler._domain('finance').service, 'sync_account', sync)
+    result = scheduler.run_due_finance_resumes(
+        now=NOW, adapter_factory=lambda _: SimpleNamespace(close=Mock()))
+
+    assert result['selected'] == 1 and result['running'] == 1
+    assert sync.call_count == 1
+    assert sync.call_args.kwargs['account_id'] == target
+    assert sync.call_args.kwargs['resume_sync_id'] == snapshot.id
+    assert sync.call_args.kwargs['max_pages'] == 5
+    assert MarketplaceReadSchedule.query.filter(
+        MarketplaceReadSchedule.account_id.in_(cold_ids),
+        MarketplaceReadSchedule.domain == 'finance',
+        MarketplaceReadSchedule.last_attempt_at.isnot(None),
+    ).count() == 0
+
+
+def test_finance_resume_does_not_discover_or_start_cold_accounts(scope, monkeypatch):
+    sync = Mock()
+    monkeypatch.setattr(scheduler._domain('finance').service, 'sync_account', sync)
+
+    result = scheduler.run_due_finance_resumes(
+        now=NOW, adapter_factory=lambda _: (_ for _ in ()).throw(
+            AssertionError('cold finance must not create an adapter')))
+
+    assert result['selected'] == 0
+    assert MarketplaceReadSchedule.query.count() == 0
+    sync.assert_not_called()
+
+
+def test_cold_finance_account_lock_collision_waits_for_normal_lane(scope, monkeypatch):
+    sync = Mock()
+    monkeypatch.setattr(scheduler._domain('finance').service, 'sync_account', sync)
+    account_claim = try_account_operation_lock(scope.ids[0])
+    assert account_claim is not None
+    try:
+        cold = run('finance')
+    finally:
+        account_claim.close()
+
+    assert cold['selected'] == 0
+    sync.assert_not_called()
+    schedule = MarketplaceReadSchedule.query.filter_by(
+        account_id=scope.ids[0], domain='finance').one()
+    assert schedule.status == 'waiting'
+    assert schedule.last_error_code == 'account_busy'
+    assert schedule.consecutive_failures == 0
+    assert schedule.next_due_at == NOW + timedelta(seconds=60)
+    fast = scheduler.run_due_finance_resumes(
+        now=schedule.next_due_at, adapter_factory=Mock())
+    assert fast['selected'] == 0
+    sync.assert_not_called()
+    assert MarketplaceFinanceSync.query.count() == 0
+
+
+def test_finance_resume_candidate_completed_before_claim_is_not_restarted(scope, monkeypatch):
+    snapshot = _finance_run(scope, scope.ids[0])
+    scheduler._discover('finance', NOW)
+    schedule = MarketplaceReadSchedule.query.filter_by(
+        account_id=scope.ids[0], domain='finance').one()
+    schedule.next_due_at = NOW
+    schedule.last_run_id = snapshot.id
+    db.session.commit()
+    original_advance = scheduler._advance
+    service_sync = Mock()
+    adapter_factory = Mock(side_effect=AssertionError('stale run must stop before adapter creation'))
+    monkeypatch.setattr(scheduler._domain('finance').service, 'sync_account', service_sync)
+
+    def complete_after_selection(row, spec, now, factory, **kwargs):
+        selected = db.session.get(MarketplaceFinanceSync, kwargs['resume_run_id'])
+        selected.status = 'completed'
+        selected.phase = 'completed'
+        selected.completed_at = now
+        db.session.commit()
+        return original_advance(row, spec, now, factory, **kwargs)
+
+    monkeypatch.setattr(scheduler, '_advance', complete_after_selection)
+    result = scheduler.run_due_finance_resumes(now=NOW, adapter_factory=adapter_factory)
+
+    assert result['selected'] == 0
+    service_sync.assert_not_called()
+    adapter_factory.assert_not_called()
+    assert MarketplaceFinanceSync.query.count() == 1
+    db.session.refresh(schedule)
+    assert schedule.status == 'waiting'
+    assert schedule.next_due_at == NOW + timedelta(seconds=60)
+    assert schedule.last_error_code is None
+
+
+def test_finance_resume_defers_actual_account_lock_collision_without_a_call(scope, monkeypatch):
+    snapshot = _finance_run(scope, scope.ids[0])
+    scheduler._discover('finance', NOW)
+    schedule = MarketplaceReadSchedule.query.filter_by(
+        account_id=scope.ids[0], domain='finance').one()
+    schedule.next_due_at = NOW
+    schedule.last_run_id = snapshot.id
+    db.session.commit()
+    sync = Mock(return_value=snapshot)
+    monkeypatch.setattr(scheduler._domain('finance').service, 'sync_account', sync)
+    account_claim = try_account_operation_lock(scope.ids[0])
+    assert account_claim is not None
+    try:
+        blocked = scheduler.run_due_finance_resumes(
+            now=NOW, adapter_factory=Mock())
+    finally:
+        account_claim.close()
+
+    assert blocked['selected'] == 0
+    sync.assert_not_called()
+    db.session.refresh(schedule)
+    assert schedule.status == 'waiting'
+    assert schedule.last_error_code == 'account_busy'
+    assert schedule.consecutive_failures == 0
+    due = schedule.next_due_at
+    assert due == NOW + timedelta(seconds=60)
+
+    resumed = scheduler.run_due_finance_resumes(
+        now=due, adapter_factory=lambda _: SimpleNamespace(close=Mock()))
+    assert resumed['selected'] == 1 and resumed['running'] == 1
+    assert sync.call_count == 1
+    assert sync.call_args.kwargs['resume_sync_id'] == snapshot.id
+
+
+def test_finance_resume_yields_active_manual_request_to_frequent_dispatcher(scope, monkeypatch):
+    snapshot = _finance_run(scope, scope.ids[0])
+    scheduler._discover('finance', NOW)
+    schedule = MarketplaceReadSchedule.query.filter_by(
+        account_id=scope.ids[0], domain='finance').one()
+    schedule.next_due_at = NOW
+    schedule.last_run_id = snapshot.id
+    db.session.commit()
+    request = enqueue_read(
+        seller_id=scope.seller_id, account_id=scope.ids[0],
+        domain='finance', period_code='30d', now=NOW)
+    assert request['active'] is True
+
+    sync = Mock()
+    monkeypatch.setattr(scheduler._domain('finance').service, 'sync_account', sync)
+    fast = scheduler.run_due_finance_resumes(
+        now=NOW, adapter_factory=lambda _: SimpleNamespace(close=Mock()))
+
+    assert fast['selected'] == 0
+    sync.assert_not_called()
+    assert MarketplaceReadRequest.query.one().status == 'pending'
+
+    def complete_requested(**kwargs):
+        assert 'resume_sync_id' not in kwargs
+        snapshot.status = 'completed'
+        snapshot.phase = 'completed'
+        snapshot.completed_at = kwargs['now']
+        db.session.commit()
+        return snapshot
+
+    sync.side_effect = complete_requested
+    requested = scheduler.run_requested_reads(
+        now=NOW, adapter_factory=lambda _: SimpleNamespace(close=Mock()))
+
+    assert requested['selected'] == 1 and requested['completed'] == 1
+    assert sync.call_count == 1
+    assert MarketplaceReadRequest.query.one().status == 'completed'
 
 
 def test_expired_disconnected_and_foreign_scope_never_read(scope, monkeypatch):
@@ -261,7 +460,12 @@ def test_real_service_resumes_committed_page_after_429_and_midnight(scope, monke
     due = row.next_due_at
     assert due.date() > NOW.date()
     db.session.remove()
-    assert run(domain, now=due)['selected'] == 1
+    resume = (scheduler.run_due_finance_resumes if domain == 'finance'
+              else lambda **kwargs: run(domain, **kwargs))
+    if domain == 'finance':
+        assert resume(now=due - timedelta(seconds=1))['selected'] == 0
+        assert len(calls) == 2
+    assert resume(now=due)['selected'] == 1
     assert calls[2] == attempted_page
     assert spec.model.query.count() == 1
     snapshot = db.session.get(spec.model, initial_id)
