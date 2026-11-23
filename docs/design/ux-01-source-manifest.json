@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-23T19:26:54.475430+00:00",
+  "generated_at": "2026-11-23T19:48:37.382841+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "5617f5b0fe9bd610aab25699bbe276f09e956791e2d0881714dcd75bf8880c49"
+      "sha256": "3c6cca57b7970b1697ea0637bf26a67f867d87ae24dd984afbeff1eee6dc90e9"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -1574,10 +1574,6 @@
     {
       "path": "routes/warehouse.py",
       "sha256": "a574ccfcacfeee88ed2c31625ff7867a2d4b6b6a7285416157241230e37a7fc7"
-    },
-    {
-      "path": "scripts/add_sexopt_supplier.py",
-      "sha256": "2796021658749906d6873589e8fda87df266f91f34fc89e2452bfea0cfd53a56"
     },
     {
       "path": "scripts/admit_luna_parsing.py",
@@ -5460,5 +5456,5 @@
       "sha256": "260973076a516b81bba3cae3adcd6b652fdee5585e27fbd0b7401062b78aefb1"
     }
   ],
-  "aggregate_sha256": "97501183fe27e50864c90ca0553e28a9ad1c5de7346dde5c92d63e7162977fc8"
+  "aggregate_sha256": "057eeb5a93e466dcf0287afd2511bd0788e3cbc03209bbda914e2db96312e4fe"
 }
