@@ -146,6 +146,7 @@
         {% elif summary.status_counts.uncertain %}
         <p class="mt-4 text-sm" style="color:var(--text-secondary)">Откройте связанную операцию, чтобы узнать состояние карточки с неизвестным результатом.</p>
         {% endif %}
+    </div>
     <div class="mt-5 space-y-3">
         {% set phase_labels = {
             'pending':'Ждёт подготовки','preparing':'Готовим локально','waiting_reference':'Ждём справочник',
