@@ -47,6 +47,10 @@ from services.marketplace_fact_pack import (
     MarketplaceFactPackError,
 )
 from services.ozon_reference_service import OzonReferenceService
+from services.supplier_field_observations import (
+    load_source_snapshot,
+    supplier_copy_identity_rejection,
+)
 
 
 _MAX_TREE_ROWS = 100_000
@@ -499,6 +503,38 @@ def _exact_raw_source_category(
     return raw_category
 
 
+def _peer_category_identity_matches(
+    product: ImportedProduct,
+    *,
+    expected_raw_category: str,
+) -> bool:
+    """Validate only the current exact supplier copy and its raw category.
+
+    Peer titles, SKUs, and arbitrary listing attributes are not evidence for
+    the category shortlist. The current target keeps the stricter fact-pack
+    validation used to build its prompt.
+    """
+    supplier_product = product.supplier_product
+    if (
+        supplier_product is None
+        or supplier_copy_identity_rejection(product, supplier_product) is not None
+    ):
+        return False
+    copied = load_source_snapshot(product.original_data)
+    current = load_source_snapshot(supplier_product.original_data_json)
+    if not isinstance(copied, dict) or not isinstance(current, dict):
+        return False
+    copied_category = copied.get("category")
+    current_category = current.get("category")
+    return bool(
+        isinstance(copied_category, str)
+        and copied_category.strip()
+        and copied_category == current_category
+        and copied_category == product.category
+        and copied_category == expected_raw_category
+    )
+
+
 def _fresh_observed_product_type(
     product_type: object,
     *,
@@ -730,19 +766,11 @@ def _load_exact_observed_scope(
                 listing.info_synced_at,
                 listing.attributes_synced_at,
             ))
-            or not isinstance(listing.attributes_json, str)
-            or len(listing.attributes_json.encode("utf-8"))
-            > MarketplaceDraftService.MAX_JSON_BYTES
         ):
             return remember(None)
-        try:
-            attributes = json.loads(listing.attributes_json)
-        except (TypeError, ValueError):
-            return remember(None)
-        if (
-            not isinstance(attributes, list)
-            or len(attributes) > MarketplaceDraftService.MAX_ATTRIBUTES
-            or _source_observation(linked_product) is None
+        if not _peer_category_identity_matches(
+            linked_product,
+            expected_raw_category=raw_source_category,
         ):
             return remember(None)
         product_type = listing.product_type
