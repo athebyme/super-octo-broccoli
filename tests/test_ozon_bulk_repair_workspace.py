@@ -1415,6 +1415,162 @@ def test_required_brand_search_is_exposed_and_bulk_resolution_requires_exact_id(
         )
 
 
+def test_native_editor_replaces_only_stale_unlinked_brand_with_exact_source_choice(
+    case, monkeypatch,
+):
+    now = datetime.utcnow()
+    brand = MarketplaceAttributeDefinition(
+        marketplace_id=case.marketplace.id,
+        product_type_id=case.product_type.id,
+        external_attribute_id='31',
+        name='Бренд',
+        data_type='String',
+        is_required=True,
+        dictionary_id='brand-dictionary',
+        max_value_count=1,
+        is_collection=False,
+        is_available=True,
+        is_enabled=True,
+        last_seen_at=now,
+        values_synced_at=now,
+        values_sync_status='success',
+        values_snapshot_hash='brand-values-hash',
+        values_version=1,
+        values_count=1,
+        restriction_value_ids_json=json.dumps(['41000', '41001', '41002']),
+    )
+    case.product_type.attributes_count = 3
+    case.product_type.required_attributes_count = 2
+    case.draft.attributes_json = json.dumps([{
+        'attribute_id': '31',
+        'complex_id': '0',
+        'values': [{
+            'dictionary_value_id': '41000',
+            'value': 'ACME NORTH',
+        }],
+    }])
+    db.session.add(brand)
+    db.session.commit()
+
+    choice = {
+        'dictionary_value_id': '41000',
+        'value': 'Acme North',
+    }
+    choices = [
+        choice,
+        {'dictionary_value_id': '41001', 'value': 'Acme North'},
+    ]
+    monkeypatch.setattr(
+        'services.ozon_brand_search.OzonBrandSearch.value_choices',
+        lambda draft, definition: (
+            choices if draft.published_listing_id is None else []
+        ),
+    )
+    scope = selection(case, [case.draft.id])
+    validation = MarketplaceDraftService._build_validation_result(case.draft)
+    assert any(
+        error['code'] == 'dictionary_value_out_of_scope'
+        and error['field'] == 'attributes[0]'
+        for error in validation['errors']
+    )
+    assert any(
+        error['code'] == 'required_attribute_missing'
+        and error['field'] == 'attributes.22232'
+        for error in validation['errors']
+    )
+
+    editor = Repair.editor_document(
+        seller_id=case.seller.id,
+        selection=scope,
+    )
+    row = editor['groups'][0]['rows'][0]
+    brand_field = next(
+        field for field in row['attributes']
+        if field['external_id'] == '31'
+    )
+    assert brand_field['editable'] is True
+    assert brand_field['value'] == 'ACME NORTH'
+    assert brand_field['dictionary_value_id'] == '41000'
+    assert any(
+        field['external_id'] == '22232' and field['editable']
+        for field in row['attributes']
+    )
+
+    searched = Repair.search_dictionary_values(
+        seller_id=case.seller.id,
+        selection=scope,
+        draft_id=case.draft.id,
+        external_attribute_id='31',
+        query='Acme',
+    )
+    assert searched['items'] == [
+        {'id': '41000', 'value': 'Acme North'},
+        {'id': '41001', 'value': 'Acme North'},
+    ]
+
+    before = (case.draft.version, case.draft.attributes_json)
+    rejected = Repair.apply_editor_rows(
+        seller_id=case.seller.id,
+        selection=scope,
+        rows=[selection_row(
+            row,
+            **{
+                'attribute:31': 'Acme North',
+                'attribute_value_id:31': '41002',
+            },
+        )],
+    )
+    assert rejected['failed'] == 1
+    db.session.refresh(case.draft)
+    assert (case.draft.version, case.draft.attributes_json) == before
+
+    accepted = Repair.apply_editor_rows(
+        seller_id=case.seller.id,
+        selection=scope,
+        rows=[selection_row(
+            row,
+            **{
+                'attribute:31': choice['value'],
+                'attribute_value_id:31': choice['dictionary_value_id'],
+            },
+        )],
+    )
+    assert accepted['updated'] == 1
+    assert accepted['failed'] == 0
+    db.session.refresh(case.draft)
+    assert json.loads(case.draft.attributes_json) == [{
+        'attribute_id': '31',
+        'complex_id': '0',
+        'values': [choice],
+    }]
+    after_validation = MarketplaceDraftService._build_validation_result(
+        case.draft,
+    )
+    assert not any(
+        error['code'] in {
+            'dictionary_value_out_of_scope',
+            'dictionary_display_mismatch',
+        }
+        and error['field'] == 'attributes[0]'
+        for error in after_validation['errors']
+    )
+    assert any(
+        error['code'] == 'required_attribute_missing'
+        and error['field'] == 'attributes.22232'
+        for error in after_validation['errors']
+    )
+    assert Repair._brand_replacement_attribute_ids(
+        type('LinkedDraft', (), {
+            'published_listing_id': 1,
+            'product_type_id': case.product_type.id,
+        })(),
+        definitions={(case.product_type.id, '31'): brand},
+        validation_result=validation,
+        attributes=json.loads(before[1]),
+    ) == []
+    assert MarketplaceOperation.query.count() == 0
+
+
 def test_draft_selection_marks_active_reviewed_draft_as_blocked(case):
     Upload.accept_reviewed_publish(
         seller_id=case.seller.id,

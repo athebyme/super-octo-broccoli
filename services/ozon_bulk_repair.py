@@ -949,6 +949,95 @@ class OzonBulkRepairService:
         return list(dict.fromkeys(result))
 
     @classmethod
+    def _brand_replacement_attribute_ids(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        definitions: Dict[
+            Tuple[int, str],
+            MarketplaceAttributeDefinition,
+        ],
+        validation_result: Optional[dict] = None,
+        attributes: Optional[list] = None,
+    ) -> List[str]:
+        """Select stale flat brand cells with an exact current source choice."""
+        attributes = (
+            attributes
+            if isinstance(attributes, list)
+            else cls._stored_json(draft.attributes_json, [])
+        )
+        invalid_pairs = {}
+        for error in cls._validation_errors(
+            draft,
+            validation_result=validation_result,
+        ):
+            if error.get("code") not in {
+                "dictionary_value_out_of_scope",
+                "dictionary_display_mismatch",
+            }:
+                continue
+            field = error.get("field")
+            match = (
+                cls.FLAT_ATTRIBUTE_PATH.fullmatch(field)
+                if isinstance(field, str) else None
+            )
+            if match is None:
+                continue
+            position = int(match.group(1))
+            if position >= len(attributes):
+                continue
+            attribute = attributes[position]
+            if (
+                not isinstance(attribute, dict)
+                or attribute.get("complex_id", "0") != "0"
+                or attribute.get("attribute_id")
+                not in MarketplaceDraftService.OZON_BRAND_ATTRIBUTE_IDS
+            ):
+                continue
+            external_id = attribute["attribute_id"]
+            if sum(
+                isinstance(item, dict)
+                and item.get("attribute_id") == external_id
+                and item.get("complex_id", "0") == "0"
+                for item in attributes
+            ) != 1:
+                continue
+            values = attribute.get("values")
+            if (
+                not isinstance(values, list)
+                or len(values) != 1
+                or not isinstance(values[0], dict)
+                or not isinstance(values[0].get("dictionary_value_id"), str)
+                or not values[0]["dictionary_value_id"]
+                or not isinstance(values[0].get("value"), str)
+            ):
+                continue
+            invalid_pairs[external_id] = (
+                values[0]["dictionary_value_id"],
+                values[0]["value"],
+            )
+        if not invalid_pairs:
+            return []
+
+        from services.ozon_brand_search import OzonBrandSearch
+
+        editable = set()
+        for external_id, current_pair in invalid_pairs.items():
+            definition = definitions.get(
+                (draft.product_type_id, external_id)
+            )
+            if definition is None:
+                continue
+            choices = OzonBrandSearch.value_choices(draft, definition)
+            if any(
+                (choice["dictionary_value_id"], choice["value"])
+                != current_pair
+                for choice in choices
+            ):
+                editable.add(external_id)
+        return sorted(editable, key=int)
+
+    @classmethod
     def _definition_map(
         cls,
         drafts: Iterable[MarketplaceProductDraft],
@@ -2104,6 +2193,16 @@ class OzonBulkRepairService:
             commercial = cls._stored_json(draft.commercial_json, {})
             current_attributes = cls._current_attribute_values(draft)
             raw_attributes = cls._stored_json(draft.attributes_json, [])
+            brand_replacement_ids = (
+                cls._brand_replacement_attribute_ids(
+                    draft,
+                    definitions=definitions,
+                    validation_result=validation_result,
+                    attributes=raw_attributes,
+                )
+                if source_prepare or draft_selection
+                else []
+            )
             dictionary_ids = {}
             for attribute in raw_attributes:
                 if (
@@ -2136,13 +2235,14 @@ class OzonBulkRepairService:
                     key=int,
                 ),
                 *sorted(source_editable_ids, key=int),
+                *brand_replacement_ids,
             ]))
             legacy_editable_ids = set(
                 cls._missing_attribute_ids(
                     draft,
                     validation_result=validation_result,
                 )
-            ) | cleanup_replacement_ids
+            ) | cleanup_replacement_ids | set(brand_replacement_ids)
             for external_id in editable_ids:
                 if external_id in legacy_editable_ids:
                     editor_attribute_cells += 1
@@ -2571,22 +2671,22 @@ class OzonBulkRepairService:
         # use that same projection, including replacements after schema drift;
         # an older (or absent) saved validation is not the current form.
         validation_result = MarketplaceDraftService._build_validation_result(draft)
+        source_native = document.get("mode") in {
+            "source_prepare", "draft_selection",
+        }
+        definitions_by_type = cls._definition_map([draft])
         editable_ids = set(cls._missing_attribute_ids(
             draft, validation_result=validation_result,
         ))
         editable_ids.update(
             candidate["attribute_id"]
             for candidate in cls._schema_cleanup_candidates(
-                draft=draft, definitions=cls._definition_map([draft]),
+                draft=draft, definitions=definitions_by_type,
                 validation_result=validation_result,
             )
             if candidate["replacement_required"]
         )
-        source_native = document.get("mode") in {
-            "source_prepare", "draft_selection",
-        }
         if source_native:
-            definitions_by_type = cls._definition_map([draft])
             _comparisons, _proof_payloads, source_editable_ids = (
                 cls._source_comparisons_for_draft(
                     draft,
@@ -2594,6 +2694,13 @@ class OzonBulkRepairService:
                 )
             )
             editable_ids.update(source_editable_ids)
+            editable_ids.update(
+                cls._brand_replacement_attribute_ids(
+                    draft,
+                    definitions=definitions_by_type,
+                    validation_result=validation_result,
+                )
+            )
         if external_attribute_id not in editable_ids:
             raise OzonBulkUploadValidationError(
                 "Атрибут не относится к недостающим полям этой строки"
