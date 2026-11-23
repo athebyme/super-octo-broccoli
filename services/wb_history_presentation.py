@@ -71,6 +71,18 @@ def _legacy_completed_presentation(operation):
             ),
         }
 
+    if success_count + error_count > total_products:
+        return {
+            "tone": "unknown",
+            "label": "Завершено, счётчики результата не согласуются с числом товаров",
+            "message": (
+                f"Без ошибки обработано {success_count} из {total_products} строк. "
+                f"Ошибок: {error_count}. Счётчики превышают общее число товаров. "
+                "Проверьте детали и статусы строк в WB. Не повторяйте изменение, "
+                "пока исход не установлен."
+            ),
+        }
+
     if error_count > 0 and success_count > 0:
         return {
             "tone": "partial",
@@ -173,16 +185,6 @@ def _reviewed_completed_presentation(operation, summary):
                     "отдельно по каждой строке."
                 ),
             }
-
-        return {
-            "tone": "unknown",
-            "label": "Завершено, успешный результат не подтверждён счётчиками",
-            "message": (
-                f"{execution_counts} Счётчики выполнения не подтверждают полный "
-                "результат. Проверьте детали и статусы строк в WB. Не повторяйте "
-                "изменение, пока исход не установлен."
-            ),
-        }
 
     return {
         "tone": "unknown",

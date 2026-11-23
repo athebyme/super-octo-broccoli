@@ -477,6 +477,25 @@ def test_legacy_completed_null_counters_remain_explicitly_unknown():
     }
 
 
+def test_legacy_completed_counters_above_total_remain_unknown():
+    from services.wb_history_presentation import present_wb_bulk_operation
+
+    operation = SimpleNamespace(
+        status="completed",
+        total_products=1,
+        success_count=2,
+        error_count=0,
+        operation_params=None,
+        reverted=False,
+    )
+    result = present_wb_bulk_operation(operation)
+
+    assert result["tone"] == "unknown"
+    assert result["label"] == "Завершено, счётчики результата не согласуются с числом товаров"
+    assert "2 из 1" in result["message"]
+    assert "Счётчики превышают общее число товаров" in result["message"]
+
+
 def test_legacy_history_without_review_summary_keeps_legacy_summary_only():
     html = _render_bulk_history_detail([], error_count=1)
     assert 'data-operations-review-summary' not in html
