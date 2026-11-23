@@ -2668,8 +2668,12 @@ def assert_bulk_supplier_source_review(page, fixture: dict[str, int]) -> None:
         (expected_product_id, "527"),
         (expected_product_id, "202"),
     }, observed_rows
-    color_conflict = conflicts.locator('[data-review-conflict-characteristic-id="527"]')
-    country_conflict = conflicts.locator('[data-review-conflict-characteristic-id="202"]')
+    color_conflict = page.locator(
+        '[data-review-conflict-row][data-review-conflict-characteristic-id="527"]'
+    )
+    country_conflict = page.locator(
+        '[data-review-conflict-row][data-review-conflict-characteristic-id="202"]'
+    )
     assert color_conflict.count() == country_conflict.count() == 1
     assert "Снимок карточки WB" in color_conflict.inner_text()
     assert "Пусто" in color_conflict.inner_text()
