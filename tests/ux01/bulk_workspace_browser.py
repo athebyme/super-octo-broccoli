@@ -1257,9 +1257,21 @@ def run():
                 dark_screenshot = OUTPUT / "catalog-selection-review-dark-320.png"
                 review_page.screenshot(path=dark_screenshot, animations="disabled", full_page=True)
                 selection_review_screenshots.append(dark_screenshot.name)
-            review_page.locator(
-                f'[data-selection-review-row="{selection_review_ids[0]}"] input[type="checkbox"]',
-            ).uncheck()
+            deselected_row = review_page.locator(
+                f'[data-selection-review-row="{selection_review_ids[0]}"]',
+            )
+            deselected_checkbox = deselected_row.locator('input[type="checkbox"]')
+            assert deselected_checkbox.is_visible() and deselected_checkbox.is_checked()
+            deselected_checkbox.scroll_into_view_if_needed()
+            deselection_bounds = deselected_checkbox.bounding_box()
+            assert deselection_bounds and 0 <= deselection_bounds["x"] \
+                and deselection_bounds["x"] + deselection_bounds["width"] <= 320 \
+                and 0 <= deselection_bounds["y"] \
+                and deselection_bounds["y"] + deselection_bounds["height"] <= 900, deselection_bounds
+            deselected_checkbox.click()
+            review_page.wait_for_function("""id => !document.querySelector(
+                `[data-selection-review-row="${id}"]`
+            )""", arg=selection_review_ids[0])
             assert selected_browser_state(review_page)["selected"] == [selection_review_ids[1]]
             assert review_page.locator("[data-selection-review]").count() == 1
             assert review_page.locator("[data-selection-review-row]").evaluate_all(
