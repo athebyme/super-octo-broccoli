@@ -4771,7 +4771,7 @@ def run():
         price_posts_before = len(mixed_browser_post_paths)
         price_preview_before = len(price_preview_posts)
         price_create_before = len(price_create_posts)
-        pick_action(mixed_page, "Изменить цены Ozon")
+        invoke_workspace_action(mixed_page, "ozon_prices")
         price_scope_dialog = mixed_page.locator("[data-ozon-scope-dialog]")
         price_scope_dialog.wait_for(state="visible")
         price_scope_dialog.locator("#mp-ozon-price-account").select_option(
