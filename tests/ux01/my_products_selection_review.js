@@ -101,7 +101,7 @@ function row(id) {
   };
 }
 
-function makeApp() {
+function makeApp(preserveWorkspaceReturn = false) {
   const app = Object.assign(component.data(), component.methods);
   app.$refs = {
     moreActions: {open: false},
@@ -119,9 +119,14 @@ function makeApp() {
   app.loading = false;
   app.loadingMore = false;
   app.selectAllLoading = false;
-  app.searchInput = '';
-  app.filters = {search: '', supplier: '', has_photos: '', stock: '', sort: ''};
-  app.activeTab = '';
+  if (!preserveWorkspaceReturn) {
+    app.searchInput = '';
+    app.filters = {
+      search: '', supplier: '', has_photos: '', stock: '', sort: '',
+      marketplace: '', marketplace_state: '',
+    };
+    app.activeTab = '';
+  }
   app.items = [];
   app.itemsScope = app.feedScopeKey();
   app.pagination = {page: 1, per_page: 50, total: 0, pages: 1, has_next: false};
@@ -148,6 +153,71 @@ async function settle() {
 }
 
 async function main() {
+  const defaultScopeApp = makeApp();
+  defaultScopeApp.items = [row(4)];
+  defaultScopeApp.itemsScope = defaultScopeApp.feedScopeKey();
+  const defaultScope = defaultScopeApp.buildWorkspaceReturnScope();
+  assert.ok(defaultScope);
+  assert.equal(Object.hasOwn(defaultScope, 'marketplace'), false,
+    'the legacy default scope shape omits optional marketplace filters');
+  assert.equal(Object.hasOwn(defaultScope, 'marketplace_state'), false,
+    'the legacy default scope shape omits the default common status');
+
+  const stateOnly = makeApp();
+  stateOnly.filters.marketplace_state = 'attention';
+  const stateOnlyParams = stateOnly.queryParams(1, 50);
+  assert.equal(stateOnlyParams.marketplace_state, 'attention');
+  assert.equal(Object.hasOwn(stateOnlyParams, 'marketplace'), false,
+    'a common state alone does not narrow the provider set');
+
+  const disabledOzon = makeApp();
+  assert.equal(disabledOzon.ozonEnabled, false);
+  assert.equal(disabledOzon.setMarketplace('ozon'), false,
+    'a disabled Ozon provider cannot be selected');
+  assert.equal(disabledOzon.filters.marketplace, '');
+
+  const ozonSwitch = makeApp();
+  ozonSwitch.ozonEnabled = true;
+  ozonSwitch.activeTab = 'imported';
+  assert.equal(ozonSwitch.setMarketplace('ozon'), true);
+  assert.equal(ozonSwitch.activeTab, '',
+    'switching to Ozon clears an incompatible legacy WB status');
+  assert.equal(ozonSwitch.queryParams().marketplace, 'ozon');
+  assert.equal(Object.hasOwn(ozonSwitch.queryParams(), 'status'), false);
+
+  const updatesStatus = makeApp();
+  updatesStatus.load = function () {};
+  updatesStatus.setTab('updates');
+  assert.equal(updatesStatus.selectedWbStatusLabel, '',
+    'the WB status control is visually empty in the supplier updates view');
+  assert.equal(updatesStatus.queryParams().updates, '1');
+  updatesStatus.setWbStatus('pending');
+  assert.equal(updatesStatus.activeTab, 'pending',
+    'choosing a WB import status leaves the supplier updates view');
+  assert.equal(updatesStatus.queryParams().status, 'pending');
+  assert.equal(Object.hasOwn(updatesStatus.queryParams(), 'updates'), false);
+
+  const resetLegacyStatus = makeApp();
+  resetLegacyStatus.activeTab = 'pending';
+  resetLegacyStatus.items = [row(5)];
+  resetLegacyStatus.itemsScope = resetLegacyStatus.feedScopeKey();
+  let resetFeedReads = 0;
+  resetLegacyStatus.load = function () { resetFeedReads += 1; };
+  const oldFilters = resetLegacyStatus.filters;
+  resetLegacyStatus.resetFilters();
+  assert.equal(resetLegacyStatus.activeTab, '',
+    'reset clears a legacy WB status even when no other filter is active');
+  assert.notEqual(resetLegacyStatus.filters, oldFilters,
+    'reset replaces the filter object so Vue observes the status-only reset');
+  assert.equal(resetFeedReads, 0, 'reset relies on the filter watcher for one feed read');
+  component.watch.filters.handler.call(resetLegacyStatus);
+  assert.equal(resetFeedReads, 1);
+
+  const ozonOnlyStatus = makeApp();
+  ozonOnlyStatus.filters.marketplace = 'ozon';
+  assert.equal(ozonOnlyStatus.setWbStatus('pending'), false,
+    'the WB-only status control cannot set an Ozon-only scope');
+
   const app = makeApp();
   app.items = [row(11), row(12)];
   app.itemsScope = app.feedScopeKey();
@@ -333,9 +403,12 @@ async function main() {
   context.clearTimeout = originalClearTimeout;
 
   fakeDocument.activeElement = fakeDocument.body;
+  boot.ozonEnabled = true;
   const navigating = makeApp();
   navigating.urls.commonContent = '/my-products/common-content';
   navigating.items = [row(30)];
+  navigating.filters.marketplace = 'ozon';
+  navigating.filters.marketplace_state = 'active';
   navigating.itemsScope = navigating.feedScopeKey();
   navigating.selected = [11, 22];
   navigating.selectionReviewRows = [row(11), row(22)];
@@ -345,6 +418,12 @@ async function main() {
   assert.equal(returnPayload.owner, boot.workspaceOwner);
   assert.equal(returnPayload.scope.visibleCount, 1,
     'the capsule retains the filtered feed count rather than selected-only row count');
+  assert.equal(returnPayload.scope.marketplace, 'ozon');
+  assert.equal(returnPayload.scope.marketplace_state, 'active');
+  sameJson(Object.keys(returnPayload.scope), [
+    'activeTab', 'search', 'supplier', 'has_photos', 'stock', 'sort',
+    'visibleCount', 'marketplace', 'marketplace_state',
+  ], 'non-default provider scope keys serialize in a stable order');
   const marker = [...storage.values()].map(value => {
     try { return JSON.parse(value); } catch (_) { return null; }
   }).find(value => value && value.nonce === returnNonce && Array.isArray(value.ids));
@@ -353,13 +432,18 @@ async function main() {
 
   fakeWindow.location.hash = '#workspace-return=' + returnNonce;
   vm.runInContext(sourceText, context, {filename: sourcePath + ' return'});
-  const returned = makeApp();
+  const returned = makeApp(true);
+  assert.equal(returned.workspaceReturnPending, true);
+  assert.equal(returned.filters.marketplace, 'ozon');
+  assert.equal(returned.filters.marketplace_state, 'active');
   let returnedFeedReads = 0;
   let returnedSelectionReads = 0;
   returned.$api.get = function (url, params) {
     returnedFeedReads += 1;
     assert.equal(url, '/api/my-products');
     assert.equal(params.per_page, 50);
+    assert.equal(params.marketplace, 'ozon');
+    assert.equal(params.marketplace_state, 'active');
     return Promise.resolve(page([row(30)], 1));
   };
   returned.$api.post = function (url, body) {
@@ -391,9 +475,62 @@ async function main() {
   assert.match(template, /data-selection-outside-count/);
   assert.match(template, /data-selection-review-row/);
   assert.match(template, /<sh-filter-bar ref="catalogSearch"/);
+  assert.match(template, /data-catalog-marketplace="all"[\s\S]*data-catalog-marketplace="wb"[\s\S]*data-catalog-marketplace="ozon"/);
+  assert.match(template, /data-catalog-marketplace-status/);
+  assert.match(template, /data-catalog-extra-filters/);
+  assert.match(template, /data-catalog-wb-status/);
+  assert.match(template, /:value="activeTab === 'updates' \? '' : activeTab"/);
+  assert.match(template, /v-if="filters\.marketplace !== 'ozon'" class="mp-extra-filters"/);
+  assert.match(template, /data-catalog-marketplace-status aria-label="Статус карточек"/);
+  assert.doesNotMatch(template, /class="mp-tabs"/,
+    'the old competing status tabs are no longer rendered');
+  assert.match(css, /\.mp-marketplace-choice\s*\{[^}]*min-height:\s*44px/);
+  assert.match(css, /\.mp-extra-filters summary\s*\{[^}]*min-height:\s*44px/);
+  assert.match(css, /\.mp-marketplace-choice:focus-visible/);
+  assert.match(css, /\.mp-extra-filters summary:focus-visible/);
   assert.match(css, /\.mp-selection-review[\s\S]*--focus-outline/);
-  assert.match(template, /filename='my-products-beta\.css', v='20261123-workspace-selection-r70'/);
-  assert.match(template, /filename='my-products-beta\.js', v='20261123-workspace-selection-r70'/);
+  assert.match(template, /filename='my-products-beta\.css', v='20261123-unified-marketplace-filters-r71'/);
+  assert.match(template, /filename='my-products-beta\.js', v='20261123-unified-marketplace-filters-r71'/);
+
+  const legacyScope = {
+    activeTab: 'pending', search: '', supplier: '', has_photos: '', stock: '',
+    sort: '', visibleCount: 1,
+  };
+  returnPayload = {
+    owner: boot.workspaceOwner,
+    batch: null,
+    selectionIds: [],
+    scope: legacyScope,
+  };
+  fakeWindow.location.hash = '#workspace-return=' + returnNonce;
+  vm.runInContext(sourceText, context, {filename: sourcePath + ' legacy capsule'});
+  const legacyReturn = makeApp(true);
+  assert.equal(legacyReturn.workspaceReturnPending, true,
+    'R70 capsules without optional provider fields remain valid');
+  assert.equal(legacyReturn.queryParams().status, 'pending',
+    'legacy status capsules still restore their WB status query');
+
+  returnPayload = {
+    owner: boot.workspaceOwner,
+    batch: null,
+    selectionIds: [],
+    scope: Object.assign({}, legacyScope, {unexpected: 'ignored'}),
+  };
+  vm.runInContext(sourceText, context, {filename: sourcePath + ' invalid capsule'});
+  const invalidReturn = makeApp();
+  assert.equal(invalidReturn.workspaceReturnPending, false,
+    'the expanded return scope still rejects keys outside its strict allowlist');
+
+  returnPayload = {
+    owner: boot.workspaceOwner,
+    batch: null,
+    selectionIds: [],
+    scope: Object.assign({}, legacyScope, {marketplace: 'ozon'}),
+  };
+  vm.runInContext(sourceText, context, {filename: sourcePath + ' hidden WB filter capsule'});
+  const hiddenWbStatusReturn = makeApp(true);
+  assert.equal(hiddenWbStatusReturn.workspaceReturnPending, false,
+    'an Ozon-only capsule cannot restore a hidden legacy WB status filter');
 
   process.stdout.write('My Products selection review regressions passed\n');
 }

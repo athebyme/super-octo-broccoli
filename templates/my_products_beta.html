@@ -6,7 +6,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-workspace-selection-r70') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-unified-marketplace-filters-r71') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261123-unified-catalog-prices-r63b') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
@@ -310,19 +310,29 @@
     </div>
 
     <section class="mp-catalog-surface" data-workspace-catalog aria-label="Каталог товаров">
-    <!-- Вкладки статуса, точный выбор и карточки остаются на одной поверхности. -->
-    <nav v-if="!importBatchMode && !supplierRefreshBatchMode && !selectionReviewActive" class="mp-tabs" aria-label="Статус карточек">
-        <button v-for="tab in statusTabs" :key="tab.key" type="button"
-                class="mp-tab" :class="{'is-active': activeTab === tab.key}"
-                :aria-pressed="activeTab === tab.key"
-                @click="setTab(tab.key)">
-            {{ tab.label }}
-            <span v-if="facets[tab.countKey] !== undefined" class="mp-tab-n">{{ facets[tab.countKey] }}</span>
-        </button>
-    </nav>
-
     <sh-filter-bar ref="catalogSearch" v-if="!importBatchMode && !supplierRefreshBatchMode && !selectionReviewActive" v-model="searchInput" placeholder="Название, бренд или артикул"
                    :chips="[]" :sticky="true">
+        <div class="mp-marketplace-filter" :class="{'mp-marketplace-filter--two': !ozonEnabled}" role="group" aria-label="Площадка">
+            <button type="button" class="mp-marketplace-choice"
+                    data-catalog-marketplace="all"
+                    :aria-pressed="!filters.marketplace"
+                    @click="setMarketplace('')">Все площадки</button>
+            <button type="button" class="mp-marketplace-choice mp-marketplace-choice--wb"
+                    data-catalog-marketplace="wb"
+                    :aria-pressed="filters.marketplace === 'wb'"
+                    @click="setMarketplace('wb')">WB</button>
+            <button v-if="ozonEnabled" type="button" class="mp-marketplace-choice mp-marketplace-choice--ozon"
+                    data-catalog-marketplace="ozon"
+                    :aria-pressed="filters.marketplace === 'ozon'"
+                    @click="setMarketplace('ozon')">Ozon</button>
+        </div>
+        <select v-model="filters.marketplace_state" class="mp-select mp-select--marketplace-state"
+                data-catalog-marketplace-status aria-label="Статус карточек">
+            <option value="">Любой статус</option>
+            <option value="active">На площадке</option>
+            <option value="preparation">В подготовке</option>
+            <option value="attention">Требуют внимания</option>
+        </select>
         <select v-model="filters.supplier" class="mp-select" aria-label="Поставщик">
             <option value="">Все поставщики</option>
             <option v-for="s in suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
@@ -344,6 +354,23 @@
             <option value="price_desc">Дороже</option>
             <option value="title">По названию</option>
         </select>
+        <details v-if="filters.marketplace !== 'ozon'" class="mp-extra-filters" data-catalog-extra-filters>
+            <summary>
+                <span>Статус WB</span>
+                <span v-if="selectedWbStatusLabel" class="mp-extra-filter-current">{{ selectedWbStatusLabel }}</span>
+            </summary>
+            <div class="mp-extra-filter-body">
+                <select data-catalog-wb-status
+                        :value="activeTab === 'updates' ? '' : activeTab"
+                        aria-label="Статус карточки WB"
+                        @change="setWbStatus($event.target.value)">
+                    <option value="">Любой статус</option>
+                    <option v-for="filter in wbStatusFilters" :key="filter.key" :value="filter.key">
+                        {{ filter.label }}<template v-if="facets[filter.countKey] !== undefined"> ({{ $fmt.int(facets[filter.countKey]) }})</template>
+                    </option>
+                </select>
+            </div>
+        </details>
     </sh-filter-bar>
 
     <section v-if="selectionReviewActive" class="mp-selection-review" data-selection-review
@@ -775,5 +802,5 @@
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261122-ozon-update-return-r56') }}"></script>
 <script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261123-unified-catalog-prices-r63b') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-workspace-selection-r70') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-unified-marketplace-filters-r71') }}"></script>
 {% endblock %}

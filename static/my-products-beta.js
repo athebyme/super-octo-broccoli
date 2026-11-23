@@ -234,6 +234,7 @@
     var WORKSPACE_RETURN_SCOPE_KEYS = [
         'activeTab', 'search', 'supplier', 'has_photos', 'stock', 'sort', 'visibleCount',
     ];
+    var WORKSPACE_RETURN_SCOPE_OPTIONAL_KEYS = ['marketplace', 'marketplace_state'];
     function validWbCreateIds(ids, allowEmpty) {
         return Array.isArray(ids) && (allowEmpty || ids.length > 0) && ids.length <= MAX_BULK_SELECTION &&
             ids.every(function (id) { return Number.isSafeInteger(id) && id > 0; }) &&
@@ -1080,31 +1081,41 @@
         return text.length > 160 ? text.slice(0, 157) + '…' : text;
     }
 
-    var TABS = [
-        { key: '', label: 'Все', countKey: 'all' },
-        { key: 'pending', label: 'В работе', countKey: 'pending' },
-        { key: 'validated', label: 'Готовы к WB', countKey: 'validated' },
-        { key: 'imported', label: 'На WB', countKey: 'imported' },
+    var WB_STATUS_FILTERS = [
+        { key: 'pending', label: 'Ожидают проверки', countKey: 'pending' },
+        { key: 'validated', label: 'Готовы к отправке в WB', countKey: 'validated' },
+        { key: 'imported', label: 'Переданы в WB', countKey: 'imported' },
         { key: 'imported_pending_sync', label: 'Ждут артикул WB', countKey: 'imported_pending_sync' },
-        { key: 'failed', label: 'Ошибки', countKey: 'failed' },
-        { key: 'updates', label: 'Обновления поставщика', countKey: 'supplier_updates' },
+        { key: 'failed', label: 'Не удалось подготовить', countKey: 'failed' },
     ];
 
     function validWorkspaceReturnScope(scope) {
         if (!scope || typeof scope !== 'object' || Array.isArray(scope)) return false;
         var keys = Object.keys(scope).sort();
         var expectedKeys = WORKSPACE_RETURN_SCOPE_KEYS.slice().sort();
-        if (keys.length !== expectedKeys.length ||
-            !keys.every(function (key, index) { return key === expectedKeys[index]; })) return false;
+        var allowedKeys = WORKSPACE_RETURN_SCOPE_KEYS.concat(WORKSPACE_RETURN_SCOPE_OPTIONAL_KEYS);
+        if (keys.length < expectedKeys.length || keys.length > allowedKeys.length ||
+            !expectedKeys.every(function (key) { return keys.indexOf(key) !== -1; }) ||
+            !keys.every(function (key) { return allowedKeys.indexOf(key) !== -1; })) return false;
         var supplierIsActive = scope.supplier === '' || (
             Number.isSafeInteger(scope.supplier) && scope.supplier > 0 &&
             Array.isArray(boot.suppliers) && boot.suppliers.some(function (supplier) {
                 return supplier && supplier.id === scope.supplier;
             })
         );
-        return TABS.some(function (tab) { return tab.key === scope.activeTab; }) &&
+        var marketplaceValid = !Object.prototype.hasOwnProperty.call(scope, 'marketplace') ||
+            scope.marketplace === 'wb' ||
+            (scope.marketplace === 'ozon' && boot.ozonEnabled === true);
+        var marketplaceStateValid = !Object.prototype.hasOwnProperty.call(scope, 'marketplace_state') ||
+            ['active', 'preparation', 'attention'].indexOf(scope.marketplace_state) !== -1;
+        var activeTabValid = scope.activeTab === '' || scope.activeTab === 'updates' ||
+            WB_STATUS_FILTERS.some(function (filter) { return filter.key === scope.activeTab; });
+        var marketplaceStatusCompatible = scope.marketplace !== 'ozon' ||
+            scope.activeTab === '' || scope.activeTab === 'updates';
+        return activeTabValid && marketplaceStatusCompatible &&
             typeof scope.search === 'string' && scope.search.length <= 200 &&
             scope.search.trim() === scope.search && supplierIsActive &&
+            marketplaceValid && marketplaceStateValid &&
             ['', 'yes', 'no'].indexOf(scope.has_photos) !== -1 &&
             ['', 'in_stock', 'out_of_stock'].indexOf(scope.stock) !== -1 &&
             ['', 'oldest', 'price_asc', 'price_desc', 'title'].indexOf(scope.sort) !== -1 &&
@@ -1114,7 +1125,9 @@
 
     function defaultWorkspaceReturnScope(scope) {
         return scope.activeTab === '' && scope.search === '' && scope.supplier === '' &&
-            scope.has_photos === '' && scope.stock === '' && scope.sort === '';
+            scope.has_photos === '' && scope.stock === '' && scope.sort === '' &&
+            !Object.prototype.hasOwnProperty.call(scope, 'marketplace') &&
+            !Object.prototype.hasOwnProperty.call(scope, 'marketplace_state');
     }
 
     function commonContentSelectionUrl(base, productIds, helpers) {
@@ -1245,6 +1258,10 @@
                     has_photos: workspaceReturnScopeSeed ? workspaceReturnScopeSeed.has_photos : '',
                     stock: workspaceReturnScopeSeed ? workspaceReturnScopeSeed.stock : '',
                     sort: workspaceReturnScopeSeed ? workspaceReturnScopeSeed.sort : '',
+                    marketplace: workspaceReturnScopeSeed && workspaceReturnScopeSeed.marketplace
+                        ? workspaceReturnScopeSeed.marketplace : '',
+                    marketplace_state: workspaceReturnScopeSeed && workspaceReturnScopeSeed.marketplace_state
+                        ? workspaceReturnScopeSeed.marketplace_state : '',
                 },
                 selected: [],
                 selectionReviewActive: false,
@@ -1296,7 +1313,7 @@
                 ozonWorkspaceUpdateBusy: false,
                 ozonWorkspaceUpdateDialogError: '',
                 imgFailed: {},
-                tabs: TABS,
+                wbStatusFilters: WB_STATUS_FILTERS,
 
                 job: null,
                 jobTitle: 'Выполняем',
@@ -1314,8 +1331,10 @@
         },
 
         computed: {
-            statusTabs: function () {
-                return this.tabs.filter(function (tab) { return tab.key !== 'updates'; });
+            selectedWbStatusLabel: function () {
+                var selected = this.activeTab === 'updates' ? '' : this.activeTab;
+                var option = WB_STATUS_FILTERS.find(function (filter) { return filter.key === selected; });
+                return option ? option.label : '';
             },
             supplierUpdatesEntryAriaLabel: function () {
                 if (this.selected.length) {
@@ -1796,8 +1815,9 @@
                         action: 'none',
                     };
                 }
-                if (this.filters.search || this.filters.supplier
-                    || this.filters.has_photos || this.filters.stock) {
+                if (this.filters.search || this.filters.supplier || this.filters.has_photos ||
+                    this.filters.stock || this.filters.sort || this.filters.marketplace ||
+                    this.filters.marketplace_state || (this.activeTab && this.activeTab !== 'updates')) {
                     return {
                         title: 'По этим условиям товаров нет',
                         text: 'Попробуйте убрать часть фильтров.',
@@ -2179,7 +2199,10 @@
                 this.importBatchSelectionPending = true;
                 this.activeTab = '';
                 this.searchInput = '';
-                this.filters = { search: '', supplier: '', has_photos: '', stock: '', sort: '' };
+                this.filters = {
+                    search: '', supplier: '', has_photos: '', stock: '', sort: '',
+                    marketplace: '', marketplace_state: '',
+                };
                 this.selected = [];
                 this.error = '';
                 this.load();
@@ -2218,7 +2241,10 @@
                 this.selected = [];
                 this.activeTab = '';
                 this.searchInput = '';
-                this.filters = { search: '', supplier: '', has_photos: '', stock: '', sort: '' };
+                this.filters = {
+                    search: '', supplier: '', has_photos: '', stock: '', sort: '',
+                    marketplace: '', marketplace_state: '',
+                };
                 this.error = '';
                 // Replacing filters triggers the deep watcher, which performs
                 // the one ordinary feed read after the signed batch is cleared.
@@ -2609,7 +2635,10 @@
                 this.supplierRefreshSelectPending = true;
                 this.activeTab = '';
                 this.searchInput = '';
-                this.filters = { search: '', supplier: '', has_photos: '', stock: '', sort: '' };
+                this.filters = {
+                    search: '', supplier: '', has_photos: '', stock: '', sort: '',
+                    marketplace: '', marketplace_state: '',
+                };
                 this.error = '';
                 this.load();
                 return true;
@@ -2630,6 +2659,10 @@
                     page: page || 1,
                     per_page: perPage || 50,
                 };
+                if (this.filters.marketplace) params.marketplace = this.filters.marketplace;
+                if (this.filters.marketplace_state) {
+                    params.marketplace_state = this.filters.marketplace_state;
+                }
                 if (this.activeTab === 'updates') params.updates = '1';
                 else if (this.activeTab) params.status = this.activeTab;
                 return params;
@@ -2689,6 +2722,8 @@
                         this.filters.has_photos === scope.has_photos &&
                         this.filters.stock === scope.stock &&
                         this.filters.sort === scope.sort &&
+                        (this.filters.marketplace || '') === (scope.marketplace || '') &&
+                        (this.filters.marketplace_state || '') === (scope.marketplace_state || '') &&
                         (this.searchInput || '').trim().slice(0, 200) === scope.search;
             },
             workspaceReturnScopeIsCurrent: function (scope) {
@@ -2696,16 +2731,14 @@
                     this.itemsScope !== this.feedScopeKey() ||
                     (this.searchInput || '').trim().slice(0, 200) !== this.filters.search ||
                     !validWorkspaceReturnScope(scope)) return false;
-                var current = {
-                    activeTab: this.activeTab,
-                    search: this.filters.search,
-                    supplier: this.filters.supplier,
-                    has_photos: this.filters.has_photos,
-                    stock: this.filters.stock,
-                    sort: this.filters.sort,
-                    visibleCount: Math.min(this.items.length, MAX_BULK_SELECTION),
-                };
-                return JSON.stringify(current) === JSON.stringify(scope) &&
+                var current = this.buildWorkspaceReturnScope();
+                var currentKeys = current ? Object.keys(current).sort() : [];
+                var expectedKeys = Object.keys(scope).sort();
+                var sameScope = !!current && currentKeys.length === expectedKeys.length &&
+                    currentKeys.every(function (key, index) {
+                        return key === expectedKeys[index] && current[key] === scope[key];
+                    });
+                return sameScope &&
                     (!this.importBatchMode || defaultWorkspaceReturnScope(scope));
             },
             workspaceReturnWbEditMatches: function (items, selectionIds) {
@@ -2758,6 +2791,10 @@
                     sort: this.filters.sort,
                     visibleCount: visibleCount,
                 };
+                if (this.filters.marketplace) scope.marketplace = this.filters.marketplace;
+                if (this.filters.marketplace_state) {
+                    scope.marketplace_state = this.filters.marketplace_state;
+                }
                 return validWorkspaceReturnScope(scope) &&
                     (!this.importBatchMode || defaultWorkspaceReturnScope(scope)) ? scope : null;
             },
@@ -3395,9 +3432,30 @@
             },
             setTab: function (key) {
                 if (this.importBatchMode || this.supplierRefreshBatchMode) return;
-                if (this.activeTab === key) return;
+                if (['', 'updates'].indexOf(key) === -1 || this.activeTab === key) return;
                 this.activeTab = key;
                 this.load();
+            },
+            setMarketplace: function (marketplace) {
+                if (this.importBatchMode || this.supplierRefreshBatchMode ||
+                    ['', 'wb', 'ozon'].indexOf(marketplace) === -1 ||
+                    (marketplace === 'ozon' && !this.ozonEnabled)) return false;
+                this.filters.marketplace = marketplace;
+                if (marketplace === 'ozon' && this.activeTab !== 'updates' && this.activeTab) {
+                    this.activeTab = '';
+                }
+                return true;
+            },
+            setWbStatus: function (status) {
+                if (this.importBatchMode || this.supplierRefreshBatchMode ||
+                    this.filters.marketplace === 'ozon' ||
+                    !['', 'pending', 'validated', 'imported', 'imported_pending_sync', 'failed'].includes(status)) {
+                    return false;
+                }
+                if (status) this.activeTab = status;
+                else if (this.activeTab !== 'updates') this.activeTab = '';
+                this.load();
+                return true;
             },
             toggleSupplierUpdates: function () {
                 if (this.importBatchMode || this.supplierRefreshBatchMode ||
@@ -3415,11 +3473,12 @@
             },
             resetFilters: function () {
                 if (this.importBatchMode || this.supplierRefreshBatchMode) return;
+                this.activeTab = '';
                 this.searchInput = '';
-                this.filters.search = '';
-                this.filters.supplier = '';
-                this.filters.has_photos = '';
-                this.filters.stock = '';
+                this.filters = {
+                    search: '', supplier: '', has_photos: '', stock: '', sort: '',
+                    marketplace: '', marketplace_state: '',
+                };
             },
             toggleAll: function () {
                 if (this.selectionReviewActive || this.loading || this.loadingMore ||
