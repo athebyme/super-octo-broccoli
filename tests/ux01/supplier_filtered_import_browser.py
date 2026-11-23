@@ -483,6 +483,7 @@ def run():
     wb_create_result_reads = []
     product_feed_reads = []
     facet_reads = []
+    category_reads = []
     document_requests = []
     job_status_reads = []
     page_errors = []
@@ -559,6 +560,29 @@ def run():
                     response = route.fetch(max_redirects=0)
                 except Exception:
                     raise AssertionError("local product facets request failed") from None
+                if response.status >= 400:
+                    fixture.REPORT["unexpected_http"].append({
+                        "path": parsed.path, "status": response.status,
+                    })
+                route.fulfill(response=response)
+                return
+            if parsed.path == "/api/my-products/categories":
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                try:
+                    response = route.fetch(max_redirects=0)
+                except Exception:
+                    raise AssertionError("local product category options request failed") from None
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = None
+                category_reads.append({
+                    "sequence": next_event(),
+                    "query_keys": tuple(sorted(query)),
+                    "pages": tuple(query.get("page", [])),
+                    "status": response.status,
+                    "payload": payload,
+                })
                 if response.status >= 400:
                     fixture.REPORT["unexpected_http"].append({
                         "path": parsed.path, "status": response.status,
@@ -1019,6 +1043,7 @@ def run():
                 "has_next": False,
             }
             assert facet_reads == [], "batch view must not request global facets"
+            assert category_reads == [], "exact batch view must not request category options"
             checks.append("modern_redirect_loads_exactly_50_persisted_seller_owned_rows_without_facets")
 
             page.get_by_role("checkbox", name="Выбрать товары из импорта").check()
@@ -1096,6 +1121,7 @@ def run():
             assert {item.get("id") for item in reloaded_items if isinstance(item, dict)} == persisted_product_ids
             assert reloaded_payload.get("pagination") == pagination
             assert facet_reads == []
+            assert category_reads == [], "reloaded exact batch must not request category options"
             page.set_viewport_size({"width": 320, "height": 900})
             dimensions = page.evaluate("""() => ({
                 scroll: document.documentElement.scrollWidth,
@@ -1108,7 +1134,9 @@ def run():
             page.screenshot(path=REPORT_PATH.parent / screenshot_name, animations="disabled")
             feeds_before_workspace_switch = len(product_feed_reads)
             facets_before_workspace_switch = len(facet_reads)
+            categories_before_workspace_switch = len(category_reads)
             documents_before_workspace_switch = len(document_requests)
+            assert categories_before_workspace_switch == 0
             with page.expect_response(
                 lambda response: urlsplit(response.url).path == "/api/my-products"
                 and response.request.method == "GET"
@@ -1118,14 +1146,26 @@ def run():
                 and "supplier_refresh_batch" not in parse_qs(
                     urlsplit(response.url).query, keep_blank_values=True,
                 ),
-            ) as full_workspace_response:
+            ) as full_workspace_response, page.expect_response(
+                lambda response: urlsplit(response.url).path == "/api/my-products/categories"
+                and response.request.method == "GET"
+                and parse_qs(
+                    urlsplit(response.url).query, keep_blank_values=True,
+                ) == {"page": ["1"]},
+            ) as category_options_response:
                 page.get_by_role("button", name="Все мои товары", exact=True).click()
             assert full_workspace_response.value.status == 200
+            assert category_options_response.value.status == 200
             page.wait_for_function("""() => {
                 const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
                 return proxy && !proxy.loading && !proxy.importBatchMode &&
                     !proxy.supplierRefreshBatchMode && Array.isArray(proxy.items) &&
                     proxy.items.length > 0 && proxy.pagination.total > 0;
+            }""")
+            page.wait_for_function("""() => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                return proxy && !proxy.catalogCategoriesLoading &&
+                    proxy.catalogCategoriesPage === 1;
             }""")
             normal_location = page.evaluate("() => ({path: location.pathname, search: location.search})")
             assert normal_location["path"] == "/my-products/beta"
@@ -1138,6 +1178,44 @@ def run():
             assert len(product_feed_reads) == feeds_before_workspace_switch + 1, (
                 "workspace switch must perform one ordinary product feed read",
             )
+            assert len(category_reads) == categories_before_workspace_switch + 1, (
+                "workspace switch must request the first category options page once",
+            )
+            first_category_read = category_reads[-1]
+            assert first_category_read["query_keys"] == ("page",)
+            assert first_category_read["pages"] == ("1",)
+            assert first_category_read["status"] == 200
+            first_category_payload = first_category_read["payload"]
+            assert isinstance(first_category_payload, dict)
+            assert first_category_payload.get("success") is True
+            assert first_category_payload.get("page") == 1
+            assert isinstance(first_category_payload.get("options"), list)
+            expected_category = "Synthetic WB category"
+            batch_category_labels = {
+                item.get("category") for item in reloaded_items
+                if isinstance(item, dict) and isinstance(item.get("category"), str)
+            }
+            assert expected_category in batch_category_labels, (
+                "the exact imported batch should retain its fixture category",
+                batch_category_labels,
+            )
+            assert any(
+                option.get("key") == "label:" + expected_category and
+                option.get("label") == expected_category
+                for option in first_category_payload["options"]
+                if isinstance(option, dict)
+            )
+            rendered_category_options = page.locator(
+                "[data-catalog-category] option",
+            ).evaluate_all("""options => options.map(option => ({
+                value: option.value,
+                label: option.textContent.trim(),
+            }))""")
+            assert any(
+                option["value"] == "label:" + expected_category and
+                option["label"] == expected_category
+                for option in rendered_category_options
+            ), "the imported category must be present in the visible category selector"
             full_workspace_read = product_feed_reads[-1]
             assert full_workspace_read["query_keys"] == ("page", "per_page"), (
                 "the default workspace omits empty filters from its feed URL",
@@ -1187,6 +1265,9 @@ def run():
             assert full_workspace_state["pagination"]["total"] == len(all_workspace_product_ids)
             assert len(facet_reads) == facets_before_workspace_switch + 1
             assert len(posts) == 1 and fixture.REPORT["provider_attempts"] == 0
+            checks.append(
+                "batch_reload_skips_category_options_then_same_document_exit_loads_page_one"
+            )
             checks.append(
                 "batch_reload_keeps_exact_50_then_same_document_exit_loads_full_workspace_at_320px"
             )
