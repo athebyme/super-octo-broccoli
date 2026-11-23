@@ -45,7 +45,7 @@
             <p class="sh-page-subtitle">{{ run.account_label or ('Магазин #' ~ run.account_id) }}{% if local_only %} · Подготовка не отправляет данные в Ozon. Готовые карточки можно проверить и отправить отдельно, не дожидаясь остальных.{% endif %}</p>
         </div>
         <div class="sh-page-actions">
-            {% if local_only and run.status != 'running' and repair_drafts.ids %}
+            {% if local_only and source_prepare_complete and repair_drafts.ids %}
             <a class="sh-btn sh-btn--primary sh-btn--md" data-source-prepare-repair
                href="{{ url_for('ozon_bulk_uploads.repair_editor', job_uid=run.job_uid) }}">
                 Изменить черновики
@@ -92,9 +92,16 @@
     {% set result_config = {'kind': 'run', 'initial': run, 'url': url_for('ozon_bulk_uploads.detail_api', job_uid=run.job_uid)} %}
     {% endif %}
     {% include 'partials/ozon_result_status.html' %}
-    <div{% if local_only %} data-source-prepare-region="body" data-source-prepare-job="{{ run.job_uid }}" data-source-prepare-account="{{ run.account_id }}" data-source-prepare-complete="{{ '1' if source_prepare_complete else '0' }}"{% endif %}>
+    {% if local_only %}<div data-source-prepare-region="body" data-source-prepare-job="{{ run.job_uid }}" data-source-prepare-account="{{ run.account_id }}" data-source-prepare-complete="{{ '1' if source_prepare_complete else '0' }}">{% endif %}
+    {% if local_only and source_prepare_complete %}
+    {% set result_next_action = 'Локальная подготовка завершилась без отправки; исправьте нужные черновики, затем проверьте версии перед отправкой.' %}
+    {% elif local_only %}
+    {% set result_next_action = 'Подготовка ещё выполняется; дождитесь сохранённого результата.' %}
+    {% else %}
+    {% set result_next_action = 'Сверьте статус каждой строки и связанной операции; неопределённый итог сначала читают, не повторяют.' %}
+    {% endif %}
     {% set result_journey %}
-    {{ preparation_journey('result', run.account_label or ('Магазин #' ~ run.account_id), 'запуск ' ~ run.mode ~ ' · ' ~ run.job_uid, ('Локальная подготовка завершилась без отправки; исправьте нужные черновики, затем проверьте версии перед отправкой.' if local_only else 'Сверьте статус каждой строки и связанной операции; неопределённый итог сначала читают, не повторяют.'), internal_url=(url_for('seller_my_products_beta', account_id=run.account_id) if local_only else url_for('seller_my_products', account_id=run.account_id)), draft_url=url_for('marketplace_drafts.index', account_id=run.account_id), review_url=url_for('ozon_bulk_uploads.review', account_id=run.account_id, draft_ids=review_drafts.ids|join(','), parent_prepare_job_uid=run.job_uid) if local_only and review_drafts.ids else false, result_url=url_for('ozon_bulk_uploads.index', account_id=run.account_id), listing_url=url_for('marketplace_listings.index', marketplace='ozon', account_id=run.account_id), channel='Ozon', include_stylesheet=not local_only) }}
+    {{ preparation_journey('result', run.account_label or ('Магазин #' ~ run.account_id), 'запуск ' ~ run.mode ~ ' · ' ~ run.job_uid, result_next_action, internal_url=(url_for('seller_my_products_beta', account_id=run.account_id) if local_only else url_for('seller_my_products', account_id=run.account_id)), draft_url=url_for('marketplace_drafts.index', account_id=run.account_id), review_url=url_for('ozon_bulk_uploads.review', account_id=run.account_id, draft_ids=review_drafts.ids|join(','), parent_prepare_job_uid=run.job_uid) if local_only and review_drafts.ids else false, result_url=url_for('ozon_bulk_uploads.index', account_id=run.account_id), listing_url=url_for('marketplace_listings.index', marketplace='ozon', account_id=run.account_id), channel='Ozon', include_stylesheet=not local_only) }}
     {% endset %}
     {% if local_only %}{{ result_journey }}{% endif %}
     <div class="sh-card p-5" {% if not local_only %}data-reviewed-result-summary{% endif %}>
@@ -116,7 +123,7 @@
         </div>
         {% if local_only %}
         <p class="mt-4 text-sm" style="color:var(--text-secondary)">Откройте проверку, исправьте нужные черновики и отдельно подтвердите отправку выбранных версий.</p>
-        {% if run.mode == 'source_prepare' and run.status == 'completed' and prepare_retry_count > 0 and prepare_retry_request_key|default('', true) %}
+        {% if run.mode == 'source_prepare' and source_prepare_complete and prepare_retry_count > 0 and prepare_retry_request_key|default('', true) %}
         <form class="mt-5 border-t pt-4" style="border-color:var(--border)"
               data-source-prepare-retry
               method="post" action="{{ url_for('ozon_bulk_uploads.retry', job_uid=run.job_uid) }}">
@@ -139,7 +146,6 @@
         {% elif summary.status_counts.uncertain %}
         <p class="mt-4 text-sm" style="color:var(--text-secondary)">Откройте связанную операцию, чтобы узнать состояние карточки с неизвестным результатом.</p>
         {% endif %}
-    </div>
     <div class="mt-5 space-y-3">
         {% set phase_labels = {
             'pending':'Ждёт подготовки','preparing':'Готовим локально','waiting_reference':'Ждём справочник',
@@ -174,7 +180,7 @@
         {% endfor %}
     </div>
     {% if not local_only %}<div class="mt-6" data-reviewed-result-guide>{{ result_journey }}</div>{% endif %}
-    </div>
+    {% if local_only %}</div>{% endif %}
     {% if run['mode'] == 'source_prepare' %}
     <script type="application/json" id="ozon-prepare-workspace-return">{{ {
         'workspaceUrl': url_for('seller_my_products_beta'),
