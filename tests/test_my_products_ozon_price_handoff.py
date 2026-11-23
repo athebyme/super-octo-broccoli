@@ -19,6 +19,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
 let component;
 const assigned = [];
 const storedPriceReturns = [];
+const boundPriceReturns = [];
 const returnNonce = '0123456789abcdef0123456789abcdef';
 let returnStorageAvailable = true;
 const location = {
@@ -33,6 +34,10 @@ const context = {
       storeWorkspaceReturn(payload) {
         storedPriceReturns.push(payload);
         return returnStorageAvailable ? returnNonce : null;
+      },
+      bindPriceWorkspaceResult(hash, payload) {
+        boundPriceReturns.push({hash, payload: plain(payload)});
+        return hash;
       },
     },
     shVue: {
@@ -156,7 +161,11 @@ const bothShops = [
 const choicesApp = makeApp(bothShops, accounts);
 const choices = choicesApp.resolveOzonPriceAccountChoices(bothShops, [101, 102]);
 assert.equal(choices.reason, null);
-assert.deepEqual(JSON.parse(JSON.stringify(choices.choices)), [
+assert.deepEqual(JSON.parse(JSON.stringify(choices.choices.map(choice => ({
+  account_id: choice.account_id,
+  account_label: choice.account_label,
+  listing_ids: choice.listing_ids,
+})))), [
   {account_id: 11, account_label: 'Shop A', listing_ids: [1001, 1002]},
   {account_id: 12, account_label: 'Shop B', listing_ids: [2001, 2002]},
 ]);
@@ -264,22 +273,143 @@ const partial = [
   product(102, [listing(2002, 12)]),
 ];
 const partialResult = makeApp(partial, accounts).resolveOzonPriceAccountChoices(partial, [101, 102]);
-assert.deepEqual(JSON.parse(JSON.stringify(partialResult.choices)), [
+assert.deepEqual(JSON.parse(JSON.stringify(partialResult.choices.map(choice => ({
+  account_id: choice.account_id,
+  account_label: choice.account_label,
+  listing_ids: choice.listing_ids,
+})))), [
+  {account_id: 11, account_label: 'Shop A', listing_ids: [1001]},
   {account_id: 12, account_label: 'Shop B', listing_ids: [2001, 2002]},
 ]);
+assert.equal(partialResult.partial, true,
+  'a covering group and an eligible partial group are both presented');
+
+// When one shop covers all products and another covers a subset, both appear
+// and even the full set requires an explicit choice.
+assigned.length = 0;
+const fullAndPartialApp = makeApp(partial, accounts);
+fullAndPartialApp.startAction({key: 'ozon_prices'});
+assert.equal(assigned.length, 0);
+assert.equal(fullAndPartialApp.$refs.ozonPriceAccountDialog.open, true);
+assert.deepEqual(plain(fullAndPartialApp.ozonPriceHandoffReview.choices.map(choice => choice.partial)),
+  [true, false]);
+fullAndPartialApp.ozonPriceAccountId = '12';
+fullAndPartialApp.continueOzonPriceHandoff();
+assertHandoffUrl(12, [2001, 2002]);
+assert.equal(Object.hasOwn(storedPriceReturns.at(-1), 'actionSelectionIds'), false,
+  'the full account choice keeps the legacy exact-set capsule shape');
+
+// Inline price review and save remain bound to the exact selected subset and
+// full original selection; a changed excluded mapping blocks the save receipt.
+assigned.length = 0;
+const inlineItems = [product(101, [listing(1001, 11)]), product(102, [listing(2002, 12)])];
+const inlinePartial = makeApp(inlineItems, [accounts[0]]);
+inlinePartial.priceWorkspaceDialogAvailable = true;
+inlinePartial.priceWorkspaceDialogOpen = false;
+inlinePartial.startAction({key: 'ozon_prices'});
+inlinePartial.ozonPriceAccountId = '11';
+inlinePartial.continueOzonPriceHandoff();
+assert.equal(inlinePartial.priceWorkspaceDialogOpen, true);
+assert.deepEqual(plain(inlinePartial.priceWorkspaceLaunch.localSelectionIds), [101]);
+assert.deepEqual(plain(inlinePartial.priceWorkspaceLaunch.selectionIds), [101, 102]);
+assert.deepEqual(plain(inlinePartial.priceWorkspaceLaunch.productIds), [1001]);
+const inlineHref = '/marketplaces/commercial/?account_id=11';
+assert.equal(inlinePartial.handlePriceWorkspaceSaved({
+  marketplace: 'ozon', accountId: 11, selectedCount: 1, savedCount: 1,
+  proposalIds: [901], reviewUrl: inlineHref, destination: {href: inlineHref},
+}), true);
+assert.deepEqual(plain(storedPriceReturns.at(-1).selectionIds), [101, 102]);
+assert.deepEqual(plain(storedPriceReturns.at(-1).actionSelectionIds), [101]);
+assert.deepEqual(plain(boundPriceReturns.at(-1).payload.actionSelectionIds), [101]);
+
+const staleInline = makeApp(inlineItems.map(row => product(row.id, row.ozon.listings.slice())), [accounts[0]]);
+staleInline.priceWorkspaceDialogAvailable = true;
+staleInline.priceWorkspaceDialogOpen = false;
+staleInline.startAction({key: 'ozon_prices'});
+staleInline.ozonPriceAccountId = '11';
+staleInline.continueOzonPriceHandoff();
+staleInline.items[1].ozon.listings.push(listing(1002, 11));
+assert.equal(staleInline.handlePriceWorkspaceSaved({
+  marketplace: 'ozon', accountId: 11, selectedCount: 1, savedCount: 1,
+  proposalIds: [902], reviewUrl: inlineHref, destination: {href: inlineHref},
+}), false, 'the inline save receipt is rejected if the chosen group changes');
 const noCommon = [
   product(101, [listing(1001, 11)]),
   product(102, [listing(2002, 12)]),
 ];
+const onePartialApp = makeApp([
+  product(91, [listing(1091, 11)]),
+  product(92, []),
+], [accounts[0]]);
+onePartialApp.startAction({key: 'ozon_prices'});
+assert.equal(onePartialApp.ozonPriceHandoffReview.choices.length, 1);
+assert.equal(onePartialApp.ozonPriceHandoffReview.choices[0].partial, true);
+assert.equal(onePartialApp.$refs.ozonPriceAccountDialog.open, true,
+  'a single partial group still asks for an explicit Continue');
 assigned.length = 0;
 const noCommonApp = makeApp(noCommon, accounts);
 const unavailablePrices = component.computed.bulkIntentGroups.call(noCommonApp)
   .find(group => group.key === 'prices');
-assert.equal(unavailablePrices.actions.length, 0,
-  'Ozon price handoff is unavailable unless one shop has every exact linked card');
+assert.ok(unavailablePrices.actions.some(action => action.key === 'ozon_prices'),
+  'a safe partial account group remains available');
 noCommonApp.startAction({key: 'ozon_prices'});
 assert.equal(assigned.length, 0);
-assert.match(noCommonApp.ozonPriceError, /Не найден один магазин Ozon/);
+assert.equal(noCommonApp.ozonPriceHandoffReview.partial, true);
+assert.equal(noCommonApp.$refs.ozonPriceAccountDialog.open, true,
+  'one or more partial groups always require an explicit account choice');
+assert.deepEqual(plain(noCommonApp.ozonPriceHandoffReview.choices.map(choice => ({
+  account_id: choice.account_id,
+  source_ids: choice.source_ids,
+  listing_ids: choice.listing_ids,
+  eligible_count: choice.eligible_count,
+  total_count: choice.total_count,
+  excluded_rows: choice.excluded_rows.map(row => ({id: row.id, reason: row.reason})),
+}))), [
+  {account_id: 11, source_ids: [101], listing_ids: [1001], eligible_count: 1, total_count: 2,
+    excluded_rows: [{id: 102, reason: 'Нет связанной карточки в магазине'}]},
+  {account_id: 12, source_ids: [102], listing_ids: [2002], eligible_count: 1, total_count: 2,
+    excluded_rows: [{id: 101, reason: 'Нет связанной карточки в магазине'}]},
+]);
+noCommonApp.ozonPriceAccountId = '11';
+noCommonApp.continueOzonPriceHandoff();
+assertHandoffUrl(11, [1001]);
+assert.deepEqual(plain(storedPriceReturns.at(-1).selectionIds), [101, 102],
+  'the return capsule retains the full original selection');
+assert.deepEqual(plain(storedPriceReturns.at(-1).actionSelectionIds), [101],
+  'the provider handoff records its exact ordered subset');
+
+// A mixed selection can use a 100-item shop group even when the original
+// global selection has 101 rows. The explicit chooser shows what was excluded.
+assigned.length = 0;
+const mixed101 = Array.from({length: 101}, (_, index) => {
+  const id = index + 1;
+  return product(id, [index < 100 ? listing(id + 1000, 11) : listing(id + 2000, 12)]);
+});
+const mixed101App = makeApp(mixed101, accounts);
+mixed101App.startAction({key: 'ozon_prices'});
+assert.equal(mixed101App.ozonPriceHandoffReview.partial, true);
+assert.deepEqual(plain(mixed101App.ozonPriceHandoffReview.choices[0].source_ids),
+  Array.from({length: 100}, (_, index) => index + 1));
+assert.equal(mixed101App.$refs.ozonPriceAccountDialog.open, true);
+mixed101App.ozonPriceAccountId = '11';
+mixed101App.continueOzonPriceHandoff();
+assertHandoffUrl(11, Array.from({length: 100}, (_, index) => index + 1001));
+assert.equal(storedPriceReturns.at(-1).selectionIds.length, 101);
+assert.equal(storedPriceReturns.at(-1).actionSelectionIds.length, 100);
+
+// A newly eligible selected row invalidates the reviewed subset instead of
+// silently widening the request after the chooser was opened.
+assigned.length = 0;
+const staleMembership = makeApp([
+  product(501, [listing(1501, 11)]),
+  product(502, [listing(2502, 12)]),
+], accounts);
+staleMembership.startAction({key: 'ozon_prices'});
+staleMembership.ozonPriceAccountId = '11';
+staleMembership.items[1].ozon.listings.push(listing(1502, 11));
+staleMembership.continueOzonPriceHandoff();
+assert.equal(assigned.length, 0);
+assert.match(staleMembership.ozonPriceError, /изменились после проверки/);
 
 assert.equal(
   makeApp(bothShops, [{id: 11, label: 'Shop A', connection_status: 'unchecked'}])
@@ -330,6 +460,26 @@ assert.equal(
     .resolveOzonPriceAccountChoices(duplicateTarget, [101, 102]).choices.length,
   0,
 );
+const duplicateAgainstArchived = [
+  product(101, [listing(1001, 11)]),
+  product(102, [listing(1001, 11, {is_archived: true})]),
+];
+assert.equal(
+  makeApp(duplicateAgainstArchived, [accounts[0]])
+    .resolveOzonPriceAccountChoices(duplicateAgainstArchived, [101, 102]).choices.length,
+  0,
+  'an archived selected mapping still reserves its duplicated provider ID',
+);
+const duplicateAgainstAmbiguous = [
+  product(101, [listing(1001, 11)]),
+  product(102, [listing(1001, 11), listing(1002, 11)]),
+];
+assert.equal(
+  makeApp(duplicateAgainstAmbiguous, [accounts[0]])
+    .resolveOzonPriceAccountChoices(duplicateAgainstAmbiguous, [101, 102]).choices.length,
+  0,
+  'an ambiguous selected mapping still reserves its duplicate provider ID',
+);
 assert.equal(
   makeApp(bothShops, accounts)
     .resolveOzonPriceAccountChoices(bothShops, [101]).reason,
@@ -342,7 +492,8 @@ const tooMany = Array.from({length: 101}, (_, index) => {
 assert.equal(
   makeApp(tooMany, [accounts[0]])
     .resolveOzonPriceAccountChoices(tooMany, tooMany.map(row => row.id)).reason,
-  'limit',
+  'no_common_account',
+  'a complete 101-item account group is over the cap and is not truncated',
 );
 """
 

@@ -515,6 +515,21 @@
         });
     }
 
+    function sameOzonChooserChoice(left, right) {
+        if (!left || !right || left.account_id !== right.account_id ||
+            left.partial !== right.partial ||
+            left.eligible_count !== right.eligible_count || left.total_count !== right.total_count ||
+            !sameOrderedIds(left.source_ids, right.source_ids) ||
+            !sameOrderedIds(left.listing_ids, right.listing_ids) ||
+            !Array.isArray(left.excluded_rows) || !Array.isArray(right.excluded_rows) ||
+            left.excluded_rows.length !== right.excluded_rows.length) return false;
+        return left.excluded_rows.every(function (row, index) {
+            var other = right.excluded_rows[index];
+            return !!row && !!other && row.id === other.id &&
+                row.label === other.label && row.reason === other.reason;
+        });
+    }
+
     var SELECTION_REVIEW_RETURN_KEY = 'my-products-selection-review-return-v1';
     function validSelectionReviewIds(ids) {
         return Array.isArray(ids) && ids.length > 0 && ids.length <= MAX_BULK_SELECTION &&
@@ -595,18 +610,23 @@
             sameOrderedIds(data.ids, expectedProductIds);
     }
 
-    function storePriceWorkspaceReturn(app, priceTarget, selectionIds, scope) {
-        if (!scope || !Array.isArray(selectionIds)) return null;
+    function storePriceWorkspaceReturn(app, priceTarget, selectionIds, scope, actionSelectionIds) {
+        if (!scope || !validSelectionReviewIds(selectionIds) ||
+            (actionSelectionIds !== undefined &&
+                (!Array.isArray(actionSelectionIds) || !orderedSubsetIds(actionSelectionIds, selectionIds) ||
+                    actionSelectionIds.length >= selectionIds.length))) return null;
         var helpers = window.SellerHubCommonContent || {};
         if (typeof helpers.storeWorkspaceReturn !== 'function') return null;
         try {
-            var nonce = helpers.storeWorkspaceReturn({
+            var payload = {
                 owner: boot.workspaceOwner,
                 priceTarget: priceTarget,
                 selectionIds: selectionIds.slice(),
                 scope: scope,
                 batch: app.importBatchMode ? app.importBatch : null,
-            });
+            };
+            if (actionSelectionIds !== undefined) payload.actionSelectionIds = actionSelectionIds.slice();
+            var nonce = helpers.storeWorkspaceReturn(payload);
             saveSelectionReviewReturn(app, nonce, selectionIds);
             return nonce;
         } catch (_) {
@@ -660,15 +680,21 @@
         }
     }
 
-    function storeOzonWorkspaceUpdateReturn(app, accountId, listingIds, selectionIds, scope) {
+    function storeOzonWorkspaceUpdateReturn(app, accountId, listingIds, selectionIds, scope, actionSelectionIds) {
         if (!scope || !Number.isSafeInteger(accountId) || accountId <= 0 ||
             !Array.isArray(listingIds) || !Array.isArray(selectionIds) ||
-            listingIds.length !== selectionIds.length || !listingIds.length ||
+            !validSelectionReviewIds(selectionIds) || !listingIds.length ||
             listingIds.length > MAX_BULK_SELECTION) return null;
+        if (actionSelectionIds === undefined) {
+            if (listingIds.length !== selectionIds.length) return null;
+        } else if (!Array.isArray(actionSelectionIds) ||
+            !orderedSubsetIds(actionSelectionIds, selectionIds) ||
+            actionSelectionIds.length >= selectionIds.length ||
+            listingIds.length !== actionSelectionIds.length) return null;
         var helpers = window.SellerHubCommonContent || {};
         if (typeof helpers.storeWorkspaceReturn !== 'function') return null;
         try {
-            var nonce = helpers.storeWorkspaceReturn({
+            var payload = {
                 owner: boot.workspaceOwner,
                 ozonUpdateTarget: {
                     accountId: accountId,
@@ -677,7 +703,9 @@
                 selectionIds: selectionIds.slice(),
                 scope: scope,
                 batch: app.importBatchMode ? app.importBatch : null,
-            });
+            };
+            if (actionSelectionIds !== undefined) payload.actionSelectionIds = actionSelectionIds.slice();
+            var nonce = helpers.storeWorkspaceReturn(payload);
             saveSelectionReviewReturn(app, nonce, selectionIds);
             return workspaceReturnHash(nonce) ? nonce : null;
         } catch (_) {
@@ -788,10 +816,11 @@
         var maxSelection = Number.isSafeInteger(maximum) && maximum > 0
             ? maximum : MAX_OZON_PRICE_HANDOFF;
         if (!Array.isArray(selectionIds) || !selectionIds.length ||
-            selectionIds.length > maxSelection) {
+            selectionIds.length > MAX_BULK_SELECTION) {
             return {
                 choices: [],
-                reason: Array.isArray(selectionIds) && selectionIds.length > maxSelection
+                partial: false,
+                reason: Array.isArray(selectionIds) && selectionIds.length > MAX_BULK_SELECTION
                     ? 'limit' : 'selection',
             };
         }
@@ -813,13 +842,13 @@
             return { choices: [], reason: 'selection' };
         }
 
-        if (!Array.isArray(accounts)) return { choices: [], reason: 'accounts' };
+        if (!Array.isArray(accounts)) return { choices: [], partial: false, reason: 'accounts' };
         var accountIds = new Set();
         var activeAccounts = [];
         for (var a = 0; a < accounts.length; a += 1) {
             var account = accounts[a];
             if (!account || !Number.isSafeInteger(account.id) || account.id <= 0 ||
-                accountIds.has(account.id)) return { choices: [], reason: 'accounts' };
+                accountIds.has(account.id)) return { choices: [], partial: false, reason: 'accounts' };
             accountIds.add(account.id);
             // The page bootstrap is already seller/Ozon/active scoped. Honor
             // explicit status fields too when a newer DTO supplies them.
@@ -830,51 +859,104 @@
                     account.connection_status !== 'connected')) continue;
             activeAccounts.push(account);
         }
-        if (!activeAccounts.length) return { choices: [], reason: 'no_accounts' };
+        if (!activeAccounts.length) return { choices: [], partial: false, reason: 'no_accounts' };
 
         var choices = [];
         activeAccounts.forEach(function (account) {
-            var listingIds = [];
-            var eligible = true;
-            selectionIds.forEach(function (productId) {
-                if (!eligible) return;
+            var evaluations = selectionIds.map(function (productId) {
                 var product = itemsById.get(productId);
                 var listings = product && product.ozon && product.ozon.listings;
                 if (!Array.isArray(listings)) {
-                    eligible = false;
-                    return;
+                    return { productId: productId, candidateIds: [], reason: 'Нет связанной карточки в магазине' };
                 }
                 var accountRows = listings.filter(function (listing) {
                     return listing && listing.account_id === account.id;
                 });
+                if (!accountRows.length) {
+                    return { productId: productId, candidateIds: [], reason: 'Нет связанной карточки в магазине' };
+                }
+                var candidateIds = accountRows.map(function (listing) {
+                    return listing && Number.isSafeInteger(listing.id) && listing.id > 0
+                        ? listing.id : null;
+                }).filter(Boolean);
                 if (accountRows.length !== 1) {
-                    eligible = false;
-                    return;
+                    return {
+                        productId: productId,
+                        candidateIds: candidateIds,
+                        reason: 'Несколько карточек в магазине',
+                    };
                 }
                 var listing = accountRows[0];
-                if (listing.marketplace_code !== 'ozon' ||
-                    listing.link_status !== 'linked' ||
-                    listing.account_is_active !== true ||
-                    listing.is_available !== true ||
-                    listing.is_archived !== false ||
-                    !Number.isSafeInteger(listing.id) || listing.id <= 0) {
-                    eligible = false;
-                    return;
-                }
-                listingIds.push(listing.id);
+                var eligibilityReason = '';
+                if (listing.marketplace_code !== 'ozon') eligibilityReason = 'Не удалось проверить площадку карточки';
+                else if (listing.link_status !== 'linked') eligibilityReason = 'Карточка не связана';
+                else if (listing.account_is_active !== true) eligibilityReason = 'Магазин не активен';
+                else if (listing.is_available !== true) eligibilityReason = 'Карточка недоступна';
+                else if (listing.is_archived !== false) eligibilityReason = 'Карточка в архиве';
+                else if (!candidateIds.length) eligibilityReason = 'Не подтверждён ID карточки';
+                return {
+                    productId: productId,
+                    candidateIds: candidateIds,
+                    listingId: eligibilityReason ? null : listing.id,
+                    reason: eligibilityReason,
+                };
             });
-            if (eligible && listingIds.length === selectionIds.length &&
-                new Set(listingIds).size === listingIds.length) {
-                choices.push({
+
+            // A duplicated provider ID cannot safely identify two distinct
+            // selected products. Exclude every row sharing that ID so the
+            // chooser can explain exactly what was left out.
+            var listingCounts = new Map();
+            evaluations.forEach(function (row) {
+                row.candidateIds.forEach(function (listingId) {
+                    listingCounts.set(listingId, (listingCounts.get(listingId) || 0) + 1);
+                });
+            });
+            evaluations.forEach(function (row) {
+                if (row.listingId && listingCounts.get(row.listingId) > 1) {
+                    row.reason = 'Повторяется ID карточки Ozon';
+                    row.listingId = null;
+                }
+            });
+
+            var sourceIds = [];
+            var listingIds = [];
+            var excludedRows = [];
+            evaluations.forEach(function (row) {
+                if (row.listingId) {
+                    sourceIds.push(row.productId);
+                    listingIds.push(row.listingId);
+                } else {
+                    var product = itemsById.get(row.productId);
+                    excludedRows.push({
+                        id: row.productId,
+                        label: labelProduct(product) || ('Товар #' + row.productId),
+                        reason: row.reason || 'Не удалось проверить карточку',
+                    });
+                }
+            });
+            var choice = {
                     account_id: account.id,
                     account_label: typeof account.label === 'string' ? account.label : '',
                     listing_ids: listingIds,
-                });
+                    source_ids: sourceIds,
+                    eligible_count: sourceIds.length,
+                    total_count: selectionIds.length,
+                    excluded_rows: excludedRows,
+                };
+            if (sourceIds.length === selectionIds.length && sourceIds.length <= maxSelection) {
+                choice.partial = false;
+                choices.push(choice);
+            } else if (sourceIds.length > 0 && sourceIds.length < selectionIds.length &&
+                sourceIds.length <= maxSelection) {
+                choice.partial = true;
+                choices.push(choice);
             }
         });
         return {
             choices: choices,
-            reason: choices.length ? null : 'no_common_account',
+            partial: choices.some(function (choice) { return choice.partial; }),
+            reason: choices.length ? null :
+                selectionIds.length > MAX_BULK_SELECTION ? 'limit' : 'no_common_account',
         };
     }
 
@@ -1696,6 +1778,31 @@
                     !this.selectionReviewLoading && this.itemsScope === this.feedScopeKey() &&
                     (this.searchInput || '').trim().slice(0, 200) === this.filters.search;
             },
+            ozonChooserReview: function () {
+                var review = this.ozonAccountChooserKind === 'workspace_update'
+                    ? this.ozonWorkspaceUpdateReview : this.ozonPriceHandoffReview;
+                if (!review) return null;
+                return Object.assign({}, review, {
+                    total: Number.isSafeInteger(review.total)
+                        ? review.total
+                        : (review.sourceIds || review.imported_product_ids || []).length,
+                    limit: Number.isSafeInteger(review.limit)
+                        ? review.limit
+                        : (this.ozonAccountChooserKind === 'workspace_update'
+                            ? MAX_BULK_SELECTION : MAX_OZON_PRICE_HANDOFF),
+                });
+            },
+            ozonChooserActiveChoice: function () {
+                var review = this.ozonChooserReview;
+                var accountId = Number(this.ozonPriceAccountId);
+                if (!review || !Number.isSafeInteger(accountId) || accountId <= 0) return null;
+                return review.choices.find(function (choice) {
+                    return choice.account_id === accountId;
+                }) || null;
+            },
+            ozonChooserIsPartial: function () {
+                return !!(this.ozonChooserReview && this.ozonChooserReview.partial);
+            },
             bulkIntentVerificationAvailable: function () {
                 return this.selectionRowsVerified || this.selectionReviewAvailable;
             },
@@ -1792,7 +1899,9 @@
                 var ozonPriceResult = exactOzonPriceAccountChoices(
                     chosen, this.selected, this.ozonAccounts,
                 );
-                var ozonPriceHint = ozonPriceResult.reason === 'no_accounts'
+                var ozonPriceHint = ozonPriceResult.partial
+                    ? 'выберите магазин: будут открыты только доступные связанные карточки, остальные останутся отмечены'
+                    : ozonPriceResult.reason === 'no_accounts'
                     ? 'подключите активный магазин Ozon'
                     : ozonPriceResult.reason === 'accounts'
                         ? 'не удалось проверить магазины Ozon; обновите страницу'
@@ -1817,7 +1926,9 @@
                                             ? 'не у всех товаров есть точная доступная карточка в одном магазине Ozon'
                                             : this.ozonWorkspaceUpdateBusy
                                                 ? 'проверяем точный состав выбранных карточек…'
-                                                : ozonUpdateResult.choices.length > 1
+                                                : ozonUpdateResult.partial
+                                                    ? 'выберите магазин и проверьте точный доступный набор; остальные товары останутся отмечены'
+                                                    : ozonUpdateResult.choices.length > 1
                                                     ? 'выберите магазин, где связаны все карточки'
                                                     : 'сначала проверим выбранные карточки; применение подтвердите отдельно';
                 var ozonUpdateDisabled = !chosen.length || !underLimit || !workspaceCurrent ||
@@ -1922,7 +2033,9 @@
                             key: 'ozon_prices',
                             label: 'Изменить цены Ozon',
                             hint: ozonPriceResult.choices.length
-                                ? 'откроется сравнение и ценовые заявки для одного магазина со всеми выбранными карточками'
+                                ? ozonPriceResult.partial
+                                    ? ozonPriceHint
+                                    : 'откроется сравнение и ценовые заявки для одного магазина со всеми выбранными карточками'
                                 : ozonPriceHint,
                             disabled: !chosen.length || !ozonPriceResult.choices.length,
                         } : null,
@@ -1964,7 +2077,7 @@
                         emptyHint: this.selected.length > MAX_BULK_SELECTION
                             ? 'За один раз можно выбрать не больше 200 товаров.'
                             : this.selected.length > MAX_OZON_PRICE_HANDOFF
-                                ? 'Для Ozon доступно до 100 товаров; для WB нужны карточки с точной связью.'
+                                ? 'Для Ozon нужны точные карточки одного магазина в пределах 100; остальные отметки сохранятся.'
                                 : 'Нужны связанные карточки WB или доступный набор в одном магазине Ozon.',
                     },
                     {
@@ -2673,7 +2786,7 @@
                     this._feedRevision !== launch.feedRevision || this.feedScopeKey() !== launch.scopeKey ||
                     this.itemsScope !== launch.scopeKey ||
                     (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) return false;
-                if (launch.source === 'bulk' && (!sameOrderedIds(this.selected, launch.localSelectionIds) ||
+                if (launch.source === 'bulk' && (!sameOrderedIds(this.selected, launch.selectionIds) ||
                     !workspaceReturnScopeMatchesCurrent(this, launch.returnScope))) return false;
                 if (launch.source === 'row' && launch.localSelectionIds.length !== 1) return false;
                 var sourceItems = this.priceWorkspaceItemsBySelection(launch.localSelectionIds);
@@ -2684,25 +2797,42 @@
                         sameOrderedIds(orderedWbProductIds(sourceItems, launch.localSelectionIds), launch.productIds);
                 }
                 if (launch.marketplace !== 'ozon') return false;
-                var accountResult = this.resolveOzonPriceAccountChoices(sourceItems, launch.localSelectionIds);
+                var allItems = this.priceWorkspaceItemsBySelection(launch.selectionIds);
+                if (!allItems) return false;
+                var accountResult = this.resolveOzonPriceAccountChoices(allItems, launch.selectionIds);
                 var freshChoice = accountResult.choices.find(function (choice) {
                     return choice.account_id === launch.accountId;
                 });
-                return !!freshChoice && sameOrderedIds(freshChoice.listing_ids, launch.productIds);
+                return !!freshChoice && freshChoice.partial === !!launch.actionSelectionIds &&
+                    sameOrderedIds(freshChoice.source_ids, launch.localSelectionIds) &&
+                    sameOrderedIds(freshChoice.listing_ids, launch.productIds) &&
+                    sameOzonChooserChoice(freshChoice, launch.choiceSnapshot);
             },
             openPriceWorkspaceDialog: function (marketplace, localSelectionIds, options) {
                 options = options || {};
                 if (!this.priceWorkspaceDialogAvailable) return false;
                 if (this.priceWorkspaceDialogOpen) return false;
                 var source = options.source === 'row' ? 'row' : 'bulk';
+                var selectionIds = Array.isArray(options.selectionIds)
+                    ? options.selectionIds.slice() : localSelectionIds;
+                var hasActionSelectionIds = Object.prototype.hasOwnProperty.call(options, 'actionSelectionIds');
+                var actionSelectionIds = hasActionSelectionIds && Array.isArray(options.actionSelectionIds)
+                    ? options.actionSelectionIds.slice() : null;
+                var expectedLocalIds = actionSelectionIds || selectionIds;
                 if (this.loading || this.loadingMore || this.selectAllLoading ||
                     this.itemsScope !== this.feedScopeKey() ||
                     (this.searchInput || '').trim().slice(0, 200) !== this.filters.search ||
                     !Array.isArray(localSelectionIds) || !localSelectionIds.length ||
                     new Set(localSelectionIds).size !== localSelectionIds.length ||
+                    !validSelectionReviewIds(selectionIds) ||
+                    !sameOrderedIds(localSelectionIds, expectedLocalIds) ||
+                    (hasActionSelectionIds && (!actionSelectionIds ||
+                        actionSelectionIds.length >= selectionIds.length ||
+                        !orderedSubsetIds(actionSelectionIds, selectionIds))) ||
                     (source === 'bulk' && (!this.selectionRowsVerified ||
-                        !sameOrderedIds(this.selected, localSelectionIds))) ||
-                    (source === 'row' && localSelectionIds.length !== 1)) {
+                        !sameOrderedIds(this.selected, selectionIds))) ||
+                    (source === 'row' && (localSelectionIds.length !== 1 ||
+                        !sameOrderedIds(localSelectionIds, selectionIds) || hasActionSelectionIds))) {
                     this.error = 'Список или выбор изменился. Обновите список и отметьте товары заново.';
                     return false;
                 }
@@ -2724,11 +2854,16 @@
                     accountLabel = 'Wildberries';
                 } else if (marketplace === 'ozon') {
                     var choice = options.choice;
-                    var choices = this.resolveOzonPriceAccountChoices(sourceItems, localSelectionIds).choices;
-                    var freshChoice = choice && choices.find(function (candidate) {
+                    var allItems = this.priceWorkspaceItemsBySelection(selectionIds);
+                    var accountResult = allItems
+                        ? this.resolveOzonPriceAccountChoices(allItems, selectionIds)
+                        : { choices: [], partial: false };
+                    var freshChoice = choice && accountResult.choices.find(function (candidate) {
                         return candidate.account_id === choice.account_id;
                     });
-                    if (!freshChoice || !sameOrderedIds(freshChoice.listing_ids, choice.listing_ids)) {
+                    if (!freshChoice || freshChoice.partial !== hasActionSelectionIds ||
+                        !sameOzonChooserChoice(freshChoice, choice) ||
+                        !sameOrderedIds(freshChoice.source_ids, localSelectionIds)) {
                         this.error = 'Связанные карточки Ozon изменились. Обновите список и повторите действие.';
                         return false;
                     }
@@ -2736,6 +2871,10 @@
                     accountId = freshChoice.account_id;
                     accountLabel = freshChoice.account_label || ('Магазин № ' + accountId);
                 } else {
+                    return false;
+                }
+                if (marketplace === 'wb' && !sameOrderedIds(localSelectionIds, selectionIds)) {
+                    this.error = 'Измените набор WB целиком, затем повторите действие.';
                     return false;
                 }
                 var returnScope = source === 'bulk' ? this.buildWorkspaceReturnScope() : null;
@@ -2758,6 +2897,7 @@
                     source: source,
                     marketplace: marketplace,
                     localSelectionIds: localSelectionIds.slice(),
+                    selectionIds: selectionIds.slice(),
                     productIds: productIds.slice(),
                     accountId: accountId,
                     accountLabel: accountLabel,
@@ -2767,6 +2907,14 @@
                     returnScope: returnScope,
                     priceTarget: {channel: marketplace, ids: productIds.slice(), accountId: accountId},
                 };
+                if (hasActionSelectionIds) launch.actionSelectionIds = actionSelectionIds.slice();
+                if (marketplace === 'ozon') launch.choiceSnapshot = Object.assign({}, options.choice, {
+                    source_ids: options.choice.source_ids.slice(),
+                    listing_ids: options.choice.listing_ids.slice(),
+                    excluded_rows: options.choice.excluded_rows.map(function (row) {
+                        return {id: row.id, label: row.label, reason: row.reason};
+                    }),
+                });
                 if (!this.priceWorkspaceLaunchIsCurrent(launch)) {
                     this.error = 'Состав выбора или связь с маркетплейсом изменилась. Обновите список и повторите действие.';
                     return false;
@@ -2841,7 +2989,8 @@
                     };
                 }
                 var nonce = storePriceWorkspaceReturn(
-                    this, launch.priceTarget, launch.localSelectionIds, launch.returnScope,
+                    this, launch.priceTarget, launch.selectionIds, launch.returnScope,
+                    launch.actionSelectionIds,
                 );
                 var hash = workspaceReturnHash(nonce);
                 var helpers = window.SellerHubCommonContent || {};
@@ -2851,11 +3000,13 @@
                 }
                 var bound = '';
                 try {
-                    bound = helpers.bindPriceWorkspaceResult(hash, {
+                    var bindPayload = {
                         owner: this.workspaceOwner,
                         priceTarget: launch.priceTarget,
                         priceResult: priceResult,
-                    });
+                    };
+                    if (launch.actionSelectionIds) bindPayload.actionSelectionIds = launch.actionSelectionIds.slice();
+                    bound = helpers.bindPriceWorkspaceResult(hash, bindPayload);
                 } catch (_) {}
                 if (bound !== hash) {
                     this.consumeWorkspaceReturn(nonce);
@@ -2874,7 +3025,8 @@
                 var nonce = null;
                 if (launch.source === 'bulk' && launch.returnScope) {
                     nonce = storePriceWorkspaceReturn(
-                        this, launch.priceTarget, launch.localSelectionIds, launch.returnScope,
+                        this, launch.priceTarget, launch.selectionIds, launch.returnScope,
+                        launch.actionSelectionIds,
                     );
                 }
                 var hash = workspaceReturnHash(nonce);
@@ -2954,7 +3106,7 @@
                 }
                 if (group.actions.length === 1) {
                     var directKey = group.actions[0].key;
-                    var returnFocus = ['ozon', 'wb_prices', 'ozon_prices', 'common_content'].includes(directKey)
+                    var returnFocus = ['ozon', 'wb_prices', 'ozon_prices', 'ozon_workspace_update', 'common_content'].includes(directKey)
                         ? trigger : null;
                     this.closeBulkActionPanel(false);
                     return this.startAction(group.actions[0], returnFocus);
@@ -2969,7 +3121,7 @@
             },
             runBulkIntentAction: function (action, event) {
                 var key = action && action.key;
-                var returnFocus = ['wb_prices', 'ozon_prices', 'common_content'].includes(key)
+                var returnFocus = ['wb_prices', 'ozon_prices', 'ozon_workspace_update', 'common_content'].includes(key)
                     ? this._bulkActionTrigger || (event && event.currentTarget)
                     : key === 'ozon'
                         ? (event && event.currentTarget) || this._bulkActionTrigger : null;
@@ -3175,11 +3327,39 @@
                 var choice = result.choices.find(function (row) {
                     return row.account_id === target.accountId;
                 });
-                return !!choice && sameOrderedIds(choice.listing_ids, target.listingIds);
+                var hasActionSelection = Object.prototype.hasOwnProperty.call(capsule, 'actionSelectionIds');
+                var expectedSourceIds = hasActionSelection ? capsule.actionSelectionIds : selectionIds;
+                return !!choice && choice.partial === hasActionSelection &&
+                    sameOrderedIds(choice.source_ids, expectedSourceIds) &&
+                    sameOrderedIds(choice.listing_ids, target.listingIds);
+            },
+            workspaceReturnOzonPriceMatches: function (items, selectionIds) {
+                var capsule = workspaceReturnCapsule;
+                if (!capsule || (capsule.v !== 2 && capsule.v !== 3) ||
+                    !capsule.priceTarget || capsule.priceTarget.channel !== 'ozon') return true;
+                if (!Object.prototype.hasOwnProperty.call(capsule, 'actionSelectionIds')) return true;
+                var target = capsule.priceTarget;
+                var feedIds = orderedProductIds(items);
+                if (!sameOrderedIds(selectionIds, capsule.selectionIds) || !feedIds) return false;
+                var itemsById = new Map((items || []).map(function (item) {
+                    return [item.id, item];
+                }));
+                var selectedItems = selectionIds.map(function (id) { return itemsById.get(id); });
+                if (selectedItems.some(function (item) { return !item; })) return false;
+                var result = exactOzonPriceAccountChoices(selectedItems, selectionIds, this.ozonAccounts);
+                var choice = result.choices.find(function (row) {
+                    return row.account_id === target.accountId;
+                });
+                var hasActionSelection = Object.prototype.hasOwnProperty.call(capsule, 'actionSelectionIds');
+                var expectedSourceIds = hasActionSelection ? capsule.actionSelectionIds : selectionIds;
+                return !!choice && choice.partial === hasActionSelection &&
+                    sameOrderedIds(choice.source_ids, expectedSourceIds) &&
+                    sameOrderedIds(choice.listing_ids, target.ids);
             },
             workspaceReturnSelectionMatches: function (items, selectionIds) {
                 return this.workspaceReturnWbEditMatches(items, selectionIds) &&
-                    this.workspaceReturnOzonUpdateMatches(items, selectionIds);
+                    this.workspaceReturnOzonUpdateMatches(items, selectionIds) &&
+                    this.workspaceReturnOzonPriceMatches(items, selectionIds);
             },
             buildWorkspaceReturnScope: function () {
                 if (this.loading || this.itemsScope !== this.feedScopeKey() ||
@@ -4411,7 +4591,7 @@
                     this.$refs.ozonPriceError?.focus();
                 });
             },
-            openOzonWorkspaceUpdate: function (items, selectionIds) {
+            openOzonWorkspaceUpdate: function (items, selectionIds, returnFocus) {
                 this.error = '';
                 this.ozonWorkspaceUpdateDialogError = '';
                 if (this.ozonWorkspaceUpdateBusy) return false;
@@ -4444,12 +4624,17 @@
                 }
                 var review = {
                     sourceIds: selectionIds.slice(),
+                    total: selectionIds.length,
+                    limit: MAX_BULK_SELECTION,
+                    partial: result.partial,
                     choices: result.choices.map(function (choice) {
-                        return {
-                            account_id: choice.account_id,
-                            account_label: choice.account_label,
+                        return Object.assign({}, choice, {
                             listing_ids: choice.listing_ids.slice(),
-                        };
+                            source_ids: choice.source_ids.slice(),
+                            excluded_rows: choice.excluded_rows.map(function (row) {
+                                return {id: row.id, label: row.label, reason: row.reason};
+                            }),
+                        });
                     }),
                     scopeKey: this.feedScopeKey(),
                     feedRevision: this._feedRevision || 0,
@@ -4457,10 +4642,10 @@
                 };
                 this.ozonWorkspaceUpdateReview = review;
                 this.ozonAccountChooserKind = 'workspace_update';
-                if (review.choices.length === 1) {
+                if (review.choices.length === 1 && !review.choices[0].partial) {
                     return this.submitOzonWorkspaceUpdate(review.choices[0].account_id, review);
                 }
-                this._ozonPriceTrigger = document.activeElement;
+                this._ozonPriceTrigger = returnFocus || document.activeElement;
                 this.ozonPriceAccountId = '';
                 this.$nextTick(function () {
                     this.$refs.ozonPriceAccountDialog.showModal();
@@ -4481,7 +4666,7 @@
                     if (options.restoreFocus !== false) this._ozonPriceTrigger?.focus();
                 }
             },
-            ozonWorkspaceUpdateReviewIsCurrent: function (review, accountId, expectedListingIds) {
+            ozonWorkspaceUpdateReviewIsCurrent: function (review, accountId, expectedListingIds, expectedSourceIds) {
                 if (!review || (this._feedRevision || 0) !== review.feedRevision ||
                     this.loading || this.loadingMore || this.selectAllLoading ||
                     this.feedScopeKey() !== review.scopeKey || this.itemsScope !== review.scopeKey ||
@@ -4500,8 +4685,9 @@
                     return choice.account_id === accountId;
                 });
                 return !!freshChoice && !!reviewedChoice &&
-                    sameOrderedIds(freshChoice.listing_ids, reviewedChoice.listing_ids) &&
-                    (!expectedListingIds || sameOrderedIds(freshChoice.listing_ids, expectedListingIds));
+                    sameOzonChooserChoice(freshChoice, reviewedChoice) &&
+                    (!expectedListingIds || sameOrderedIds(freshChoice.listing_ids, expectedListingIds)) &&
+                    (!expectedSourceIds || sameOrderedIds(freshChoice.source_ids, expectedSourceIds));
             },
             submitOzonWorkspaceUpdate: function (accountId, review) {
                 review = review || this.ozonWorkspaceUpdateReview;
@@ -4514,10 +4700,12 @@
                     return candidate.account_id === accountId;
                 });
                 if (!choice || this.ozonWorkspaceUpdateBusy) return false;
-                var sourceIds = review.sourceIds.slice();
+                var sourceIds = choice.source_ids.slice();
+                var fullSelectionIds = review.sourceIds.slice();
                 var listingIds = choice.listing_ids.slice();
                 var returnNonce = storeOzonWorkspaceUpdateReturn(
-                    this, accountId, listingIds, sourceIds, review.returnScope,
+                    this, accountId, listingIds, fullSelectionIds, review.returnScope,
+                    choice.partial ? sourceIds : undefined,
                 );
                 var returnTo = wbWorkspaceReturnUrl(this, returnNonce);
                 if (!returnTo || !this.urls.ozonWorkspaceUpdateHandoff) {
@@ -4529,7 +4717,9 @@
 
                 this.cancelOzonWorkspaceUpdateReview({ restoreFocus: false });
                 var handoff = {
-                    selectionIds: sourceIds,
+                    selectionIds: fullSelectionIds,
+                    sourceIds: sourceIds,
+                    actionSelectionIds: choice.partial ? sourceIds.slice() : null,
                     listingIds: listingIds,
                     accountId: accountId,
                     scopeKey: review.scopeKey,
@@ -4555,7 +4745,7 @@
                 var self = this;
                 return Promise.resolve(request).then(function (data) {
                     if (!self.ozonWorkspaceUpdateReviewIsCurrent(
-                        review, handoff.accountId, handoff.listingIds,
+                        review, handoff.accountId, handoff.listingIds, handoff.sourceIds,
                     ) || self._ozonWorkspaceUpdateHandoff !== handoff ||
                         handoff.abort.signal.aborted) {
                         self.invalidateOzonWorkspaceUpdate(handoff);
@@ -4576,7 +4766,7 @@
                     return true;
                 }).catch(function (err) {
                     if (!self.ozonWorkspaceUpdateReviewIsCurrent(
-                        review, handoff.accountId, handoff.listingIds,
+                        review, handoff.accountId, handoff.listingIds, handoff.sourceIds,
                     ) || self._ozonWorkspaceUpdateHandoff !== handoff ||
                         handoff.abort.signal.aborted) {
                         self.invalidateOzonWorkspaceUpdate(handoff);
@@ -4623,7 +4813,7 @@
                 var result = this.resolveOzonPriceAccountChoices(sourceItems, selectionIds);
                 if (!result.choices.length) {
                     var message = result.reason === 'limit'
-                        ? 'За одно сравнение Ozon можно выбрать не больше 100 товаров.'
+                        ? 'За один запуск можно выбрать не больше 200 товаров.'
                         : result.reason === 'no_accounts'
                             ? 'Нет активного магазина Ozon. Подключите магазин или откройте «Ценовые заявки Ozon».'
                             : result.reason === 'selection'
@@ -4636,21 +4826,26 @@
                 }
                 var review = {
                     imported_product_ids: selectionIds.slice(),
+                    total: selectionIds.length,
+                    limit: MAX_OZON_PRICE_HANDOFF,
+                    partial: result.partial,
                     source: source,
                     scopeKey: this.feedScopeKey(),
                     feedRevision: this._feedRevision,
                     returnScope: source === 'bulk' ? this.buildWorkspaceReturnScope() : null,
                     returnFocus: options.returnFocus || document.activeElement,
                     choices: result.choices.map(function (choice) {
-                        return {
-                            account_id: choice.account_id,
-                            account_label: choice.account_label,
+                        return Object.assign({}, choice, {
                             listing_ids: choice.listing_ids.slice(),
-                        };
+                            source_ids: choice.source_ids.slice(),
+                            excluded_rows: choice.excluded_rows.map(function (row) {
+                                return {id: row.id, label: row.label, reason: row.reason};
+                            }),
+                        });
                     }),
                 };
                 this.ozonPriceHandoffReview = review;
-                if (review.choices.length === 1) {
+                if (review.choices.length === 1 && !review.choices[0].partial) {
                     this.navigateOzonPriceHandoff(review.choices[0].account_id, review);
                     return;
                 }
@@ -4736,7 +4931,7 @@
                     return choice.account_id === accountId;
                 });
                 if (!freshChoice || !reviewedChoice ||
-                    !sameOrderedIds(freshChoice.listing_ids, reviewedChoice.listing_ids)) {
+                    !sameOzonChooserChoice(freshChoice, reviewedChoice)) {
                     this.closeOzonPriceHandoff();
                     this.setOzonPriceHandoffError(
                         'Связанные карточки изменились после проверки. Обновите список и повторите действие.'
@@ -4745,18 +4940,22 @@
                 }
                 if (this.priceWorkspaceDialogAvailable) {
                     this.closeOzonPriceHandoff({restoreFocus: false});
-                    return this.openPriceWorkspaceDialog('ozon', review.imported_product_ids, {
+                    var priceOptions = {
                         source: review.source,
                         returnFocus: review.returnFocus,
                         choice: freshChoice,
-                    });
+                        selectionIds: review.imported_product_ids.slice(),
+                    };
+                    if (freshChoice.partial) priceOptions.actionSelectionIds = freshChoice.source_ids.slice();
+                    return this.openPriceWorkspaceDialog('ozon', freshChoice.source_ids, priceOptions);
                 }
                 var returnScope = review.returnScope;
                 var returnNonce = storePriceWorkspaceReturn(this, {
                     channel: 'ozon',
                     ids: freshChoice.listing_ids.slice(),
                     accountId: accountId,
-                }, review.imported_product_ids, returnScope);
+                }, review.imported_product_ids, returnScope,
+                freshChoice.partial ? freshChoice.source_ids : undefined);
                 try {
                     if (typeof this.urls.ozonCommercial !== 'string' ||
                         !this.urls.ozonCommercial) throw new Error('missing URL');
@@ -4937,13 +5136,13 @@
                         this.error = 'Для изменения карточек Ozon выберите от 1 до 200 товаров.';
                         return;
                     }
-                    this.openOzonWorkspaceUpdate(chosen, selectionIds);
+                    this.openOzonWorkspaceUpdate(chosen, selectionIds, returnFocus);
                     return;
                 }
                 if (action.key === 'ozon_prices') {
-                    if (selectionIds.length > MAX_OZON_PRICE_HANDOFF) {
+                    if (selectionIds.length > MAX_BULK_SELECTION) {
                         this.setOzonPriceHandoffError(
-                            'За одно сравнение Ozon можно выбрать не больше 100 товаров.'
+                            'За один запуск можно выбрать не больше 200 товаров.'
                         );
                         return;
                     }

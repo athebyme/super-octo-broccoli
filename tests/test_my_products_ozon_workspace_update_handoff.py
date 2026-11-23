@@ -207,15 +207,91 @@ function assertSafeTarget(accountId, token = 'signed.update.token') {
   await longTokenApp.openOzonWorkspaceUpdate(longTokenApp.selectedItems, longTokenApp.selected);
   assertSafeTarget(11, longToken);
 
-  // No whole account and over-limit selections remain disabled with a reason.
+  // Partial account groups are offered with exact counts and remain an
+  // explicit choice even when only one group could be used.
   const mixed = makeApp([
     product(1, [listing(101, 11)]),
     product(2, [listing(202, 12)]),
   ], accounts);
   const mixedAction = mixed.actionGroups.flatMap(group => group.items)
     .find(action => action.key === 'ozon_workspace_update');
-  assert.equal(mixedAction.disabled, true);
-  assert.match(mixedAction.hint, /одном магазине Ozon/);
+  assert.equal(mixedAction.disabled, false);
+  assert.equal(mixed.openOzonWorkspaceUpdate(mixed.selectedItems, mixed.selected), true);
+  assert.equal(mixed.ozonWorkspaceUpdateReview.partial, true);
+  assert.equal(mixed.ozonWorkspaceUpdateReview.total, 2);
+  assert.deepEqual(plain(mixed.ozonWorkspaceUpdateReview.choices.map(choice => [
+    choice.account_id, choice.eligible_count, choice.total_count, choice.excluded_rows[0].id,
+  ])), [[11, 1, 2, 2], [12, 1, 2, 1]]);
+  assert.equal(mixed.$refs.ozonPriceAccountDialog.open, true);
+  const onePartial = makeApp([
+    product(5, [listing(105, 11)]),
+    product(6, []),
+  ], [accounts[0]]);
+  assert.equal(onePartial.openOzonWorkspaceUpdate(onePartial.selectedItems, onePartial.selected), true);
+  assert.equal(onePartial.ozonWorkspaceUpdateReview.choices.length, 1);
+  assert.equal(onePartial.ozonWorkspaceUpdateReview.choices[0].partial, true);
+  assert.equal(onePartial.$refs.ozonPriceAccountDialog.open, true,
+    'one partial account still requires an explicit Continue');
+  const fullAndPartial = makeApp([
+    product(7, [listing(107, 11), listing(207, 12)]),
+    product(8, [listing(208, 12)]),
+  ], accounts);
+  assert.equal(fullAndPartial.openOzonWorkspaceUpdate(
+    fullAndPartial.selectedItems, fullAndPartial.selected,
+  ), true);
+  assert.deepEqual(plain(fullAndPartial.ozonWorkspaceUpdateReview.choices.map(choice => choice.partial)),
+    [true, false], 'a full shop and a partial shop both appear in account order');
+  assert.equal(fullAndPartial.$refs.ozonPriceAccountDialog.open, true);
+  const focusTrigger = {count: 0, focus() { this.count += 1; }};
+  const focusApp = makeApp([
+    product(3, [listing(103, 11)]),
+    product(4, [listing(204, 12)]),
+  ], accounts);
+  focusApp.openOzonWorkspaceUpdate(focusApp.selectedItems, focusApp.selected, focusTrigger);
+  focusApp.cancelOzonWorkspaceUpdateReview();
+  assert.equal(focusTrigger.count, 1,
+    'closing the partial chooser returns keyboard focus to the bulk toolbar trigger');
+
+  // The existing-card POST and return capsule carry the exact chosen subset,
+  // while the original full global selection stays checked.
+  requests.length = 0;
+  assigned.length = 0;
+  stored.length = 0;
+  const partial = makeApp([
+    product(11, [listing(111, 11)]),
+    product(12, [listing(212, 12)]),
+    product(13, [listing(113, 11)]),
+  ], accounts, {batch: 'signed-import-batch'});
+  assert.equal(partial.openOzonWorkspaceUpdate(partial.selectedItems, partial.selected), true);
+  partial.ozonPriceAccountId = '11';
+  postHandler = () => Promise.resolve({success: true,
+    url: '/marketplaces/listings/?marketplace=ozon&account_id=11&workspace_update=1#workspace-update=partial.token'});
+  await partial.continueOzonPriceHandoff();
+  assert.deepEqual(requests.at(-1).body.source_ids, [11, 13]);
+  assert.deepEqual(requests.at(-1).body.listing_ids, [111, 113]);
+  assert.deepEqual(stored.at(-1).selectionIds, [11, 12, 13]);
+  assert.deepEqual(stored.at(-1).actionSelectionIds, [11, 13]);
+  assert.deepEqual(partial.selected, [11, 12, 13]);
+  assertSafeTarget(11, 'partial.token');
+
+  // A row becoming eligible after review invalidates the partial group. It
+  // cannot be silently widened at the explicit Continue step.
+  requests.length = 0;
+  assigned.length = 0;
+  const staleMembership = makeApp([
+    product(21, [listing(121, 11)]),
+    product(22, [listing(222, 12)]),
+  ], accounts);
+  assert.equal(staleMembership.openOzonWorkspaceUpdate(
+    staleMembership.selectedItems, staleMembership.selected,
+  ), true);
+  staleMembership.ozonPriceAccountId = '11';
+  staleMembership.items[1].ozon.listings.push(listing(122, 11));
+  assert.equal(await staleMembership.continueOzonPriceHandoff(), false);
+  assert.equal(requests.length, 0);
+  assert.equal(assigned.length, 0);
+
+  // A complete 201-item group still exceeds the existing global bulk limit.
   const tooManyRows = Array.from({length: 201}, (_, index) => {
     const id = index + 1;
     return product(id, [listing(id + 1000, 11)]);
@@ -227,7 +303,7 @@ function assertSafeTarget(accountId, token = 'signed.update.token') {
   assert.match(tooManyAction.hint, /не больше 200/);
   assert.equal(tooMany.resolveOzonPriceAccountChoices(
     tooManyRows.slice(0, 101), tooManyRows.slice(0, 101).map(row => row.id),
-  ).reason, 'limit', 'the price resolver keeps its original 100-item cap');
+  ).reason, 'no_common_account', 'an exact 101-item price group is not truncated to 100');
 
   // Browser storage failure still posts a safe batch return URL without a
   // workspace fragment; it never changes the target or drops the batch.
@@ -439,10 +515,10 @@ class MyProductsOzonWorkspaceUpdateHandoffTest(unittest.TestCase):
         self.assertIn("key: 'ozon_workspace_update'", script)
         self.assertIn('сначала проверим выбранные карточки; применение подтвердите отдельно', script)
         self.assertIn("'ozonWorkspaceUpdateHandoff': url_for('marketplace_listings.workspace_update_handoff')", template)
-        self.assertIn('Сначала проверим выбранные карточки; изменения не применятся автоматически.', template)
+        self.assertIn('Переход к редактору не отправит изменения автоматически.', template)
         self.assertIn("workspaceReturnOzonUpdateMatches", script)
         self.assertIn("WORKSPACE_RETURN_V6_CAPSULE_KEYS", helper)
-        self.assertIn("изменения не применятся автоматически.", template)
+        self.assertIn("Изменение цены не начнётся автоматически.", template)
         self.assertIn("'ozonCommercial': url_for('marketplace_commercial.index')", template)
         self.assertIn("label: 'Изменить цены Ozon'", script)
         js_asset = re.search(r"filename='my-products-beta\.js', v='([^']+)'", template)
