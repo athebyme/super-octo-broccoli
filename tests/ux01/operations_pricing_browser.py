@@ -2312,9 +2312,9 @@ def main() -> None:
                             '[data-operations-changed-field="characteristics"]',
                         );
                         const valueLine = (label) => Array.from(diff?.children || [])
-                            .find(node => node.querySelector('span')?.textContent.trim() === label);
+                            .find(node => node.querySelector(':scope > span')?.textContent.trim() === label);
                         const items = label => Array.from(
-                            valueLine(label)?.querySelectorAll('li') || [],
+                            valueLine(label)?.querySelectorAll(':scope > ul > li') || [],
                         ).map(item => item.innerText.trim().replace(/\\s+/g, ' '));
                         return {
                             source_text: (diff?.querySelector('p')?.innerText || '')
@@ -2323,7 +2323,7 @@ def main() -> None:
                             after: items('После:'),
                         };
                     }""", characteristic_product_id)
-                    assert legacy_characteristics == {
+                    expected_legacy_characteristics = {
                         "source_text": (
                             "Подписи без сохранённого названия: По сохранённому "
                             "справочнику WB. Значения взяты из снимка истории."
@@ -2339,6 +2339,12 @@ def main() -> None:
                             "Комплектация: 2 шт.",
                         ],
                     }
+                    assert legacy_characteristics == expected_legacy_characteristics, (
+                        "WB history cached-characteristic DOM values differ from the exact "
+                        f"saved reference at {history_url!r} (viewport=320px, theme={theme!r}): "
+                        f"expected={expected_legacy_characteristics!r}; "
+                        f"actual={legacy_characteristics!r}"
+                    )
                     legacy_characteristic_proofs.append({
                         "theme": theme,
                         "width": 320,
