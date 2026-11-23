@@ -77,7 +77,7 @@ def test_bulk_completed_with_two_errors_is_not_shown_as_success():
 
     assert "Завершено с ошибками" in html
     assert "0 из 2" in html
-    assert "ошибок: 2" in html
+    assert "Ошибок: 2" in html
     assert "Завершено</span>" not in html
     assert "operations-wb-result--dark-hero" not in html
 
@@ -303,8 +303,8 @@ def test_reviewed_batch31_summary_counts_skips_and_uses_changed_denominator():
     assert "4%" not in html
     assert "100%" in html
     assert "Завершено</span>" in html
-    assert "без ошибки обработано 2 из 2" in html
-    assert "ошибок операции: 0" in html
+    assert "Без ошибки обработано 2 из 2" in html
+    assert "Ошибок операции: 0" in html
     assert "успешный результат не подтверждён счётчиками" not in html
     technical_start = html.index("Технические параметры операции")
     details_start = html.rfind("<details", 0, technical_start)
@@ -335,7 +335,7 @@ def test_reviewed_batch31_summary_counts_skips_and_uses_changed_denominator():
     )
     list_html = _render_bulk_history_list(list_operation)
     assert "Завершено</span>" in list_html
-    assert "без ошибки обработано 2 из 2" in list_html
+    assert "Без ошибки обработано 2 из 2" in list_html
     assert "2 из 50" not in list_html
 
 
@@ -379,9 +379,9 @@ def test_reviewed_partial_history_uses_changed_denominator_in_list_and_detail():
 
     for html in (list_html, detail_html):
         assert "Завершено частично" in html
-        assert "без ошибки обработано 1 из 2" in html
-        assert "ошибок операции: 1" in html
-        assert "пропущено 48" in html
+        assert "Без ошибки обработано 1 из 2" in html
+        assert "Ошибок операции: 1" in html
+        assert "Пропущено 48" in html
         assert "1 из 50" not in html
 
 
@@ -838,6 +838,7 @@ def test_review_history_zero_changed_uses_dash_and_bad_summary_falls_back_safely
 
     malformed = _render_bulk_history_detail(
         [],
+        error_count=0,
         total_products=50,
         success_count=2,
         operation_params={
