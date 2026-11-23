@@ -200,7 +200,9 @@ def bridge(route):
                 result=route.fetch(max_redirects=0);body=result.json();body['editor']['account_id']=fixture['foreign_account_id']
                 route.fulfill(status=200,json=body);return
         if u.path.startswith('/api/photos/imported-product/'):
-            parts=u.path.split('/');assert int(parts[-2]) in fixture['repair_sources']
+            parts=u.path.split('/')
+            allowed_sources=set(fixture['repair_sources']) | set(fixture['supplier_source_sources'].values())
+            assert int(parts[-2]) in allowed_sources
             route.fulfill(body=svg,content_type='image/svg+xml');return
         result=route.fetch(max_redirects=0)
         if result.status>=400:report['unexpected_http'].append({'path':u.path,'status':result.status})

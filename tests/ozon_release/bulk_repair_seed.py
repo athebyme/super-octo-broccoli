@@ -171,7 +171,7 @@ def bulk_seed(app):
         # Keep the long-standing 200-row repair job byte-for-byte representative
         # of its original synthetic groups. Supplier evidence gets independent
         # seller-owned drafts that enter through the normal draft selection flow.
-        supplier_source_drafts={}
+        supplier_source_drafts={};supplier_source_sources={}
         for index,source_case in SOURCE_REVIEW_CASES.items():
             kind=kinds[index%len(kinds)]
             external_id='bulk-source-review-'+str(index)
@@ -238,6 +238,8 @@ def bulk_seed(app):
                 )
             db.session.commit()
             supplier_source_drafts[index]=draft.id
+            supplier_source_sources[index]=source.id
         return {**fixture,'repair_job':job.job_uid,'repair_drafts':draft_ids,'repair_sources':sources,
                 'supplier_source_drafts':supplier_source_drafts,
+                'supplier_source_sources':supplier_source_sources,
                 'supplier_source_cases':SOURCE_REVIEW_CASES}
