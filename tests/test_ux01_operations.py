@@ -482,6 +482,8 @@ def test_legacy_completed_null_counters_remain_explicitly_unknown():
 
 
 def test_legacy_completed_counters_above_total_remain_unknown():
+    import re
+
     from services.wb_history_presentation import present_wb_bulk_operation
 
     operation = SimpleNamespace(
@@ -498,6 +500,27 @@ def test_legacy_completed_counters_above_total_remain_unknown():
     assert result["label"] == "Завершено, счётчики результата не согласуются с числом товаров"
     assert "2 из 1" in result["message"]
     assert "Счётчики превышают общее число товаров" in result["message"]
+    assert result["counts"] == {
+        "total_products": 1,
+        "success_count": 2,
+        "error_count": 0,
+    }
+    assert result["legacy_success_ratio_available"] is False
+
+    detail_html = _render_bulk_history_detail(
+        [],
+        total_products=1,
+        success_count=2,
+        error_count=0,
+    )
+    stats = detail_html[
+        detail_html.index('class="operations-stats-grid'):
+        detail_html.index("<!-- Параметры операции -->")
+    ]
+    assert "Без общей ошибки" in stats
+    assert "200%" not in stats
+    compact_stats = re.sub(r"\s+", "", stats)
+    assert '<pclass="text-3xlfont-boldtext-green-700">2</p>' in compact_stats
 
 
 def test_legacy_characteristic_labels_use_only_agreeing_current_wb_cache():

@@ -265,6 +265,14 @@ def present_wb_bulk_operation(operation):
         and _nonnegative_int(getattr(operation, "error_count", None))
         and operation.success_count + operation.error_count == summary["changed"]
     )
+    result["legacy_success_ratio_available"] = bool(
+        summary is None
+        and _nonnegative_int(getattr(operation, "total_products", None))
+        and operation.total_products > 0
+        and _nonnegative_int(getattr(operation, "success_count", None))
+        and _nonnegative_int(getattr(operation, "error_count", None))
+        and operation.success_count + operation.error_count <= operation.total_products
+    )
     result["reverted"] = bool(getattr(operation, "reverted", False))
     result["is_pending"] = status in {"pending", "in_progress"}
     return result

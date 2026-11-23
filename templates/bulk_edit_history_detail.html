@@ -226,7 +226,7 @@
                         {% else %}—{% endif %}
                     {% elif review_summary_valid %}
                         —
-                    {% elif wb_history_presentation.counts.total_products is not none and wb_history_presentation.counts.total_products > 0 and wb_history_presentation.counts.success_count is not none %}
+                    {% elif wb_history_presentation.legacy_success_ratio_available %}
                         {{ "%.0f"|format((wb_history_presentation.counts.success_count / wb_history_presentation.counts.total_products) * 100) }}%
                     {% else %}
                         —
