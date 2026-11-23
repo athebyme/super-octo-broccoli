@@ -4578,14 +4578,20 @@ def run():
                 mixed_browser_post_paths.append(urlsplit(request.url).path)
 
         mixed_page.on("request", record_mixed_local_post)
-        open_products(mixed_page)
+        fixture.wait_document(mixed_page, "ozon_mixed_workspace_scope", "/my-products/beta")
+        mixed_search = mixed_page.get_by_placeholder("Название, бренд или артикул")
+        mixed_search.wait_for(state="visible")
         assert_marketplace_filter(mixed_page, "all")
         with mixed_page.expect_response(lambda response: feed_matches(response, {
                 "search": "R94-MIXED-",
         })) as mixed_feed:
-            mixed_page.get_by_placeholder("Название, бренд или артикул").fill("R94-MIXED-")
+            mixed_search.fill("R94-MIXED-")
         assert mixed_feed.value.status == 200
         assert {item["id"] for item in mixed_feed.value.json()["items"]} == set(mixed_ids)
+        for title in (mixed_fixture["ozon_title"], mixed_fixture["wb_title"]):
+            mixed_page.get_by_role("checkbox", name=f"Выбрать {title}", exact=True).wait_for(
+                state="visible",
+            )
         mixed_rows = mixed_page.evaluate("""ids => {
             const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
             if (!proxy) return null;
@@ -4784,10 +4790,10 @@ def run():
         ) == mixed_ids
         assert mixed_page.locator(
             f'[data-selection-review-row="{mixed_fixture["ozon_source_id"]}"]',
-        ).get_by_text(mixed_fixture["ozon_title"], exact=False).count() == 1
+        ).locator(".mp-title-link").inner_text() == mixed_fixture["ozon_title"]
         assert mixed_page.locator(
             f'[data-selection-review-row="{mixed_fixture["wb_source_id"]}"]',
-        ).get_by_text(mixed_fixture["wb_title"], exact=False).count() == 1
+        ).locator(".mp-title-link").inner_text() == mixed_fixture["wb_title"]
         assert selected_browser_state(mixed_page)["selected"] == mixed_ids
         mixed_scope_state["armed"] = False
 
