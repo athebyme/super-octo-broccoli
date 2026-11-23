@@ -1675,7 +1675,7 @@ def _assert_common_preview_provenance_matches_api(page, payload: dict, product_i
     assert isinstance(item, dict), {"product_id": product_id, "item_count": len(items)}
     source_origins = item.get("source", {}).get("field_origins", {})
     photo_options = page.locator("#common-content-bootstrap").evaluate(
-        "text => JSON.parse(text).products.find(product => product.product_id === " + str(product_id)
+        "element => JSON.parse(element.textContent).products.find(product => product.product_id === " + str(product_id)
         + ").photo_options"
     )
     labels = {
