@@ -430,7 +430,7 @@ class SupplierCSVRefreshRoutesTest(unittest.TestCase):
         page = response.get_data(as_text=True)
         self.assertIn('data-supplier-color-observation-status', page)
         self.assertIn('data-supplier-color-last-attempt', page)
-        self.assertIn('снимок наблюдений сохранён', page)
+        self.assertIn('снимок сохранён', page)
         self.assertIn('data-supplier-color-last-snapshot', page)
         self.assertIn('товаров: 7', page)
         for private_value in (
@@ -466,7 +466,7 @@ class SupplierCSVRefreshRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         page = response.get_data(as_text=True)
         self.assertIn(
-            'Состояние сейчас недоступно; результат не подтверждён.', page,
+            'Состояние проверки пока неизвестно.', page,
         )
         status_panel = page.split(
             'data-supplier-color-observation-status', 1,
