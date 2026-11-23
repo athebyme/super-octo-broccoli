@@ -394,6 +394,8 @@ class MyProductsFeedTest(unittest.TestCase):
         active = imported('ozon-active')
         inactive_account_active_listing = imported('ozon-inactive-account')
         unknown_archived = imported('ozon-unknown-archived')
+        archived_moderation = imported('ozon-archived-moderation')
+        archived_error = imported('ozon-archived-error')
         unavailable = imported('ozon-unavailable')
         moderation = imported('ozon-moderation')
         errored = imported('ozon-error')
@@ -433,6 +435,8 @@ class MyProductsFeedTest(unittest.TestCase):
         listing(active, 'active')
         listing(inactive_account_active_listing, 'active', owner=inactive_account)
         listing(unknown_archived, 'unknown', available=False, archived=True)
+        listing(archived_moderation, 'moderation', archived=True)
+        listing(archived_error, 'error', archived=True)
         listing(unavailable, 'active', available=False)
         listing(moderation, 'moderation')
         listing(errored, 'error')
@@ -461,9 +465,10 @@ class MyProductsFeedTest(unittest.TestCase):
                 empty_filters = self.client.get(
                     '/api/my-products?marketplace=&marketplace_state=',
                 ).get_json()
-                ozon_all = self.client.get(
+                ozon_all_response = self.client.get(
                     '/api/my-products?marketplace=ozon',
-                ).get_json()
+                )
+                ozon_all = ozon_all_response.get_json()
                 ozon_active = self.client.get(
                     '/api/my-products?marketplace=ozon&marketplace_state=active',
                 ).get_json()
@@ -501,11 +506,18 @@ class MyProductsFeedTest(unittest.TestCase):
             return [row['id'] for row in payload['items']]
 
         self.assertEqual(empty_filters, baseline)
-        self.assertEqual(ozon_all['pagination']['total'], 8)
+        cache_directives = {
+            part.strip()
+            for part in ozon_all_response.headers['Cache-Control'].split(',')
+        }
+        self.assertTrue({'private', 'no-store'}.issubset(cache_directives))
+        self.assertEqual(ozon_all_response.headers['Pragma'], 'no-cache')
+        self.assertEqual(ozon_all['pagination']['total'], 10)
         self.assertCountEqual(ids(ozon_all), [
             active.id, inactive_account_active_listing.id,
-            unknown_archived.id, unavailable.id, moderation.id, errored.id,
-            draft_preparation.id, draft_blocked.id,
+            unknown_archived.id, archived_moderation.id, archived_error.id,
+            unavailable.id, moderation.id, errored.id, draft_preparation.id,
+            draft_blocked.id,
         ])
         self.assertNotIn(wrong_account.id, ids(ozon_all))
         self.assertEqual(ids(ozon_active), [active.id])
@@ -513,6 +525,8 @@ class MyProductsFeedTest(unittest.TestCase):
             ids(ozon_preparation), [moderation.id, draft_preparation.id],
         )
         self.assertCountEqual(ids(ozon_attention), [errored.id, draft_blocked.id])
+        self.assertNotIn(archived_moderation.id, ids(ozon_preparation))
+        self.assertNotIn(archived_error.id, ids(ozon_attention))
         self.assertCountEqual(ids(active_union), [self.published_id, active.id])
 
         self.assertEqual(wb_page['pagination']['total'], 5)
@@ -542,6 +556,9 @@ class MyProductsFeedTest(unittest.TestCase):
                 duplicate = self.client.get(
                     '/api/my-products?marketplace=wb&marketplace=ozon',
                 )
+                duplicate_state = self.client.get(
+                    '/api/my-products?marketplace_state=active&marketplace_state=attention',
+                )
                 disabled_ozon = self.client.get(
                     '/api/my-products?marketplace=ozon',
                 )
@@ -557,8 +574,27 @@ class MyProductsFeedTest(unittest.TestCase):
         self.assertEqual(invalid_marketplace.status_code, 400)
         self.assertEqual(invalid_state.status_code, 400)
         self.assertEqual(duplicate.status_code, 400)
+        self.assertEqual(duplicate_state.status_code, 400)
+        self.assertEqual(
+            invalid_marketplace.get_json()['error'], 'Неизвестная площадка',
+        )
+        self.assertEqual(
+            invalid_state.get_json()['error'], 'Неизвестный статус карточек',
+        )
+        self.assertEqual(
+            duplicate.get_json()['error'], 'Площадка указана несколько раз',
+        )
+        self.assertEqual(
+            duplicate_state.get_json()['error'],
+            'Статус карточек указан несколько раз',
+        )
         self.assertEqual(disabled_ozon.status_code, 404)
-        self.assertIn('no-store', disabled_ozon.headers['Cache-Control'])
+        for response in (invalid_marketplace, invalid_state, disabled_ozon):
+            directives = {
+                part.strip()
+                for part in response.headers['Cache-Control'].split(',')
+            }
+            self.assertTrue({'private', 'no-store'}.issubset(directives))
         self.assertEqual(
             [row['id'] for row in wb_state_only.get_json()['items']],
             [self.published_id],

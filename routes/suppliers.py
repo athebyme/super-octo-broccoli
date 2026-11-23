@@ -1387,12 +1387,19 @@ def _bounded_import_batch_template_value():
 
 
 def _no_store_supplier_import_batch_response(response):
-    """Prevent batch selections and their row payloads from entering caches."""
+    """Keep signed batch and marketplace-filter feed responses out of caches."""
     response = make_response(response)
     if 'import_batch' in request.args:
-        response.headers['Cache-Control'] = 'no-store'
-        response.headers['Pragma'] = 'no-cache'
-        response.headers['Expires'] = '0'
+        cache_control = 'no-store'
+    elif request.path == '/api/my-products' and (
+        'marketplace' in request.args or 'marketplace_state' in request.args
+    ):
+        cache_control = 'private, no-store'
+    else:
+        return response
+    response.headers['Cache-Control'] = cache_control
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
     return response
 
 
@@ -4570,8 +4577,12 @@ def register_supplier_routes(app):
         try:
             marketplace_values = request.args.getlist('marketplace')
             marketplace_state_values = request.args.getlist('marketplace_state')
-            if len(marketplace_values) > 1 or len(marketplace_state_values) > 1:
-                raise MyProductsFeedError('Фильтр канала указан несколько раз')
+            if len(marketplace_values) > 1:
+                raise MyProductsFeedError('Площадка указана несколько раз')
+            if len(marketplace_state_values) > 1:
+                raise MyProductsFeedError(
+                    'Статус карточек указан несколько раз'
+                )
             payload = MyProductsFeed.list_products(
                 seller_id=seller.id,
                 status=request.args.get('status') or None,
@@ -4600,7 +4611,10 @@ def register_supplier_routes(app):
                 'error': str(exc),
             }), 404))
         except MyProductsFeedError as exc:
-            return jsonify({'success': False, 'error': str(exc)}), 400
+            return _no_store_supplier_import_batch_response((jsonify({
+                'success': False,
+                'error': str(exc),
+            }), 400))
         return _no_store_supplier_import_batch_response(
             jsonify({'success': True, **payload})
         )

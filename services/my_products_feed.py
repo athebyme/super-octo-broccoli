@@ -148,7 +148,7 @@ class MyProductsFeed:
             raise MyProductsFeedFeatureDisabled('Фильтр Ozon отключён')
 
         query = ImportedProduct.query.filter_by(seller_id=seller_id)
-        if marketplace:
+        if marketplace and not marketplace_state:
             query = query.filter(cls._marketplace_association(
                 seller_id=seller_id,
                 marketplace=marketplace,
@@ -281,7 +281,11 @@ class MyProductsFeed:
         if value in (None, ''):
             return None
         if not isinstance(value, str) or value not in allowed:
-            raise MyProductsFeedError(f'Неизвестный фильтр {name}')
+            message = {
+                'marketplace': 'Неизвестная площадка',
+                'marketplace_state': 'Неизвестный статус карточек',
+            }.get(name, 'Неизвестный фильтр')
+            raise MyProductsFeedError(message)
         return value
 
     @staticmethod
@@ -393,6 +397,7 @@ class MyProductsFeed:
                         MarketplaceListing.normalized_status.in_(
                             ('creating', 'moderation'),
                         ),
+                        MarketplaceListing.is_archived.is_(False),
                     ),
                 ),
                 cls._ozon_draft_exists(
@@ -405,6 +410,7 @@ class MyProductsFeed:
                 seller_id=seller_id,
                 conditions=(
                     MarketplaceListing.normalized_status == 'error',
+                    MarketplaceListing.is_archived.is_(False),
                 ),
             ),
             cls._ozon_draft_exists(
@@ -529,8 +535,6 @@ class MyProductsFeed:
         drafts: Dict[int, List[Dict[str, Any]]] = {}
         listings: Dict[int, List[Dict[str, Any]]] = {}
         if imported_ids:
-            from models import Marketplace
-
             # This projection is specifically Ozon.  Match every channel row
             # to an account owned by this seller and to that same marketplace;
             # a malformed foreign or cross-marketplace account link must not
