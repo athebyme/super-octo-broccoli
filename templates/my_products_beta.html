@@ -7,7 +7,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-supplier-refresh-prepare-r1') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-ozon-mixed-scope-r1') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261123-unified-catalog-prices-r63b') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='common-product-content.css', v='20261123-inline-common-editor-r1') }}">
 
@@ -887,25 +887,71 @@
         </template>
         <div class="mp-ozon-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!ozonBusy" @click="closeOzonDialog">Вернуться</button><button type="button" class="sh-btn sh-btn--primary" data-ozon-preparation-submit :disabled="!ozonAccountId || !!ozonBusy || !!ozonPending || ozonStorageProblem || ozonSessionEnded" @click="prepareOzon">{{ ozonBusy === 'post' ? 'Принимаем…' : 'Подготовить черновики' }}</button></div>
     </dialog>
-    <dialog ref="ozonPriceAccountDialog" class="mp-ozon-dialog"
+    <dialog ref="ozonPriceAccountDialog" class="mp-ozon-dialog mp-ozon-dialog--scope"
+            data-ozon-scope-dialog
             aria-labelledby="mp-ozon-price-dialog-title"
+            aria-describedby="mp-ozon-price-dialog-help"
             @cancel.prevent="closeOzonPriceHandoff">
         <div class="mp-ozon-dialog-head">
             <div><p class="mp-ozon-eyebrow">{{ ozonAccountChooserKind === 'workspace_update' ? 'Ozon · карточки' : 'Ozon · цены' }}</p><h2 id="mp-ozon-price-dialog-title">Выберите магазин</h2></div>
             <button type="button" class="mp-ozon-close" aria-label="Закрыть"
                     @click="closeOzonPriceHandoff">×</button>
         </div>
-        <p v-if="ozonAccountChooserKind === 'workspace_update'">Для всех {{ ozonWorkspaceUpdateReview ? ozonWorkspaceUpdateReview.sourceIds.length : 0 }} товаров подходят несколько магазинов. Сначала проверим выбранные карточки; изменения не применятся автоматически.</p>
-        <p v-else>Для всех {{ ozonPriceHandoffReview ? ozonPriceHandoffReview.imported_product_ids.length : 0 }} товаров подходят несколько магазинов. Откроется сравнение; отправка изменения не начнётся.</p>
+        <p id="mp-ozon-price-dialog-help" v-if="ozonChooserReview && !ozonChooserIsPartial && ozonAccountChooserKind === 'workspace_update'">
+            Для всех {{ ozonChooserReview.total }} выбранных товаров доступны несколько магазинов. Выберите магазин, чтобы проверить карточки; изменения не применятся автоматически.
+        </p>
+        <p id="mp-ozon-price-dialog-help" v-else-if="ozonChooserReview && !ozonChooserIsPartial">
+            Для всех {{ ozonChooserReview.total }} выбранных товаров доступны несколько магазинов. Выберите магазин, чтобы открыть сравнение; отправка изменения не начнётся.
+        </p>
+        <p id="mp-ozon-price-dialog-help" v-else-if="ozonAccountChooserKind === 'workspace_update'">
+            Выберите магазин, чтобы проверить связанные карточки. Переход к редактору не отправит изменения автоматически.
+        </p>
+        <p id="mp-ozon-price-dialog-help" v-else>
+            Выберите магазин, чтобы открыть сравнение цен. Изменение цены не начнётся автоматически.
+        </p>
         <label class="mp-ozon-label" for="mp-ozon-price-account">Магазин Ozon</label>
         <select ref="ozonPriceAccount" id="mp-ozon-price-account" class="sh-input"
                 v-model="ozonPriceAccountId" required>
             <option value="">Выберите магазин</option>
-            <option v-for="choice in (ozonAccountChooserKind === 'workspace_update' ? (ozonWorkspaceUpdateReview ? ozonWorkspaceUpdateReview.choices : []) : (ozonPriceHandoffReview ? ozonPriceHandoffReview.choices : []))"
-                    :key="choice.account_id" :value="String(choice.account_id)">
-                {{ choice.account_label || ('Магазин № ' + choice.account_id) }} · {{ choice.listing_ids.length }} товаров
+            <option v-for="choice in (ozonChooserReview ? ozonChooserReview.choices : [])"
+                    :key="choice.account_id" :value="String(choice.account_id)"
+                    data-ozon-scope-choice>
+                {{ choice.account_label || ('Магазин № ' + choice.account_id) }} ·
+                <template v-if="choice.partial">{{ choice.eligible_count }} из {{ choice.total_count }} выбранных товаров</template>
+                <template v-else>{{ choice.eligible_count }} {{ $fmt.plural(choice.eligible_count, 'товар', 'товара', 'товаров') }}</template>
             </option>
         </select>
+        <section v-if="ozonChooserIsPartial && ozonChooserActiveChoice"
+                 class="mp-ozon-scope-summary" data-ozon-scope-summary role="status" aria-live="polite">
+            <template v-if="ozonChooserActiveChoice.partial">
+                <h3>В это действие войдёт часть выбора</h3>
+                <p>В этом магазине есть карточки для <strong>{{ ozonChooserActiveChoice.eligible_count }} из {{ ozonChooserActiveChoice.total_count }} выбранных товаров.</strong></p>
+                <p>{{ ozonChooserActiveChoice.excluded_rows.length }} {{ $fmt.plural(ozonChooserActiveChoice.excluded_rows.length, 'товар не войдёт', 'товара не войдут', 'товаров не войдут') }} в это действие.</p>
+                <div v-if="ozonChooserActiveChoice.excluded_rows.length" class="mp-ozon-scope-exclusions"
+                     data-ozon-scope-exclusions>
+                    <h4>Исключённые товары</h4>
+                    <ul class="mp-ozon-scope-exclusion-list" tabindex="0">
+                        <li v-for="(excluded, index) in ozonChooserActiveChoice.excluded_rows.slice(0, 3)"
+                            :key="'visible-' + index" data-ozon-scope-excluded>
+                            <strong>{{ excluded.label || 'Товар без названия' }}</strong>
+                            <span>{{ excluded.reason }}</span>
+                        </li>
+                    </ul>
+                    <details v-if="ozonChooserActiveChoice.excluded_rows.length > 3"
+                             class="mp-ozon-scope-more-exclusions">
+                        <summary>Показать ещё {{ ozonChooserActiveChoice.excluded_rows.length - 3 }} {{ $fmt.plural(ozonChooserActiveChoice.excluded_rows.length - 3, 'товар', 'товара', 'товаров') }}</summary>
+                        <ul class="mp-ozon-scope-exclusion-list" tabindex="0">
+                            <li v-for="(excluded, index) in ozonChooserActiveChoice.excluded_rows.slice(3)"
+                                :key="'more-' + index" data-ozon-scope-excluded>
+                                <strong>{{ excluded.label || 'Товар без названия' }}</strong>
+                                <span>{{ excluded.reason }}</span>
+                            </li>
+                        </ul>
+                    </details>
+                </div>
+            </template>
+            <p v-else>В этом магазине доступны все {{ ozonChooserActiveChoice.total_count }} выбранных товаров.</p>
+        </section>
         <div v-if="ozonWorkspaceUpdateDialogError" class="mp-ozon-message mp-ozon-message--error"
              role="alert">{{ ozonWorkspaceUpdateDialogError }}</div>
         <div v-if="ozonPriceDialogError" class="mp-ozon-message mp-ozon-message--error"
@@ -913,9 +959,9 @@
         <div class="mp-ozon-actions">
             <button type="button" class="sh-btn sh-btn--secondary"
                     @click="closeOzonPriceHandoff">Назад</button>
-            <button type="button" class="sh-btn sh-btn--primary"
-                    :disabled="!ozonPriceAccountId"
-                    @click="continueOzonPriceHandoff">{{ ozonAccountChooserKind === 'workspace_update' ? 'Проверить карточки' : 'Открыть сравнение' }}</button>
+            <button type="button" class="sh-btn sh-btn--primary" data-ozon-scope-submit
+                    :disabled="!ozonPriceAccountId || !ozonChooserActiveChoice"
+                    @click="continueOzonPriceHandoff"><template v-if="ozonChooserActiveChoice && ozonChooserActiveChoice.partial">{{ ozonAccountChooserKind === 'workspace_update' ? 'Проверить ' + ozonChooserActiveChoice.eligible_count + ' ' + $fmt.plural(ozonChooserActiveChoice.eligible_count, 'товар', 'товара', 'товаров') : 'Открыть сравнение для ' + ozonChooserActiveChoice.eligible_count + ' ' + $fmt.plural(ozonChooserActiveChoice.eligible_count, 'товара', 'товаров', 'товаров') }}</template><template v-else>{{ ozonAccountChooserKind === 'workspace_update' ? 'Проверить карточки' : 'Открыть сравнение' }}</template></button>
         </div>
     </dialog>
     <workspace-price-dialog v-if="priceWorkspaceDialogAvailable"
@@ -934,7 +980,7 @@
 
 <script src="{{ url_for('static', filename='vendor/vue-3.5.46.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
-<script src="{{ url_for('static', filename='common-product-content.js', v='20261123-inline-common-editor-r1') }}"></script>
+<script src="{{ url_for('static', filename='common-product-content.js', v='20261123-ozon-mixed-scope-r1') }}"></script>
 <script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261123-unified-catalog-prices-r63b') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-supplier-refresh-prepare-r1') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-ozon-mixed-scope-r1') }}"></script>
 {% endblock %}
