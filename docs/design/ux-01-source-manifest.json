@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-23T15:26:23.133031+00:00",
+  "generated_at": "2026-11-23T15:52:11.927074+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "3ace232665aedb4cb8de3db11419354367b7e7b9cc4dc454bd3d07cd8b929d39"
+      "sha256": "251e3cc194093400fe64c9fd06c038a44d294b745800c674135d08997c080b3a"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -381,7 +381,7 @@
     },
     {
       "path": "docs/design/marketplace-decisions-preparation.md",
-      "sha256": "218d994f83c71fe135d0aeec8da4fa0617a7046979693b4c44378f42df7230eb"
+      "sha256": "586fbc0b6fcc079e40292bdf866f15159b5b2b88a961af1b9b732e67b8f610d0"
     },
     {
       "path": "docs/design/ozon-account-health.md",
@@ -1561,7 +1561,7 @@
     },
     {
       "path": "routes/suppliers.py",
-      "sha256": "e4a0e410d7ef289ac934505450dcf22dbce22aa46922a4c2fb659dbd5e47f3cc"
+      "sha256": "0bfc74adb63c69c8574882dced0e65ca011f73d48e09b19c19ca6e0080fe4082"
     },
     {
       "path": "routes/telegram_alerts.py",
@@ -2477,11 +2477,11 @@
     },
     {
       "path": "services/supplier_color_observation_scheduler.py",
-      "sha256": "f75392d7f5f2e235dbdf50bd39452e30d625899035648e2bc10b17864dd1e9b2"
+      "sha256": "ac6759c91151a969ffbc9618fc9dbb1aa3ed8c76817d5dadb54739c79e6c5e1d"
     },
     {
       "path": "services/supplier_color_observation_store.py",
-      "sha256": "e48867e9ba13b422c4aae4918969e3273855f8c537a07561b7eca8e1a34794a0"
+      "sha256": "e8bd4f9d2b55e334df283a2396e627cb4c93c583b975871337daabf14cdf0aa1"
     },
     {
       "path": "services/supplier_enrichment.py",
@@ -3073,7 +3073,7 @@
     },
     {
       "path": "templates/admin_supplier_form.html",
-      "sha256": "0f69d39bbbe6b2ef3a84827e38daa7802f84838d9a5b1c8cf56a547e0787c0c0"
+      "sha256": "65b8cf3d222f8079b1168868418f3a35819872217cb010abfe84ac6822926210"
     },
     {
       "path": "templates/admin_supplier_marketplaces.html",
@@ -5105,15 +5105,15 @@
     },
     {
       "path": "tests/test_supplier_color_observation_scheduler.py",
-      "sha256": "a48f054bdbddf9db9a91e3f750060022cb1672c80fdd451207345cbd710238d9"
+      "sha256": "3dc77a98bdc2723386b4a1f17f71b26cbca8110440affab00f804124fb8d9354"
     },
     {
       "path": "tests/test_supplier_color_observation_store.py",
-      "sha256": "95c6a533978453183da139ca2f14fcee4cac046195e32d6f317cf83da8acf115"
+      "sha256": "1b3a0c94c928a0f5bc87b4e341f20ad61f36067392a3f4b2aed7f5c557f3048b"
     },
     {
       "path": "tests/test_supplier_csv_refresh_routes.py",
-      "sha256": "f0d222a60acf910a2477ba11792403aef4b2fb025fe76c1a00a0f258a9167190"
+      "sha256": "1f7c58d86c5f9d39f414df74875fc92222fe858b3b416f4167de01a54995cab4"
     },
     {
       "path": "tests/test_supplier_enrichment_bulk.py",
@@ -5440,5 +5440,5 @@
       "sha256": "260973076a516b81bba3cae3adcd6b652fdee5585e27fbd0b7401062b78aefb1"
     }
   ],
-  "aggregate_sha256": "440a2639158819099d74a459aa3f0b2d63a2444d59427c797a534e65e6b19940"
+  "aggregate_sha256": "fa2278ceecb940288b29297a496c4e27d34ada10388ae6a0ddb5daff515d83e0"
 }
