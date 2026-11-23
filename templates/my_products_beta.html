@@ -813,14 +813,14 @@
                 <span>Подготовить обновлённые карточки для Ozon</span>
             </label>
             <p id="mp-supplier-refresh-ozon-help">Подготовим карточки с сохранёнными изменениями. Отправка на Ozon подтверждается отдельно.</p>
-            <div v-if="supplierRefreshReview.prepareOzon && ozonAccounts.length === 1"
+            <div v-if="supplierRefreshReview.prepareOzon && supplierRefreshOzonAccounts.length === 1"
                  class="mp-supplier-refresh-ozon-account">
                 <span id="mp-supplier-refresh-ozon-account-label"
                       class="mp-supplier-refresh-ozon-account-label">Магазин Ozon</span>
                 <output data-supplier-refresh-ozon-account
-                        aria-labelledby="mp-supplier-refresh-ozon-account-label">{{ ozonAccounts[0].label }}</output>
+                        aria-labelledby="mp-supplier-refresh-ozon-account-label">{{ supplierRefreshOzonAccounts[0].label }}</output>
             </div>
-            <div v-else-if="supplierRefreshReview.prepareOzon && ozonAccounts.length > 1"
+            <div v-else-if="supplierRefreshReview.prepareOzon && supplierRefreshOzonAccounts.length > 1"
                  class="mp-supplier-refresh-ozon-account">
                 <label class="mp-supplier-refresh-ozon-account-label"
                        for="mp-supplier-refresh-ozon-account">Магазин Ozon</label>
@@ -829,7 +829,7 @@
                         v-model="supplierRefreshReview.prepareOzonAccountId"
                         :disabled="supplierRefreshReview.phase === 'applying'">
                     <option value="">Выберите магазин</option>
-                    <option v-for="account in ozonAccounts" :key="account.id"
+                    <option v-for="account in supplierRefreshOzonAccounts" :key="account.id"
                             :value="String(account.id)">{{ account.label }}</option>
                 </select>
             </div>
