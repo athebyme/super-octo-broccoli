@@ -21,6 +21,7 @@ import os
 import re
 import time
 import threading
+import unicodedata
 import uuid
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -493,6 +494,84 @@ class SupplierCSVParser:
         self.delimiter = supplier.csv_delimiter or ';'
         self.encoding = supplier.csv_encoding or 'cp1251'
 
+    _OBSERVED_FIELDS_VERSION_KEY = 'observed_supplier_fields_version'
+    _OBSERVED_FIELDS_KEY = 'observed_supplier_fields'
+    _OBSERVED_COUNTRY_LIMIT = 100
+
+    @classmethod
+    def _strip_reserved_observation_keys(cls, product: dict) -> None:
+        """Remove only top-level feed/config copies of parser-owned evidence."""
+        product.pop(cls._OBSERVED_FIELDS_VERSION_KEY, None)
+        product.pop(cls._OBSERVED_FIELDS_KEY, None)
+
+    @staticmethod
+    def _contains_control_characters(value: str) -> bool:
+        return any(unicodedata.category(character) == 'Cc' for character in value)
+
+    @classmethod
+    def _valid_observed_country(cls, value):
+        if (
+            not isinstance(value, str) or not value or value != value.strip()
+            or len(value) > cls._OBSERVED_COUNTRY_LIMIT
+            or cls._contains_control_characters(value)
+        ):
+            return None
+        return value
+
+    @classmethod
+    def _valid_observed_colors(cls, value):
+        if not isinstance(value, list) or not value or len(value) > 16:
+            return None
+        if any(
+            not isinstance(color, str) or not color or color != color.strip()
+            or len(color) > 120 or cls._contains_control_characters(color)
+            for color in value
+        ):
+            return None
+        return list(value)
+
+    @classmethod
+    def _observed_source_fields(cls, product: dict, supplier) -> dict:
+        """Project exact parsed cells only for explicit semantic parser roles."""
+        mapping = getattr(supplier, 'csv_column_mapping', None)
+        observed = {}
+        if isinstance(mapping, dict) and mapping:
+            country_config = mapping.get('country')
+            if (
+                isinstance(country_config, dict)
+                and country_config.get('type') == 'string'
+                and type(country_config.get('column')) in (int, str)
+                and country_config.get('column') != ''
+            ):
+                country = cls._valid_observed_country(product.get('country'))
+                if country is not None:
+                    observed['country'] = country
+
+            colors_config = mapping.get('colors')
+            has_explicit_list_cells = isinstance(colors_config, dict) and (
+                colors_config.get('type') == 'list'
+                and (
+                    type(colors_config.get('column')) in (int, str)
+                    or isinstance(colors_config.get('columns'), list)
+                    or (
+                        isinstance(colors_config.get('columns_prefix'), str)
+                        and bool(colors_config.get('columns_prefix'))
+                    )
+                )
+            )
+            if has_explicit_list_cells:
+                colors = cls._valid_observed_colors(product.get('colors'))
+                if colors is not None:
+                    observed['colors'] = colors
+        elif getattr(supplier, 'code', None) == 'sexoptovik':
+            country = cls._valid_observed_country(product.get('country'))
+            colors = cls._valid_observed_colors(product.get('colors'))
+            if country is not None:
+                observed['country'] = country
+            if colors is not None:
+                observed['colors'] = colors
+        return observed
+
     def fetch_csv(self) -> Optional[str]:
         """Скачать и строго декодировать CSV по URL."""
         raw_bytes = self.fetch_csv_raw()
@@ -754,6 +833,10 @@ class SupplierCSVParser:
         from services.data_normalizer import DataNormalizer
 
         products = self.parse(csv_content)
+        observed_fields = []
+        for product in products:
+            self._strip_reserved_observation_keys(product)
+            observed_fields.append(self._observed_source_fields(product, self.supplier))
         normalized = DataNormalizer.normalize_product_list(products)
 
         # Обогащение из описаний (заполняет пустые поля из текста описания)
@@ -770,6 +853,14 @@ class SupplierCSVParser:
             normalized = engine.apply_to_list(normalized)
         except Exception as e:
             logger.debug(f"Auto-correction skipped: {e}")
+
+        # Keep direct-cell evidence out of enrichment/correction and restore it
+        # afterward so inferred values cannot acquire source provenance.
+        if len(normalized) == len(observed_fields):
+            for product, fields in zip(normalized, observed_fields):
+                if fields:
+                    product[self._OBSERVED_FIELDS_VERSION_KEY] = 1
+                    product[self._OBSERVED_FIELDS_KEY] = fields
 
         return normalized
 
