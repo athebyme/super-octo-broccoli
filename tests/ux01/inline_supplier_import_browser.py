@@ -19,11 +19,16 @@ artifacts.mkdir(parents=True, exist_ok=True)
 post_path = '/supplier-catalog/import'
 receipt_path = '/supplier-catalog/import/result'
 prepare_path = '/marketplaces/ozon/uploads/'
+prepare_status_pattern = re.compile(
+    r'/marketplaces/ozon/uploads/api/(ozon-upload-[0-9a-f]{32})'
+)
 wb_create_path = '/my-products/push-to-wb-bulk'
 wb_create_result_path = '/my-products/push-to-wb-bulk/result'
 feed_path = '/api/my-products'
 state = {
     'mode': 'normal', 'catalog': [], 'posts': [], 'receipts': [], 'prepares': [], 'errors': [],
+    'prepare_status_next': 'all_prepared', 'prepare_status_by_uid': {},
+    'prepare_status_reads': [],
     'wb_mode': 'normal', 'wb_posts': [], 'wb_reads': [], 'wb_feed_reads': [],
     'wb_worker_product_ids': [], 'wb_worker_errors': [],
 }
@@ -159,9 +164,135 @@ def bridge(route):
             assert re.fullmatch(r'[0-9a-f]{32}', posted['request_key'])
             response = route.fetch(max_redirects=0)
             assert response.status == 202, response.status
-            state['prepares'].append({'ids': posted['imported_product_ids'], 'account_id': posted['account_id'],
-                                      'location': response.headers['location']})
+            location = response.headers['location']
+            job_uid = location.rsplit('/', 1)[-1]
+            assert re.fullmatch(r'ozon-upload-[0-9a-f]{32}', job_uid)
+            status_mode, state['prepare_status_next'] = (
+                state['prepare_status_next'], 'all_prepared',
+            )
+            prepare = {
+                'ids': posted['imported_product_ids'],
+                'account_id': posted['account_id'],
+                'location': location,
+                'job_uid': job_uid,
+                'status_mode': status_mode,
+            }
+            state['prepares'].append(prepare)
+            state['prepare_status_by_uid'][job_uid] = prepare
             route.fulfill(response=response)
+            return
+        status_match = prepare_status_pattern.fullmatch(parsed.path)
+        if request.method == 'GET' and status_match:
+            assert not parsed.query
+            job_uid = status_match.group(1)
+            prepare = state['prepare_status_by_uid'].get(job_uid)
+            assert prepare is not None, 'status GET must use this tab’s exact accepted receipt UID'
+            response = route.fetch(max_redirects=0)
+            assert response.status == 200, response.status
+            payload = response.json()
+            assert isinstance(payload, dict) and payload.get('success') is True
+            run = payload.get('run')
+            assert isinstance(run, dict)
+            assert run.get('job_uid') == job_uid
+            assert run.get('account_id') == prepare['account_id']
+            assert run.get('mode') == 'source_prepare'
+            summary = run.get('summary')
+            assert isinstance(summary, dict) and summary.get('version') == 3
+            assert summary.get('account_id') == prepare['account_id']
+            assert summary.get('mode') == 'source_prepare'
+            assert summary.get('total') == len(prepare['ids'])
+            items = run.get('items')
+            assert isinstance(items, list)
+            assert [item.get('imported_product_id') for item in items] == prepare['ids']
+
+            read = {
+                'uid': job_uid,
+                'query': parsed.query,
+                'http_status': response.status,
+                'account_id': run['account_id'],
+                'mode': run['mode'],
+                'summary_version': summary['version'],
+                'total': summary['total'],
+                'delivered_status': None,
+                'delivered_account_id': None,
+            }
+            status_mode = prepare['status_mode']
+            prior_reads = [
+                row for row in state['prepare_status_reads']
+                if row['uid'] == job_uid
+            ]
+            if status_mode == 'mixed' and not prior_reads:
+                assert run.get('status') == 'running'
+                assert summary.get('outcome') == 'running'
+                assert summary.get('active', 0) > 0
+                assert summary.get('processed', 0) + summary['active'] == summary['total']
+                read.update({
+                    'delivered_status': 'running',
+                    'delivered_account_id': prepare['account_id'],
+                    'processed': summary['processed'],
+                    'active': summary['active'],
+                    'prepared': summary['prepared'],
+                    'needs_input': summary['needs_input'],
+                })
+                state['prepare_status_reads'].append(read)
+                # Preserve the actual V3 running response for the first poll;
+                # the next poll below supplies only the deterministic terminal fixture.
+                route.fulfill(response=response)
+                return
+            if status_mode == 'mismatched_account':
+                payload = json.loads(json.dumps(payload))
+                payload['run']['account_id'] = prepare['account_id'] + 1
+                payload['run']['summary']['account_id'] = prepare['account_id'] + 1
+                read['delivered_account_id'] = prepare['account_id'] + 1
+                state['prepare_status_reads'].append(read)
+                route.fulfill(
+                    status=response.status,
+                    content_type='application/json; charset=utf-8',
+                    headers={'Cache-Control': 'private, no-store'},
+                    body=json.dumps(payload, ensure_ascii=False),
+                )
+                return
+
+            prepared_count = len(prepare['ids'])
+            needs_input_count = 0
+            if status_mode == 'mixed':
+                assert prepared_count >= 2
+                prepared_count -= 1
+                needs_input_count = 1
+            for index, item in enumerate(payload['run']['items']):
+                phase = 'prepared' if index < prepared_count else 'needs_input'
+                if status_mode != 'mixed':
+                    phase = 'prepared'
+                item['phase'] = phase
+                item['status'] = phase
+                if phase == 'needs_input':
+                    item['code'] = 'missing_required_attribute'
+                    item['message'] = 'Остаётся заполнить подтверждённый факт'
+            final_counts = {'prepared': prepared_count}
+            if needs_input_count:
+                final_counts['needs_input'] = needs_input_count
+            final_summary = payload['run']['summary']
+            final_summary.update({
+                'processed': len(prepare['ids']),
+                'prepared': prepared_count,
+                'needs_input': needs_input_count,
+                'failed': 0,
+                'active': 0,
+                'outcome': 'partial' if needs_input_count else 'success',
+                'status_counts': final_counts,
+            })
+            payload['run']['status'] = 'completed'
+            read['delivered_status'] = 'partial' if needs_input_count else 'success'
+            read['delivered_account_id'] = prepare['account_id']
+            read['prepared'] = prepared_count
+            read['needs_input'] = needs_input_count
+            state['prepare_status_reads'].append(read)
+            route.fulfill(
+                status=response.status,
+                content_type='application/json; charset=utf-8',
+                headers={'Cache-Control': 'private, no-store'},
+                body=json.dumps(payload, ensure_ascii=False),
+            )
             return
         if (request.method == 'GET' and re.fullmatch(r'/supplier-catalog/\d+/products', parsed.path)
                 and request.headers.get('accept') == 'application/json'):
@@ -317,7 +448,10 @@ def check_channel_actions(page, count, navigations):
     return ['push_wb', 'ozon']
 
 
-def check_inline_ozon_preparation(page, selected, navigations, *, account_id, account_label, choose_account=False):
+def check_inline_ozon_preparation(
+    page, selected, navigations, *, account_id, account_label,
+    choose_account=False, status_mode='all_prepared',
+):
     previous_runs = len(state['prepares'])
     next_action = page.locator('[data-supplier-import-next-action="ozon"]')
     next_action.click()
@@ -329,6 +463,7 @@ def check_inline_ozon_preparation(page, selected, navigations, *, account_id, ac
         assert account_picker.locator('option').count() == 3
         account_picker.select_option(str(account_id))
         assert confirm.is_enabled() and len(state['prepares']) == previous_runs
+    state['prepare_status_next'] = status_mode
     with page.expect_response(lambda response: urlsplit(response.url).path == prepare_path
                               and response.request.method == 'POST') as queued:
         confirm.click()
@@ -345,7 +480,87 @@ def check_inline_ozon_preparation(page, selected, navigations, *, account_id, ac
     review = receipt.locator('[data-ozon-local-prepare-run]')
     expect(review).to_have_attribute('href', prepare['location'])
     assert not navigations and page.evaluate("window.supplierProofDocument === 'first'")
+    assert urlsplit(page.url).path == '/my-products/beta'
+    assert parse_qs(urlsplit(page.url).query).keys() == {'import_batch'}
     assert page.evaluate("document.querySelector('#my-products-app')._vnode.component.proxy.selected") == selected
+    status = page.locator('[data-ozon-local-prepare-status]')
+    if status_mode == 'mismatched_account':
+        expect(status).to_have_attribute('data-status', 'unknown')
+        expect(status).to_contain_text('Статус не удалось подтвердить.')
+        assert page.locator('[data-ozon-local-prepare-counts]').count() == 0
+        reads = [row for row in state['prepare_status_reads'] if row['uid'] == prepare['job_uid']]
+        assert len(reads) == 1
+        assert reads[0]['query'] == ''
+        assert reads[0]['account_id'] == account_id
+        assert reads[0]['mode'] == 'source_prepare'
+        assert reads[0]['delivered_account_id'] == account_id + 1
+    else:
+        if status_mode == 'mixed':
+            page.wait_for_function("""() => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                return proxy && proxy.ozonInlineStatus && proxy.ozonInlineStatus.state === 'running';
+            }""")
+            expect(status).to_have_attribute('data-status', 'running')
+            expect(status).to_contain_text('Подготовка выполняется.')
+            first_reads = [
+                row for row in state['prepare_status_reads']
+                if row['uid'] == prepare['job_uid']
+            ]
+            assert len(first_reads) == 1
+            assert first_reads[0]['delivered_status'] == 'running'
+            assert first_reads[0]['active'] > 0
+            assert first_reads[0]['processed'] + first_reads[0]['active'] == len(selected)
+        expect(status).to_have_attribute('data-status', 'completed')
+        expect(status).to_contain_text('Подготовка завершена.')
+        counts = page.locator('[data-ozon-local-prepare-counts]')
+        expect(counts).to_be_visible()
+        ready_count = counts.locator('[data-ozon-local-prepare-ready-count]')
+        attention_count = counts.locator('[data-ozon-local-prepare-attention-count]')
+        if status_mode == 'mixed':
+            expect(ready_count).to_have_text('Подготовлено: 51')
+            expect(attention_count).to_have_text('Требуют внимания: 1')
+        else:
+            expect(ready_count).to_have_text(f'Подготовлено: {len(selected)}')
+            expect(attention_count).to_have_text('Требуют внимания: 0')
+        reads = [row for row in state['prepare_status_reads'] if row['uid'] == prepare['job_uid']]
+        assert len(reads) == (2 if status_mode == 'mixed' else 1)
+        assert reads[0]['query'] == ''
+        assert reads[0]['account_id'] == account_id
+        assert reads[0]['mode'] == 'source_prepare'
+        assert reads[0]['delivered_account_id'] == account_id
+        terminal_read = reads[-1]
+        assert terminal_read['query'] == ''
+        assert terminal_read['account_id'] == account_id
+        assert terminal_read['mode'] == 'source_prepare'
+        assert terminal_read['delivered_account_id'] == account_id
+        assert terminal_read['delivered_status'] in {'partial', 'success'}
+        assert terminal_read['total'] == len(selected)
+        if status_mode == 'mixed':
+            assert terminal_read['summary_version'] == 3
+            assert terminal_read['prepared'] == 51 and terminal_read['needs_input'] == 1
+            geometry = page.evaluate("""() => {
+                const receipt = document.querySelector('[data-ozon-local-prepare-receipt]');
+                const actions = [...receipt.querySelectorAll(
+                    '[data-ozon-local-prepare-run], [data-ozon-local-prepare-dismiss]'
+                )].map(element => {
+                    const rect = element.getBoundingClientRect();
+                    return {height: rect.height, width: rect.width};
+                });
+                return {
+                    viewportWidth: window.innerWidth,
+                    documentWidth: document.documentElement.scrollWidth,
+                    actions,
+                };
+            }""")
+            assert geometry['documentWidth'] <= geometry['viewportWidth'] + 1, geometry
+            assert len(geometry['actions']) == 2 and all(
+                action['height'] >= 44 and action['width'] >= 44
+                for action in geometry['actions']
+            ), geometry
+            page.screenshot(path=artifacts / 'inline-ozon-mixed-dark-320.png')
+    assert page.evaluate("document.querySelector('#my-products-app')._vnode.component.proxy.selected") == selected
+    assert review.get_attribute('href') == prepare['location']
+    assert len(state['prepares']) == previous_runs + 1, 'status polling must not create another prepare run'
     with fixture.app.app_context():
         job = BackgroundJob.query.filter_by(job_uid=prepare['location'].rsplit('/', 1)[-1],
                                             seller_id=fixture.FIXTURE['seller_id']).one()
@@ -623,6 +838,7 @@ def check_wb_create_selection_continuity(
         second = check_inline_ozon_preparation(
             page, selected, navigations, account_id=second_account_id,
             account_label=second_account_label, choose_account=True,
+            status_mode='mismatched_account',
         )
         assert first != second
         assert len(state['wb_posts']) == 3 and state['wb_worker_product_ids'] == [selected]
@@ -688,8 +904,12 @@ def run():
             page.screenshot(path=artifacts / 'exact-batch-dark-320.png')
             channel_actions = check_channel_actions(page, 52, navigations)
             page.screenshot(path=artifacts / 'exact-batch-marketplaces-dark-320.png')
-            check_inline_ozon_preparation(page, selected, navigations, account_id=fixture.FIXTURE['account_id'],
-                                          account_label=fixture.OZON_ACCOUNT_LABEL)
+            check_inline_ozon_preparation(
+                page, selected, navigations,
+                account_id=fixture.FIXTURE['account_id'],
+                account_label=fixture.OZON_ACCOUNT_LABEL,
+                status_mode='mixed',
+            )
             context.close()
 
             with fixture.app.app_context():
@@ -775,12 +995,43 @@ def run():
         assert not fixture.REPORT['unexpected_http'], fixture.REPORT['unexpected_http']
         assert not fixture.REPORT['unexpected_external_requests']
         assert fixture.REPORT['provider_attempts'] == 0
+        mixed_status_uids = {
+            row['uid'] for row in state['prepare_status_reads']
+            if row['total'] == 52
+        }
+        mixed_status_reads = {
+            uid: [row for row in state['prepare_status_reads'] if row['uid'] == uid]
+            for uid in mixed_status_uids
+        }
         report = {
             'status': 'passed', 'vue': '3.5.46', 'workspaces': [320, 390, 1440],
             'navigation_count_since_open': 0, 'source_rows_in_full_selection': 53,
             'initial_batch_count': 52, 'selected_scope_matches_committed_batch': True,
             'next_create_actions': channel_actions, 'local_commits': 3,
             'exact_inline_ozon_preparation': True,
+            'inline_ozon_live_status': {
+                'running_to_mixed_terminal': any(
+                    len(rows) == 2
+                    and rows[0]['delivered_status'] == 'running'
+                    and rows[1]['delivered_status'] == 'partial'
+                    and rows[1]['prepared'] == 51
+                    and rows[1]['needs_input'] == 1
+                    and rows[1]['total'] == 52
+                    for rows in mixed_status_reads.values()
+                ),
+                'exact_mixed_prepared_needs_input': any(
+                    row['delivered_status'] == 'partial'
+                    and row['prepared'] == 51 and row['needs_input'] == 1
+                    and row['summary_version'] == 3 and row['total'] == 52
+                    for row in state['prepare_status_reads']
+                ),
+                'mismatched_account_status_rejected': any(
+                    row['delivered_account_id'] != row['account_id']
+                    for row in state['prepare_status_reads']
+                ),
+                'exact_uid_read_count': len(state['prepare_status_reads']),
+                'prepare_posts': len(state['prepares']),
+            },
             'same_selection_submitted_to_two_explicit_ozon_shops': True,
             'wb_create_selection_continuity': wb_continuity,
             'explicit_supplier_source_only_when_multiple': True,
