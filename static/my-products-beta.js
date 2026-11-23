@@ -1233,6 +1233,24 @@
         return base + '?' + query.toString();
     }
 
+    function validCommonContentBootstrap(data, productIds, expectedOwner) {
+        if (!data || typeof data !== 'object' || Array.isArray(data) || data.success !== true ||
+            !Array.isArray(productIds) || !productIds.length || productIds.length > 50 ||
+            !Array.isArray(data.selectedProductIds) || !Array.isArray(data.products) ||
+            !sameOrderedIds(data.selectedProductIds, productIds) ||
+            data.products.length !== productIds.length || data.workspaceOwner !== expectedOwner ||
+            typeof data.csrfToken !== 'string' || !data.csrfToken || data.csrfToken.length > 4096 ||
+            data.previewUrl !== '/api/my-products/common-content/preview' ||
+            data.applyUrl !== '/api/my-products/common-content/apply' ||
+            data.readUrlBase !== '/api/my-products/' || data.workspaceUrl !== '/my-products/beta') {
+            return false;
+        }
+        return data.products.every(function (product, index) {
+            return !!product && typeof product === 'object' && !Array.isArray(product) &&
+                product.product_id === productIds[index];
+        });
+    }
+
     var workspaceReturnCapsule = null;
     var workspaceReturnScopeSeed = null;
     var workspaceReturnSetupNote = '';
@@ -1301,6 +1319,14 @@
                 priceWorkspaceReviewHref: '',
                 priceWorkspaceLaunch: null,
                 priceWorkspaceReturnFocus: null,
+                inlineCommonContentLoading: false,
+                inlineCommonContentError: '',
+                inlineCommonContentCanRetry: false,
+                inlineCommonContentCount: 0,
+                inlineCommonContentBusy: false,
+                _inlineCommonContentLaunch: null,
+                _inlineCommonContentEditor: null,
+                _inlineCommonContentDiscardReturnFocus: null,
                 supplierImportOpen: false,
                 supplierImportOutcome: null,
                 supplierImportFallbackUrl: '',
@@ -2052,6 +2078,7 @@
         },
         beforeUnmount: function () {
             this._mpUnmounted = true;
+            this.closeInlineCommonContent({ force: true, restoreFocus: false, refreshAfterAttempt: false });
             this._catalogCategoriesRequestId = (this._catalogCategoriesRequestId || 0) + 1;
             if (this._catalogCategoriesAbort) this._catalogCategoriesAbort.abort();
             this._catalogCategoriesAbort = null;
@@ -2686,7 +2713,7 @@
                 if (headMore) headMore.open = false;
                 if (group.actions.length === 1) {
                     var directKey = group.actions[0].key;
-                    var returnFocus = ['ozon', 'wb_prices', 'ozon_prices'].includes(directKey)
+                    var returnFocus = ['ozon', 'wb_prices', 'ozon_prices', 'common_content'].includes(directKey)
                         ? event && event.currentTarget : null;
                     this.closeBulkActionPanel(false);
                     this.startAction(group.actions[0], returnFocus);
@@ -2701,7 +2728,7 @@
             },
             runBulkIntentAction: function (action, event) {
                 var key = action && action.key;
-                var returnFocus = ['wb_prices', 'ozon_prices'].includes(key)
+                var returnFocus = ['wb_prices', 'ozon_prices', 'common_content'].includes(key)
                     ? this._bulkActionTrigger || (event && event.currentTarget)
                     : key === 'ozon'
                         ? (event && event.currentTarget) || this._bulkActionTrigger : null;
@@ -3060,6 +3087,391 @@
                 form.submit();
                 return true;
             },
+            inlineCommonContentLaunchIsCurrent: function (launch) {
+                if (!launch || this._inlineCommonContentLaunch !== launch ||
+                    !launch.abort || launch.abort.signal.aborted ||
+                    this._feedRevision !== launch.feedRevision ||
+                    this.feedScopeKey() !== launch.scopeKey || this.itemsScope !== launch.scopeKey ||
+                    this.loading || this.loadingMore || this.selectAllLoading ||
+                    this.selectionReviewLoading ||
+                    (this.searchInput || '').trim().slice(0, 200) !== launch.searchValue ||
+                    this.filters.search !== launch.searchValue ||
+                    !sameOrderedIds(this.selected, launch.selectionIds) ||
+                    !sameOrderedIds(orderedProductIds(this.visibleItems), launch.visibleIds) ||
+                    !sameOrderedIds(orderedProductIds(this.items), launch.feedIds) ||
+                    this.selectionReviewActive !== launch.selectionReviewActive ||
+                    launch.batchMode !== (this.importBatchMode || this.supplierRefreshBatchMode)) return false;
+                if (launch.selectionReviewActive &&
+                    !sameOrderedIds(this.selectionReviewIds, launch.selectionReviewIds)) return false;
+                if (launch.source === 'bulk') {
+                    return this.selectionRowsVerified &&
+                        sameOrderedIds(this.selected, launch.editorIds) &&
+                        sameOrderedIds(launch.editorIds, launch.selectionIds);
+                }
+                return launch.source === 'row' &&
+                    this.visibleItems.some(function (item) {
+                        return item && item.id === launch.editorIds[0];
+                    }) && (!launch.selectionIds.length || this.selectionRowsVerified);
+            },
+            openInlineCommonContent: function (editorIds, selectionIds, options) {
+                options = options || {};
+                var source = options.source === 'bulk' ? 'bulk' : 'row';
+                var helpers = window.SellerHubCommonContent || {};
+                var dialog = this.$refs.inlineCommonContentDialog;
+                if (typeof helpers.mountEditor !== 'function' || !dialog ||
+                    typeof dialog.showModal !== 'function' || typeof dialog.close !== 'function') {
+                    return this.navigateCommonContent(editorIds, selectionIds);
+                }
+                if (this._inlineCommonContentLaunch) return false;
+                var editorProductIds = Array.isArray(editorIds) ? editorIds.slice() : [];
+                var selectedProductIds = Array.isArray(selectionIds) ? selectionIds.slice() : [];
+                var visibleIds = orderedProductIds(this.visibleItems);
+                var feedIds = orderedProductIds(this.items);
+                var scopeKey = this.feedScopeKey();
+                var searchValue = (this.searchInput || '').trim().slice(0, 200);
+                var validIdSet = function (ids, allowEmpty, maximum) {
+                    return Array.isArray(ids) && (allowEmpty || ids.length > 0) &&
+                        ids.length <= maximum &&
+                        ids.every(function (id) { return Number.isSafeInteger(id) && id > 0; }) &&
+                        new Set(ids).size === ids.length;
+                };
+                if (!validIdSet(editorProductIds, false, 50) ||
+                    !validIdSet(selectedProductIds, true, MAX_BULK_SELECTION) ||
+                    !visibleIds || !feedIds || this.loading || this.loadingMore || this.selectAllLoading ||
+                    this.itemsScope !== scopeKey || searchValue !== this.filters.search ||
+                    (selectedProductIds.length && !this.selectionRowsVerified) ||
+                    (source === 'bulk' && (!sameOrderedIds(editorProductIds, selectedProductIds) ||
+                        !this.selectionRowsVerified || !sameOrderedIds(this.selected, selectedProductIds))) ||
+                    (source === 'row' && (editorProductIds.length !== 1 ||
+                        !visibleIds.includes(editorProductIds[0])))) {
+                    if (source === 'row' && editorProductIds.length === 1) {
+                        return this.navigateCommonContent(editorProductIds, selectedProductIds);
+                    }
+                    this.error = 'Список или выбор изменился. Обновите список и отметьте товары заново.';
+                    return false;
+                }
+                var target;
+                try {
+                    target = commonContentSelectionUrl(this.urls.commonContent, editorProductIds, helpers);
+                    var parsedTarget = new URL(target, window.location.origin);
+                    if (parsedTarget.origin !== window.location.origin ||
+                        parsedTarget.pathname !== this.urls.commonContent ||
+                        parsedTarget.hash ||
+                        !sameOrderedIds(parsedTarget.searchParams.getAll('product_id').map(Number), editorProductIds) ||
+                        Array.from(parsedTarget.searchParams.keys()).some(function (key) {
+                            return key !== 'product_id';
+                        })) throw new Error('invalid common-content target');
+                } catch (_) {
+                    this.error = 'Не удалось открыть данные товара. Обновите страницу и повторите действие.';
+                    return false;
+                }
+                var trigger = options.returnFocus || options.trigger || document.activeElement;
+                if (trigger === document.body) trigger = null;
+                var abort = new AbortController();
+                var launchData = {
+                    source: source,
+                    editorIds: editorProductIds,
+                    selectionIds: selectedProductIds,
+                    visibleIds: visibleIds.slice(),
+                    feedIds: feedIds.slice(),
+                    searchValue: searchValue,
+                    selectionReviewActive: !!this.selectionReviewActive,
+                    selectionReviewIds: this.selectionReviewActive ? this.selectionReviewIds.slice() : [],
+                    scopeKey: scopeKey,
+                    feedRevision: this._feedRevision,
+                    batchMode: this.importBatchMode || this.supplierRefreshBatchMode,
+                    target: target,
+                    abort: abort,
+                    applyAttempted: false,
+                    exitRefreshStarted: false,
+                    trigger: trigger,
+                };
+                var launch = window.Vue && typeof window.Vue.markRaw === 'function'
+                    ? window.Vue.markRaw(launchData) : launchData;
+                this.closeBulkActionPanel(false);
+                if (this.$refs.moreActions) this.$refs.moreActions.open = false;
+                if (this.$refs.headMore) this.$refs.headMore.open = false;
+                this._inlineCommonContentLaunch = launch;
+                this.inlineCommonContentLoading = true;
+                this.inlineCommonContentError = '';
+                this.inlineCommonContentCanRetry = false;
+                this.inlineCommonContentBusy = false;
+                this.inlineCommonContentCount = editorProductIds.length;
+                this.error = '';
+                if (!this.inlineCommonContentLaunchIsCurrent(launch)) {
+                    this.invalidateInlineCommonContentLaunch(launch);
+                    return false;
+                }
+                try {
+                    if (!dialog.open) dialog.showModal();
+                } catch (_) {
+                    this.invalidateInlineCommonContentLaunch(launch, { fallback: true });
+                    return false;
+                }
+                this.$refs.inlineCommonContentTitle?.focus({ preventScroll: true });
+                this.loadInlineCommonContent(launch);
+                return true;
+            },
+            loadInlineCommonContent: function (launch) {
+                if (!this.inlineCommonContentLaunchIsCurrent(launch)) {
+                    this.invalidateInlineCommonContentLaunch(launch);
+                    return Promise.resolve(false);
+                }
+                var self = this;
+                var helpers = window.SellerHubCommonContent || {};
+                this.inlineCommonContentLoading = true;
+                this.inlineCommonContentError = '';
+                this.inlineCommonContentCanRetry = false;
+                var request;
+                try {
+                    request = this.$api.get(launch.target, null, { signal: launch.abort.signal });
+                } catch (error) {
+                    request = Promise.reject(error);
+                }
+                return Promise.resolve(request).then(function (data) {
+                    if (!self.inlineCommonContentLaunchIsCurrent(launch)) {
+                        self.invalidateInlineCommonContentLaunch(launch);
+                        return false;
+                    }
+                    if (!validCommonContentBootstrap(data, launch.editorIds, self.workspaceOwner)) {
+                        self.inlineCommonContentLoading = false;
+                        self.inlineCommonContentError = 'Ответ сервера не подтвердил точный состав выбранных товаров. Закройте окно и отметьте товары заново.';
+                        self.inlineCommonContentCanRetry = false;
+                        self.focusInlineCommonContentError();
+                        return false;
+                    }
+                    var root = self.$refs.inlineCommonContentMount;
+                    var instance;
+                    try {
+                        instance = helpers.mountEditor(root, data, {
+                            inline: true,
+                            onApplyStart: function () {
+                                if (self._inlineCommonContentLaunch !== launch) return;
+                                launch.applyAttempted = true;
+                            },
+                            onBusyChange: function (busy) {
+                                if (self._inlineCommonContentLaunch !== launch) return;
+                                self.inlineCommonContentBusy = !!busy;
+                            },
+                        });
+                    } catch (_) {
+                        instance = null;
+                    }
+                    if (!instance || typeof instance.hasUnsavedChanges !== 'function' ||
+                        typeof instance.isBusy !== 'function' || typeof instance.destroy !== 'function') {
+                        if (instance && typeof instance.destroy === 'function') {
+                            try { instance.destroy(); } catch (_) {}
+                        }
+                        self.invalidateInlineCommonContentLaunch(launch, { fallback: true });
+                        return false;
+                    }
+                    self._inlineCommonContentEditor = instance;
+                    self.inlineCommonContentLoading = false;
+                    self.inlineCommonContentCanRetry = false;
+                    self.updateInlineCommonContentBusy(launch);
+                    return true;
+                }).catch(function (error) {
+                    if (launch.abort.signal.aborted || self._inlineCommonContentLaunch !== launch) return false;
+                    if (!self.inlineCommonContentLaunchIsCurrent(launch)) {
+                        self.invalidateInlineCommonContentLaunch(launch);
+                        return false;
+                    }
+                    self.inlineCommonContentLoading = false;
+                    self.inlineCommonContentCanRetry = true;
+                    self.inlineCommonContentError = error && typeof error.message === 'string'
+                        ? error.message.slice(0, 400)
+                        : 'Не удалось проверить выбранные товары. Повторите чтение.';
+                    self.focusInlineCommonContentError();
+                    return false;
+                }).finally(function () {
+                    if (self._inlineCommonContentLaunch === launch &&
+                        !self.inlineCommonContentLoading) self.updateInlineCommonContentBusy(launch);
+                });
+            },
+            retryInlineCommonContent: function () {
+                var launch = this._inlineCommonContentLaunch;
+                if (!launch || this.inlineCommonContentLoading || !this.inlineCommonContentCanRetry) return false;
+                launch.abort.abort();
+                launch.abort = new AbortController();
+                return this.loadInlineCommonContent(launch);
+            },
+            invalidateInlineCommonContentLaunch: function (launch, options) {
+                options = options || {};
+                if (this._inlineCommonContentLaunch !== launch) return false;
+                var editorIds = launch.editorIds.slice();
+                var selectionIds = launch.selectionIds.slice();
+                var trigger = launch.trigger;
+                this.closeInlineCommonContent({ force: true, restoreFocus: false, refreshAfterAttempt: false });
+                if (options.fallback) return this.navigateCommonContent(editorIds, selectionIds);
+                this.error = 'Список или выбор изменился. Обновите список и отметьте товары заново.';
+                this.restoreInlineCommonContentFocus({ trigger: trigger });
+                return false;
+            },
+            updateInlineCommonContentBusy: function (launch) {
+                if (launch && this._inlineCommonContentLaunch !== launch) return false;
+                var editor = this._inlineCommonContentEditor;
+                var busy = false;
+                try { busy = !!(editor && editor.isBusy()); } catch (_) { busy = true; }
+                this.inlineCommonContentBusy = busy;
+                return busy;
+            },
+            focusInlineCommonContentError: function () {
+                this.$nextTick(function () {
+                    this.$refs.inlineCommonContentErrorNode?.focus({ preventScroll: true });
+                });
+            },
+            requestCloseInlineCommonContent: function () {
+                var editor = this._inlineCommonContentEditor;
+                if (this.updateInlineCommonContentBusy()) return false;
+                var dirty = false;
+                try { dirty = !!(editor && editor.hasUnsavedChanges()); } catch (_) { dirty = true; }
+                if (dirty) {
+                    this._inlineCommonContentDiscardReturnFocus = document.activeElement;
+                    this.$nextTick(function () {
+                        var discardDialog = this.$refs.inlineCommonContentDiscardDialog;
+                        if (!discardDialog || discardDialog.open) return;
+                        try { discardDialog.showModal(); } catch (_) { return; }
+                        this.$refs.inlineCommonContentDiscardTitle?.focus({ preventScroll: true });
+                    });
+                    return false;
+                }
+                return this.closeInlineCommonContent();
+            },
+            cancelInlineCommonContentDiscard: function () {
+                var discardDialog = this.$refs.inlineCommonContentDiscardDialog;
+                if (discardDialog && discardDialog.open) discardDialog.close();
+                var target = this._inlineCommonContentDiscardReturnFocus;
+                this._inlineCommonContentDiscardReturnFocus = null;
+                this.$nextTick(function () {
+                    if (this.inlineCommonContentTargetCanReceiveFocus(target)) {
+                        target.focus({ preventScroll: true });
+                    } else {
+                        this.$refs.inlineCommonContentClose?.focus({ preventScroll: true });
+                    }
+                });
+                return true;
+            },
+            confirmInlineCommonContentDiscard: function () {
+                var discardDialog = this.$refs.inlineCommonContentDiscardDialog;
+                if (discardDialog && discardDialog.open) discardDialog.close();
+                this._inlineCommonContentDiscardReturnFocus = null;
+                return this.closeInlineCommonContent({ force: true });
+            },
+            inlineCommonContentTargetCanReceiveFocus: function (target) {
+                if (!target || target.isConnected === false || target.disabled ||
+                    typeof target.focus !== 'function') return false;
+                if (typeof target.getClientRects === 'function' && !target.getClientRects().length) return false;
+                if (typeof target.closest === 'function' && target.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+                return true;
+            },
+            restoreInlineCommonContentFocus: function (launch) {
+                var trigger = launch && launch.trigger;
+                this.$nextTick(function () {
+                    if (this.inlineCommonContentTargetCanReceiveFocus(trigger)) {
+                        trigger.focus({ preventScroll: true });
+                    } else {
+                        this.focusCatalogAfterSelectionReview();
+                    }
+                });
+            },
+            closeInlineCommonContent: function (options) {
+                options = options || {};
+                var launch = this._inlineCommonContentLaunch;
+                var force = options.force === true;
+                if (!launch) return false;
+                if (!force && this.updateInlineCommonContentBusy()) return false;
+                if (!force) {
+                    var dirty = false;
+                    try { dirty = !!(this._inlineCommonContentEditor &&
+                        this._inlineCommonContentEditor.hasUnsavedChanges()); } catch (_) { dirty = true; }
+                    if (dirty) return this.requestCloseInlineCommonContent();
+                }
+                var shouldRefresh = launch.applyAttempted && options.refreshAfterAttempt !== false;
+                if (launch.abort) launch.abort.abort();
+                var editor = this._inlineCommonContentEditor;
+                this._inlineCommonContentEditor = null;
+                if (editor && typeof editor.destroy === 'function') {
+                    try { editor.destroy(); } catch (_) {}
+                }
+                var discardDialog = this.$refs.inlineCommonContentDiscardDialog;
+                if (discardDialog && discardDialog.open) discardDialog.close();
+                var dialog = this.$refs.inlineCommonContentDialog;
+                if (dialog && dialog.open) dialog.close();
+                this.inlineCommonContentLoading = false;
+                this.inlineCommonContentError = '';
+                this.inlineCommonContentCanRetry = false;
+                this.inlineCommonContentBusy = false;
+                this.inlineCommonContentCount = 0;
+                this._inlineCommonContentLaunch = null;
+                this._inlineCommonContentDiscardReturnFocus = null;
+                if (shouldRefresh) this.refreshInlineCommonContentAfterExit(launch);
+                else if (options.restoreFocus !== false) this.restoreInlineCommonContentFocus(launch);
+                return true;
+            },
+            refreshInlineCommonContentAfterExit: function (launch) {
+                if (!launch || launch.exitRefreshStarted) return false;
+                launch.exitRefreshStarted = true;
+                var self = this;
+                var pageSize = Math.min(MAX_BULK_SELECTION, Math.max(50,
+                    Math.ceil(launch.feedIds.length / 50) * 50));
+                var refresh;
+                try { refresh = this.load({ inlineCommonContentPerPage: pageSize }); }
+                catch (_) { this.restoreInlineCommonContentFocus(launch); return false; }
+                var revision = this._feedRevision;
+                if (!refresh || typeof refresh.then !== 'function') {
+                    this.restoreInlineCommonContentFocus(launch);
+                    return false;
+                }
+                return Promise.resolve(refresh).then(function (data) {
+                    var scopeCurrent = self._feedRevision === revision &&
+                        self.feedScopeKey() === launch.scopeKey &&
+                        self.itemsScope === launch.scopeKey &&
+                        (self.searchInput || '').trim().slice(0, 200) === launch.searchValue &&
+                        self.filters.search === launch.searchValue &&
+                        launch.batchMode === (self.importBatchMode || self.supplierRefreshBatchMode);
+                    if (!scopeCurrent || !sameOrderedIds(self.selected, launch.selectionIds)) return false;
+                    if (self.loading || self.error || !data || data.success !== true) {
+                        self.workspaceReturnChanged();
+                        return false;
+                    }
+                    var freshIds = orderedProductIds(self.items);
+                    if (!freshIds) {
+                        self.workspaceReturnChanged();
+                        return false;
+                    }
+                    if (launch.batchMode) {
+                        var batchIsExact = self.importBatchMode
+                            ? exactImportBatchPage(data, self.supplierRefreshResultBatchMode
+                                ? 'supplier_refresh_result' : 'import')
+                            : self.supplierRefreshBatchMode && exactSupplierRefreshBatchPage(data);
+                        if (!batchIsExact || !sameOrderedIds(freshIds, orderedProductIds(data.items)) ||
+                            !launch.selectionIds.every(function (id) { return freshIds.indexOf(id) !== -1; })) {
+                            self.workspaceReturnChanged();
+                            return false;
+                        }
+                        self.selected = launch.selectionIds.slice();
+                        return true;
+                    }
+                    var exactPage = exactWorkspaceFeedPage(data, pageSize);
+                    if (!exactPage || !sameOrderedIds(freshIds, exactPage.ids)) {
+                        self.workspaceReturnChanged();
+                        return false;
+                    }
+                    if (!launch.selectionIds.length) return true;
+                    self.selected = launch.selectionIds.slice();
+                    return self.readSelectionReviewRows(launch.selectionIds, {
+                        activate: launch.selectionReviewActive,
+                    }).then(function (result) {
+                        if (!result || !result.ok) self.workspaceReturnChanged();
+                        return !!(result && result.ok);
+                    });
+                }).catch(function () {
+                    self.workspaceReturnChanged();
+                    return false;
+                }).finally(function () {
+                    self.restoreInlineCommonContentFocus(launch);
+                });
+            },
             navigateCommonContent: function (editorIds, selectionIds) {
                 var scope = this.buildWorkspaceReturnScope();
                 if (!scope) {
@@ -3112,7 +3524,10 @@
                     this.error = 'Не удалось проверить товар. Обновите список и повторите действие.';
                     return;
                 }
-                this.navigateCommonContent([item.id], this.selected.slice());
+                this.openInlineCommonContent([item.id], this.selected.slice(), {
+                    source: 'row',
+                    trigger: event.currentTarget,
+                });
             },
             feedScopeKey: function () {
                 if (this.importBatchMode) {
@@ -3133,7 +3548,14 @@
                 this._selectAllRevision = (this._selectAllRevision || 0) + 1;
                 this.selectAllLoading = false;
             },
-            load: function () {
+            load: function (options) {
+                options = options || {};
+                var inlinePageSize = options.inlineCommonContentPerPage;
+                if (inlinePageSize !== undefined &&
+                    (!Number.isSafeInteger(inlinePageSize) || inlinePageSize < 50 ||
+                        inlinePageSize > MAX_BULK_SELECTION || inlinePageSize % 50 !== 0)) {
+                    return Promise.resolve(null);
+                }
                 var self = this;
                 this.invalidateWbEditHandoff();
                 this.invalidateOzonWorkspaceUpdate();
@@ -3167,6 +3589,7 @@
                     !this.supplierRefreshBatchMode
                     ? Math.ceil(workspaceReturn.scope.visibleCount / 50) * 50
                     : undefined;
+                var requestPerPage = inlinePageSize || restorePerPage;
                 var abort = new AbortController();
                 this._abort = abort;
                 this.loading = true;
@@ -3186,11 +3609,16 @@
                                 : 'Эта подборка недоступна. Вернитесь через «Все мои товары».';
                         this.loading = false;
                         if (this._abort === abort) this._abort = null;
-                        return;
+                        return Promise.resolve(null);
                     }
                 }
-                this.$api.get(this.urls.feed, this.queryParams(1, restorePerPage), { signal: abort.signal })
+                var inlineLoadData = null;
+                var feedRequest = this.$api.get(
+                    this.urls.feed, this.queryParams(1, requestPerPage), { signal: abort.signal }
+                );
+                return Promise.resolve(feedRequest)
                     .then(function (data) {
+                        inlineLoadData = data;
                         if (abort.signal.aborted || self._feedRevision !== revision) return;
                         if (workspaceReturn) {
                             if (!self.workspaceReturnScopeMatches(workspaceReturn.scope)) {
@@ -3410,7 +3838,7 @@
                             self._feedRevision === revision) {
                             self.consumeWorkspaceReturn(workspaceReturn.nonce);
                         }
-                    });
+                    }).then(function () { return inlineLoadData; });
             },
             loadMore: function () {
                 if (this.importBatchMode || this.supplierRefreshBatchMode || this.selectionReviewActive) return;
@@ -4213,7 +4641,10 @@
                         this.error = 'За один раз можно открыть не больше 50 товаров. Снимите часть отметок.';
                         return;
                     }
-                    this.navigateCommonContent(productIds, selectionIds);
+                    this.openInlineCommonContent(productIds, selectionIds, {
+                        source: 'bulk',
+                        returnFocus: returnFocus,
+                    });
                     return;
                 }
                 if (action.key === 'wb_edit') {

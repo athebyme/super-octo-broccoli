@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/common_product_content_editor.html" import common_content_effect_note, common_content_editor_body %}
 
 {% block title %}Данные товара · Seller Hub{% endblock %}
 
@@ -14,16 +15,7 @@
 }
 </style>
 
-<script type="application/json" id="common-content-bootstrap">{{ {
-    'products': products,
-    'selectedProductIds': selected_product_ids,
-    'csrfToken': common_content_csrf_token,
-    'previewUrl': url_for('common_product_content.preview_common_product_content'),
-    'applyUrl': url_for('common_product_content.apply_common_product_content'),
-    'readUrlBase': '/api/my-products/',
-    'workspaceUrl': url_for('seller_my_products_beta'),
-    'workspaceOwner': (current_user.id|string) ~ ':' ~ (current_user.seller.id|string),
-} | tojson }}</script>
+<script type="application/json" id="common-content-bootstrap">{{ common_content_bootstrap | tojson }}</script>
 
 <div id="common-content-editor" class="cpc-page">
     <header class="cpc-header">
@@ -35,10 +27,7 @@
         <a data-workspace-return-link class="sh-btn sh-btn--secondary" href="{{ url_for('seller_my_products') }}">Вернуться к товарам</a>
     </header>
 
-    <aside class="cpc-effect-note" role="note" aria-label="Что изменится при сохранении">
-        <span class="cpc-effect-mark" aria-hidden="true">≡</span>
-        <p><strong>Сохраняются только данные товара в Seller Hub.</strong> Черновики и опубликованные карточки WB и Ozon не меняются. Чтобы обновить карточку, откройте соответствующий маркетплейс, проверьте изменения и подтвердите их отдельно.</p>
-    </aside>
+    {{ common_content_effect_note() }}
 
     {% if not products %}
     <section class="cpc-empty" aria-labelledby="cpc-empty-title">
@@ -47,27 +36,9 @@
         <a data-workspace-return-link class="sh-btn sh-btn--primary" href="{{ url_for('seller_my_products') }}">Открыть мои товары</a>
     </section>
     {% else %}
-    <div class="cpc-layout" data-product-count="{{ products|length }}">
-        <aside class="cpc-selection" aria-labelledby="cpc-selection-title">
-            <div class="cpc-selection-head">
-                <h2 id="cpc-selection-title">Выбранные товары</h2>
-                <span>{{ products|length }} / 50</span>
-            </div>
-            <p class="cpc-selection-help">Изменения сохраняются отдельно для каждого товара.</p>
-            <nav aria-label="Перейти к выбранному товару">
-                <ul id="common-content-product-list" class="cpc-product-list"></ul>
-            </nav>
-        </aside>
-
-        <section class="cpc-workspace" aria-label="Редактирование данных товара">
-            <div id="common-content-error" class="cpc-message cpc-message--error" role="alert" tabindex="-1" hidden></div>
-            <div id="common-content-status" class="cpc-message cpc-message--status" role="status" aria-live="polite" hidden></div>
-            <div id="common-content-fields"></div>
-            <div id="common-content-preview" hidden></div>
-        </section>
-    </div>
+    {{ common_content_editor_body(products|length) }}
     {% endif %}
 </div>
 
-<script src="{{ url_for('static', filename='common-product-content.js', v='20261123-common-content-provenance-r37') }}" defer></script>
+<script src="{{ url_for('static', filename='common-product-content.js', v='20261123-inline-common-editor-r1') }}" defer></script>
 {% endblock %}

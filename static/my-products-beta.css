@@ -382,6 +382,75 @@
 .mp-ozon-dialog--prepare .mp-ozon-actions { margin-top:18px; }
 .mp-ozon-dialog--prepare .sh-btn { min-height:44px; }
 
+/* The shared common-content editor stays in the catalog's native modal layer. */
+.mp-inline-common-dialog {
+    display:none;
+    flex-direction:column;
+    gap:10px;
+    width:min(1280px, calc(100vw - 20px));
+    max-width:calc(100vw - 20px);
+    max-height:min(94vh, 900px);
+    max-height:min(94dvh, 900px);
+    box-sizing:border-box;
+    padding:clamp(12px, 2vw, 22px);
+    border:1px solid var(--border);
+    border-radius:10px;
+    background:var(--bg-card);
+    color:var(--text);
+    box-shadow:0 25px 75px #0005;
+    overflow:hidden;
+    overscroll-behavior:contain;
+}
+.mp-inline-common-dialog[open] { display:flex; }
+.mp-inline-common-dialog::backdrop { background:#171a1dcc; }
+.mp-inline-common-dialog-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex:none; }
+.mp-inline-common-dialog-head > div { min-width:0; }
+.mp-inline-common-eyebrow { margin:0 0 3px; color:var(--accent-text); font-size:11px; font-weight:650; }
+.mp-inline-common-dialog-head h2 { margin:0; color:var(--text); font-size:20px; line-height:1.25; }
+.mp-inline-common-dialog-head h2:focus { outline:2px solid var(--focus-outline); outline-offset:4px; border-radius:2px; }
+.mp-inline-common-close { display:inline-grid; flex:0 0 44px; place-items:center; width:44px; height:44px; padding:0; border:1px solid var(--border); border-radius:6px; background:var(--bg-card); color:var(--text); font-size:25px; line-height:1; cursor:pointer; }
+.mp-inline-common-close:hover { background:var(--bg-hover); }
+.mp-inline-common-close:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
+.mp-inline-common-close:disabled { color:var(--text-muted); cursor:wait; }
+.mp-inline-common-status,
+.mp-inline-common-error { flex:none; margin:0; padding:9px 11px; border-radius:var(--r-sm); font-size:13px; line-height:1.45; }
+.mp-inline-common-status { border:1px solid var(--border); color:var(--text-secondary); background:var(--bg-hover); }
+.mp-inline-common-error { border:1px solid var(--danger-border); color:var(--danger); background:var(--danger-bg); }
+.mp-inline-common-error p { margin:0 0 8px; }
+.mp-inline-common-error p:last-child { margin-bottom:0; }
+.mp-inline-common-error:focus { outline:2px solid var(--focus-outline); outline-offset:2px; }
+.mp-inline-common-dialog [data-inline-common-editor] { min-width:0; min-height:0; flex:1 1 auto; overflow:auto; overscroll-behavior:contain; }
+.mp-inline-common-dialog .cpc-layout[data-product-count="1"] { grid-template-columns:minmax(0, 1fr); gap:.75rem; }
+.mp-inline-common-dialog .cpc-layout[data-product-count="1"] .cpc-selection { display:none; }
+.mp-inline-common-dialog #common-content-editor .cpc-diff-row { grid-template-columns:minmax(6rem, .55fr) repeat(3, minmax(0, 1fr)); }
+.mp-inline-common-dialog #common-content-editor .cpc-diff-label { min-width:0; overflow-wrap:anywhere; }
+.mp-inline-common-dialog #common-content-editor .cpc-preview-confirm input:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
+.mp-inline-common-discard-dialog {
+    width:min(520px, calc(100vw - 24px));
+    max-width:calc(100vw - 24px);
+    box-sizing:border-box;
+    padding:20px;
+    border:1px solid var(--border);
+    border-radius:10px;
+    background:var(--bg-card);
+    color:var(--text);
+    box-shadow:0 25px 75px #0007;
+}
+.mp-inline-common-discard-dialog::backdrop { background:#171a1dcc; }
+.mp-inline-common-discard-dialog h3 { margin:0; font-size:18px; line-height:1.3; }
+.mp-inline-common-discard-dialog h3:focus { outline:2px solid var(--focus-outline); outline-offset:4px; border-radius:2px; }
+.mp-inline-common-discard-dialog p { margin:9px 0 16px; color:var(--text-secondary); font-size:13px; line-height:1.5; }
+.mp-inline-common-discard-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
+.mp-inline-common-discard-actions .sh-btn { min-height:44px; }
+.mp-inline-common-discard-actions .sh-btn:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
+@media (max-width:760px) {
+    .mp-inline-common-dialog { width:calc(100vw - 12px); max-width:calc(100vw - 12px); max-height:96vh; max-height:96dvh; padding:8px; }
+    .mp-inline-common-dialog #common-content-editor.cpc-page { width:min(100% - .5rem, 90rem); padding:.75rem 0 2rem; }
+    .mp-inline-common-dialog #common-content-editor .cpc-diff-row { grid-template-columns:minmax(0, 1fr); }
+    .mp-inline-common-dialog #common-content-editor .cpc-diff-label { grid-column:auto; }
+    .mp-inline-common-discard-dialog { width:calc(100vw - 16px); max-width:calc(100vw - 16px); padding:14px; }
+}
+
 /* Local supplier preview: the summary and decision stay visible while rows scroll. */
 .mp-supplier-refresh-dialog {
     flex-direction:column;

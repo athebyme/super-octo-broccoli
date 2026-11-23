@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/common_product_content_editor.html" import common_content_effect_note, common_content_editor_body %}
 
 {% set import_batch_context = import_batch|default(none) %}
 {% set import_batch_kind_context = batch_kind|default('import' if import_batch_context is not none else none) %}
@@ -6,8 +7,9 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-category-filter-r73') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-inline-common-dialog-r1') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261123-unified-catalog-prices-r63b') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='common-product-content.css', v='20261123-inline-common-editor-r1') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
     'wbConnected': wb_connected,
@@ -625,7 +627,7 @@
                             class="shk-actions-item" :class="{'is-danger': action.danger}"
                             :data-bulk-action-key="action.key"
                             :disabled="action.disabled"
-                            @click="startAction(action); $event.currentTarget.closest('details').open = false">
+                            @click="startAction(action, $event.currentTarget.closest('details').querySelector('summary')); $event.currentTarget.closest('details').open = false">
                         <span class="shk-actions-item-label">{{ action.label }}</span>
                         <span v-if="action.hint" class="shk-actions-item-hint">{{ action.hint }}</span>
                     </button>
@@ -695,6 +697,67 @@
                 :details="confirm.details" :confirm-label="confirm.label"
                 :danger="confirm.danger" :busy="confirm.busy"
                 @confirm="runAction" @cancel="cancelAction"></sh-confirm>
+    <dialog ref="inlineCommonContentDialog" class="mp-inline-common-dialog"
+            data-inline-common-dialog
+            aria-labelledby="mp-inline-common-title"
+            :aria-busy="inlineCommonContentLoading || inlineCommonContentBusy ? 'true' : 'false'"
+            @cancel.prevent="requestCloseInlineCommonContent">
+        <header class="mp-inline-common-dialog-head">
+            <div>
+                <p v-if="inlineCommonContentCount > 1" class="mp-inline-common-eyebrow">
+                    {{ inlineCommonContentCount }} {{ $fmt.plural(inlineCommonContentCount, 'товар', 'товара', 'товаров') }}
+                </p>
+                <h2 id="mp-inline-common-title" ref="inlineCommonContentTitle" tabindex="-1">Данные товара</h2>
+            </div>
+            <button ref="inlineCommonContentClose" type="button" class="mp-inline-common-close"
+                    data-inline-common-close
+                    aria-label="Закрыть данные товара"
+                    :disabled="inlineCommonContentBusy"
+                    @click="requestCloseInlineCommonContent">×</button>
+        </header>
+        <p v-if="inlineCommonContentLoading" class="mp-inline-common-status"
+           role="status" aria-live="polite" aria-atomic="true">
+            Загружаем данные товаров…
+        </p>
+        <section v-if="inlineCommonContentError" ref="inlineCommonContentErrorNode"
+                 class="mp-inline-common-error" role="alert" tabindex="-1">
+            <p>{{ inlineCommonContentError }}</p>
+            <button v-if="inlineCommonContentCanRetry" type="button"
+                    class="sh-btn sh-btn--secondary"
+                    data-inline-common-retry
+                    @click="retryInlineCommonContent">Повторить чтение</button>
+        </section>
+        {% endraw %}
+        <div id="common-content-editor" ref="inlineCommonContentMount"
+             class="cpc-page" data-inline-common-editor
+             v-show="!inlineCommonContentLoading && !inlineCommonContentError">
+            {{ common_content_effect_note(compact=true) }}
+            {{ common_content_editor_body(0) }}
+        </div>
+        {% raw %}
+        <dialog ref="inlineCommonContentDiscardDialog"
+                class="mp-inline-common-discard-dialog"
+                data-inline-common-discard-dialog
+                role="alertdialog" aria-modal="true"
+                aria-labelledby="mp-inline-common-discard-title"
+                aria-describedby="mp-inline-common-discard-description"
+                @cancel.prevent="cancelInlineCommonContentDiscard">
+            <h3 id="mp-inline-common-discard-title" ref="inlineCommonContentDiscardTitle" tabindex="-1">
+                Отменить несохранённые правки?
+            </h3>
+            <p id="mp-inline-common-discard-description">
+                Правки в этом окне будут потеряны.
+            </p>
+            <div class="mp-inline-common-discard-actions">
+                <button type="button" class="sh-btn sh-btn--secondary"
+                        data-inline-common-discard-cancel
+                        @click="cancelInlineCommonContentDiscard">Продолжить правку</button>
+                <button type="button" class="sh-btn sh-btn--primary"
+                        data-inline-common-discard-confirm
+                        @click="confirmInlineCommonContentDiscard">Закрыть без сохранения</button>
+            </div>
+        </dialog>
+    </dialog>
     <dialog ref="supplierRefreshDialog" class="mp-supplier-refresh-dialog"
             aria-labelledby="mp-supplier-refresh-dialog-title"
             :aria-busy="supplierRefreshReview && ['loading', 'applying'].includes(supplierRefreshReview.phase) ? 'true' : 'false'"
@@ -818,7 +881,7 @@
 
 <script src="{{ url_for('static', filename='vendor/vue-3.5.46.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
-<script src="{{ url_for('static', filename='common-product-content.js', v='20261122-ozon-update-return-r56') }}"></script>
+<script src="{{ url_for('static', filename='common-product-content.js', v='20261123-inline-common-editor-r1') }}"></script>
 <script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261123-unified-catalog-prices-r63b') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-category-filter-r73') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-inline-common-dialog-r1') }}"></script>
 {% endblock %}

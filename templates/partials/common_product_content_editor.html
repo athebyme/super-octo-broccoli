@@ -1,0 +1,32 @@
+{% macro common_content_effect_note(compact=false) %}
+<aside class="cpc-effect-note" role="note" aria-label="Что изменится при сохранении">
+    <span class="cpc-effect-mark" aria-hidden="true">≡</span>
+    {% if compact %}
+    <p><strong>Правки сохранятся в Seller Hub.</strong> Карточки WB и Ozon обновляются отдельно.</p>
+    {% else %}
+    <p><strong>Сохраняются только данные товара в Seller Hub.</strong> Черновики и опубликованные карточки WB и Ozon не меняются. Чтобы обновить карточку, откройте соответствующий маркетплейс, проверьте изменения и подтвердите их отдельно.</p>
+    {% endif %}
+</aside>
+{% endmacro %}
+
+{% macro common_content_editor_body(product_count) %}
+<div class="cpc-layout" data-product-count="{{ product_count }}">
+    <aside class="cpc-selection" aria-labelledby="cpc-selection-title">
+        <div class="cpc-selection-head">
+            <h2 id="cpc-selection-title">Выбранные товары</h2>
+            <span data-common-content-count>{{ product_count }} / 50</span>
+        </div>
+        <p class="cpc-selection-help">Изменения сохраняются отдельно для каждого товара.</p>
+        <nav aria-label="Перейти к выбранному товару">
+            <ul id="common-content-product-list" class="cpc-product-list"></ul>
+        </nav>
+    </aside>
+
+    <section class="cpc-workspace" aria-label="Редактирование данных товара">
+        <div id="common-content-error" class="cpc-message cpc-message--error" role="alert" tabindex="-1" hidden></div>
+        <div id="common-content-status" class="cpc-message cpc-message--status" role="status" aria-live="polite" hidden></div>
+        <div id="common-content-fields"></div>
+        <div id="common-content-preview" hidden></div>
+    </section>
+</div>
+{% endmacro %}

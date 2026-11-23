@@ -2,7 +2,7 @@
 
 import json
 
-from flask import Blueprint, current_app, jsonify, render_template, request
+from flask import Blueprint, current_app, jsonify, make_response, render_template, request, url_for
 from flask_login import current_user, login_required
 from flask_wtf.csrf import generate_csrf
 from werkzeug.exceptions import RequestEntityTooLarge
@@ -42,6 +42,44 @@ def _error(error: CommonProductContentError):
         "error": str(error),
         "code": error.code,
     }), error.status_code
+
+
+def _editor_bootstrap(*, products, selected_product_ids):
+    """Return the single bootstrap contract shared by HTML and JSON callers."""
+    return {
+        "products": products,
+        "selectedProductIds": selected_product_ids,
+        "csrfToken": generate_csrf(),
+        "previewUrl": url_for("common_product_content.preview_common_product_content"),
+        "applyUrl": url_for("common_product_content.apply_common_product_content"),
+        "readUrlBase": "/api/my-products/",
+        "workspaceUrl": url_for("seller_my_products_beta"),
+        "workspaceOwner": f"{current_user.id}:{current_user.seller.id}",
+    }
+
+
+def _request_prefers_json() -> bool:
+    """Negotiate the editor bootstrap without changing the normal HTML URL."""
+    return request.accept_mimetypes.best_match(
+        ("text/html", "application/json"),
+    ) == "application/json"
+
+
+def _editor_page_response(payload, *, status_code=200):
+    response = make_response(jsonify(payload), status_code)
+    response.vary.add("Accept")
+    if _request_prefers_json():
+        response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+def _editor_page_error(error):
+    db.session.rollback()
+    return _editor_page_response({
+        "success": False,
+        "error": str(error),
+        "code": error.code,
+    }, status_code=error.status_code)
 
 
 def _read_json_body(*, expected_keys: set[str]):
@@ -163,36 +201,69 @@ def register_common_product_content_routes(app) -> None:
     def common_product_content_editor_page():
         identity = _identity()
         if identity is None:
-            return jsonify(success=False, error="Для этой операции нужен кабинет продавца", code="seller_required"), 404
+            return _editor_page_response({
+                "success": False,
+                "error": "Для этой операции нужен кабинет продавца",
+                "code": "seller_required",
+            }, status_code=404)
         seller_id, _ = identity
         if set(request.args.keys()) - {"product_id"}:
-            return jsonify(success=False, error="Используйте только параметр product_id", code="invalid_selection"), 400
+            return _editor_page_response({
+                "success": False,
+                "error": "Используйте только параметр product_id",
+                "code": "invalid_selection",
+            }, status_code=400)
         raw_ids = request.args.getlist("product_id")
         if len(raw_ids) > 50:
-            return jsonify(success=False, error="Можно открыть не больше 50 товаров", code="too_many_items"), 413
+            return _editor_page_response({
+                "success": False,
+                "error": "Можно открыть не больше 50 товаров",
+                "code": "too_many_items",
+            }, status_code=413)
         product_ids = []
         for raw_id in raw_ids:
             if (
                 not raw_id.isascii() or not raw_id.isdigit()
                 or len(raw_id) > 19
             ):
-                return jsonify(success=False, error="Выбор содержит неверный ID товара", code="invalid_selection"), 400
+                return _editor_page_response({
+                    "success": False,
+                    "error": "Выбор содержит неверный ID товара",
+                    "code": "invalid_selection",
+                }, status_code=400)
             product_id = int(raw_id)
             if product_id <= 0 or product_id > MAX_DB_ID:
-                return jsonify(success=False, error="Выбор содержит неверный ID товара", code="invalid_selection"), 400
+                return _editor_page_response({
+                    "success": False,
+                    "error": "Выбор содержит неверный ID товара",
+                    "code": "invalid_selection",
+                }, status_code=400)
             product_ids.append(product_id)
         if len(product_ids) != len(set(product_ids)):
-            return jsonify(success=False, error="Выбор содержит повтор товара", code="duplicate_selection"), 400
+            return _editor_page_response({
+                "success": False,
+                "error": "Выбор содержит повтор товара",
+                "code": "duplicate_selection",
+            }, status_code=400)
         try:
             products = (
                 CommonProductContentService.read_many(seller_id=seller_id, product_ids=product_ids)
                 if product_ids else []
             )
         except CommonProductContentError as error:
-            return _error(error)
-        return render_template(
-            "common_product_content.html",
+            return _editor_page_error(error)
+        bootstrap = _editor_bootstrap(
             products=products,
             selected_product_ids=product_ids,
-            common_content_csrf_token=generate_csrf(),
         )
+        if _request_prefers_json():
+            response = _editor_page_response({"success": True, **bootstrap})
+        else:
+            response = make_response(render_template(
+                "common_product_content.html",
+                products=products,
+                selected_product_ids=product_ids,
+                common_content_bootstrap=bootstrap,
+            ))
+            response.vary.add("Accept")
+        return response

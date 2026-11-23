@@ -92,6 +92,113 @@ def test_get_is_seller_scoped_and_returns_effective_inherited_contract(api):
     assert missing.status_code == 404
 
 
+def test_editor_json_bootstrap_negotiates_explicit_json_and_is_private_no_store(api):
+    app, client, (seller_id, user_id, own_id, _) = api
+    app.add_url_rule("/my-products", endpoint="seller_my_products", view_func=lambda: "catalog")
+    app.add_url_rule("/my-products/beta", endpoint="seller_my_products_beta", view_func=lambda: "beta")
+    user_patch, login_patch = _auth(seller_id, user_id)
+    rendered = {}
+
+    def fake_render_template(template, **context):
+        rendered["template"] = template
+        rendered.update(context)
+        return "html editor"
+
+    with user_patch, login_patch, patch(
+        "routes.common_product_content.render_template",
+        side_effect=fake_render_template,
+    ):
+        html_tie = client.get(
+            f"/my-products/common-content?product_id={own_id}",
+            headers={"Accept": "text/html, application/json"},
+        )
+        json_response = client.get(
+            f"/my-products/common-content?product_id={own_id}",
+            headers={"Accept": "application/json, text/html;q=0.8"},
+        )
+
+    assert html_tie.status_code == 200
+    assert html_tie.get_data(as_text=True) == "html editor"
+    assert rendered["template"] == "common_product_content.html"
+    assert rendered["common_content_bootstrap"]["selectedProductIds"] == [own_id]
+    assert "Accept" in html_tie.vary
+
+    assert json_response.status_code == 200
+    payload = json_response.get_json()
+    assert set(payload) == {
+        "success", "products", "selectedProductIds", "csrfToken", "previewUrl",
+        "applyUrl", "readUrlBase", "workspaceUrl", "workspaceOwner",
+    }
+    assert payload["success"] is True
+    assert payload["selectedProductIds"] == [own_id]
+    assert [product["product_id"] for product in payload["products"]] == [own_id]
+    assert payload["csrfToken"]
+    assert payload["csrfToken"] == rendered["common_content_bootstrap"]["csrfToken"]
+    assert payload["previewUrl"] == rendered["common_content_bootstrap"]["previewUrl"]
+    assert payload["applyUrl"] == rendered["common_content_bootstrap"]["applyUrl"]
+    assert payload["workspaceUrl"] == "/my-products/beta"
+    assert payload["workspaceOwner"] == f"{user_id}:{seller_id}"
+    assert json_response.headers["Cache-Control"] == "private, no-store"
+    assert "Accept" in json_response.vary
+
+
+def test_json_editor_selection_errors_are_private_no_store(api):
+    app, client, (seller_id, user_id, own_id, foreign_id) = api
+    app.add_url_rule("/my-products", endpoint="seller_my_products", view_func=lambda: "catalog")
+    app.add_url_rule("/my-products/beta", endpoint="seller_my_products_beta", view_func=lambda: "beta")
+    user_patch, login_patch = _auth(seller_id, user_id)
+    accept_json = {"Accept": "application/json"}
+    with user_patch, login_patch:
+        responses = [
+            client.get("/my-products/common-content?product_id=not-an-id", headers=accept_json),
+            client.get(
+                f"/my-products/common-content?product_id={own_id}&product_id={own_id}",
+                headers=accept_json,
+            ),
+            client.get(
+                "/my-products/common-content?" + "&".join("product_id=" + str(index + 1) for index in range(51)),
+                headers=accept_json,
+            ),
+            client.get(f"/my-products/common-content?product_id={foreign_id}", headers=accept_json),
+        ]
+
+    assert [(response.status_code, response.get_json()["code"]) for response in responses] == [
+        (400, "invalid_selection"),
+        (400, "duplicate_selection"),
+        (413, "too_many_items"),
+        (404, "common_content_not_found"),
+    ]
+    assert all(response.headers["Cache-Control"] == "private, no-store" for response in responses)
+    assert all("Accept" in response.vary for response in responses)
+
+
+def test_json_editor_missing_seller_error_is_private_no_store(api):
+    app, client, (_, user_id, _, _) = api
+    missing_seller = SimpleNamespace(
+        id=user_id,
+        seller=None,
+        is_authenticated=True,
+        is_active=True,
+        is_admin=False,
+    )
+    with patch("routes.common_product_content.current_user", missing_seller), patch(
+        "flask_login.utils._get_user", return_value=missing_seller,
+    ):
+        response = client.get(
+            "/my-products/common-content",
+            headers={"Accept": "application/json"},
+        )
+
+    assert response.status_code == 404
+    assert response.get_json() == {
+        "success": False,
+        "error": "Для этой операции нужен кабинет продавца",
+        "code": "seller_required",
+    }
+    assert response.headers["Cache-Control"] == "private, no-store"
+    assert "Accept" in response.vary
+
+
 def test_preview_apply_uses_signed_review_and_server_actor_audit(api):
     app, client, (seller_id, user_id, product_id, _) = api
     user_patch, login_patch = _auth(seller_id, user_id)

@@ -364,6 +364,15 @@ def selected_browser_state(page):
     }""")
 
 
+def disable_inline_common_content_mount(page):
+    """Keep legacy full-document navigation assertions on their fallback path."""
+    return page.evaluate("""() => {
+        window.SellerHubCommonContent = window.SellerHubCommonContent || {};
+        window.SellerHubCommonContent.mountEditor = null;
+        return window.SellerHubCommonContent.mountEditor === null;
+    }""")
+
+
 def refresh_ozon_button(page, count=1):
     return page.get_by_role("button", name=f"Подготовить для Ozon ({count})")
 
@@ -2189,6 +2198,9 @@ def run():
             "boxes => boxes.filter(box => box.checked).map(box => Number(box.value))"
         )
         assert selected_ids == expected_ids[:50], (selected_ids[:3], expected_ids[:3], len(selected_ids))
+        # This assertion covers the classic document navigation and query
+        # contract, so make the inline editor unavailable for this click.
+        assert disable_inline_common_content_mount(page) is True
         with page.expect_response(lambda response: urlsplit(response.url).path == "/my-products/common-content"
                                   and response.request.method == "GET") as content_review:
             pick_action(page, "Изменить общий контент")
@@ -3258,6 +3270,9 @@ def run():
         assert parse_qs(plain_parts.query) == {"product_id": [str(imported_local_id)]}
         assert not plain_parts.fragment
 
+        # This flow checks the direct URL, return capsule, and classic reload;
+        # explicitly exercise it with inline mounting unavailable.
+        assert disable_inline_common_content_mount(page) is True
         # Ctrl-click stays a direct editor URL and does not mint a return
         # capsule. This preserves the link's ordinary browser behavior.
         with context.expect_page() as direct_editor_page:

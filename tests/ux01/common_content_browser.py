@@ -618,6 +618,13 @@ def query_ids(url: str) -> list[int]:
     return [int(value) for value in values]
 
 
+def invoke_common_content_document(page) -> int:
+    # This journey covers the standalone editor's return capsule and reload.
+    # A browser without dialog support still reaches that editor from Beta.
+    page.evaluate("HTMLDialogElement.prototype.showModal = undefined")
+    return invoke_workspace_action(page, "common_content")
+
+
 def beta_catalog_state(page) -> dict | None:
     return page.evaluate("""() => {
         const root = document.querySelector('#my-products-app');
@@ -1970,7 +1977,7 @@ def _run_bulk_50_case(page) -> None:
     assert beta_catalog_state(page)["selected"] == product_ids
     with page.expect_response(lambda response: urlsplit(response.url).path == "/my-products/common-content"
                               and response.request.method == "GET") as common_handoff:
-        assert invoke_workspace_action(page, "common_content") == 1
+        assert invoke_common_content_document(page) == 1
     assert common_handoff.value.status == 200
     page.wait_for_url(lambda value: _common_editor_url_matches(value, product_ids, with_return_nonce=True))
     page.locator("#common-content-editor").wait_for(state="visible")
@@ -2301,7 +2308,7 @@ def _run_bulk_50_case(page) -> None:
 
     # A single row leaving the captured search scope invalidates the whole
     # selection; no partial selection should be restored.
-    assert invoke_workspace_action(page, "common_content") == 1
+    assert invoke_common_content_document(page) == 1
     page.wait_for_url(lambda value: _common_editor_url_matches(
         value, product_ids, with_return_nonce=True,
     ))
@@ -3154,7 +3161,7 @@ def run():
         boxes.nth(1).check()
         ordinary_selection = beta_catalog_state(page)["selected"]
         assert set(ordinary_selection) == set(product_ids) and len(ordinary_selection) == 2
-        assert invoke_workspace_action(page, "common_content") in (1, 2)
+        assert invoke_common_content_document(page) in (1, 2)
         page.wait_for_url(lambda value: _common_editor_url_matches(
             value, ordinary_selection, with_return_nonce=True,
         ))
