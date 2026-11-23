@@ -5428,10 +5428,18 @@ def bulk_edit_history():
         error_out=False
     )
 
+    from services.wb_history_presentation import present_wb_bulk_operation
+
+    wb_history_presentations = {
+        operation.id: present_wb_bulk_operation(operation)
+        for operation in pagination.items
+    }
+
     return render_template(
         'bulk_edit_history.html',
         history_records=pagination.items,
-        pagination=pagination
+        pagination=pagination,
+        wb_history_presentations=wb_history_presentations,
     )
 
 
@@ -5499,12 +5507,15 @@ def bulk_edit_history_detail(bulk_id):
             ).all()
         }
 
+    from services.wb_history_presentation import present_wb_bulk_operation
+
     return render_template(
         'bulk_edit_history_detail.html',
         bulk_operation=bulk_operation,
         product_changes=product_changes,
         owned_product_ids=owned_product_ids,
         workspace_return=workspace_return,
+        wb_history_presentation=present_wb_bulk_operation(bulk_operation),
     )
 
 

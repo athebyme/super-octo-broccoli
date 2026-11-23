@@ -198,27 +198,22 @@
             </div>
         </div>
 
-        {% set operation_params = bulk_operation.operation_params if bulk_operation.operation_params is mapping else {} %}
-        {% set review_summary = operation_params.get('review_summary') %}
-        {% set review_summary_valid = review_summary is mapping
-            and review_summary.get('selected') is integer and review_summary.get('selected') is not boolean and review_summary.get('selected') >= 0
-            and review_summary.get('eligible') is integer and review_summary.get('eligible') is not boolean and review_summary.get('eligible') >= 0
-            and review_summary.get('changed') is integer and review_summary.get('changed') is not boolean and review_summary.get('changed') >= 0
-            and review_summary.get('skipped') is integer and review_summary.get('skipped') is not boolean and review_summary.get('skipped') >= 0 %}
+        {% set review_summary = wb_history_presentation.review_summary %}
+        {% set review_summary_valid = review_summary is mapping %}
 
         <!-- Статистика -->
         <div class="operations-stats-grid grid grid-cols-4 gap-4">
             <div class="bg-gray-50 p-4 rounded-lg">
                 <p class="text-xs text-gray-600 mb-1">Всего товаров</p>
-                <p class="text-3xl font-bold text-gray-900">{{ bulk_operation.total_products }}</p>
+                <p class="text-3xl font-bold text-gray-900">{{ '—' if wb_history_presentation.counts.total_products is none else wb_history_presentation.counts.total_products }}</p>
             </div>
             <div class="bg-green-50 p-4 rounded-lg">
                 <p class="text-xs text-gray-600 mb-1">Обработано без ошибки</p>
-                <p class="text-3xl font-bold text-green-700">{{ bulk_operation.success_count }}</p>
+                <p class="text-3xl font-bold text-green-700">{{ '—' if wb_history_presentation.counts.success_count is none else wb_history_presentation.counts.success_count }}</p>
             </div>
             <div class="bg-red-50 p-4 rounded-lg">
                 <p class="text-xs text-gray-600 mb-1">Ошибок</p>
-                <p class="text-3xl font-bold text-red-700">{{ bulk_operation.error_count }}</p>
+                <p class="text-3xl font-bold text-red-700">{{ '—' if wb_history_presentation.counts.error_count is none else wb_history_presentation.counts.error_count }}</p>
             </div>
             <div class="bg-blue-50 p-4 rounded-lg">
                 <p class="text-xs text-gray-600 mb-1">
@@ -226,13 +221,15 @@
                 </p>
                 <p class="text-3xl font-bold text-blue-700">
                     {% if review_summary_valid and review_summary.changed > 0 %}
-                        {{ "%.0f"|format((bulk_operation.success_count / review_summary.changed) * 100) }}%
+                        {% if wb_history_presentation.reviewed_counts_reconciled %}
+                            {{ "%.0f"|format((wb_history_presentation.counts.success_count / review_summary.changed) * 100) }}%
+                        {% else %}—{% endif %}
                     {% elif review_summary_valid %}
                         —
-                    {% elif bulk_operation.total_products > 0 %}
-                        {{ "%.0f"|format((bulk_operation.success_count / bulk_operation.total_products) * 100) }}%
+                    {% elif wb_history_presentation.counts.total_products is not none and wb_history_presentation.counts.total_products > 0 and wb_history_presentation.counts.success_count is not none %}
+                        {{ "%.0f"|format((wb_history_presentation.counts.success_count / wb_history_presentation.counts.total_products) * 100) }}%
                     {% else %}
-                        0%
+                        —
                     {% endif %}
                 </p>
             </div>
@@ -248,14 +245,26 @@
                 <div><dt class="text-xs text-gray-600">Пропущено</dt><dd class="text-xl font-semibold text-gray-900">{{ review_summary.skipped }}</dd></div>
             </dl>
             <p class="mt-4 text-sm text-gray-700">
-                Фактически обработано без ошибки: <strong>{{ bulk_operation.success_count }}</strong>
+                {% if wb_history_presentation.is_pending %}
+                Операция ещё не завершена. Подготовлено к записи: <strong>{{ review_summary.changed }}</strong>. Итоговые счётчики появятся после завершения.
+                {% elif wb_history_presentation.reviewed_counts_reconciled %}
+                Фактически обработано без ошибки: <strong>{{ wb_history_presentation.counts.success_count }}</strong>
                 из {{ review_summary.changed }} подготовленных карточек.
+                {% else %}
+                Результат выполнения не подтверждён числовым счётчиком.
+                {% endif %}
                 {% if review_summary.changed > 0 %}
-                    Это {{ "%.0f"|format((bulk_operation.success_count / review_summary.changed) * 100) }}% подготовленных карточек.
+                    {% if wb_history_presentation.is_pending %}
+                    Доля успеха пока неизвестна.
+                    {% elif wb_history_presentation.reviewed_counts_reconciled %}
+                    Это {{ "%.0f"|format((wb_history_presentation.counts.success_count / review_summary.changed) * 100) }}% подготовленных карточек.
+                    {% else %}
+                    Доля успеха неизвестна.
+                    {% endif %}
                 {% else %}
                     Доля успеха не рассчитывается: к записи не было подготовлено карточек.
                 {% endif %}
-                Ошибок операции: <strong>{{ bulk_operation.error_count }}</strong>.
+                Ошибок операции: <strong>{{ '—' if wb_history_presentation.counts.error_count is none else wb_history_presentation.counts.error_count }}</strong>.
                 {% if review_summary.get('errors') is integer and review_summary.get('errors') is not boolean and review_summary.get('errors') >= 0 %}
                     Ошибок при проверке и подготовке: <strong>{{ review_summary.errors }}</strong>.
                 {% endif %}

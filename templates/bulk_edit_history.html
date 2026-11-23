@@ -44,6 +44,7 @@
 
                         </div>
 
+                        {% set wb_history_presentation = wb_history_presentations.get(operation.id) %}
                         {% include 'partials/operations_workspace_wb_result.html' %}
 
                         <p class="text-sm text-gray-600">
@@ -62,15 +63,15 @@
                 <div class="grid grid-cols-3 gap-4 mb-4">
                     <div class="bg-gray-50 p-3 rounded-lg">
                         <p class="text-xs text-gray-600 mb-1">Всего товаров</p>
-                        <p class="text-2xl font-bold text-gray-900">{{ operation.total_products }}</p>
+                        <p class="text-2xl font-bold text-gray-900">{{ '—' if wb_history_presentation.counts.total_products is none else wb_history_presentation.counts.total_products }}</p>
                     </div>
                     <div class="bg-green-50 p-3 rounded-lg">
                         <p class="text-xs text-gray-600 mb-1">Обработано без ошибки</p>
-                        <p class="text-2xl font-bold text-green-700">{{ operation.success_count }}</p>
+                        <p class="text-2xl font-bold text-green-700">{{ '—' if wb_history_presentation.counts.success_count is none else wb_history_presentation.counts.success_count }}</p>
                     </div>
                     <div class="bg-red-50 p-3 rounded-lg">
                         <p class="text-xs text-gray-600 mb-1">Ошибок</p>
-                        <p class="text-2xl font-bold text-red-700">{{ operation.error_count }}</p>
+                        <p class="text-2xl font-bold text-red-700">{{ '—' if wb_history_presentation.counts.error_count is none else wb_history_presentation.counts.error_count }}</p>
                     </div>
                 </div>
 

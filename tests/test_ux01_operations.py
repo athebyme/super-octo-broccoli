@@ -30,7 +30,9 @@ def _app(*, ozon_enabled=True):
     ])
     endpoints = {
         "bulk_edit_history": "/bulk-history",
+        "bulk_edit_history_detail": "/bulk-history/<int:bulk_id>",
         "bulk_edit_export": "/bulk-history/<int:bulk_id>/export",
+        "products_bulk_edit": "/products/bulk-edit",
         "prices.prices_dashboard": "/prices/",
         "prices.prices_change": "/prices/change",
         "prices.prices_history": "/prices/history",
@@ -54,18 +56,23 @@ def _app(*, ozon_enabled=True):
 
 
 def test_bulk_completed_with_two_errors_is_not_shown_as_success():
+    from services.wb_history_presentation import present_wb_bulk_operation
+
     app = _app()
     operation = SimpleNamespace(
+        id=3,
         status="completed",
         total_products=2,
         success_count=0,
         error_count=2,
         reverted=False,
+        operation_params=None,
     )
     with app.test_request_context("/bulk-history"):
         html = render_template(
             "partials/operations_workspace_wb_result.html",
             operation=operation,
+            wb_history_presentation=present_wb_bulk_operation(operation),
         )
 
     assert "Завершено с ошибками" in html
@@ -76,6 +83,8 @@ def test_bulk_completed_with_two_errors_is_not_shown_as_success():
 
 
 def test_wb_detail_result_uses_hero_text_token():
+    from services.wb_history_presentation import present_wb_bulk_operation
+
     app = _app()
     operation = SimpleNamespace(
         status="completed",
@@ -88,6 +97,7 @@ def test_wb_detail_result_uses_hero_text_token():
         html = render_template(
             "partials/operations_workspace_wb_result.html",
             operation=operation,
+            wb_history_presentation=present_wb_bulk_operation(operation),
             operations_wb_result_context="dark-hero",
         )
     css = (ROOT / "static/operations-workspace.css").read_text()
@@ -201,13 +211,16 @@ def _render_bulk_history_detail(
     operation_params=None,
     total_products=2,
     success_count=0,
+    status="completed",
 ):
+    from services.wb_history_presentation import present_wb_bulk_operation
+
     app = _app()
     operation = SimpleNamespace(
         id=operation_id,
         seller_id=92,
         description="Synthetic bulk operation",
-        status="completed",
+        status=status,
         total_products=total_products,
         success_count=success_count,
         error_count=error_count,
@@ -226,6 +239,25 @@ def _render_bulk_history_detail(
             bulk_operation=operation,
             product_changes=product_changes or [],
             owned_product_ids=owned_product_ids or [],
+            wb_history_presentation=present_wb_bulk_operation(operation),
+        )
+
+
+def _render_bulk_history_list(operation):
+    from services.wb_history_presentation import present_wb_bulk_operation
+
+    app = _app()
+    pagination = SimpleNamespace(
+        items=[operation], pages=1, page=1, has_prev=False, has_next=False,
+    )
+    with app.test_request_context("/bulk-history"):
+        return render_template(
+            "bulk_edit_history.html",
+            history_records=[operation],
+            pagination=pagination,
+            wb_history_presentations={
+                operation.id: present_wb_bulk_operation(operation),
+            },
         )
 
 
@@ -266,10 +298,183 @@ def test_reviewed_batch31_summary_counts_skips_and_uses_changed_denominator():
     assert "Без ошибки из подготовленных" in html
     assert "4%" not in html
     assert "100%" in html
+    assert "Завершено</span>" in html
+    assert "без ошибки обработано 2 из 2" in html
+    assert "ошибок операции: 0" in html
+    assert "успешный результат не подтверждён счётчиками" not in html
     technical_start = html.index("Технические параметры операции")
     details_start = html.rfind("<details", 0, technical_start)
     assert "\"subject_id\": 123" in html[technical_start:]
     assert html.startswith('<details class="operations-technical-details mt-4">', details_start)
+
+    list_operation = SimpleNamespace(
+        id=31,
+        description="Synthetic reviewed batch 31",
+        status="completed",
+        total_products=50,
+        success_count=2,
+        error_count=0,
+        reverted=False,
+        created_at=datetime(2026, 9, 30, 12, 0, 0),
+        completed_at=datetime(2026, 9, 30, 12, 0, 1),
+        duration_seconds=1.0,
+        operation_params={
+            "review_summary": {
+                "selected": 50,
+                "eligible": 50,
+                "changed": 2,
+                "skipped": 48,
+                "errors": 0,
+            },
+        },
+        can_revert=lambda: False,
+    )
+    list_html = _render_bulk_history_list(list_operation)
+    assert "Завершено</span>" in list_html
+    assert "без ошибки обработано 2 из 2" in list_html
+    assert "2 из 50" not in list_html
+
+
+def test_reviewed_partial_history_uses_changed_denominator_in_list_and_detail():
+    from services.wb_history_presentation import present_wb_bulk_operation
+
+    operation = SimpleNamespace(
+        id=31,
+        seller_id=92,
+        description="Synthetic reviewed batch 31",
+        status="completed",
+        total_products=50,
+        success_count=1,
+        error_count=1,
+        reverted=False,
+        reverted_at=None,
+        created_at=datetime(2026, 9, 30, 12, 0, 0),
+        completed_at=datetime(2026, 9, 30, 12, 0, 1),
+        duration_seconds=1.0,
+        operation_params={
+            "review_summary": {
+                "selected": 50,
+                "eligible": 50,
+                "changed": 2,
+                "skipped": 48,
+                "errors": 0,
+            },
+        },
+        errors_details=None,
+        can_revert=lambda: False,
+    )
+    list_html = _render_bulk_history_list(operation)
+    detail_html = _render_bulk_history_detail(
+        [],
+        operation_id=31,
+        error_count=1,
+        total_products=50,
+        success_count=1,
+        operation_params=operation.operation_params,
+    )
+
+    for html in (list_html, detail_html):
+        assert "Завершено частично" in html
+        assert "без ошибки обработано 1 из 2" in html
+        assert "ошибок операции: 1" in html
+        assert "пропущено 48" in html
+        assert "1 из 50" not in html
+
+
+def test_reviewed_result_requires_complete_counts_and_keeps_pending_state():
+    from services.wb_history_presentation import present_wb_bulk_operation
+
+    base = {
+        "selected": 50,
+        "eligible": 50,
+        "changed": 2,
+        "skipped": 48,
+        "errors": 0,
+    }
+    incomplete = SimpleNamespace(
+        status="completed", total_products=50, success_count=1, error_count=0,
+        operation_params={"review_summary": base}, reverted=False,
+    )
+    pending = SimpleNamespace(
+        status="pending", total_products=50, success_count=2, error_count=0,
+        operation_params={"review_summary": base}, reverted=False,
+    )
+    over_counted = SimpleNamespace(
+        status="completed", total_products=50, success_count=2, error_count=1,
+        operation_params={"review_summary": base}, reverted=False,
+    )
+
+    incomplete_result = present_wb_bulk_operation(incomplete)
+    pending_result = present_wb_bulk_operation(pending)
+    over_counted_result = present_wb_bulk_operation(over_counted)
+    assert incomplete_result["label"] == "Завершено, успешный результат не подтверждён счётчиками"
+    assert "1 из 2" in incomplete_result["message"]
+    assert not incomplete_result["reviewed_counts_reconciled"]
+    assert pending_result["label"] == "Ожидает выполнения"
+    assert "ещё не завершена" in pending_result["message"]
+    assert not pending_result["reviewed_counts_reconciled"]
+    pending_detail = _render_bulk_history_detail(
+        [],
+        operation_id=31,
+        total_products=50,
+        success_count=2,
+        error_count=0,
+        status="pending",
+        operation_params={"review_summary": base},
+    )
+    assert "Операция ещё не завершена" in pending_detail
+    assert "Итоговые счётчики появятся после завершения" in pending_detail
+    assert "Ошибок операции: <strong>—</strong>" in pending_detail
+    assert "Доля успеха пока неизвестна" in pending_detail
+    assert over_counted_result["label"] == incomplete_result["label"]
+    assert "Счётчики выполнения не подтверждают полный результат" in over_counted_result["message"]
+    assert "Без ошибки обработано 2 из 2" in over_counted_result["message"]
+    assert "Ошибок операции: 1" in over_counted_result["message"]
+    assert not over_counted_result["reviewed_counts_reconciled"]
+
+
+def test_legacy_completed_null_counters_remain_explicitly_unknown():
+    from services.wb_history_presentation import present_wb_bulk_operation
+
+    operation = SimpleNamespace(
+        id=44,
+        seller_id=92,
+        description="Synthetic legacy history with missing counts",
+        status="completed",
+        total_products=None,
+        success_count=None,
+        error_count=None,
+        reverted=False,
+        reverted_at=None,
+        created_at=datetime(2026, 9, 30, 12, 0, 0),
+        completed_at=datetime(2026, 9, 30, 12, 0, 1),
+        duration_seconds=1.0,
+        operation_params=None,
+        errors_details=None,
+        can_revert=lambda: False,
+    )
+    result = present_wb_bulk_operation(operation)
+    list_html = _render_bulk_history_list(operation)
+    detail_html = _render_bulk_history_detail(
+        [], error_count=None, total_products=None, success_count=None,
+    )
+
+    assert result["tone"] == "unknown"
+    assert result["label"] == "Завершено, счётчики результата не подтверждены"
+    assert "отсутствуют корректные числовые счётчики" in result["message"]
+    assert "Завершено, счётчики результата не подтверждены" in list_html
+    assert "Завершено, счётчики результата не подтверждены" in detail_html
+    stats = detail_html[detail_html.index('class="operations-stats-grid'):detail_html.index("<!-- Параметры операции -->")]
+    assert "—" in stats and "None" not in stats and "0%" not in stats
+    missing = present_wb_bulk_operation(SimpleNamespace(
+        status="completed", operation_params=None, reverted=False,
+    ))
+    assert missing["tone"] == "unknown"
+    assert missing["counts"] == {
+        "total_products": None,
+        "success_count": None,
+        "error_count": None,
+    }
 
 
 def test_legacy_history_without_review_summary_keeps_legacy_summary_only():
@@ -277,6 +482,7 @@ def test_legacy_history_without_review_summary_keeps_legacy_summary_only():
     assert 'data-operations-review-summary' not in html
     assert "Всего товаров" in html
     assert "Без общей ошибки" in html
+    assert "Завершено с ошибками" in html
 
 
 def test_review_history_zero_changed_uses_dash_and_bad_summary_falls_back_safely():
@@ -320,6 +526,7 @@ def test_review_history_zero_changed_uses_dash_and_bad_summary_falls_back_safely
     assert "Без общей ошибки" in stats
     assert "Без ошибки из подготовленных" not in stats
     assert "4%" in stats
+    assert "успешный результат не подтверждён счётчиками" in malformed
 
 
 def test_bulk_detail_shows_row_identity_and_typed_error_outside_collapsed_raw_data():
