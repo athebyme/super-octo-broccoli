@@ -6,7 +6,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-compact-catalog-toolbar-r71') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-category-filter-r73') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261123-unified-catalog-prices-r63b') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
@@ -24,6 +24,7 @@
     'workspaceOwner': (current_user.id|string) ~ ':' ~ (current_user.seller.id|string),
     'urls': {
         'feed': url_for('api_my_products_list'),
+        'catalogCategories': url_for('api_my_products_categories'),
         'workspace': url_for('seller_my_products_beta'),
         'facets': url_for('api_my_products_facets'),
         'selection': url_for('api_my_products_selection'),
@@ -333,16 +334,33 @@
             <option value="preparation">В подготовке</option>
             <option value="attention">Требуют внимания</option>
         </select>
-        <select v-model="filters.supplier" class="mp-select" aria-label="Поставщик">
-            <option value="">Все поставщики</option>
-            <option v-for="s in suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
-        </select>
+        <div class="mp-catalog-category-filter">
+            <select :value="filters.catalog_category" class="mp-select"
+                    data-catalog-category aria-label="Категория каталога"
+                    @change="handleCatalogCategoryChange($event)">
+                <option value="">Все категории</option>
+                <option v-for="category in catalogCategorySelectOptions"
+                        :key="category.key" :value="category.key">{{ category.label }}</option>
+                <option v-if="catalogCategoriesLoading || catalogCategoriesHasNext || catalogCategoriesError"
+                        :value="catalogCategoryMoreOption" :disabled="catalogCategoriesLoading">
+                    {{ catalogCategoriesLoading ? 'Загружаем категории…' :
+                        (catalogCategoriesError ? 'Повторить загрузку категорий' : 'Загрузить ещё категории') }}
+                </option>
+            </select>
+            <small v-if="catalogCategoriesError" class="mp-category-filter-error"
+                   role="status">{{ catalogCategoriesError }}</small>
+        </div>
         <details class="mp-extra-filters" data-catalog-extra-filters>
             <summary :aria-label="extraFiltersDisclosureLabel" :title="extraFiltersDisclosureLabel">
                 <span>Дополнительные фильтры</span>
                 <span v-if="activeAdvancedFilterCount" class="mp-extra-filter-count" data-catalog-extra-filter-count>{{ activeAdvancedFilterCount }}</span>
             </summary>
             <div class="mp-extra-filter-body">
+                <select v-model="filters.supplier" class="mp-select"
+                        data-catalog-supplier aria-label="Поставщик">
+                    <option value="">Все поставщики</option>
+                    <option v-for="s in suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
+                </select>
                 <select v-model="filters.has_photos" class="mp-select" aria-label="Фото">
                     <option value="">Фото: любые</option>
                     <option value="yes">С фото</option>
@@ -802,5 +820,5 @@
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261122-ozon-update-return-r56') }}"></script>
 <script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261123-unified-catalog-prices-r63b') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-compact-catalog-toolbar-r71') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-category-filter-r73') }}"></script>
 {% endblock %}

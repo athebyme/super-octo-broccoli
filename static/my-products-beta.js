@@ -234,11 +234,54 @@
     var WORKSPACE_RETURN_SCOPE_KEYS = [
         'activeTab', 'search', 'supplier', 'has_photos', 'stock', 'sort', 'visibleCount',
     ];
-    var WORKSPACE_RETURN_SCOPE_OPTIONAL_KEYS = ['marketplace', 'marketplace_state'];
+    var WORKSPACE_RETURN_SCOPE_OPTIONAL_KEYS = ['marketplace', 'marketplace_state', 'catalog_category'];
+    var CATALOG_CATEGORY_MORE_OPTION = '__load_more_catalog_categories__';
     function validWbCreateIds(ids, allowEmpty) {
         return Array.isArray(ids) && (allowEmpty || ids.length > 0) && ids.length <= MAX_BULK_SELECTION &&
             ids.every(function (id) { return Number.isSafeInteger(id) && id > 0; }) &&
             new Set(ids).size === ids.length;
+    }
+
+    function validCatalogCategoryToken(value) {
+        if (value === 'missing') return true;
+        if (typeof value !== 'string' || value.slice(0, 6) !== 'label:') return false;
+        var label = value.slice(6);
+        var codePoints = Array.from(label);
+        for (var index = 0; index < label.length; index += 1) {
+            var codeUnit = label.charCodeAt(index);
+            if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+                var lowSurrogate = label.charCodeAt(index + 1);
+                if (lowSurrogate < 0xdc00 || lowSurrogate > 0xdfff) return false;
+                index += 1;
+            } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+                return false;
+            }
+        }
+        return codePoints.length >= 1 && codePoints.length <= 200 &&
+            !/[\u0000-\u001f\u007f-\u009f]/.test(label);
+    }
+
+    function validCatalogCategoryOption(option) {
+        return !!option && typeof option === 'object' && !Array.isArray(option) &&
+            Object.keys(option).length === 2 &&
+            Object.prototype.hasOwnProperty.call(option, 'key') &&
+            Object.prototype.hasOwnProperty.call(option, 'label') &&
+            typeof option.key === 'string' && typeof option.label === 'string' &&
+            option.key === 'label:' + option.label && validCatalogCategoryToken(option.key);
+    }
+
+    function validCatalogCategoryPage(data, requestedPage) {
+        if (!data || typeof data !== 'object' || Array.isArray(data) || data.success !== true ||
+            data.page !== requestedPage || !Array.isArray(data.options) ||
+            data.options.length > 100 || typeof data.has_next !== 'boolean' ||
+            typeof data.has_uncategorized !== 'boolean') return false;
+        var seen = new Set();
+        for (var index = 0; index < data.options.length; index += 1) {
+            var option = data.options[index];
+            if (!validCatalogCategoryOption(option) || seen.has(option.key)) return false;
+            seen.add(option.key);
+        }
+        return true;
     }
 
     function validWbCreatePending(value) {
@@ -1108,11 +1151,13 @@
             (scope.marketplace === 'ozon' && boot.ozonEnabled === true);
         var marketplaceStateValid = !Object.prototype.hasOwnProperty.call(scope, 'marketplace_state') ||
             ['active', 'preparation', 'attention'].indexOf(scope.marketplace_state) !== -1;
+        var catalogCategoryValid = !Object.prototype.hasOwnProperty.call(scope, 'catalog_category') ||
+            validCatalogCategoryToken(scope.catalog_category);
         var activeTabValid = scope.activeTab === '' || scope.activeTab === 'updates' ||
             WB_STATUS_FILTERS.some(function (filter) { return filter.key === scope.activeTab; });
         var marketplaceStatusCompatible = scope.marketplace !== 'ozon' ||
             scope.activeTab === '' || scope.activeTab === 'updates';
-        return activeTabValid && marketplaceStatusCompatible &&
+        return activeTabValid && marketplaceStatusCompatible && catalogCategoryValid &&
             typeof scope.search === 'string' && scope.search.length <= 200 &&
             scope.search.trim() === scope.search && supplierIsActive &&
             marketplaceValid && marketplaceStateValid &&
@@ -1127,7 +1172,8 @@
         return scope.activeTab === '' && scope.search === '' && scope.supplier === '' &&
             scope.has_photos === '' && scope.stock === '' && scope.sort === '' &&
             !Object.prototype.hasOwnProperty.call(scope, 'marketplace') &&
-            !Object.prototype.hasOwnProperty.call(scope, 'marketplace_state');
+            !Object.prototype.hasOwnProperty.call(scope, 'marketplace_state') &&
+            !Object.prototype.hasOwnProperty.call(scope, 'catalog_category');
     }
 
     function workspaceReturnScopeSnapshot(app, visibleCount) {
@@ -1143,6 +1189,7 @@
         };
         if (filters.marketplace) scope.marketplace = filters.marketplace;
         if (filters.marketplace_state) scope.marketplace_state = filters.marketplace_state;
+        if (filters.catalog_category) scope.catalog_category = filters.catalog_category;
         return scope;
     }
 
@@ -1274,6 +1321,15 @@
                 supplierRefreshReturnUrl: typeof boot.supplierRefreshReturnUrl === 'string'
                     ? boot.supplierRefreshReturnUrl : (boot.urls || {}).classic || '/my-products',
 
+                catalogCategoryOptions: [],
+                catalogCategoriesPage: 0,
+                catalogCategoriesHasNext: false,
+                catalogCategoriesHasUncategorized: false,
+                catalogCategoriesLoading: false,
+                catalogCategoriesError: '',
+                _catalogCategoriesRequestId: 0,
+                _catalogCategoriesAbort: null,
+
                 items: [],
                 itemsScope: '',
                 facets: {},
@@ -1297,6 +1353,8 @@
                         ? workspaceReturnScopeSeed.marketplace : '',
                     marketplace_state: workspaceReturnScopeSeed && workspaceReturnScopeSeed.marketplace_state
                         ? workspaceReturnScopeSeed.marketplace_state : '',
+                    catalog_category: workspaceReturnScopeSeed && workspaceReturnScopeSeed.catalog_category
+                        ? workspaceReturnScopeSeed.catalog_category : '',
                 },
                 selected: [],
                 selectionReviewActive: false,
@@ -1366,6 +1424,25 @@
         },
 
         computed: {
+            catalogCategoryMoreOption: function () {
+                return CATALOG_CATEGORY_MORE_OPTION;
+            },
+            catalogCategorySelectOptions: function () {
+                var options = this.catalogCategoryOptions.slice();
+                if ((this.catalogCategoriesHasUncategorized || this.filters.catalog_category === 'missing') &&
+                    !options.some(function (option) { return option.key === 'missing'; })) {
+                    options.unshift({ key: 'missing', label: 'Без категории' });
+                }
+                var selected = this.filters.catalog_category;
+                if (selected && validCatalogCategoryToken(selected) &&
+                    !options.some(function (option) { return option.key === selected; })) {
+                    options.unshift({
+                        key: selected,
+                        label: selected === 'missing' ? 'Без категории' : selected.slice(6),
+                    });
+                }
+                return options;
+            },
             selectedWbStatusLabel: function () {
                 var selected = this.activeTab === 'updates' ? '' : this.activeTab;
                 var option = WB_STATUS_FILTERS.find(function (filter) { return filter.key === selected; });
@@ -1373,10 +1450,17 @@
             },
             activeAdvancedFilterCount: function () {
                 return (this.filters.has_photos ? 1 : 0) +
-                    (this.filters.stock ? 1 : 0) + (this.selectedWbStatusLabel ? 1 : 0);
+                    (this.filters.stock ? 1 : 0) + (this.filters.supplier ? 1 : 0) +
+                    (this.selectedWbStatusLabel ? 1 : 0);
             },
             extraFiltersDisclosureLabel: function () {
                 var labels = [];
+                var selectedSupplier = (this.suppliers || []).find(function (supplier) {
+                    return supplier && supplier.id === this.filters.supplier;
+                }, this);
+                if (this.filters.supplier) {
+                    labels.push('Поставщик: ' + (selectedSupplier ? selectedSupplier.name : 'выбран'));
+                }
                 if (this.filters.has_photos === 'yes') labels.push('С фото');
                 else if (this.filters.has_photos === 'no') labels.push('Без фото');
                 if (this.filters.stock === 'in_stock') labels.push('В наличии у поставщика');
@@ -1867,7 +1951,8 @@
                 }
                 if (this.filters.search || this.filters.supplier || this.filters.has_photos ||
                     this.filters.stock || this.filters.sort || this.filters.marketplace ||
-                    this.filters.marketplace_state || (this.activeTab && this.activeTab !== 'updates')) {
+                    this.filters.marketplace_state || this.filters.catalog_category ||
+                    (this.activeTab && this.activeTab !== 'updates')) {
                     return {
                         title: 'По этим условиям товаров нет',
                         text: 'Попробуйте убрать часть фильтров.',
@@ -1960,10 +2045,16 @@
                 this.consumeWorkspaceReturn(workspaceReturnCapsule.nonce);
             }
             this.load();
-            if (!this.importBatchMode && !this.supplierRefreshBatchMode) this.loadFacets();
+            if (!this.importBatchMode && !this.supplierRefreshBatchMode) {
+                this.loadFacets();
+                this.loadCatalogCategories();
+            }
         },
         beforeUnmount: function () {
             this._mpUnmounted = true;
+            this._catalogCategoriesRequestId = (this._catalogCategoriesRequestId || 0) + 1;
+            if (this._catalogCategoriesAbort) this._catalogCategoriesAbort.abort();
+            this._catalogCategoriesAbort = null;
             this.invalidateWbEditHandoff();
             this.invalidateOzonWorkspaceUpdate();
             this.stopJobTracking();
@@ -2251,7 +2342,7 @@
                 this.searchInput = '';
                 this.filters = {
                     search: '', supplier: '', has_photos: '', stock: '', sort: '',
-                    marketplace: '', marketplace_state: '',
+                    marketplace: '', marketplace_state: '', catalog_category: '',
                 };
                 this.selected = [];
                 this.error = '';
@@ -2293,7 +2384,7 @@
                 this.searchInput = '';
                 this.filters = {
                     search: '', supplier: '', has_photos: '', stock: '', sort: '',
-                    marketplace: '', marketplace_state: '',
+                    marketplace: '', marketplace_state: '', catalog_category: '',
                 };
                 this.error = '';
                 // Replacing filters triggers the deep watcher, which performs
@@ -2687,7 +2778,7 @@
                 this.searchInput = '';
                 this.filters = {
                     search: '', supplier: '', has_photos: '', stock: '', sort: '',
-                    marketplace: '', marketplace_state: '',
+                    marketplace: '', marketplace_state: '', catalog_category: '',
                 };
                 this.error = '';
                 this.load();
@@ -2712,6 +2803,9 @@
                 if (this.filters.marketplace) params.marketplace = this.filters.marketplace;
                 if (this.filters.marketplace_state) {
                     params.marketplace_state = this.filters.marketplace_state;
+                }
+                if (this.filters.catalog_category) {
+                    params.catalog_category = this.filters.catalog_category;
                 }
                 if (this.activeTab === 'updates') params.updates = '1';
                 else if (this.activeTab) params.status = this.activeTab;
@@ -2774,6 +2868,7 @@
                         this.filters.sort === scope.sort &&
                         (this.filters.marketplace || '') === (scope.marketplace || '') &&
                         (this.filters.marketplace_state || '') === (scope.marketplace_state || '') &&
+                        (this.filters.catalog_category || '') === (scope.catalog_category || '') &&
                         (this.searchInput || '').trim().slice(0, 200) === scope.search;
             },
             workspaceReturnScopeIsCurrent: function (scope) {
@@ -3455,6 +3550,85 @@
                     self.facets = data.statuses || {};
                 }).catch(function () { /* счётчики некритичны */ });
             },
+            loadCatalogCategories: function () {
+                if (this._mpUnmounted || this.importBatchMode || this.supplierRefreshBatchMode ||
+                    this.catalogCategoriesLoading) return Promise.resolve(false);
+                if (this.catalogCategoriesPage > 0 && !this.catalogCategoriesHasNext &&
+                    !this.catalogCategoriesError) return Promise.resolve(false);
+                var requestedPage = this.catalogCategoriesPage > 0
+                    ? this.catalogCategoriesPage + 1 : 1;
+                if (requestedPage > 1 && !this.catalogCategoriesHasNext &&
+                    !this.catalogCategoriesError) return Promise.resolve(false);
+                if (typeof this.urls.catalogCategories !== 'string' ||
+                    this.urls.catalogCategories.charAt(0) !== '/') {
+                    this.catalogCategoriesError = 'Список категорий не загружен. Повторите загрузку.';
+                    return Promise.resolve(false);
+                }
+                var requestId = (this._catalogCategoriesRequestId || 0) + 1;
+                this._catalogCategoriesRequestId = requestId;
+                var abort = new AbortController();
+                this._catalogCategoriesAbort = abort;
+                this.catalogCategoriesLoading = true;
+                this.catalogCategoriesError = '';
+                var self = this;
+                return this.$api.get(this.urls.catalogCategories, { page: requestedPage }, { signal: abort.signal })
+                    .then(function (data) {
+                        if (self._mpUnmounted || abort.signal.aborted ||
+                            self._catalogCategoriesAbort !== abort ||
+                            self._catalogCategoriesRequestId !== requestId) return false;
+                        if (!validCatalogCategoryPage(data, requestedPage)) {
+                            throw new Error('invalid_categories_response');
+                        }
+                        var knownKeys = new Set(self.catalogCategoryOptions.map(function (option) {
+                            return option.key;
+                        }));
+                        self.catalogCategoryOptions = self.catalogCategoryOptions.concat(
+                            data.options.filter(function (option) {
+                                if (knownKeys.has(option.key)) return false;
+                                knownKeys.add(option.key);
+                                return true;
+                            }).map(function (option) {
+                                return { key: option.key, label: option.label };
+                            }),
+                        );
+                        self.catalogCategoriesPage = requestedPage;
+                        self.catalogCategoriesHasNext = data.has_next;
+                        self.catalogCategoriesHasUncategorized =
+                            self.catalogCategoriesHasUncategorized || data.has_uncategorized;
+                        return true;
+                    }).catch(function (error) {
+                        if (self._mpUnmounted || abort.signal.aborted ||
+                            self._catalogCategoriesAbort !== abort ||
+                            self._catalogCategoriesRequestId !== requestId ||
+                            (error && error.name === 'AbortError')) return false;
+                        self.catalogCategoriesError = 'Список категорий не загружен. Повторите загрузку.';
+                        return false;
+                    }).finally(function () {
+                        if (self._catalogCategoriesAbort === abort) {
+                            self._catalogCategoriesAbort = null;
+                            self.catalogCategoriesLoading = false;
+                        }
+                    });
+            },
+            handleCatalogCategoryChange: function (event) {
+                var select = event && event.currentTarget;
+                if (!select) return false;
+                var value = select.value;
+                if (value === CATALOG_CATEGORY_MORE_OPTION) {
+                    select.value = this.filters.catalog_category || '';
+                    this.loadCatalogCategories();
+                    return false;
+                }
+                if (value !== '' && (!validCatalogCategoryToken(value) ||
+                    !this.catalogCategorySelectOptions.some(function (option) {
+                        return option.key === value;
+                    }))) {
+                    select.value = this.filters.catalog_category || '';
+                    return false;
+                }
+                this.filters.catalog_category = value;
+                return true;
+            },
             setTab: function (key) {
                 if (this.importBatchMode || this.supplierRefreshBatchMode) return;
                 if (['', 'updates'].indexOf(key) === -1 || this.activeTab === key) return;
@@ -3502,7 +3676,7 @@
                 this.searchInput = '';
                 this.filters = {
                     search: '', supplier: '', has_photos: '', stock: '', sort: '',
-                    marketplace: '', marketplace_state: '',
+                    marketplace: '', marketplace_state: '', catalog_category: '',
                 };
             },
             toggleAll: function () {
