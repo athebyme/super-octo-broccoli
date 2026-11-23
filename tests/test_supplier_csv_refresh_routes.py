@@ -3,7 +3,7 @@
 from datetime import datetime
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from flask import Flask
 from flask_login import LoginManager
@@ -376,6 +376,156 @@ class SupplierCSVRefreshRoutesTest(unittest.TestCase):
         sync.assert_not_called()
         audit.assert_not_called()
         commit.assert_not_called()
+
+    def test_edit_shows_only_sanitized_current_color_observation_status(self):
+        digest = 'a' * 64
+        status = {
+            'last_attempt': {
+                'status': 'succeeded',
+                'outcome': 'snapshot_saved',
+                'fetch_attempted': True,
+                'reserved_at': '2026-11-23T09:00:00Z',
+                'finished_at': '2026-11-23T09:00:04Z',
+                'cooldown_remaining_seconds': 86_396,
+                'config_matches': True,
+                'raw_body': 'PRIVATE_RAW_BODY_MARKER',
+                'error': 'PRIVATE_ERROR_MARKER',
+                'url': 'https://private.invalid/PRIVATE_URL_MARKER',
+                'token': 'PRIVATE_TOKEN_MARKER',
+            },
+            'last_snapshot': {
+                'status': 'fresh',
+                'at': '2026-11-23T09:00:04Z',
+                'age_seconds': 5,
+                'observation_count': 7,
+                'fresh': True,
+                'config_matches': True,
+                'colors': ['PRIVATE_COLOR_MARKER'],
+                'supplier_product_id': 987654321,
+                'external_id_sha256': 'PRIVATE_HASH_MARKER',
+            },
+        }
+        store = SimpleNamespace(
+            read_status=Mock(return_value=status),
+            reserve=Mock(),
+            finish=Mock(),
+        )
+        auth_patch, login_patch = self._auth(admin=True)
+        with auth_patch, login_patch, \
+             patch(
+                 'services.supplier_color_observation_store.'
+                 'configured_supplier_color_observation_store',
+                 return_value=store,
+             ) as configured_store, \
+             patch(
+                 'services.supplier_service.supplier_catalog_config_digest',
+                 return_value=digest,
+             ) as config_digest, \
+             patch.object(db.session, 'commit', wraps=db.session.commit) as commit:
+            response = self.client.get(
+                f'/admin/suppliers/{self.supplier_id}/edit',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        page = response.get_data(as_text=True)
+        self.assertIn('data-supplier-color-observation-status', page)
+        self.assertIn('data-supplier-color-last-attempt', page)
+        self.assertIn('снимок наблюдений сохранён', page)
+        self.assertIn('data-supplier-color-last-snapshot', page)
+        self.assertIn('товаров: 7', page)
+        for private_value in (
+            'PRIVATE_RAW_BODY_MARKER', 'PRIVATE_ERROR_MARKER',
+            'PRIVATE_URL_MARKER', 'PRIVATE_TOKEN_MARKER',
+            'PRIVATE_COLOR_MARKER', 'PRIVATE_HASH_MARKER',
+            '987654321',
+        ):
+            self.assertNotIn(private_value, page)
+        configured_store.assert_called_once_with()
+        config_digest.assert_called_once()
+        store.read_status.assert_called_once()
+        read_args, read_kwargs = store.read_status.call_args
+        self.assertEqual(read_args, (self.supplier_id, digest))
+        self.assertEqual(set(read_kwargs), {'now'})
+        self.assertIsInstance(read_kwargs['now'], datetime)
+        store.reserve.assert_not_called()
+        store.finish.assert_not_called()
+        commit.assert_not_called()
+
+    def test_edit_reports_unknown_color_status_without_fabricating_counts(self):
+        store = SimpleNamespace(read_status=Mock(return_value=None))
+        auth_patch, login_patch = self._auth(admin=True)
+        with auth_patch, login_patch, patch(
+            'services.supplier_color_observation_store.'
+            'configured_supplier_color_observation_store',
+            return_value=store,
+        ):
+            response = self.client.get(
+                f'/admin/suppliers/{self.supplier_id}/edit',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        page = response.get_data(as_text=True)
+        self.assertIn(
+            'Состояние сейчас недоступно; результат не подтверждён.', page,
+        )
+        status_panel = page.split(
+            'data-supplier-color-observation-status', 1,
+        )[1].split('</details>', 1)[0]
+        self.assertNotIn('товаров:', status_panel)
+        self.assertNotIn('data-supplier-color-last-attempt', status_panel)
+
+    def test_edit_hides_counts_for_stale_or_config_mismatched_snapshots(self):
+        cases = (
+            ('stale', True, False),
+            ('config_mismatch', False, False),
+        )
+        auth_patch, login_patch = self._auth(admin=True)
+        for snapshot_status, config_matches, fresh in cases:
+            payload = {
+                'last_attempt': {
+                    'status': 'never_reserved',
+                    'outcome': None,
+                    'config_matches': None,
+                    'reserved_at': None,
+                    'finished_at': None,
+                },
+                'last_snapshot': {
+                    'status': snapshot_status,
+                    'at': '2026-11-20T09:00:00Z',
+                    'age_seconds': 400_000,
+                    'observation_count': 7,
+                    'fresh': fresh,
+                    'config_matches': config_matches,
+                },
+            }
+            store = SimpleNamespace(read_status=Mock(return_value=payload))
+            with auth_patch, login_patch, patch(
+                'services.supplier_color_observation_store.'
+                'configured_supplier_color_observation_store',
+                return_value=store,
+            ):
+                response = self.client.get(
+                    f'/admin/suppliers/{self.supplier_id}/edit',
+                )
+
+            self.assertEqual(response.status_code, 200)
+            panel = response.get_data(as_text=True).split(
+                'data-supplier-color-observation-status', 1,
+            )[1].split('</details>', 1)[0]
+            self.assertNotIn('товаров:', panel)
+
+    def test_non_admin_edit_does_not_read_color_observation_store(self):
+        auth_patch, login_patch = self._auth(admin=False)
+        with auth_patch, login_patch, patch(
+            'services.supplier_color_observation_store.'
+            'configured_supplier_color_observation_store',
+        ) as configured_store:
+            response = self.client.get(
+                f'/admin/suppliers/{self.supplier_id}/edit',
+            )
+
+        self.assertEqual(response.status_code, 302)
+        configured_store.assert_not_called()
 
 
 if __name__ == '__main__':

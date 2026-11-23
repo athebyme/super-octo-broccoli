@@ -7,7 +7,7 @@ import json
 import re
 import logging
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
@@ -228,6 +228,134 @@ def _supplier_catalog_refresh_view(payload, *, lookup_failed=False):
         'price_conflicts': price_conflicts,
         'error_detail': error_detail,
     }
+
+
+_SUPPLIER_COLOR_ATTEMPT_STATUS_LABELS = {
+    'never_reserved': 'ещё не запускалась',
+    'unconfirmed': 'результат не подтверждён',
+    'succeeded': 'завершилась',
+    'failed': 'не завершилась',
+    'legacy_finished': 'старый запуск завершён; факт чтения CSV не подтверждён',
+}
+_SUPPLIER_COLOR_ATTEMPT_OUTCOME_LABELS = {
+    'snapshot_saved': 'снимок наблюдений сохранён',
+    'cleared_without_read': 'строк для сверки не было; старый снимок отозван',
+    'no_exact_ozon_links': 'нет точных связей с подключёнными кабинетами Ozon',
+    'source_scope_too_large': 'слишком много связанных товаров для безопасной сверки',
+    'feed_fetch_failed': 'не удалось прочитать настроенный CSV',
+    'feed_invalid': 'CSV не прошёл проверку формата',
+    'source_config_changed': 'настройки источника изменились во время проверки',
+    'admin_refresh_deferred': 'отложена до завершения обновления каталога',
+    'ozon_disabled_after_read': 'отложена настройками Ozon',
+    'store_finish_failed': 'сохранение результата не подтверждено',
+    'local_failure': 'результат не подтверждён',
+}
+_SUPPLIER_COLOR_SNAPSHOT_STATUS_LABELS = {
+    'missing': 'подтверждённого снимка пока нет',
+    'fresh': 'актуален',
+    'stale': 'устарел; сейчас не используется',
+    'config_mismatch': 'относится к прежним настройкам и не используется',
+    'future_timestamp': 'время не подтверждено; снимок не используется',
+    'empty': 'не содержит подтверждённых значений',
+}
+def _supplier_color_observation_time(value):
+    if not isinstance(value, str) or len(value) > 64:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed.astimezone(timezone.utc).strftime('%d.%m.%Y %H:%M UTC')
+    except (OverflowError, TypeError, ValueError):
+        return None
+
+
+def _supplier_color_observation_status_view(payload):
+    """Keep only fixed labels and bounded aggregate metadata for admin UI."""
+    if not isinstance(payload, dict):
+        return None
+    attempt = payload.get('last_attempt')
+    snapshot = payload.get('last_snapshot')
+    if not isinstance(attempt, dict) or not isinstance(snapshot, dict):
+        return None
+
+    attempt_status = attempt.get('status')
+    snapshot_status = snapshot.get('status')
+    if (
+        not isinstance(attempt_status, str)
+        or attempt_status not in _SUPPLIER_COLOR_ATTEMPT_STATUS_LABELS
+        or not isinstance(snapshot_status, str)
+        or snapshot_status not in _SUPPLIER_COLOR_SNAPSHOT_STATUS_LABELS
+    ):
+        return None
+
+    attempt_config_matches = attempt.get('config_matches')
+    attempt_label = _SUPPLIER_COLOR_ATTEMPT_STATUS_LABELS[attempt_status]
+    attempt_outcome_label = None
+    if attempt_status != 'never_reserved' and attempt_config_matches is False:
+        attempt_label = 'относится к прежним настройкам'
+    else:
+        outcome = attempt.get('outcome')
+        if isinstance(outcome, str) and outcome in _SUPPLIER_COLOR_ATTEMPT_OUTCOME_LABELS:
+            attempt_outcome_label = _SUPPLIER_COLOR_ATTEMPT_OUTCOME_LABELS[outcome]
+            attempt_label = attempt_outcome_label
+
+    snapshot_config_matches = snapshot.get('config_matches')
+    snapshot_fresh = snapshot.get('fresh')
+    observation_count = snapshot.get('observation_count')
+    show_observation_count = bool(
+        snapshot_status in {'fresh', 'empty'}
+        and snapshot_config_matches is True
+        and snapshot_fresh is True
+        and type(observation_count) is int
+        and 0 <= observation_count <= 50_000
+        and (
+            snapshot_status == 'empty' and observation_count == 0
+            or snapshot_status == 'fresh' and observation_count > 0
+        )
+    )
+    return {
+        'attempt': {
+            'status': attempt_status,
+            'label': attempt_label,
+            'outcome_label': attempt_outcome_label,
+            'at': _supplier_color_observation_time(
+                attempt.get('finished_at') or attempt.get('reserved_at')
+            ),
+        },
+        'snapshot': {
+            'status': snapshot_status,
+            'label': _SUPPLIER_COLOR_SNAPSHOT_STATUS_LABELS[snapshot_status],
+            'at': _supplier_color_observation_time(snapshot.get('at')),
+            'observation_count': observation_count if show_observation_count else None,
+            'show_observation_count': show_observation_count,
+        },
+    }
+
+
+def _read_supplier_color_observation_status(supplier):
+    """Read one supplier's sanitized private color-observation receipt."""
+    try:
+        from services.supplier_color_observation_store import (
+            configured_supplier_color_observation_store,
+        )
+        from services.supplier_service import supplier_catalog_config_digest
+
+        store = configured_supplier_color_observation_store()
+        if store is None:
+            return None
+        payload = store.read_status(
+            supplier.id,
+            supplier_catalog_config_digest(supplier),
+            now=datetime.utcnow(),
+        )
+    except Exception as exc:
+        logger.warning(
+            'Supplier color observation status read failed (%s)',
+            type(exc).__name__,
+        )
+        return None
+    return _supplier_color_observation_status_view(payload)
 
 
 def _bulk_product_ids(raw_ids, limit=MAX_BULK_PRODUCTS):
@@ -2389,7 +2517,10 @@ def register_supplier_routes(app):
                                supplier=supplier, mode='edit',
                                stats=stats, price_stock_stats=price_stock_stats,
                                sellers=sellers,
-                               sample_external_ids=sample_external_ids)
+                               sample_external_ids=sample_external_ids,
+                               supplier_color_observation_status=(
+                                   _read_supplier_color_observation_status(supplier)
+                               ))
 
     # -------------------------------------------------------------------
     # Удаление поставщика

@@ -238,6 +238,28 @@
                             </select>
                         </div>
                     </div>
+                    {% if mode == 'edit' %}
+                    <details class="rounded-lg border px-4" style="border-color:var(--border);background:var(--bg-card);color:var(--text-secondary)" data-supplier-color-observation-status>
+                        <summary class="min-h-[44px] cursor-pointer py-3 text-sm font-medium" style="color:var(--text)">Проверка цветов для подготовки Ozon</summary>
+                        <div class="space-y-2 pb-3 text-sm" style="color:var(--text-secondary)">
+                            {% if supplier_color_observation_status %}
+                            <p data-supplier-color-last-attempt>
+                                Последняя попытка: {{ supplier_color_observation_status.attempt.label }}
+                                {% if supplier_color_observation_status.attempt.at %}· {{ supplier_color_observation_status.attempt.at }}{% endif %}
+                            </p>
+                            <p data-supplier-color-last-snapshot>
+                                Состояние снимка: {{ supplier_color_observation_status.snapshot.label }}
+                                {% if supplier_color_observation_status.snapshot.at %}· {{ supplier_color_observation_status.snapshot.at }}{% endif %}
+                                {% if supplier_color_observation_status.snapshot.show_observation_count %}
+                                · товаров: {{ supplier_color_observation_status.snapshot.observation_count }}
+                                {% endif %}
+                            </p>
+                            {% else %}
+                            <p data-supplier-color-status-unknown>Состояние сейчас недоступно; результат не подтверждён.</p>
+                            {% endif %}
+                        </div>
+                    </details>
+                    {% endif %}
                     <hr class="my-4">
                     <h3 class="text-sm font-semibold text-gray-700">Файл цен и остатков</h3>
                     <div>
