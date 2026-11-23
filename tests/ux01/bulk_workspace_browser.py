@@ -291,6 +291,69 @@ def open_products(page, title=MAIN_TITLE):
     page.get_by_role("checkbox", name=f"Выбрать {title}").wait_for()
 
 
+def set_catalog_extra_filters_open_by_keyboard(page, *, opened):
+    """Use native summary keyboard activation and verify its visible focus ring."""
+    details = page.locator("[data-catalog-extra-filters]")
+    summary = details.locator("summary")
+    summary.wait_for(state="visible")
+    assert summary.evaluate(
+        "element => element.tagName === 'SUMMARY' && element.parentElement.tagName === 'DETAILS'",
+    )
+    if details.evaluate("element => element.open") is opened:
+        return
+
+    page.locator('[data-catalog-marketplace="all"]').focus()
+    focused = False
+    for _ in range(24):
+        page.keyboard.press("Tab")
+        if summary.evaluate("element => document.activeElement === element"):
+            focused = True
+            break
+    assert focused, "keyboard Tab traversal did not reach the extra-filter summary"
+    focus_style = summary.evaluate("""element => {
+        const style = getComputedStyle(element);
+        return {
+            focusVisible: element.matches(':focus-visible'),
+            outlineStyle: style.outlineStyle,
+            outlineWidth: style.outlineWidth,
+            outlineOffset: style.outlineOffset,
+        };
+    }""")
+    assert focus_style["focusVisible"], focus_style
+    assert focus_style["outlineStyle"] == "solid", focus_style
+    assert float(focus_style["outlineWidth"].removesuffix("px")) >= 2, focus_style
+    assert float(focus_style["outlineOffset"].removesuffix("px")) >= 2, focus_style
+
+    page.keyboard.press("Space")
+    assert details.evaluate("element => element.open") is opened
+    assert summary.evaluate("element => document.activeElement === element")
+
+
+def ensure_catalog_extra_filters_open(page):
+    details = page.locator("[data-catalog-extra-filters]")
+    if not details.evaluate("element => element.open"):
+        details.locator("summary").click()
+    assert details.evaluate("element => element.open")
+
+
+def assert_catalog_filter_query(response, expected_filters, *, page_number="1"):
+    query = parse_qs(urlsplit(response.url).query)
+    filter_keys = {
+        "search", "supplier", "has_photos", "stock", "sort",
+        "marketplace", "marketplace_state", "status", "updates",
+    }
+    actual_filters = {
+        key: values[-1] for key, values in query.items() if key in filter_keys
+    }
+    assert actual_filters == expected_filters, {
+        "expected_filters": expected_filters,
+        "actual_filters": actual_filters,
+        "query": query,
+    }
+    assert query.get("page") == [page_number], query
+    assert query.get("per_page") == ["50"], query
+
+
 def selected_browser_state(page):
     return page.evaluate("""() => {
         const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
@@ -411,6 +474,7 @@ def assert_supplier_refresh_token_applied(preview, apply_tokens):
 
 
 def filter_bulk_results(page):
+    ensure_catalog_extra_filters_open(page)
     with page.expect_response(lambda response: feed_matches(response, {"has_photos": "yes"})) as photos:
         page.get_by_label("Фото").select_option("yes")
     assert photos.value.status == 200
@@ -446,6 +510,25 @@ def assert_wb_status_filter(page, value):
         "", "pending", "validated", "imported", "imported_pending_sync", "failed",
     }, options
     assert wb_filter.input_value() == value
+
+
+def assert_catalog_extra_filter_scope(page, *, opened, ozon):
+    details = page.locator("[data-catalog-extra-filters]")
+    assert details.evaluate("element => element.open") is opened
+    shared_controls = (
+        page.get_by_label("Фото"),
+        page.get_by_label("Остаток у поставщика"),
+        page.locator("[data-catalog-sort]"),
+    )
+    for control in shared_controls:
+        assert control.count() == 1
+        assert control.is_visible() is opened
+    wb_status = page.locator("[data-catalog-wb-status]")
+    if ozon:
+        assert wb_status.count() == 0, "WB workflow status must not render in Ozon scope"
+    else:
+        assert wb_status.count() == 1
+        assert wb_status.is_visible() is opened
 
 
 MARKETPLACE_FILTER_ANCHOR_TITLE = "UX-R71-MARKETPLACE-FILTER-ANCHOR"
@@ -524,8 +607,11 @@ def exercise_marketplace_filters(browser, bridge, errors):
         assert page.evaluate("document.documentElement.dataset.theme") == theme
         assert_marketplace_filter(page, "all")
         source_search = "UX-R71-"
-        scope_keys = {"marketplace", "marketplace_state"}
+        common_filters = {"search": source_search}
         observed = {}
+        assert_catalog_extra_filter_scope(page, opened=False, ozon=False)
+        set_catalog_extra_filters_open_by_keyboard(page, opened=True)
+        assert_catalog_extra_filter_scope(page, opened=True, ozon=False)
 
         def apply_case(name, expected, action, *, marketplace="", state=""):
             query = {"search": source_search}
@@ -536,8 +622,12 @@ def exercise_marketplace_filters(browser, bridge, errors):
             with page.expect_response(lambda response: feed_matches(response, query)) as response:
                 action()
             assert response.value.status == 200
-            actual_query = parse_qs(urlsplit(response.value.url).query)
-            assert set(actual_query).intersection(scope_keys) == set(query).intersection(scope_keys)
+            expected_filter_query = dict(common_filters)
+            if marketplace:
+                expected_filter_query["marketplace"] = marketplace
+            if state:
+                expected_filter_query["marketplace_state"] = state
+            assert_catalog_filter_query(response.value, expected_filter_query)
             payload = response.value.json()
             expected_ids = {ids[key] for key in expected}
             ordered_ids = [row["id"] for row in payload["items"]]
@@ -570,8 +660,11 @@ def exercise_marketplace_filters(browser, bridge, errors):
                     f"{name} catalog checkboxes did not match feed rows: {diagnostics}"
                 ) from error
             assert_marketplace_filter(page, marketplace or "all")
+            assert_catalog_extra_filter_scope(
+                page, opened=True, ozon=marketplace == "ozon",
+            )
             observed[name] = {"rows": len(ordered_ids), "matches": sorted(expected),
-                              "query": {key: query[key] for key in query if key in scope_keys}}
+                              "query": expected_filter_query}
 
         def click_marketplace(name):
             page.locator(f'[data-catalog-marketplace="{name}"]').click()
@@ -581,10 +674,43 @@ def exercise_marketplace_filters(browser, bridge, errors):
         provider_before = fixture.REPORT["provider_attempts"]
         external_before = len(fixture.REPORT["unexpected_external_requests"])
         watch = begin_domain_write_watch()
+        shared_filter_reads = []
+
+        def record_shared_filter_read(request):
+            parsed = urlsplit(request.url)
+            if request.method == "GET" and parsed.path == "/api/my-products":
+                shared_filter_reads.append(parse_qs(parsed.query))
+
+        page.on("request", record_shared_filter_read)
         try:
             apply_case("all_products", ids, lambda: page.get_by_placeholder(
                 "Название, бренд или артикул",
             ).fill(source_search))
+            photo_filter = page.get_by_label("Фото")
+            with page.expect_response(lambda response: feed_matches(response, {
+                    "search": source_search, "has_photos": "no",
+            })) as photo_response:
+                photo_filter.select_option("no")
+            assert photo_response.value.status == 200
+            common_filters["has_photos"] = "no"
+            assert_catalog_filter_query(photo_response.value, common_filters)
+            stock_filter = page.get_by_label("Остаток у поставщика")
+            with page.expect_response(lambda response: feed_matches(response, {
+                    "search": source_search, "has_photos": "no", "stock": "in_stock",
+            })) as stock_response:
+                stock_filter.select_option("in_stock")
+            assert stock_response.value.status == 200
+            common_filters["stock"] = "in_stock"
+            assert_catalog_filter_query(stock_response.value, common_filters)
+            sort_filter = page.locator("[data-catalog-sort]")
+            with page.expect_response(lambda response: feed_matches(response, {
+                    "search": source_search, "has_photos": "no",
+                    "stock": "in_stock", "sort": "title",
+            })) as sort_response:
+                sort_filter.select_option("title")
+            assert sort_response.value.status == 200
+            common_filters["sort"] = "title"
+            assert_catalog_filter_query(sort_response.value, common_filters)
             apply_case("both_active", ["wb_active", "ozon_active"],
                        lambda: pick_state("active"), state="active")
             apply_case("wb_active", ["wb_active"], lambda: wb_button.press("Enter"),
@@ -599,6 +725,49 @@ def exercise_marketplace_filters(browser, bridge, errors):
                        marketplace="ozon", state="active")
             assert selected_browser_state(page)["selected"] == [ids["wb_active"]]
             assert page.locator("[data-selection-outside-count]").inner_text() == "1 вне текущего списка"
+            assert_catalog_extra_filter_scope(page, opened=True, ozon=True)
+
+            toggle_request_count = len(shared_filter_reads)
+            selected_before_toggle = selected_browser_state(page)["selected"]
+            set_catalog_extra_filters_open_by_keyboard(page, opened=False)
+            assert_catalog_extra_filter_scope(page, opened=False, ozon=True)
+            assert selected_browser_state(page)["selected"] == selected_before_toggle
+            assert len(shared_filter_reads) == toggle_request_count, shared_filter_reads
+            set_catalog_extra_filters_open_by_keyboard(page, opened=True)
+            assert_catalog_extra_filter_scope(page, opened=True, ozon=True)
+            assert selected_browser_state(page)["selected"] == selected_before_toggle
+            assert len(shared_filter_reads) == toggle_request_count, shared_filter_reads
+            expected_active_filters = {
+                **common_filters, "marketplace": "ozon", "marketplace_state": "active",
+            }
+            last_toggle_query = shared_filter_reads[-1]
+            last_toggle_filters = {
+                key: values[-1] for key, values in last_toggle_query.items()
+                if key in {
+                    "search", "supplier", "has_photos", "stock", "sort",
+                    "marketplace", "marketplace_state", "status", "updates",
+                }
+            }
+            assert last_toggle_filters == expected_active_filters, {
+                "expected": expected_active_filters,
+                "actual": last_toggle_filters,
+                "query": last_toggle_query,
+            }
+            current_state = page.evaluate("""() => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                return proxy ? {
+                    filters: {...proxy.filters}, activeTab: proxy.activeTab,
+                    selected: proxy.selected.slice(),
+                } : null;
+            }""")
+            assert current_state and current_state["activeTab"] == "", current_state
+            assert current_state["selected"] == selected_before_toggle, current_state
+            for key in (
+                "search", "supplier", "has_photos", "stock", "sort",
+                "marketplace", "marketplace_state",
+            ):
+                expected_value = expected_active_filters.get(key, "")
+                assert current_state["filters"].get(key, "") == expected_value, current_state
             apply_case("ozon_preparation", ["ozon_preparation"],
                        lambda: pick_state("preparation"), marketplace="ozon", state="preparation")
             screenshot = OUTPUT / f"catalog-marketplace-filter-{theme}-{width}.png"
@@ -1316,6 +1485,7 @@ def run():
             review_page = review_context.new_page()
             review_page.on("pageerror", lambda error: errors.append(str(error)))
             open_products(review_page)
+            ensure_catalog_extra_filters_open(review_page)
             review_search = review_page.get_by_placeholder("Название, бренд или артикул")
             hidden_title = selection_review_titles[selection_review_ids[0]]
             with review_page.expect_response(lambda response: feed_matches(response, {
@@ -1522,6 +1692,7 @@ def run():
         wb_page = wb_context.new_page()
         wb_page.on("pageerror", lambda error: errors.append(str(error)))
         open_products(wb_page)
+        ensure_catalog_extra_filters_open(wb_page)
         source_owner = wb_page.evaluate(
             "JSON.parse(document.querySelector('#mp-bootstrap').textContent).workspaceOwner",
         )
@@ -1898,7 +2069,9 @@ def run():
         assert_supplier_updates_entry_state(page, pressed=False)
         checks.append("supplier_updates_header_toggle_keeps_marketplace_controls_independent")
         extra_filters = page.locator("[data-catalog-extra-filters]")
-        extra_filters.locator("summary").click()
+        assert_catalog_extra_filter_scope(page, opened=False, ozon=False)
+        set_catalog_extra_filters_open_by_keyboard(page, opened=True)
+        assert_catalog_extra_filter_scope(page, opened=True, ozon=False)
         wb_status = extra_filters.locator("[data-catalog-wb-status]")
         with page.expect_response(lambda response: feed_matches(response, {"status": "pending"})) as pending_filter:
             wb_status.select_option("pending")
@@ -1910,7 +2083,8 @@ def run():
             wb_status.select_option("")
         assert all_filter.value.status == 200
         assert_wb_status_filter(page, "")
-        extra_filters.locator("summary").click()
+        set_catalog_extra_filters_open_by_keyboard(page, opened=False)
+        assert_catalog_extra_filter_scope(page, opened=False, ozon=False)
         checks.append("my_products_status_filter_exposes_current_selection_to_accessibility_tree")
         filter_bulk_results(page)
         select_all = page.get_by_role("button", name=f"Выбрать все {len(fixture_ids['bulk_ids'])}")
@@ -2070,6 +2244,7 @@ def run():
         page = context.new_page()
         page.on("pageerror", lambda error: errors.append(str(error)))
         open_products(page)
+        ensure_catalog_extra_filters_open(page)
         source_owner = page.evaluate("JSON.parse(document.querySelector('#mp-bootstrap').textContent).workspaceOwner")
         with page.expect_response(lambda response: feed_matches(response, {"search": MAIN_TITLE})) as filtered_feed:
             page.get_by_placeholder("Название, бренд или артикул").fill(MAIN_TITLE)
@@ -2195,6 +2370,7 @@ def run():
         # original ImportedProduct set after a fresh feed read.
         page.goto(fixture.BASE + "/my-products/beta")
         page.locator("#my-products-app").wait_for(state="visible")
+        ensure_catalog_extra_filters_open(page)
         with page.expect_response(lambda response: feed_matches(response, {"search": MAIN_TITLE})) as price_search:
             page.get_by_placeholder("Название, бренд или артикул").fill(MAIN_TITLE)
         assert price_search.value.status == 200

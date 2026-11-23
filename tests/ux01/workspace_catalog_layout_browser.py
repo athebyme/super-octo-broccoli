@@ -9,7 +9,14 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 from tests.ux01 import journey_browser as fixture
-from tests.ux01.bulk_workspace_browser import MAIN_TITLE, selected_browser_state, seed_bulk_selection
+from tests.ux01.bulk_workspace_browser import (
+    MAIN_TITLE,
+    assert_catalog_extra_filter_scope,
+    ensure_catalog_extra_filters_open,
+    selected_browser_state,
+    seed_bulk_selection,
+    set_catalog_extra_filters_open_by_keyboard,
+)
 from models import ImportedProduct, MarketplaceListing, SellerMarketplaceAccount, SupplierProduct, db
 
 
@@ -141,6 +148,11 @@ with sync_playwright() as playwright:
             assert cols["left"] >= -1 and cols["right"] <= cols["device"] + 1
             filter_buttons = page.locator("[data-catalog-marketplace]")
             expect(filter_buttons).to_have_count(3)
+            toolbar = page.locator(".mp-catalog-surface .shk-filters")
+            expect(toolbar).to_be_visible()
+            toolbar_box = toolbar.bounding_box()
+            assert toolbar_box and toolbar_box["x"] >= -1
+            assert toolbar_box["x"] + toolbar_box["width"] <= width + 1, toolbar_box
             filter_geometry = []
             for control in (
                 *filter_buttons.all(),
@@ -154,7 +166,9 @@ with sync_playwright() as playwright:
                     assert box["width"] >= 44 and box["height"] >= 44, box
                 filter_geometry.append({"width": box["width"], "height": box["height"]})
             expect(filter_buttons.first).to_have_attribute("aria-pressed", "true")
-            assert page.locator("[data-catalog-extra-filters]").evaluate("details => !details.open")
+            extra_filters = page.locator("[data-catalog-extra-filters]")
+            assert not extra_filters.evaluate("details => details.open")
+            assert_catalog_extra_filter_scope(page, opened=False, ozon=False)
             for city in ("Северный склад", "Южный склад"):
                 label = row.get_by_text(city, exact=False).last
                 expect(label).to_be_visible()
@@ -183,6 +197,41 @@ with sync_playwright() as playwright:
             snapshot = f"catalog-grid-{width}-{theme}.png"
             page.screenshot(path=target / snapshot, animations="disabled")
 
+            selection_before_disclosure = selected_browser_state(page)["selected"]
+            assert selection_before_disclosure == []
+            set_catalog_extra_filters_open_by_keyboard(page, opened=True)
+            assert_catalog_extra_filter_scope(page, opened=True, ozon=False)
+            expanded_controls = (
+                page.get_by_label("Фото"),
+                page.get_by_label("Остаток у поставщика"),
+                page.locator("[data-catalog-sort]"),
+                page.locator("[data-catalog-wb-status]"),
+            )
+            for control in expanded_controls:
+                expect(control).to_be_visible()
+                box = control.bounding_box()
+                assert box and box["x"] >= 0
+                assert box["x"] + box["width"] <= width + 1, box
+                if width <= 390:
+                    assert box["width"] >= 44 and box["height"] >= 44, box
+            if width <= 390:
+                summary_box = extra_filters.locator("summary").bounding_box()
+                body_box = extra_filters.locator(".mp-extra-filter-body").bounding_box()
+                assert summary_box and body_box
+                assert body_box["x"] >= 0 and body_box["x"] + body_box["width"] <= width + 1, body_box
+                assert body_box["y"] >= summary_box["y"] + summary_box["height"] - 1, {
+                    "summary": summary_box, "body": body_box,
+                }
+            expanded_dimensions = page.evaluate("""() => ({
+                scroll: document.documentElement.scrollWidth,
+                viewport: document.documentElement.clientWidth,
+            })""")
+            assert expanded_dimensions["scroll"] == expanded_dimensions["viewport"], expanded_dimensions
+            assert selected_browser_state(page)["selected"] == selection_before_disclosure
+            set_catalog_extra_filters_open_by_keyboard(page, opened=False)
+            assert_catalog_extra_filter_scope(page, opened=False, ozon=False)
+            assert selected_browser_state(page)["selected"] == selection_before_disclosure
+
             if width == 320 and theme == "light":
                 bootstrap = json.loads(page.locator("#mp-bootstrap").text_content())
                 feed_path = urlsplit(bootstrap["urls"]["feed"]).path
@@ -205,12 +254,20 @@ with sync_playwright() as playwright:
                 page.evaluate("window.__supplierEntryDocumentMarker = 'same-document'")
 
                 before_url = page.url
+                ensure_catalog_extra_filters_open(page)
                 stock_filter = page.get_by_label("Остаток у поставщика")
                 baseline_feed_reads = len(feed_requests)
                 with page.expect_response(lambda response: feed_response(response, False)) as stock_response:
                     stock_filter.select_option("in_stock")
                 assert stock_response.value.status == 200
                 assert len(feed_requests) == baseline_feed_reads + 1, feed_requests
+                stock_query = parse_qs(urlsplit(stock_response.value.url).query)
+                assert {key: values[-1] for key, values in stock_query.items()
+                        if key in {"search", "supplier", "has_photos", "stock", "sort",
+                                   "marketplace", "marketplace_state", "status", "updates"}} == {
+                    "stock": "in_stock",
+                }, stock_query
+                assert stock_query.get("page") == ["1"] and stock_query.get("per_page") == ["50"], stock_query
 
                 updates_entry = page.locator("[data-supplier-updates-entry]")
                 baseline_feed_reads = len(feed_requests)
@@ -220,6 +277,11 @@ with sync_playwright() as playwright:
                 assert len(feed_requests) == baseline_feed_reads + 1, feed_requests
                 update_query = parse_qs(urlsplit(updates_response.value.url).query)
                 assert update_query.get("stock") == ["in_stock"], update_query
+                assert {key: values[-1] for key, values in update_query.items()
+                        if key in {"search", "supplier", "has_photos", "stock", "sort",
+                                   "marketplace", "marketplace_state", "status", "updates"}} == {
+                    "stock": "in_stock", "updates": "1",
+                }, update_query
                 expect(updates_entry).to_have_attribute("aria-pressed", "true")
                 assert page.url == before_url
                 assert page.evaluate("window.__supplierEntryDocumentMarker") == "same-document"
@@ -231,6 +293,11 @@ with sync_playwright() as playwright:
                 assert len(feed_requests) == baseline_feed_reads + 1, feed_requests
                 all_query = parse_qs(urlsplit(all_response.value.url).query)
                 assert all_query.get("stock") == ["in_stock"], all_query
+                assert {key: values[-1] for key, values in all_query.items()
+                        if key in {"search", "supplier", "has_photos", "stock", "sort",
+                                   "marketplace", "marketplace_state", "status", "updates"}} == {
+                    "stock": "in_stock",
+                }, all_query
                 expect(updates_entry).to_have_attribute("aria-pressed", "false")
                 expect(stock_filter).to_have_value("in_stock")
                 assert page.url == before_url
