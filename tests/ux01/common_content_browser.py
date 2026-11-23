@@ -1927,7 +1927,12 @@ def _run_bulk_50_case(page) -> None:
         const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
         return proxy && !proxy.loading && proxy.itemsScope === proxy.feedScopeKey();
     }""")
-    page.get_by_role("button", name=re.compile(r"^Готовы к WB")).click()
+    extra_filters = page.locator("[data-catalog-extra-filters]")
+    assert not extra_filters.evaluate("details => details.open")
+    extra_filters.locator("summary").click()
+    wb_status = page.locator("[data-catalog-wb-status]")
+    assert wb_status.count() == 1 and wb_status.is_visible()
+    wb_status.select_option("validated")
     page.wait_for_function("""() => {
         const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
         return proxy && proxy.activeTab === 'validated' && !proxy.loading &&
@@ -2267,6 +2272,16 @@ def _run_bulk_50_case(page) -> None:
         "boxes => boxes.map(box => Number(box.value))"
     ) == product_ids
     assert page.locator("[data-workspace-return-note]").count() == 0
+    restored_extra_filters = page.locator("[data-catalog-extra-filters]")
+    assert not restored_extra_filters.evaluate("details => details.open")
+    restored_extra_filters.locator("summary").click()
+    assert page.locator("[data-catalog-wb-status]").input_value() == "validated"
+    assert page.get_by_label("Фото").input_value() == "no"
+    assert page.get_by_label("Остаток у поставщика").input_value() == "out_of_stock"
+    assert page.locator("[data-catalog-sort]").input_value() == "title"
+    REPORT["checks"].append(
+        "common_50_return_remounts_collapsed_disclosure_with_native_filters_restored"
+    )
     REPORT["checks"].append("common_50_apply_return_waits_for_fresh_scoped_feed_without_stale_selection")
     REPORT["checks"].append("common_50_apply_return_restores_filter_tab_sort_and_exact_ordered_selection")
 
