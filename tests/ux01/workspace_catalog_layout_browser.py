@@ -167,7 +167,8 @@ with sync_playwright() as playwright:
                 filter_geometry.append({"width": box["width"], "height": box["height"]})
             expect(filter_buttons.first).to_have_attribute("aria-pressed", "true")
             extra_filters = page.locator("[data-catalog-extra-filters]")
-            assert not extra_filters.evaluate("details => details.open")
+            closed_initially = not extra_filters.evaluate("details => details.open")
+            assert closed_initially
             assert_catalog_extra_filter_scope(page, opened=False, ozon=False)
             for city in ("Северный склад", "Южный склад"):
                 label = row.get_by_text(city, exact=False).last
@@ -201,19 +202,23 @@ with sync_playwright() as playwright:
             assert selection_before_disclosure == []
             set_catalog_extra_filters_open_by_keyboard(page, opened=True)
             assert_catalog_extra_filter_scope(page, opened=True, ozon=False)
-            expanded_controls = (
-                page.get_by_label("Фото"),
-                page.get_by_label("Остаток у поставщика"),
-                page.locator("[data-catalog-sort]"),
-                page.locator("[data-catalog-wb-status]"),
-            )
-            for control in expanded_controls:
+            expanded_controls = {
+                "photo": page.get_by_label("Фото"),
+                "supplier_stock": page.get_by_label("Остаток у поставщика"),
+                "sort": page.locator("[data-catalog-sort]"),
+                "wb_status": page.locator("[data-catalog-wb-status]"),
+            }
+            expanded_control_boxes = {}
+            for name, control in expanded_controls.items():
                 expect(control).to_be_visible()
                 box = control.bounding_box()
                 assert box and box["x"] >= 0
                 assert box["x"] + box["width"] <= width + 1, box
                 if width <= 390:
                     assert box["width"] >= 44 and box["height"] >= 44, box
+                expanded_control_boxes[name] = {
+                    key: box[key] for key in ("x", "y", "width", "height")
+                }
             if width <= 390:
                 summary_box = extra_filters.locator("summary").bounding_box()
                 body_box = extra_filters.locator(".mp-extra-filter-body").bounding_box()
@@ -231,6 +236,8 @@ with sync_playwright() as playwright:
             set_catalog_extra_filters_open_by_keyboard(page, opened=False)
             assert_catalog_extra_filter_scope(page, opened=False, ozon=False)
             assert selected_browser_state(page)["selected"] == selection_before_disclosure
+            keyboard_open_close = True
+            open_disclosure_screenshot = None
 
             if width == 320 and theme == "light":
                 bootstrap = json.loads(page.locator("#mp-bootstrap").text_content())
@@ -255,6 +262,20 @@ with sync_playwright() as playwright:
 
                 before_url = page.url
                 ensure_catalog_extra_filters_open(page)
+                photo_filter = page.get_by_label("Фото")
+                baseline_feed_reads = len(feed_requests)
+                with page.expect_response(lambda response: feed_response(response, False)) as photo_response:
+                    photo_filter.select_option("yes")
+                assert photo_response.value.status == 200
+                assert len(feed_requests) == baseline_feed_reads + 1, feed_requests
+                photo_query = parse_qs(urlsplit(photo_response.value.url).query)
+                assert {key: values[-1] for key, values in photo_query.items()
+                        if key in {"search", "supplier", "has_photos", "stock", "sort",
+                                   "marketplace", "marketplace_state", "status", "updates"}} == {
+                    "has_photos": "yes",
+                }, photo_query
+                assert photo_query.get("page") == ["1"] and photo_query.get("per_page") == ["50"], photo_query
+
                 stock_filter = page.get_by_label("Остаток у поставщика")
                 baseline_feed_reads = len(feed_requests)
                 with page.expect_response(lambda response: feed_response(response, False)) as stock_response:
@@ -265,9 +286,23 @@ with sync_playwright() as playwright:
                 assert {key: values[-1] for key, values in stock_query.items()
                         if key in {"search", "supplier", "has_photos", "stock", "sort",
                                    "marketplace", "marketplace_state", "status", "updates"}} == {
-                    "stock": "in_stock",
+                    "has_photos": "yes", "stock": "in_stock",
                 }, stock_query
                 assert stock_query.get("page") == ["1"] and stock_query.get("per_page") == ["50"], stock_query
+                expect(photo_filter).to_have_value("yes")
+
+                if width == 320 and theme == "light":
+                    open_disclosure_screenshot = "catalog-extra-filters-open-photo-stock-320-light.png"
+                    page.screenshot(path=target / open_disclosure_screenshot, animations="disabled")
+                set_catalog_extra_filters_open_by_keyboard(page, opened=False)
+                summary = page.locator("[data-catalog-extra-filters] summary")
+                expect(summary).to_be_visible()
+                expect(summary.locator(".mp-extra-filter-count")).to_have_text("Выбрано 2 фильтра")
+                expect(summary).to_have_attribute(
+                    "aria-label",
+                    "Дополнительные фильтры. Выбрано: С фото, В наличии у поставщика",
+                )
+                assert_catalog_extra_filter_scope(page, opened=False, ozon=False)
 
                 updates_entry = page.locator("[data-supplier-updates-entry]")
                 baseline_feed_reads = len(feed_requests)
@@ -280,7 +315,7 @@ with sync_playwright() as playwright:
                 assert {key: values[-1] for key, values in update_query.items()
                         if key in {"search", "supplier", "has_photos", "stock", "sort",
                                    "marketplace", "marketplace_state", "status", "updates"}} == {
-                    "stock": "in_stock", "updates": "1",
+                    "has_photos": "yes", "stock": "in_stock", "updates": "1",
                 }, update_query
                 expect(updates_entry).to_have_attribute("aria-pressed", "true")
                 assert page.url == before_url
@@ -296,7 +331,7 @@ with sync_playwright() as playwright:
                 assert {key: values[-1] for key, values in all_query.items()
                         if key in {"search", "supplier", "has_photos", "stock", "sort",
                                    "marketplace", "marketplace_state", "status", "updates"}} == {
-                    "stock": "in_stock",
+                    "has_photos": "yes", "stock": "in_stock",
                 }, all_query
                 expect(updates_entry).to_have_attribute("aria-pressed", "false")
                 expect(stock_filter).to_have_value("in_stock")
@@ -347,10 +382,25 @@ with sync_playwright() as playwright:
                 expect(page.locator(f'[data-bulk-action-group="{group}"]')).to_be_visible()
             checkbox.uncheck()
             if width == 320 and theme == "light":
+                ensure_catalog_extra_filters_open(page)
+                with page.expect_response(lambda response: feed_response(response, False)) as reset_photo_response:
+                    photo_filter.select_option("")
+                assert reset_photo_response.value.status == 200
+                reset_photo_query = parse_qs(urlsplit(reset_photo_response.value.url).query)
+                assert {key: values[-1] for key, values in reset_photo_query.items()
+                        if key in {"search", "supplier", "has_photos", "stock", "sort",
+                                   "marketplace", "marketplace_state", "status", "updates"}} == {
+                    "stock": "in_stock",
+                }, reset_photo_query
+                expect(photo_filter).to_have_value("")
                 with page.expect_response(lambda response: feed_response(response, False)) as reset_stock_response:
                     stock_filter.select_option("")
                 assert reset_stock_response.value.status == 200
                 reset_query = parse_qs(urlsplit(reset_stock_response.value.url).query)
+                assert {key: values[-1] for key, values in reset_query.items()
+                        if key in {"search", "supplier", "has_photos", "stock", "sort",
+                                   "marketplace", "marketplace_state", "status", "updates"}} == {}, reset_query
+                assert reset_query.get("page") == ["1"] and reset_query.get("per_page") == ["50"], reset_query
                 assert "stock" not in reset_query, reset_query
                 expect(stock_filter).to_have_value("")
                 unfiltered_ambiguous_row = page.locator(".mp-row").filter(has_text=AMBIGUOUS_WB_TITLE)
@@ -365,7 +415,16 @@ with sync_playwright() as playwright:
                 expect(ambiguous_row.locator('[data-row-price-action="wb"]')).to_have_count(0)
             report["layouts"].append({"width": width, "theme": theme, "screenshot": snapshot,
                                       "row_width": cols["right"] - cols["left"],
-                                      "filter_targets": filter_geometry})
+                                      "filter_targets": filter_geometry,
+                                      "compact_filter_disclosure": {
+                                          "closed_initially": closed_initially,
+                                          "keyboard_open_close": keyboard_open_close,
+                                          "expanded_controls": expanded_control_boxes,
+                                          "toolbar_width": toolbar_box["width"],
+                                          "expanded_scroll_width": expanded_dimensions["scroll"],
+                                          "expanded_client_width": expanded_dimensions["viewport"],
+                                          "open_screenshot": open_disclosure_screenshot,
+                                      }})
             context.unroute_all(behavior="wait")
             context.close()
     browser.close()

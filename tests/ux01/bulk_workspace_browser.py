@@ -609,6 +609,11 @@ def exercise_marketplace_filters(browser, bridge, errors):
         source_search = "UX-R71-"
         common_filters = {"search": source_search}
         observed = {}
+        disclosure_evidence = {
+            "keyboard_open_close": False,
+            "wb_status_hidden_in_ozon": False,
+            "selection_preserved_without_feed_read": False,
+        }
         assert_catalog_extra_filter_scope(page, opened=False, ozon=False)
         set_catalog_extra_filters_open_by_keyboard(page, opened=True)
         assert_catalog_extra_filter_scope(page, opened=True, ozon=False)
@@ -663,6 +668,8 @@ def exercise_marketplace_filters(browser, bridge, errors):
             assert_catalog_extra_filter_scope(
                 page, opened=True, ozon=marketplace == "ozon",
             )
+            if marketplace == "ozon":
+                disclosure_evidence["wb_status_hidden_in_ozon"] = True
             observed[name] = {"rows": len(ordered_ids), "matches": sorted(expected),
                               "query": expected_filter_query}
 
@@ -737,6 +744,8 @@ def exercise_marketplace_filters(browser, bridge, errors):
             assert_catalog_extra_filter_scope(page, opened=True, ozon=True)
             assert selected_browser_state(page)["selected"] == selected_before_toggle
             assert len(shared_filter_reads) == toggle_request_count, shared_filter_reads
+            disclosure_evidence["keyboard_open_close"] = True
+            disclosure_evidence["selection_preserved_without_feed_read"] = True
             expected_active_filters = {
                 **common_filters, "marketplace": "ozon", "marketplace_state": "active",
             }
@@ -787,9 +796,11 @@ def exercise_marketplace_filters(browser, bridge, errors):
         assert writes == []
         assert fixture.REPORT["provider_attempts"] == provider_before
         assert len(fixture.REPORT["unexpected_external_requests"]) == external_before
+        assert all(disclosure_evidence.values()), disclosure_evidence
         report.append({"width": width, "theme": theme, "cases": observed,
                        "marks_preserved": True, "local_db_write_statements": len(writes),
                        "keyboard_activation": True, "provider_attempts": 0,
+                       "compact_filter_disclosure": disclosure_evidence,
                        "screenshot": screenshot.name})
         context.close()
     return report
@@ -2232,9 +2243,14 @@ def run():
         race_page.wait_for_timeout(600)
         assert race_page.locator(".mp-list article.mp-row").count() == 0
         assert race_page.locator(".mp-list article.mp-row input[type=checkbox]:checked").count() == 0
+        empty_output_sort = race_page.get_by_label("Сортировка")
+        assert empty_output_sort.count() == 1 and empty_output_sort.is_visible()
+        assert empty_output_sort.get_attribute("data-catalog-sort") is not None
+        assert empty_output_sort.input_value() == "title"
         assert any(query.get("search") == ["UX-BULK-NO-MATCH"] for query in feed_gets)
         assert len(posts) == before_select_posts, posts
         checks.append("delayed_full_select_is_discarded_when_search_changes")
+        checks.append("compact_catalog_sort_remains_accessible_with_empty_results")
         race_context.close()
         context.close()
 
