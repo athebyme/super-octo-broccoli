@@ -20,6 +20,7 @@ from sqlalchemy.orm import load_only
 
 from models import (
     ImportedProduct,
+    Marketplace,
     MarketplaceListing,
     MarketplaceProductDraft,
     Product,
@@ -34,6 +35,9 @@ STATUSES = frozenset({
     'pending', 'validated', 'imported', 'imported_pending_sync', 'failed',
 })
 SORTS = frozenset({'newest', 'oldest', 'price_asc', 'price_desc', 'title'})
+MARKETPLACES = frozenset({'wb', 'ozon'})
+MARKETPLACE_STATES = frozenset({'active', 'preparation', 'attention'})
+_WB_WORKFLOW_STATUSES = ('validated', 'imported_pending_sync', 'failed')
 
 # Причины, по которым карточку стоит трогать в первую очередь.
 # Совпадают с кодами card_quality_scorer.ATTENTION_REASONS.
@@ -46,6 +50,10 @@ class MyProductsFeedError(ValueError):
 
 class MyProductsFeedNotFound(MyProductsFeedError):
     """One or more exact seller-owned rows are no longer available."""
+
+
+class MyProductsFeedFeatureDisabled(MyProductsFeedError):
+    """A requested marketplace view is disabled for this deployment."""
 
 
 def _positive_int(value: Any, name: str, default: Optional[int] = None) -> int:
@@ -112,6 +120,9 @@ class MyProductsFeed:
         has_photos: Optional[str] = None,
         stock: Optional[str] = None,
         updates_only: bool = False,
+        marketplace: Optional[str] = None,
+        marketplace_state: Optional[str] = None,
+        ozon_enabled: bool = False,
         sort: Optional[str] = None,
         page: int = 1,
         per_page: int = 50,
@@ -127,8 +138,44 @@ class MyProductsFeed:
             raise MyProductsFeedError('Неизвестный статус')
         if sort and sort not in SORTS:
             raise MyProductsFeedError('Неизвестная сортировка')
+        marketplace = cls._filter_value(
+            marketplace, 'marketplace', MARKETPLACES,
+        )
+        marketplace_state = cls._filter_value(
+            marketplace_state, 'marketplace_state', MARKETPLACE_STATES,
+        )
+        if marketplace == 'ozon' and not ozon_enabled:
+            raise MyProductsFeedFeatureDisabled('Фильтр Ozon отключён')
 
         query = ImportedProduct.query.filter_by(seller_id=seller_id)
+        if marketplace:
+            query = query.filter(cls._marketplace_association(
+                seller_id=seller_id,
+                marketplace=marketplace,
+            ))
+        if marketplace_state:
+            if marketplace == 'wb':
+                state_filter = cls._wb_state(
+                    seller_id=seller_id,
+                    state=marketplace_state,
+                )
+            elif marketplace == 'ozon':
+                state_filter = cls._ozon_state(
+                    seller_id=seller_id,
+                    state=marketplace_state,
+                )
+            else:
+                state_filters = [cls._wb_state(
+                    seller_id=seller_id,
+                    state=marketplace_state,
+                )]
+                if ozon_enabled:
+                    state_filters.append(cls._ozon_state(
+                        seller_id=seller_id,
+                        state=marketplace_state,
+                    ))
+                state_filter = db.or_(*state_filters)
+            query = query.filter(state_filter)
         if status:
             query = query.filter_by(import_status=status)
         if updates_only:
@@ -224,6 +271,147 @@ class MyProductsFeed:
                 'has_next': pagination.has_next,
             },
         }
+
+    @staticmethod
+    def _filter_value(
+        value: Optional[str],
+        name: str,
+        allowed: frozenset,
+    ) -> Optional[str]:
+        if value in (None, ''):
+            return None
+        if not isinstance(value, str) or value not in allowed:
+            raise MyProductsFeedError(f'Неизвестный фильтр {name}')
+        return value
+
+    @staticmethod
+    def _wb_product_exists(*, seller_id: int, active_only: bool = False):
+        """An exact seller-owned WB card with a confirmed positive nmID."""
+        product_query = db.session.query(Product.id).filter(
+            Product.id == ImportedProduct.product_id,
+            Product.seller_id == seller_id,
+            Product.nm_id.isnot(None),
+            Product.nm_id > 0,
+        )
+        if active_only:
+            product_query = product_query.filter(Product.is_active.is_(True))
+        return product_query.exists()
+
+    @classmethod
+    def _wb_association(cls, *, seller_id: int):
+        return db.or_(
+            cls._wb_product_exists(seller_id=seller_id),
+            ImportedProduct.import_status.in_(_WB_WORKFLOW_STATUSES),
+        )
+
+    @staticmethod
+    def _ozon_listing_exists(*, seller_id: int, conditions=()):
+        listing_query = db.session.query(MarketplaceListing.id).join(
+            Marketplace,
+            Marketplace.id == MarketplaceListing.marketplace_id,
+        ).join(
+            SellerMarketplaceAccount,
+            SellerMarketplaceAccount.id == MarketplaceListing.account_id,
+        ).filter(
+            MarketplaceListing.imported_product_id == ImportedProduct.id,
+            MarketplaceListing.seller_id == seller_id,
+            Marketplace.code == 'ozon',
+            SellerMarketplaceAccount.seller_id == seller_id,
+            SellerMarketplaceAccount.marketplace_id
+            == MarketplaceListing.marketplace_id,
+        )
+        return listing_query.filter(*conditions).exists()
+
+    @staticmethod
+    def _ozon_draft_exists(*, seller_id: int, statuses=None):
+        draft_query = db.session.query(MarketplaceProductDraft.id).join(
+            Marketplace,
+            Marketplace.id == MarketplaceProductDraft.marketplace_id,
+        ).join(
+            SellerMarketplaceAccount,
+            SellerMarketplaceAccount.id == MarketplaceProductDraft.account_id,
+        ).filter(
+            MarketplaceProductDraft.imported_product_id == ImportedProduct.id,
+            MarketplaceProductDraft.seller_id == seller_id,
+            MarketplaceProductDraft.published_listing_id.is_(None),
+            Marketplace.code == 'ozon',
+            SellerMarketplaceAccount.seller_id == seller_id,
+            SellerMarketplaceAccount.marketplace_id
+            == MarketplaceProductDraft.marketplace_id,
+        )
+        if statuses is not None:
+            draft_query = draft_query.filter(
+                MarketplaceProductDraft.status.in_(statuses),
+            )
+        return draft_query.exists()
+
+    @classmethod
+    def _ozon_association(cls, *, seller_id: int):
+        # Unknown and archived provider rows remain Ozon associations. The
+        # state predicates below decide whether they qualify for a workflow tab.
+        return db.or_(
+            cls._ozon_listing_exists(seller_id=seller_id),
+            cls._ozon_draft_exists(seller_id=seller_id),
+        )
+
+    @classmethod
+    def _marketplace_association(cls, *, seller_id: int, marketplace: str):
+        if marketplace == 'wb':
+            return cls._wb_association(seller_id=seller_id)
+        return cls._ozon_association(seller_id=seller_id)
+
+    @classmethod
+    def _wb_state(cls, *, seller_id: int, state: str):
+        if state == 'active':
+            return db.and_(
+                ImportedProduct.import_status == 'imported',
+                cls._wb_product_exists(seller_id=seller_id, active_only=True),
+            )
+        if state == 'preparation':
+            return ImportedProduct.import_status.in_(
+                ('validated', 'imported_pending_sync'),
+            )
+        return ImportedProduct.import_status == 'failed'
+
+    @classmethod
+    def _ozon_state(cls, *, seller_id: int, state: str):
+        if state == 'active':
+            return cls._ozon_listing_exists(
+                seller_id=seller_id,
+                conditions=(
+                    MarketplaceListing.normalized_status == 'active',
+                    MarketplaceListing.is_available.is_(True),
+                    MarketplaceListing.is_archived.is_(False),
+                    SellerMarketplaceAccount.is_active.is_(True),
+                ),
+            )
+        if state == 'preparation':
+            return db.or_(
+                cls._ozon_listing_exists(
+                    seller_id=seller_id,
+                    conditions=(
+                        MarketplaceListing.normalized_status.in_(
+                            ('creating', 'moderation'),
+                        ),
+                    ),
+                ),
+                cls._ozon_draft_exists(
+                    seller_id=seller_id,
+                    statuses=('needs_category', 'draft', 'ready'),
+                ),
+            )
+        return db.or_(
+            cls._ozon_listing_exists(
+                seller_id=seller_id,
+                conditions=(
+                    MarketplaceListing.normalized_status == 'error',
+                ),
+            ),
+            cls._ozon_draft_exists(
+                seller_id=seller_id,
+                statuses=('blocked',),
+            ),
+        )
 
     @classmethod
     def list_products_by_ids(

@@ -352,6 +352,218 @@ class MyProductsFeedTest(unittest.TestCase):
         self.assertTrue(inactive_row['is_archived'])
         self.assertNotIn('Чужой Ozon', json.dumps(item, ensure_ascii=False))
 
+    def test_marketplace_filtering_scopes_exact_provider_states_before_paging(self):
+        from models import (
+            ImportedProduct, Marketplace, MarketplaceListing,
+            MarketplaceProductDraft, Product, SellerMarketplaceAccount,
+        )
+
+        ozon = Marketplace(name='Ozon', code='ozon')
+        wb = Marketplace(name='WB', code='wb')
+        self.db.session.add_all([ozon, wb])
+        self.db.session.flush()
+        account = SellerMarketplaceAccount(
+            seller_id=self.seller_id, marketplace_id=ozon.id,
+            external_account_id='filter-ozon-own', label='Ozon', is_active=True,
+        )
+        inactive_account = SellerMarketplaceAccount(
+            seller_id=self.seller_id, marketplace_id=ozon.id,
+            external_account_id='filter-ozon-inactive',
+            label='Inactive Ozon', is_active=False,
+        )
+        wrong_owner_account = SellerMarketplaceAccount(
+            seller_id=self.other_seller_id, marketplace_id=ozon.id,
+            external_account_id='filter-ozon-foreign', label='Foreign Ozon',
+            is_active=True,
+        )
+        self.db.session.add_all([
+            account, inactive_account, wrong_owner_account,
+        ])
+        self.db.session.flush()
+
+        def imported(external_id, status='pending'):
+            row = ImportedProduct(
+                seller_id=self.seller_id, external_id=external_id,
+                source_type='synthetic', title=external_id,
+                import_status=status,
+            )
+            self.db.session.add(row)
+            self.db.session.flush()
+            return row
+
+        active = imported('ozon-active')
+        inactive_account_active_listing = imported('ozon-inactive-account')
+        unknown_archived = imported('ozon-unknown-archived')
+        unavailable = imported('ozon-unavailable')
+        moderation = imported('ozon-moderation')
+        errored = imported('ozon-error')
+        draft_preparation = imported('ozon-draft-preparation')
+        draft_blocked = imported('ozon-draft-blocked')
+        wrong_account = imported('ozon-wrong-account')
+        wb_pending = imported('wb-pending-sync', 'imported_pending_sync')
+        wb_failed = imported('wb-failed', 'failed')
+        wb_historical = imported('wb-historical', 'imported')
+        foreign_product_source = imported('wb-foreign-product', 'imported')
+        imported_without_product = imported('wb-imported-unlinked', 'imported')
+
+        historical_product = Product(
+            seller_id=self.seller_id, nm_id=880098,
+            title='Inactive owned Product', is_active=False,
+        )
+        foreign_product = Product(
+            seller_id=self.other_seller_id, nm_id=880099,
+            title='Foreign Product', is_active=True,
+        )
+        self.db.session.add_all([historical_product, foreign_product])
+        self.db.session.flush()
+        wb_historical.product_id = historical_product.id
+        foreign_product_source.product_id = foreign_product.id
+        imported_without_product.wb_nm_id = 880100
+
+        def listing(row, status, *, available=True, archived=False, owner=account):
+            self.db.session.add(MarketplaceListing(
+                seller_id=self.seller_id, marketplace_id=ozon.id,
+                account_id=owner.id, imported_product_id=row.id,
+                offer_id='offer-' + row.external_id,
+                external_product_id='product-' + row.external_id,
+                normalized_status=status, is_available=available,
+                is_archived=archived, sync_fingerprint='filter-fixture',
+            ))
+
+        listing(active, 'active')
+        listing(inactive_account_active_listing, 'active', owner=inactive_account)
+        listing(unknown_archived, 'unknown', available=False, archived=True)
+        listing(unavailable, 'active', available=False)
+        listing(moderation, 'moderation')
+        listing(errored, 'error')
+        listing(wrong_account, 'active', owner=wrong_owner_account)
+        self.db.session.add_all([
+            MarketplaceProductDraft(
+                seller_id=self.seller_id, marketplace_id=ozon.id,
+                account_id=account.id, imported_product_id=draft_preparation.id,
+                offer_id='ozon-draft-prep', status='needs_category',
+                source_fact_hash='filter-fixture',
+            ),
+            MarketplaceProductDraft(
+                seller_id=self.seller_id, marketplace_id=ozon.id,
+                account_id=account.id, imported_product_id=draft_blocked.id,
+                offer_id='ozon-draft-blocked', status='blocked',
+                source_fact_hash='filter-fixture',
+            ),
+        ])
+        self.db.session.commit()
+
+        previous = self.app.config.get('MARKETPLACE_OZON_ENABLED')
+        self.app.config['MARKETPLACE_OZON_ENABLED'] = True
+        try:
+            with self._auth():
+                baseline = self.client.get('/api/my-products').get_json()
+                empty_filters = self.client.get(
+                    '/api/my-products?marketplace=&marketplace_state=',
+                ).get_json()
+                ozon_all = self.client.get(
+                    '/api/my-products?marketplace=ozon',
+                ).get_json()
+                ozon_active = self.client.get(
+                    '/api/my-products?marketplace=ozon&marketplace_state=active',
+                ).get_json()
+                ozon_preparation = self.client.get(
+                    '/api/my-products?marketplace=ozon&marketplace_state=preparation',
+                ).get_json()
+                ozon_attention = self.client.get(
+                    '/api/my-products?marketplace=ozon&marketplace_state=attention',
+                ).get_json()
+                active_union = self.client.get(
+                    '/api/my-products?marketplace_state=active',
+                ).get_json()
+                wb_active = self.client.get(
+                    '/api/my-products?marketplace=wb&marketplace_state=active',
+                ).get_json()
+                wb_page = self.client.get(
+                    '/api/my-products?marketplace=wb&sort=title&per_page=1&page=2',
+                ).get_json()
+                wb_page_repeat = self.client.get(
+                    '/api/my-products?marketplace=wb&sort=title&per_page=1&page=2',
+                ).get_json()
+                legacy_match = self.client.get(
+                    '/api/my-products?marketplace=wb&status=validated&search=Плед',
+                ).get_json()
+                legacy_miss = self.client.get(
+                    '/api/my-products?marketplace=wb&status=validated&search=Обувь',
+                ).get_json()
+        finally:
+            if previous is None:
+                self.app.config.pop('MARKETPLACE_OZON_ENABLED', None)
+            else:
+                self.app.config['MARKETPLACE_OZON_ENABLED'] = previous
+
+        def ids(payload):
+            return [row['id'] for row in payload['items']]
+
+        self.assertEqual(empty_filters, baseline)
+        self.assertEqual(ozon_all['pagination']['total'], 8)
+        self.assertCountEqual(ids(ozon_all), [
+            active.id, inactive_account_active_listing.id,
+            unknown_archived.id, unavailable.id, moderation.id, errored.id,
+            draft_preparation.id, draft_blocked.id,
+        ])
+        self.assertNotIn(wrong_account.id, ids(ozon_all))
+        self.assertEqual(ids(ozon_active), [active.id])
+        self.assertCountEqual(
+            ids(ozon_preparation), [moderation.id, draft_preparation.id],
+        )
+        self.assertCountEqual(ids(ozon_attention), [errored.id, draft_blocked.id])
+        self.assertCountEqual(ids(active_union), [self.published_id, active.id])
+
+        self.assertEqual(wb_page['pagination']['total'], 5)
+        self.assertEqual(wb_page['pagination']['pages'], 5)
+        self.assertTrue(wb_page['pagination']['has_next'])
+        self.assertEqual(ids(wb_page), ids(wb_page_repeat))
+        self.assertEqual(ids(legacy_match), [self.draft_id])
+        self.assertEqual(legacy_miss['pagination']['total'], 0)
+        self.assertEqual(ids(wb_active), [self.published_id])
+        with self._auth():
+            wb_all = self.client.get('/api/my-products?marketplace=wb').get_json()
+        self.assertIn(wb_historical.id, ids(wb_all))
+        self.assertNotIn(foreign_product_source.id, ids(wb_all))
+        self.assertNotIn(imported_without_product.id, ids(wb_all))
+
+    def test_marketplace_filters_reject_bad_values_and_respect_ozon_flag(self):
+        previous = self.app.config.get('MARKETPLACE_OZON_ENABLED')
+        self.app.config['MARKETPLACE_OZON_ENABLED'] = False
+        try:
+            with self._auth():
+                invalid_marketplace = self.client.get(
+                    '/api/my-products?marketplace=amazon',
+                )
+                invalid_state = self.client.get(
+                    '/api/my-products?marketplace_state=live',
+                )
+                duplicate = self.client.get(
+                    '/api/my-products?marketplace=wb&marketplace=ozon',
+                )
+                disabled_ozon = self.client.get(
+                    '/api/my-products?marketplace=ozon',
+                )
+                wb_state_only = self.client.get(
+                    '/api/my-products?marketplace_state=active',
+                )
+        finally:
+            if previous is None:
+                self.app.config.pop('MARKETPLACE_OZON_ENABLED', None)
+            else:
+                self.app.config['MARKETPLACE_OZON_ENABLED'] = previous
+
+        self.assertEqual(invalid_marketplace.status_code, 400)
+        self.assertEqual(invalid_state.status_code, 400)
+        self.assertEqual(duplicate.status_code, 400)
+        self.assertEqual(disabled_ozon.status_code, 404)
+        self.assertIn('no-store', disabled_ozon.headers['Cache-Control'])
+        self.assertEqual(
+            [row['id'] for row in wb_state_only.get_json()['items']],
+            [self.published_id],
+        )
+
     def _batch_token(self, *, user_id, seller_id, ids):
         from itsdangerous import URLSafeTimedSerializer
 

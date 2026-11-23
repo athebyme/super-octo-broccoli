@@ -4486,7 +4486,8 @@ def register_supplier_routes(app):
     def api_my_products_list():
         """Списочный read-model «Моих товаров» для интерфейса на Vue."""
         from services.my_products_feed import (
-            MyProductsFeed, MyProductsFeedError, MyProductsFeedNotFound,
+            MyProductsFeed, MyProductsFeedError, MyProductsFeedFeatureDisabled,
+            MyProductsFeedNotFound,
         )
 
         seller = current_user.seller
@@ -4567,6 +4568,10 @@ def register_supplier_routes(app):
             )
 
         try:
+            marketplace_values = request.args.getlist('marketplace')
+            marketplace_state_values = request.args.getlist('marketplace_state')
+            if len(marketplace_values) > 1 or len(marketplace_state_values) > 1:
+                raise MyProductsFeedError('Фильтр канала указан несколько раз')
             payload = MyProductsFeed.list_products(
                 seller_id=seller.id,
                 status=request.args.get('status') or None,
@@ -4577,10 +4582,23 @@ def register_supplier_routes(app):
                 has_photos=request.args.get('has_photos') or None,
                 stock=request.args.get('stock') or None,
                 updates_only=request.args.get('updates') == '1',
+                marketplace=(marketplace_values[0] if marketplace_values else None),
+                marketplace_state=(
+                    marketplace_state_values[0]
+                    if marketplace_state_values else None
+                ),
+                ozon_enabled=bool(
+                    current_app.config.get('MARKETPLACE_OZON_ENABLED', False)
+                ),
                 sort=request.args.get('sort') or None,
                 page=request.args.get('page', 1, type=int) or 1,
                 per_page=request.args.get('per_page', 50, type=int) or 50,
             )
+        except MyProductsFeedFeatureDisabled as exc:
+            return _no_store_supplier_import_batch_response((jsonify({
+                'success': False,
+                'error': str(exc),
+            }), 404))
         except MyProductsFeedError as exc:
             return jsonify({'success': False, 'error': str(exc)}), 400
         return _no_store_supplier_import_batch_response(
