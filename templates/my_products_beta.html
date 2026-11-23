@@ -95,10 +95,10 @@
              class="mp-ozon-message mp-ozon-message--prepared" data-ozon-local-prepare-receipt
              role="region" aria-labelledby="ozon-local-prepare-title" tabindex="-1">
         <div class="mp-ozon-receipt-copy">
-            <strong id="ozon-local-prepare-title">{{ ozonInlineStatus && ozonInlineStatus.state === 'completed' ? 'Подготовка завершена' : 'Подготовка принята' }}</strong>
-            <p>Черновики сохраняются в Seller Hub. На Ozon ничего не отправлено; отправка потребует отдельного подтверждения.</p>
+            <strong id="ozon-local-prepare-title">Черновики для Ozon</strong>
+            <p>Отправка в Ozon требует отдельного подтверждения.</p>
             <p data-ozon-local-prepare-scope>
-                Этот запуск · {{ ozonInlineReceipt.latest.product_ids.length }} товаров · {{ ozonInlineReceipt.latest.account_label }}.
+                Товаров: {{ ozonInlineReceipt.latest.product_ids.length }} · {{ ozonInlineReceipt.latest.account_label }}.
             </p>
             <div v-if="ozonInlineStatus" role="status" aria-live="polite" aria-atomic="true">
                 <p data-ozon-local-prepare-status :data-status="ozonInlineStatus.state">{{ ozonInlineStatus.message }}</p>
@@ -113,7 +113,7 @@
         </div>
         <div class="mp-ozon-actions">
             <a v-if="ozonInlineReceiptUrl" class="sh-btn sh-btn--secondary"
-               data-ozon-local-prepare-run :href="ozonInlineReceiptUrl">Открыть итог подготовки</a>
+               data-ozon-local-prepare-run :href="ozonInlineReceiptUrl">Открыть итог</a>
             <a v-if="ozonInlineReceiptStorageProblem" class="sh-btn sh-btn--secondary"
                :href="urls.ozonUploads">История запусков</a>
             <button type="button" class="sh-btn sh-btn--secondary" data-ozon-local-prepare-dismiss

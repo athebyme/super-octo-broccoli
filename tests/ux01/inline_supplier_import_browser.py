@@ -476,7 +476,7 @@ def check_inline_ozon_preparation(
     scope = receipt.locator('[data-ozon-local-prepare-scope]')
     expect(scope).to_contain_text(account_label)
     expect(scope).to_contain_text(str(len(selected)))
-    assert 'ничего не отправлено' in receipt.inner_text().casefold()
+    assert 'Отправка в Ozon требует отдельного подтверждения.' in receipt.inner_text()
     review = receipt.locator('[data-ozon-local-prepare-run]')
     expect(review).to_have_attribute('href', prepare['location'])
     assert not navigations and page.evaluate("window.supplierProofDocument === 'first'")
