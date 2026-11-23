@@ -19,6 +19,7 @@ const boot = {
     feed: '/api/my-products',
     workspace: '/my-products/beta',
     facets: '/api/my-products/facets',
+    catalogCategories: '/api/my-products/categories',
     selection: '/api/my-products/selection',
     commonContent: '/my-products/common-content',
   },
@@ -162,6 +163,38 @@ async function main() {
     'the legacy default scope shape omits optional marketplace filters');
   assert.equal(Object.hasOwn(defaultScope, 'marketplace_state'), false,
     'the legacy default scope shape omits the default common status');
+
+  assert.equal(Object.hasOwn(defaultScope, 'catalog_category'), false,
+    'default scopes remain compatible with earlier capsule readers');
+
+  const categoryApp = makeApp();
+  const firstLabel = {key: 'label:Посуда', label: 'Посуда'};
+  const secondLabel = {key: 'label:Одежда', label: 'Одежда'};
+  const optionPages = [];
+  categoryApp.$api.get = async (url, {page}) => {
+    assert.equal(url, boot.urls.catalogCategories);
+    optionPages.push(page);
+    return {
+      success: true, page, has_next: page === 1, has_uncategorized: true,
+      options: page === 1 ? [firstLabel] : [firstLabel, secondLabel],
+    };
+  };
+  assert.equal(await categoryApp.loadCatalogCategories(), true);
+  assert.equal(categoryApp.handleCatalogCategoryChange({currentTarget: {value: firstLabel.key}}), true);
+  assert.equal(categoryApp.queryParams().catalog_category, firstLabel.key);
+  categoryApp.items = [row(4)];
+  categoryApp.itemsScope = categoryApp.feedScopeKey();
+  const categoryScope = categoryApp.buildWorkspaceReturnScope();
+  assert.equal(categoryScope.catalog_category, firstLabel.key);
+  assert.equal(await categoryApp.loadCatalogCategories(), true);
+  sameJson(optionPages, [1, 2]);
+  sameJson(categoryApp.catalogCategoryOptions, [firstLabel, secondLabel]);
+  assert.equal(categoryApp.workspaceReturnScopeIsCurrent(categoryScope), true,
+    'reading a further category page cannot modify the filter scope');
+  assert.equal(categoryApp.handleCatalogCategoryChange({currentTarget: {value: 'missing'}}), true);
+  categoryApp.itemsScope = categoryApp.feedScopeKey();
+  assert.equal(categoryApp.workspaceReturnScopeIsCurrent(categoryScope), false,
+    'changing the category invalidates the captured scope');
 
   const capturedScopeApp = makeApp();
   capturedScopeApp.activeTab = 'pending';
@@ -536,11 +569,13 @@ async function main() {
   assert.match(template, /<sh-filter-bar ref="catalogSearch"/);
   assert.match(template, /data-catalog-marketplace="all"[\s\S]*data-catalog-marketplace="wb"[\s\S]*data-catalog-marketplace="ozon"/);
   assert.match(template, /data-catalog-marketplace-status/);
+  assert.match(template, /data-catalog-category aria-label="Категория каталога"/);
   assert.match(template, /data-catalog-extra-filters/);
   assert.match(template, /data-catalog-wb-status/);
   assert.match(template, /:value="activeTab === 'updates' \? '' : activeTab"/);
   const sharedExtraFilters = template.match(/<details class="mp-extra-filters" data-catalog-extra-filters>([\s\S]*?)<\/details>/);
   assert.ok(sharedExtraFilters, 'advanced controls stay in one shared native disclosure');
+  assert.match(sharedExtraFilters[1], /data-catalog-supplier aria-label="Поставщик"/);
   assert.match(sharedExtraFilters[1], /<select v-if="filters\.marketplace !== 'ozon'" data-catalog-wb-status/,
     'the WB-only status control is absent from Ozon-only scope');
   assert.match(sharedExtraFilters[1], /<select v-model="filters\.sort" class="mp-select" data-catalog-sort aria-label="Сортировка">/,
@@ -555,8 +590,8 @@ async function main() {
   assert.match(css, /\.mp-marketplace-choice:focus-visible/);
   assert.match(css, /\.mp-extra-filters summary:focus-visible/);
   assert.match(css, /\.mp-selection-review[\s\S]*--focus-outline/);
-  assert.match(template, /filename='my-products-beta\.css', v='20261123-compact-catalog-toolbar-r71'/);
-  assert.match(template, /filename='my-products-beta\.js', v='20261123-compact-catalog-toolbar-r71'/);
+  assert.match(template, /filename='my-products-beta\.css', v='20261123-category-filter-r73'/);
+  assert.match(template, /filename='my-products-beta\.js', v='20261123-category-filter-r73'/);
 
   const legacyScope = {
     activeTab: 'pending', search: '', supplier: '', has_photos: '', stock: '',
