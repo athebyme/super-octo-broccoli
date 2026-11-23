@@ -720,6 +720,7 @@
     position:relative;
     flex:0 0 auto;
 }
+#my-products-app .mp-extra-filters[open] { flex:1 1 100%; min-width:0; }
 #my-products-app .mp-extra-filters summary {
     display:flex;
     align-items:center;
@@ -742,12 +743,21 @@
 #my-products-app .mp-extra-filters[open] summary::after { content:"▴"; }
 #my-products-app .mp-extra-filters summary:hover { color:var(--text); background:var(--bg-hover); }
 #my-products-app .mp-extra-filter-count {
-    max-width:150px;
-    min-width:0;
-    overflow:hidden;
+    display:inline-flex;
+    flex:0 0 22px;
+    align-items:center;
+    justify-content:center;
+    width:22px;
+    height:22px;
+    margin-left:auto;
+    border:1px solid var(--border-light);
+    border-radius:50%;
     color:var(--accent-text);
-    text-overflow:ellipsis;
+    background:var(--bg-hover);
     font-size:11px;
+    font-weight:700;
+    font-variant-numeric:tabular-nums;
+    line-height:1;
 }
 #my-products-app .mp-extra-filter-body {
     position:absolute;
@@ -769,6 +779,17 @@
     min-height:44px;
 }
 #my-products-app .mp-catalog-surface .mp-extra-filter-body .mp-select { max-width:none; }
+#my-products-app .mp-extra-filters[open] summary { width:100%; justify-content:flex-start; }
+#my-products-app .mp-extra-filters[open] .mp-extra-filter-body {
+    position:static;
+    top:auto;
+    right:auto;
+    z-index:auto;
+    width:100%;
+    margin-top:6px;
+    grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+    box-shadow:none;
+}
 #my-products-app .mp-catalog-surface .mp-select {
     height:44px;
     max-width:176px;
@@ -985,8 +1006,7 @@
     #my-products-app .mp-marketplace-choice { padding-inline:7px; font-size:12px; }
     #my-products-app .mp-extra-filters { grid-column:1/-1; }
     #my-products-app .mp-extra-filters summary { width:100%; justify-content:flex-start; }
-    #my-products-app .mp-extra-filter-count { margin-left:auto; max-width:min(140px, calc(100% - 150px)); text-align:right; }
-    #my-products-app .mp-extra-filter-body { position:static; width:100%; margin-top:6px; box-shadow:none; grid-template-columns:repeat(2,minmax(0,1fr)); }
+    #my-products-app .mp-extra-filters[open] .mp-extra-filter-body { grid-template-columns:repeat(2,minmax(0,1fr)); }
     #my-products-app .mp-extra-filter-body [data-catalog-wb-status] { grid-column:1/-1; }
     #my-products-app .mp-catalog-surface .mp-select { width:100%; min-width:0; max-width:none; height:44px; font-size:11px; }
     #my-products-app .mp-listhead { min-height:48px; flex-wrap:wrap; gap:0 8px; padding:4px 9px; }

@@ -340,9 +340,7 @@
         <details class="mp-extra-filters" data-catalog-extra-filters>
             <summary :aria-label="extraFiltersDisclosureLabel" :title="extraFiltersDisclosureLabel">
                 <span>Дополнительные фильтры</span>
-                <span v-if="activeAdvancedFilterCount" class="mp-extra-filter-count">
-                    Выбрано {{ activeAdvancedFilterCount }} {{ $fmt.plural(activeAdvancedFilterCount, 'фильтр', 'фильтра', 'фильтров') }}
-                </span>
+                <span v-if="activeAdvancedFilterCount" class="mp-extra-filter-count" data-catalog-extra-filter-count>{{ activeAdvancedFilterCount }}</span>
             </summary>
             <div class="mp-extra-filter-body">
                 <select v-model="filters.has_photos" class="mp-select" aria-label="Фото">
@@ -366,7 +364,7 @@
                         :value="activeTab === 'updates' ? '' : activeTab"
                         aria-label="Статус карточки WB"
                         @change="setWbStatus($event.target.value)">
-                    <option value="">Любой статус</option>
+                    <option value="">Любой этап WB</option>
                     <option v-for="filter in wbStatusFilters" :key="filter.key" :value="filter.key">
                         {{ filter.label }}<template v-if="facets[filter.countKey] !== undefined"> ({{ $fmt.int(facets[filter.countKey]) }})</template>
                     </option>
