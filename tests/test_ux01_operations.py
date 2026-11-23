@@ -403,6 +403,10 @@ def test_reviewed_result_requires_complete_counts_and_keeps_pending_state():
         status="pending", total_products=50, success_count=2, error_count=0,
         operation_params={"review_summary": base}, reverted=False,
     )
+    in_progress = SimpleNamespace(
+        status="in_progress", total_products=50, success_count=2, error_count=0,
+        operation_params={"review_summary": base}, reverted=False,
+    )
     over_counted = SimpleNamespace(
         status="completed", total_products=50, success_count=2, error_count=1,
         operation_params={"review_summary": base}, reverted=False,
@@ -410,6 +414,7 @@ def test_reviewed_result_requires_complete_counts_and_keeps_pending_state():
 
     incomplete_result = present_wb_bulk_operation(incomplete)
     pending_result = present_wb_bulk_operation(pending)
+    in_progress_result = present_wb_bulk_operation(in_progress)
     over_counted_result = present_wb_bulk_operation(over_counted)
     assert incomplete_result["label"] == "Завершено, успешный результат не подтверждён счётчиками"
     assert "1 из 2" in incomplete_result["message"]
@@ -417,6 +422,10 @@ def test_reviewed_result_requires_complete_counts_and_keeps_pending_state():
     assert pending_result["label"] == "Ожидает выполнения"
     assert "ещё не завершена" in pending_result["message"]
     assert not pending_result["reviewed_counts_reconciled"]
+    assert in_progress_result["label"] == "Выполняется"
+    assert in_progress_result["counts"]["success_count"] is None
+    assert in_progress_result["counts"]["error_count"] is None
+    assert not in_progress_result["legacy_success_ratio_available"]
     pending_detail = _render_bulk_history_detail(
         [],
         operation_id=31,
@@ -430,11 +439,93 @@ def test_reviewed_result_requires_complete_counts_and_keeps_pending_state():
     assert "Итоговые счётчики появятся после завершения" in pending_detail
     assert "Ошибок операции: <strong>—</strong>" in pending_detail
     assert "Доля успеха пока неизвестна" in pending_detail
+    in_progress_detail = _render_bulk_history_detail(
+        [],
+        operation_id=31,
+        total_products=50,
+        success_count=2,
+        error_count=0,
+        status="in_progress",
+        operation_params={"review_summary": base},
+    )
+    assert "Операция ещё не завершена" in in_progress_detail
+    assert "Ошибок операции: <strong>—</strong>" in in_progress_detail
+    assert "Доля успеха пока неизвестна" in in_progress_detail
     assert over_counted_result["label"] == incomplete_result["label"]
     assert "Счётчики выполнения не подтверждают полный результат" in over_counted_result["message"]
     assert "Без ошибки обработано 2 из 2" in over_counted_result["message"]
     assert "Ошибок операции: 1" in over_counted_result["message"]
     assert not over_counted_result["reviewed_counts_reconciled"]
+
+
+def test_legacy_in_progress_keeps_coherent_interim_counts_and_ratio():
+    import re
+
+    from services.wb_history_presentation import present_wb_bulk_operation
+
+    operation = SimpleNamespace(
+        id=31,
+        seller_id=92,
+        description="Synthetic legacy in-progress history",
+        status="in_progress",
+        total_products=31,
+        success_count=29,
+        error_count=1,
+        reverted=False,
+        reverted_at=None,
+        created_at=datetime(2026, 9, 30, 12, 0, 0),
+        completed_at=None,
+        duration_seconds=None,
+        operation_params=None,
+        errors_details=None,
+        can_revert=lambda: False,
+    )
+    result = present_wb_bulk_operation(operation)
+    detail = _render_bulk_history_detail(
+        [],
+        operation_id=31,
+        total_products=31,
+        success_count=29,
+        error_count=1,
+        status="in_progress",
+    )
+    stats = detail[
+        detail.index('class="operations-stats-grid'):
+        detail.index("<!-- Параметры операции -->")
+    ]
+
+    assert result["status"] == "in_progress"
+    assert result["tone"] == "running"
+    assert result["is_pending"]
+    assert result["counts"] == {
+        "total_products": 31,
+        "success_count": 29,
+        "error_count": 1,
+    }
+    assert result["legacy_success_ratio_available"]
+    assert "Выполняется" in detail
+    assert re.search(
+        r'<p class="text-3xl font-bold text-green-700">\s*29\s*</p>', stats,
+    )
+    assert re.search(
+        r'<p class="text-3xl font-bold text-red-700">\s*1\s*</p>', stats,
+    )
+    assert "94%" in stats
+
+    incoherent = SimpleNamespace(
+        status="in_progress",
+        total_products=1,
+        success_count=2,
+        error_count=0,
+        operation_params=None,
+    )
+    incoherent_result = present_wb_bulk_operation(incoherent)
+    incoherent_detail = _render_bulk_history_detail(
+        [], total_products=1, success_count=2, error_count=0,
+        status="in_progress",
+    )
+    assert not incoherent_result["legacy_success_ratio_available"]
+    assert "200%" not in incoherent_detail
 
 
 def test_legacy_completed_null_counters_remain_explicitly_unknown():

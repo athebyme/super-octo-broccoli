@@ -238,40 +238,49 @@ def present_wb_bulk_operation(operation):
 
     result["status"] = status
     result["review_summary"] = summary
-    outcome_counts_available = status not in {"pending", "in_progress"}
+    total_products = getattr(operation, "total_products", None)
+    success_count = getattr(operation, "success_count", None)
+    error_count = getattr(operation, "error_count", None)
+    outcome_counts_available = (
+        summary is None or status not in {"pending", "in_progress"}
+    )
     result["counts"] = {
         "total_products": (
-            operation.total_products
-            if _nonnegative_int(getattr(operation, "total_products", None))
+            total_products
+            if _nonnegative_int(total_products)
             else None
         ),
         "success_count": (
-            operation.success_count
+            success_count
             if outcome_counts_available
-            and _nonnegative_int(getattr(operation, "success_count", None))
+            and _nonnegative_int(success_count)
             else None
         ),
         "error_count": (
-            operation.error_count
+            error_count
             if outcome_counts_available
-            and _nonnegative_int(getattr(operation, "error_count", None))
+            and _nonnegative_int(error_count)
             else None
         ),
     }
     result["reviewed_counts_reconciled"] = bool(
         status == "completed"
         and summary is not None
-        and _nonnegative_int(getattr(operation, "success_count", None))
-        and _nonnegative_int(getattr(operation, "error_count", None))
-        and operation.success_count + operation.error_count == summary["changed"]
+        and _nonnegative_int(success_count)
+        and _nonnegative_int(error_count)
+        and success_count + error_count == summary["changed"]
     )
+    visible_counts = result["counts"]
+    visible_total = visible_counts["total_products"]
+    visible_success = visible_counts["success_count"]
+    visible_errors = visible_counts["error_count"]
     result["legacy_success_ratio_available"] = bool(
         summary is None
-        and _nonnegative_int(getattr(operation, "total_products", None))
-        and operation.total_products > 0
-        and _nonnegative_int(getattr(operation, "success_count", None))
-        and _nonnegative_int(getattr(operation, "error_count", None))
-        and operation.success_count + operation.error_count <= operation.total_products
+        and _nonnegative_int(visible_total)
+        and visible_total > 0
+        and _nonnegative_int(visible_success)
+        and _nonnegative_int(visible_errors)
+        and visible_success + visible_errors <= visible_total
     )
     result["reverted"] = bool(getattr(operation, "reverted", False))
     result["is_pending"] = status in {"pending", "in_progress"}
