@@ -74,6 +74,20 @@ def form(row, *, action='ИСПРАВИТЬ', **updates):
     return data
 
 
+def source_refresh_form(*rows, **updates):
+    data = {
+        'refresh_source': '1',
+        'confirm_local': '1',
+        'selected_draft_id': [str(row['draft_id']) for row in rows],
+    }
+    for row in rows:
+        prefix = 'row_'+str(row['draft_id'])+'_'
+        data[prefix+'draft_version'] = str(row['draft_version'])
+        data[prefix+'imported_product_id'] = str(row['imported_product_id'])
+    data.update(updates)
+    return data
+
+
 def url(case):return '/marketplaces/ozon/uploads/'+case.job.job_uid+'/repair'
 
 
@@ -642,6 +656,209 @@ def test_source_prepare_stale_version_returns_failed_receipt_without_rebase(case
     assert item.error_code == original_error_code
     assert item.error_message == original_error_message
     assert MarketplaceOperation.query.count() == 0
+
+
+def test_source_prepare_refresh_rebases_current_source_and_keeps_local_edits(case):
+    v3 = source_prepare_case(case)
+    path = '/marketplaces/ozon/uploads/'+v3['job'].job_uid+'/repair'
+    case.draft = MarketplaceDraftService.refresh_facts(
+        seller_id=case.seller.id,
+        draft_id=case.draft.id,
+        expected_version=case.draft.version,
+    )
+    content = json.loads(case.draft.content_json)
+    content['description'] = 'Описание продавца сохраняется при обновлении источника.'
+    case.draft.content_json = json.dumps(content, ensure_ascii=False)
+    before_hash = case.draft.source_fact_hash
+    source_title = 'Текущее название сохранённого источника'
+    original = json.loads(case.source.original_data or '{}')
+    original['title'] = source_title
+    case.source.original_data = json.dumps(original, ensure_ascii=False)
+    case.source.title = source_title
+    db.session.commit()
+
+    editor_response = case.client.get(
+        path,
+        headers={'Accept':'application/json'},
+    )
+    assert editor_response.status_code == 200
+    rows = [
+        row for group in editor_response.json['editor']['groups']
+        for row in group['rows']
+    ]
+    row = next(row for row in rows if row['draft_id'] == case.draft.id)
+    sibling = next(row for row in rows if row['draft_id'] != case.draft.id)
+    assert row['source_refresh_available'] is True
+    sibling_draft = db.session.get(MarketplaceProductDraft, sibling['draft_id'])
+    sibling_before = (
+        sibling_draft.version,
+        sibling_draft.content_json,
+        sibling_draft.source_fact_hash,
+    )
+
+    response = case.client.post(
+        path+'/apply',
+        data=source_refresh_form(row),
+        headers={'Accept':'application/json'},
+    )
+    assert response.status_code == 200
+    report = response.json['report']
+    assert report['source_refresh'] is True
+    assert report['mode'] == 'source_prepare'
+    assert report['total'] == report['updated'] == 1
+    assert report['failed'] == report['excluded'] == 0
+
+    refreshed = db.session.get(MarketplaceProductDraft, case.draft.id)
+    db.session.refresh(v3['items'][0])
+    db.session.refresh(sibling_draft)
+    assert refreshed.source_fact_hash != before_hash
+    refreshed_content = json.loads(refreshed.content_json)
+    assert refreshed_content['name'] == source_title
+    assert refreshed_content['description'] == (
+        'Описание продавца сохраняется при обновлении источника.'
+    )
+    assert v3['items'][0].phase in {'prepared', 'needs_input'}
+    if v3['items'][0].phase == 'prepared':
+        assert v3['items'][0].prepared_version == refreshed.version
+    assert (
+        sibling_draft.version,
+        sibling_draft.content_json,
+        sibling_draft.source_fact_hash,
+    ) == sibling_before
+    assert MarketplaceOperation.query.count() == 0
+
+
+def test_source_refresh_rejects_mixed_field_edits_and_freshness_noop(case, monkeypatch):
+    v3 = source_prepare_case(case)
+    path = '/marketplaces/ozon/uploads/'+v3['job'].job_uid+'/repair'
+    case.source.title = 'Источник успел измениться'
+    db.session.commit()
+    editor = case.client.get(path, headers={'Accept':'application/json'}).json['editor']
+    row = next(
+        row for group in editor['groups'] for row in group['rows']
+        if row['draft_id'] == case.draft.id
+    )
+    before = (case.draft.version, case.draft.content_json, case.draft.source_fact_hash)
+
+    mixed = source_refresh_form(row)
+    mixed['row_'+str(row['draft_id'])+'_description'] = 'Не смешивать с rebase'
+    rejected = case.client.post(
+        path+'/apply', data=mixed, headers={'Accept':'application/json'},
+    )
+    assert rejected.status_code == 400
+    missing_version = source_refresh_form(row)
+    missing_version.pop('row_'+str(row['draft_id'])+'_draft_version')
+    missing = case.client.post(
+        path+'/apply',
+        data=missing_version,
+        headers={'Accept':'application/json'},
+    )
+    assert missing.status_code == 400
+    db.session.refresh(case.draft)
+    assert (case.draft.version, case.draft.content_json, case.draft.source_fact_hash) == before
+
+    rebase = Mock(return_value=case.draft)
+    validate = Mock(side_effect=AssertionError('no-op rebase must not validate or write'))
+    monkeypatch.setattr(MarketplaceDraftService, 'rebase_source_defaults', rebase)
+    monkeypatch.setattr(MarketplaceDraftService, 'validate_draft', validate)
+    response = case.client.post(
+        path+'/apply',
+        data=source_refresh_form(row),
+        headers={'Accept':'application/json'},
+    )
+    assert response.status_code == 200
+    report = response.json['report']
+    assert report['source_refresh'] is True
+    assert report['updated'] == 0
+    assert report['failed'] == 1
+    assert report['rows'][0]['status'] == 'failed'
+    rebase.assert_called_once()
+    validate.assert_not_called()
+    db.session.refresh(case.draft)
+    db.session.refresh(v3['items'][0])
+    assert (case.draft.version, case.draft.content_json, case.draft.source_fact_hash) == before
+    assert v3['items'][0].phase == 'needs_input'
+    assert MarketplaceOperation.query.count() == 0
+
+
+def test_draft_selection_source_refresh_keeps_exact_selection_scope(case):
+    register_marketplace_draft_routes(case.app)
+    case.source.title = 'Новое название выбранного источника'
+    db.session.commit()
+    query = urlencode({
+        'account_id': case.account.id,
+        'draft_ids': str(case.draft.id),
+    })
+    path = '/marketplaces/ozon/uploads/selection/repair?'+query
+    editor_response = case.client.get(
+        path,
+        headers={'Accept':'application/json'},
+    )
+    assert editor_response.status_code == 200
+    editor = editor_response.json['editor']
+    row = editor['groups'][0]['rows'][0]
+    assert editor['mode'] == 'draft_selection'
+    assert row['source_refresh_available'] is True
+    runs_before = OzonBulkUploadRun.query.count()
+    items_before = OzonBulkUploadItem.query.count()
+    before_hash = case.draft.source_fact_hash
+
+    response = case.client.post(
+        '/marketplaces/ozon/uploads/selection/repair/apply?'+query,
+        data=source_refresh_form(row),
+        headers={'Accept':'application/json'},
+    )
+    assert response.status_code == 200
+    assert response.json['mode'] == 'draft_selection'
+    assert response.json['scope_key'] == editor['scope_key']
+    report = response.json['report']
+    assert report['mode'] == 'draft_selection'
+    assert report['scope_key'] == editor['scope_key']
+    assert report['source_refresh'] is True
+    assert report['total'] == report['updated'] == 1
+    assert report['failed'] == 0
+    db.session.refresh(case.draft)
+    assert case.draft.source_fact_hash != before_hash
+    assert OzonBulkUploadRun.query.count() == runs_before
+    assert OzonBulkUploadItem.query.count() == items_before
+    assert MarketplaceOperation.query.count() == 0
+
+
+def test_source_refresh_rejects_active_reviewed_row(case):
+    v3 = source_prepare_case(case)
+    held = v3['drafts'][1]
+    Upload.accept_reviewed_publish(
+        seller_id=case.seller.id,
+        account_id=case.account.id,
+        draft_ids=[held.id],
+        expected_versions={str(held.id): held.version},
+        request_key='source-refresh-active-review-0001',
+        parent_prepare_job_uid=v3['job'].job_uid,
+        created_by_user_id=case.user.id,
+    )
+    operations_before = MarketplaceOperation.query.count()
+    path = '/marketplaces/ozon/uploads/'+v3['job'].job_uid+'/repair'
+    editor = case.client.get(path, headers={'Accept':'application/json'}).json['editor']
+    assert all(
+        row['draft_id'] != held.id
+        for group in editor['groups']
+        for row in group['rows']
+    )
+    before = (held.version, held.content_json, held.source_fact_hash)
+    held_form = {
+        'draft_id': held.id,
+        'draft_version': held.version,
+        'imported_product_id': held.imported_product_id,
+    }
+    response = case.client.post(
+        path+'/apply',
+        data=source_refresh_form(held_form),
+        headers={'Accept':'application/json'},
+    )
+    assert response.status_code == 400
+    db.session.refresh(held)
+    assert (held.version, held.content_json, held.source_fact_hash) == before
+    assert MarketplaceOperation.query.count() == operations_before
 
 
 def test_source_prepare_draft_from_another_account_is_not_in_repair_scope(case):

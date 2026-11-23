@@ -434,6 +434,109 @@ def _parse_editor_rows(editor: dict, *, mode: str = "job") -> list[dict]:
     return result
 
 
+def _parse_source_refresh_rows(editor: dict) -> list[dict]:
+    """Parse the isolated, explicit source-rebase form for native local modes."""
+    if (
+        request.is_json
+        or request.mimetype != "application/x-www-form-urlencoded"
+    ):
+        raise OzonBulkUploadValidationError(
+            "Обновление исходных фактов доступно только из локального редактора"
+        )
+    if not _wants_json():
+        raise OzonBulkUploadValidationError(
+            "Подтвердите обновление в локальном редакторе"
+        )
+    if editor.get("mode") not in {"source_prepare", "draft_selection"}:
+        raise OzonBulkUploadValidationError(
+            "Обновить исходные факты можно только в локальной подготовке"
+        )
+
+    repeated_fields = [
+        key for key in request.form
+        if key != "selected_draft_id" and len(request.form.getlist(key)) > 1
+    ]
+    if repeated_fields:
+        raise OzonBulkUploadValidationError(
+            "Поля обновления исходных фактов не должны повторяться"
+        )
+    if _single_form_value("refresh_source", required=True) != "1":
+        raise OzonBulkUploadValidationError(
+            "Подтвердите обновление исходных фактов"
+        )
+    if _single_form_value("confirm_local", required=True) != "1":
+        raise OzonBulkUploadValidationError(
+            "Подтвердите локальное обновление черновиков"
+        )
+
+    rows_by_id = {
+        row["draft_id"]: row
+        for group in editor.get("groups", [])
+        for row in group.get("rows", [])
+    }
+    selected_raw = request.form.getlist("selected_draft_id")
+    if not selected_raw or len(selected_raw) > OzonBulkRepairService.MAX_ROWS:
+        raise OzonBulkUploadValidationError(
+            "Выберите от 1 до "
+            f"{OzonBulkRepairService.MAX_ROWS} карточек с устаревшими "
+            "исходными данными"
+        )
+    selected_ids = [_integer(value, "draft_id") for value in selected_raw]
+    if len(selected_ids) != len(set(selected_ids)):
+        raise OzonBulkUploadValidationError(
+            "Карточки для обновления не должны повторяться"
+        )
+
+    allowed_keys = {
+        "csrf_token",
+        "refresh_source",
+        "confirm_local",
+        "selected_draft_id",
+    }
+    result = []
+    for draft_id in selected_ids:
+        row = rows_by_id.get(draft_id)
+        if row is None:
+            raise OzonBulkUploadValidationError(
+                "Выбрана карточка вне текущей локальной области"
+            )
+        if row.get("source_refresh_available") is not True:
+            raise OzonBulkUploadValidationError(
+                "Обновить можно только карточки с подтверждённым устареванием источника"
+            )
+        prefix = f"row_{draft_id}_"
+        version_key = prefix + "draft_version"
+        product_key = prefix + "imported_product_id"
+        allowed_keys.update({version_key, product_key})
+        expected_version = _integer(
+            _single_form_value(version_key, required=True),
+            "draft_version",
+        )
+        imported_product_id = _integer(
+            _single_form_value(product_key, required=True),
+            "imported_product_id",
+        )
+        if (
+            expected_version != row.get("draft_version")
+            or imported_product_id != row.get("imported_product_id")
+        ):
+            raise OzonBulkUploadValidationError(
+                "Версия черновика или связь с исходным товаром изменилась"
+            )
+        result.append({
+            "draft_id": draft_id,
+            "expected_version": expected_version,
+            "imported_product_id": imported_product_id,
+        })
+
+    unknown = set(request.form.keys()) - allowed_keys
+    if unknown:
+        raise OzonBulkUploadValidationError(
+            "Форма обновления исходных фактов не должна содержать правки полей"
+        )
+    return result
+
+
 _SELECTION_MAX_IDS = 200
 _SELECTION_MAX_INT = 9223372036854775807
 _SELECTION_RETURN_STATUSES = {
@@ -1149,17 +1252,30 @@ def apply_draft_selection_repair():
             selection=selection,
         )
         scope_key = _validate_selection_editor(editor, selection)
-        rows = _parse_editor_rows(editor, mode="local_only")
-        report = OzonBulkRepairService.apply_editor_rows(
-            seller_id=seller_id,
-            selection=selection,
-            rows=rows,
-            corrected_by_user_id=getattr(current_user, "id", None),
-        )
+        if "refresh_source" in request.form:
+            rows = _parse_source_refresh_rows(editor)
+            report = OzonBulkRepairService.refresh_source_rows(
+                seller_id=seller_id,
+                account_id=editor["account_id"],
+                selection=selection,
+                rows=rows,
+            )
+        else:
+            rows = _parse_editor_rows(editor, mode="local_only")
+            report = OzonBulkRepairService.apply_editor_rows(
+                seller_id=seller_id,
+                selection=selection,
+                rows=rows,
+                corrected_by_user_id=getattr(current_user, "id", None),
+            )
         if (
             not isinstance(report, dict)
             or report.get("mode") != "draft_selection"
             or report.get("scope_key") != scope_key
+            or (
+                "refresh_source" in request.form
+                and report.get("source_refresh") is not True
+            )
         ):
             raise OzonBulkUploadError(
                 "Сервис вернул некорректный результат локального сохранения"
@@ -1327,12 +1443,29 @@ def apply_repair_editor(job_uid: str):
             seller_id=seller_id,
             job_uid=job_uid,
         )
-        report = OzonBulkRepairService.apply_editor_rows(
-            seller_id=seller_id,
-            job_uid=job_uid,
-            rows=_parse_editor_rows(editor),
-            corrected_by_user_id=getattr(current_user, "id", None),
-        )
+        if "refresh_source" in request.form:
+            if request.args.get("view") == "classic":
+                raise OzonBulkUploadValidationError(
+                    "Обновление исходных фактов доступно только в нативном редакторе"
+                )
+            rows = _parse_source_refresh_rows(editor)
+            report = OzonBulkRepairService.refresh_source_rows(
+                seller_id=seller_id,
+                account_id=editor["account_id"],
+                job_uid=job_uid,
+                rows=rows,
+            )
+            if report.get("source_refresh") is not True:
+                raise OzonBulkUploadError(
+                    "Сервис не подтвердил обновление исходных фактов"
+                )
+        else:
+            report = OzonBulkRepairService.apply_editor_rows(
+                seller_id=seller_id,
+                job_uid=job_uid,
+                rows=_parse_editor_rows(editor),
+                corrected_by_user_id=getattr(current_user, "id", None),
+            )
     except OzonBulkUploadError as exc:
         if _wants_json():
             return _error_response(exc)

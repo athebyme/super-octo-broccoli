@@ -2382,6 +2382,30 @@ class OzonBulkRepairService:
                     ]
                 ],
             }
+            if source_prepare or draft_selection:
+                source_refresh_available = bool(
+                    draft.status != "archived"
+                    and draft.imported_product is not None
+                    and "source_facts_stale" in error_codes
+                )
+                if (
+                    source_refresh_available
+                    and source_prepare
+                    and draft.published_listing_id is not None
+                    and active_catalog_listing_operation(
+                        seller_id=draft.seller_id,
+                        marketplace_id=draft.marketplace_id,
+                        account_id=draft.account_id,
+                        listing_id=draft.published_listing_id,
+                    ) is not None
+                ):
+                    # The source-run projection already checked exact draft
+                    # operation/review holds in one bounded query. Add only
+                    # its separate linked-listing fence here.
+                    source_refresh_available = False
+                editor_row["source_refresh_available"] = (
+                    source_refresh_available
+                )
             if source_prepare:
                 editor_row["phase"] = item.get("phase")
             group["rows"].append(editor_row)
@@ -3603,6 +3627,7 @@ class OzonBulkRepairService:
         default_attribute_keys: Sequence[str] = (),
         corrected_by_user_id: Optional[int] = None,
         allow_source_prepare: bool = False,
+        refresh_source: bool = False,
     ) -> dict:
         """Apply normalized local edits under one exact account claim."""
         job, document = cls._editor_scope_document(
@@ -3617,6 +3642,11 @@ class OzonBulkRepairService:
             )
         source_prepare = document.get("mode") == "source_prepare"
         draft_selection = document.get("mode") == "draft_selection"
+        if refresh_source and not (source_prepare or draft_selection):
+            raise cls._conflict(
+                "ozon_repair_source_refresh_native_only",
+                "Исходные факты можно обновить только в локальном редакторе",
+            )
         if source_prepare and not allow_source_prepare:
             raise cls._conflict(
                 "ozon_repair_source_prepare_native_only",
@@ -3686,6 +3716,8 @@ class OzonBulkRepairService:
         elif draft_selection:
             report["mode"] = "draft_selection"
             report["scope_key"] = document["scope_key"]
+        if refresh_source:
+            report["source_refresh"] = True
         try:
             # Re-read after the account claim. A stale editor/workbook must not
             # race a publication queued between initial render and submit.
@@ -3805,7 +3837,8 @@ class OzonBulkRepairService:
                         cls.SOURCE_ATTRIBUTE_SPECS
                     )
                     has_source_submission = bool(
-                        source_review_enabled
+                        refresh_source
+                        or source_review_enabled
                         and (
                             row.get("source_review_json") not in (None, "")
                             or any(
@@ -3836,7 +3869,7 @@ class OzonBulkRepairService:
                         raise MarketplaceDraftValidationError(
                             "Черновик изменился после открытия; обновите страницу"
                         )
-                    if has_source_submission:
+                    if has_source_submission and not refresh_source:
                         source_comparisons, source_proofs, _source_editable = (
                             cls._source_comparisons_for_draft(draft)
                         )
@@ -3934,7 +3967,19 @@ class OzonBulkRepairService:
                             )
                         patch["product_type_id"] = selected_type_id
                         patch["save_mapping"] = True
-                    if patch:
+                    if refresh_source:
+                        previous_fact_hash = draft.source_fact_hash
+                        draft = MarketplaceDraftService.rebase_source_defaults(
+                            seller_id=seller_id,
+                            draft_id=draft.id,
+                            expected_version=row["expected_version"],
+                        )
+                        if draft.source_fact_hash == previous_fact_hash:
+                            raise MarketplaceDraftValidationError(
+                                "Данные товара уже актуальны. Обновите список."
+                            )
+                        report["updated"] += 1
+                    elif patch:
                         draft = MarketplaceDraftService.update_draft(
                             seller_id=seller_id,
                             draft_id=draft.id,
@@ -4227,6 +4272,75 @@ class OzonBulkRepairService:
             parsed_rows=parsed_rows,
             corrected_by_user_id=corrected_by_user_id,
             allow_source_prepare=editor.get("mode") == "source_prepare",
+        )
+
+    @classmethod
+    def refresh_source_rows(
+        cls,
+        *,
+        seller_id: int,
+        account_id: int,
+        rows: Sequence[dict],
+        job_uid: Optional[str] = None,
+        selection: Optional[dict] = None,
+    ) -> dict:
+        """Rebase a strict row DTO through the existing local apply fences."""
+        if (
+            isinstance(account_id, bool)
+            or not isinstance(account_id, int)
+            or account_id <= 0
+            or not isinstance(rows, (list, tuple))
+            or not rows
+            or len(rows) > cls.MAX_ROWS
+        ):
+            raise OzonBulkUploadValidationError(
+                f"Выберите от 1 до {cls.MAX_ROWS} карточек"
+            )
+        parsed_rows = []
+        seen = set()
+        for index, row in enumerate(rows, start=1):
+            if not isinstance(row, dict) or set(row) != {
+                "draft_id", "expected_version", "imported_product_id",
+            }:
+                raise OzonBulkUploadValidationError(
+                    f"Строка {index}: недопустимая область обновления"
+                )
+            for name in ("draft_id", "expected_version", "imported_product_id"):
+                value = row.get(name)
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or value <= 0
+                ):
+                    raise OzonBulkUploadValidationError(
+                        f"Строка {index}: {name} должен быть положительным целым числом"
+                    )
+            draft_id = row["draft_id"]
+            if draft_id in seen:
+                raise OzonBulkUploadValidationError(
+                    f"Строка {index}: карточка указана повторно"
+                )
+            seen.add(draft_id)
+            parsed_rows.append({
+                "row_number": index,
+                "draft_id": draft_id,
+                "expected_version": row["expected_version"],
+                "imported_product_id": row["imported_product_id"],
+                "product_type_id": None,
+                "save_mapping": False,
+                "schema_cleanup": False,
+                "cleanup_candidates": (),
+                "values": {"action": cls.ACTION_REPAIR},
+                "attribute_keys": (),
+            })
+        return cls._apply_parsed_rows(
+            seller_id=seller_id,
+            job_uid=job_uid,
+            selection=selection,
+            account_id=account_id,
+            parsed_rows=parsed_rows,
+            allow_source_prepare=True,
+            refresh_source=True,
         )
 
     @classmethod
