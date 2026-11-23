@@ -65,7 +65,7 @@ class _Candidate:
 
 
 class OzonPrepareDecisionsService:
-    """Stage one safely selected color on a new source-preparation draft."""
+    """Stage one safely selected color on a confirmed queue-owned draft."""
 
     @classmethod
     def prepare_source_window(
@@ -76,16 +76,18 @@ class OzonPrepareDecisionsService:
         current_draft,
         lease_token: str,
         now: Optional[datetime] = None,
-        current_draft_created_this_attempt: bool,
+        confirmed_queue_created_draft: bool,
         deadline_monotonic: Optional[float] = None,
     ) -> bool:
         """Warm at most 12 due product decisions and apply only this item.
 
         Siblings are virtual, read-only projections and must have no draft or
         listing yet. Their normalized answers can be reused when the queue
-        creates each draft later. Existing/manual drafts never enter a request.
+        creates each draft later. This item must carry persisted creation
+        lineage and an unchanged draft version; unconfirmed drafts never enter
+        a request.
         """
-        if current_draft_created_this_attempt is not True:
+        if confirmed_queue_created_draft is not True:
             return False
         current_time = now or datetime.utcnow()
         try:

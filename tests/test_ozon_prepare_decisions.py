@@ -1,6 +1,6 @@
 """Fully local coverage for source-backed Ozon color preparation."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -25,6 +25,7 @@ from models import (
     db,
 )
 from services.marketplace_decisions_preparation import decode_decision_plan
+from services.marketplace_decisions_preparation import DecisionItemResult
 from services.marketplace_decisions_preparation import plan_category_phase
 from services.marketplace_decisions_preparation import plan_characteristic_phase
 from services.marketplace_drafts import MarketplaceDraftService
@@ -116,6 +117,39 @@ class _FakeCategoryPipeline:
             reservation_state="ready",
             finish_state="success",
         )
+
+
+class _CooldownThenCategoryPipeline:
+    def __init__(self, retry_at):
+        self.retry_at = retry_at
+        self.category_calls = 0
+        self.selected = _FakeCategoryPipeline()
+        self.colors = _FakeDecisionsPipeline()
+
+    def run_category_phase(self, contexts):
+        self.category_calls += 1
+        if self.category_calls > 1:
+            return self.selected.run_category_phase(contexts)
+        plan = plan_category_phase(contexts)
+        results = tuple(
+            DecisionItemResult(
+                signature=fingerprint,
+                phase="category",
+                status="abstained",
+                reason="rate_limited",
+            )
+            for fingerprint in plan.question_fingerprints
+        )
+        return SimpleNamespace(
+            results=results,
+            physical_request_started=True,
+            reservation_state="ready",
+            finish_state="deferred",
+            retry_at=self.retry_at,
+        )
+
+    def run_plan(self, plan):
+        return self.colors.run_plan(plan)
 
 
 class _FakeCategoryClient:
@@ -318,7 +352,10 @@ class OzonPrepareDecisionsQueueTest(OzonPublicationFixture, unittest.TestCase):
         )[1]
         return run, token
 
-    def _advance(self, run, token, product):
+    def _advance(
+        self, run, token, product, *, now=None, deadline_seconds=35,
+        validator=None,
+    ):
         item = OzonBulkUploadItem.query.filter_by(
             run_id=run.id, imported_product_id=product.id,
         ).one()
@@ -335,17 +372,18 @@ class OzonPrepareDecisionsQueueTest(OzonPublicationFixture, unittest.TestCase):
                 seller_id=seller_id, draft_id=draft_id,
             )
 
+        validation = validator or ready_validation
         with patch.object(
             MarketplaceDraftService,
             "validate_draft",
-            side_effect=ready_validation,
+            side_effect=validation,
         ):
             result = OzonUploadQueueService.advance_item(
                 run_id=run.id,
                 item_id=item.id,
                 lease_token=token,
-                now=datetime.utcnow(),
-                deadline_monotonic=time.monotonic() + 35,
+                now=now or datetime.utcnow(),
+                deadline_monotonic=time.monotonic() + deadline_seconds,
             )
         db.session.refresh(item)
         return item, result
@@ -711,6 +749,368 @@ class OzonPrepareDecisionsQueueTest(OzonPublicationFixture, unittest.TestCase):
 
         self.assertEqual(MarketplaceCategoryMapping.query.count(), 0)
         self.assertEqual(MarketplaceOperation.query.count(), 0)
+
+    def test_category_cooldown_continues_only_after_retry_at_and_selects_exact_type(self):
+        db.session.delete(self.draft)
+        product = self._source_product(
+            external_id="source-category-cooldown",
+            color="pink",
+            category_evidence=True,
+            create_mapping=False,
+        )
+        db.session.add(MarketplaceProductType(
+            marketplace_id=self.marketplace.id,
+            category_id=self.product_type.category_id,
+            external_type_id="778",
+            name="Тип 2",
+            is_available=True,
+            is_disabled_upstream=False,
+            is_seller_selectable=True,
+        ))
+        db.session.commit()
+        run, token = self._accept_and_claim([product])
+        retry_at = datetime.now(timezone.utc) + timedelta(seconds=45)
+        pipeline = _CooldownThenCategoryPipeline(retry_at)
+
+        with patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            return_value=pipeline,
+        ):
+            item, first = self._advance(run, token, product)
+            self.assertEqual(first.outcome, "waiting")
+            self.assertEqual(item.phase, "preparing")
+            self.assertEqual(item.error_code, "ozon_decisions_waiting_1")
+            self.assertEqual(item.local_failure_count, 0)
+            due = item.next_due_at
+            self.assertGreaterEqual(
+                due,
+                retry_at.astimezone(timezone.utc).replace(tzinfo=None),
+            )
+            draft = MarketplaceDraftService.get_draft(
+                seller_id=self.seller.id, draft_id=item.draft_id,
+            )
+            self.assertIsNone(draft.product_type_id)
+
+            before_due = OzonUploadQueueService.advance_item(
+                run_id=run.id,
+                item_id=item.id,
+                lease_token=token,
+                now=due - timedelta(seconds=1),
+                deadline_monotonic=time.monotonic() + 35,
+            )
+            self.assertEqual(before_due.outcome, "skipped")
+            self.assertEqual(pipeline.category_calls, 1)
+
+            item, second = self._advance(
+                run, token, product, now=due + timedelta(seconds=1),
+            )
+
+        self.assertEqual(second.outcome, "prepared")
+        self.assertEqual(pipeline.category_calls, 2)
+        draft = MarketplaceDraftService.get_draft(
+            seller_id=self.seller.id, draft_id=item.draft_id,
+        )
+        self.assertEqual(draft.product_type_id, self.product_type.id)
+        self.assertEqual(item.phase, "prepared")
+        self.assertIsNone(item.error_code)
+
+    def test_category_continuation_stops_after_six_hour_horizon(self):
+        db.session.delete(self.draft)
+        product = self._source_product(
+            external_id="source-category-overdue",
+            color="pink",
+            category_evidence=True,
+            create_mapping=False,
+        )
+        db.session.add(MarketplaceProductType(
+            marketplace_id=self.marketplace.id,
+            category_id=self.product_type.category_id,
+            external_type_id="778",
+            name="Тип 2",
+            is_available=True,
+            is_disabled_upstream=False,
+            is_seller_selectable=True,
+        ))
+        db.session.commit()
+        run, token = self._accept_and_claim([product])
+        pipeline = _CooldownThenCategoryPipeline(
+            datetime.now(timezone.utc) + timedelta(seconds=30),
+        )
+
+        with patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            return_value=pipeline,
+        ):
+            item, waiting = self._advance(run, token, product)
+            self.assertEqual(waiting.outcome, "waiting")
+            due = item.next_due_at
+            run.created_at = datetime.utcnow() - timedelta(hours=7)
+            db.session.commit()
+
+            item, resumed = self._advance(
+                run, token, product, now=due + timedelta(seconds=1),
+            )
+
+        self.assertEqual(resumed.outcome, "prepared")
+        self.assertEqual(pipeline.category_calls, 1)
+        self.assertEqual(item.phase, "prepared")
+        self.assertIsNone(item.error_code)
+
+    def test_manual_edit_breaks_category_continuation_lineage(self):
+        db.session.delete(self.draft)
+        product = self._source_product(
+            external_id="source-category-manual-edit",
+            color="pink",
+            category_evidence=True,
+            create_mapping=False,
+        )
+        db.session.add(MarketplaceProductType(
+            marketplace_id=self.marketplace.id,
+            category_id=self.product_type.category_id,
+            external_type_id="778",
+            name="Тип 2",
+            is_available=True,
+            is_disabled_upstream=False,
+            is_seller_selectable=True,
+        ))
+        db.session.commit()
+        run, token = self._accept_and_claim([product])
+        pipeline = _CooldownThenCategoryPipeline(
+            datetime.now(timezone.utc) + timedelta(seconds=30),
+        )
+
+        with patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            return_value=pipeline,
+        ):
+            item, waiting = self._advance(run, token, product)
+            self.assertEqual(waiting.outcome, "waiting")
+            draft = MarketplaceDraftService.get_draft(
+                seller_id=self.seller.id, draft_id=item.draft_id,
+            )
+            old_version = draft.version
+            edited = MarketplaceDraftService.update_draft(
+                seller_id=self.seller.id,
+                draft_id=draft.id,
+                expected_version=old_version,
+                patch={"content": {"name": "Ручное изменение"}},
+            )
+            self.assertGreater(edited.version, old_version)
+
+            item, resumed = self._advance(
+                run, token, product,
+                now=item.next_due_at + timedelta(seconds=1),
+            )
+
+        current = MarketplaceDraftService.get_draft(
+            seller_id=self.seller.id, draft_id=edited.id,
+        )
+        self.assertEqual(resumed.outcome, "prepared")
+        self.assertEqual(pipeline.category_calls, 1)
+        self.assertEqual(
+            json.loads(current.content_json)["name"], "Ручное изменение",
+        )
+        self.assertIsNone(current.product_type_id)
+        self.assertIsNone(item.error_code)
+
+    def test_waiting_reference_continues_color_only_for_untouched_queue_draft(self):
+        db.session.delete(self.draft)
+        product = self._source_product(
+            external_id="source-color-reference-wait", color="light pink",
+        )
+        now = datetime.utcnow()
+        stale = now - timedelta(days=5)
+        self.marketplace.categories_synced_at = stale
+        self.product_type.attributes_synced_at = stale
+        self.color_definition.values_synced_at = stale
+        db.session.commit()
+        run, token = self._accept_and_claim([product])
+        pipeline = _FakeDecisionsPipeline()
+        validation_count = 0
+
+        def wait_then_ready(*, seller_id, draft_id, expected_version,
+                            stage_automatic_cleanup=False):
+            nonlocal validation_count
+            validation_count += 1
+            draft = MarketplaceDraftService.get_draft(
+                seller_id=seller_id, draft_id=draft_id,
+            )
+            if validation_count == 1:
+                draft.status = "draft"
+                draft.validation_status = "invalid"
+                draft.validation_result_json = json.dumps({
+                    "errors": [{
+                        "code": "schema_stale",
+                        "field": "attributes",
+                        "message": "Справочник ещё обновляется",
+                    }],
+                }, ensure_ascii=False)
+            else:
+                draft.status = "ready"
+                draft.validation_status = "valid"
+                draft.validation_result_json = "{}"
+            db.session.commit()
+            return MarketplaceDraftService.get_draft(
+                seller_id=seller_id, draft_id=draft_id,
+            )
+
+        with patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            return_value=pipeline,
+        ):
+            item, first = self._advance(
+                run, token, product, validator=wait_then_ready,
+            )
+            self.assertEqual(first.outcome, "waiting")
+            self.assertEqual(item.phase, "waiting_reference")
+            self.assertEqual(item.error_code, "ozon_source_prepare_created")
+            self.assertEqual(pipeline.physical_batches, 0)
+            draft = MarketplaceDraftService.get_draft(
+                seller_id=self.seller.id, draft_id=item.draft_id,
+            )
+            self.assertEqual(self._color(draft), [])
+
+            item.next_due_at = datetime.utcnow() - timedelta(seconds=1)
+            self.marketplace.categories_synced_at = datetime.utcnow()
+            self.product_type.attributes_synced_at = datetime.utcnow()
+            self.color_definition.values_synced_at = datetime.utcnow()
+            db.session.commit()
+            item, resumed = self._advance(
+                run, token, product, validator=wait_then_ready,
+            )
+
+        draft = MarketplaceDraftService.get_draft(
+            seller_id=self.seller.id, draft_id=item.draft_id,
+        )
+        self.assertEqual(resumed.outcome, "prepared")
+        self.assertEqual(validation_count, 2)
+        self.assertEqual(pipeline.physical_batches, 1)
+        self.assertEqual(
+            self._color(draft),
+            [{"value": "Pink", "dictionary_value_id": "101"}],
+        )
+        self.assertIsNone(item.error_code)
+
+    def test_expired_reference_wait_drops_queue_creation_model_lineage(self):
+        db.session.delete(self.draft)
+        product = self._source_product(
+            external_id="source-color-reference-expired", color="light pink",
+        )
+        stale = datetime.utcnow() - timedelta(days=5)
+        self.marketplace.categories_synced_at = stale
+        self.product_type.attributes_synced_at = stale
+        self.color_definition.values_synced_at = stale
+        db.session.commit()
+        run, token = self._accept_and_claim([product])
+        pipeline = _FakeDecisionsPipeline()
+        validation_count = 0
+
+        def wait_then_ready(*, seller_id, draft_id, expected_version,
+                            stage_automatic_cleanup=False):
+            nonlocal validation_count
+            validation_count += 1
+            draft = MarketplaceDraftService.get_draft(
+                seller_id=seller_id, draft_id=draft_id,
+            )
+            if validation_count == 1:
+                draft.status = "draft"
+                draft.validation_status = "invalid"
+                draft.validation_result_json = json.dumps({
+                    "errors": [{
+                        "code": "schema_stale",
+                        "field": "attributes",
+                        "message": "Справочник ещё обновляется",
+                    }],
+                }, ensure_ascii=False)
+            else:
+                draft.status = "ready"
+                draft.validation_status = "valid"
+                draft.validation_result_json = "{}"
+            db.session.commit()
+            return MarketplaceDraftService.get_draft(
+                seller_id=seller_id, draft_id=draft_id,
+            )
+
+        with patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            return_value=pipeline,
+        ):
+            item, first = self._advance(
+                run, token, product, validator=wait_then_ready,
+            )
+            self.assertEqual(first.outcome, "waiting")
+            self.assertEqual(item.error_code, "ozon_source_prepare_created")
+
+            item.reference_wait_started_at = datetime.utcnow() - timedelta(hours=7)
+            item.next_due_at = datetime.utcnow() - timedelta(seconds=1)
+            self.marketplace.categories_synced_at = datetime.utcnow()
+            self.product_type.attributes_synced_at = datetime.utcnow()
+            self.color_definition.values_synced_at = datetime.utcnow()
+            db.session.commit()
+            item, resumed = self._advance(
+                run, token, product, validator=wait_then_ready,
+            )
+
+        draft = MarketplaceDraftService.get_draft(
+            seller_id=self.seller.id, draft_id=item.draft_id,
+        )
+        self.assertEqual(resumed.outcome, "prepared")
+        self.assertEqual(validation_count, 2)
+        self.assertEqual(pipeline.physical_batches, 0)
+        self.assertEqual(pipeline.plans, [])
+        self.assertEqual(self._color(draft), [])
+        self.assertIsNone(item.error_code)
+
+    def test_manual_draft_waiting_reference_has_no_creation_lineage_for_category(self):
+        db.session.delete(self.draft)
+        product = self._source_product(
+            external_id="source-existing-untyped-draft",
+            color="pink",
+            category_evidence=True,
+            create_mapping=False,
+        )
+        db.session.add(MarketplaceProductType(
+            marketplace_id=self.marketplace.id,
+            category_id=self.product_type.category_id,
+            external_type_id="778",
+            name="Тип 2",
+            is_available=True,
+            is_disabled_upstream=False,
+            is_seller_selectable=True,
+        ))
+        db.session.commit()
+        existing_draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller.id,
+            account_id=self.account.id,
+            imported_product_id=product.id,
+        )
+        self.assertIsNone(existing_draft.product_type_id)
+        run, token = self._accept_and_claim([product])
+        item = OzonBulkUploadItem.query.filter_by(
+            run_id=run.id, imported_product_id=product.id,
+        ).one()
+        item.draft_id = existing_draft.id
+        item.prepared_version = existing_draft.version
+        item.phase = "waiting_reference"
+        item.next_due_at = datetime.utcnow() - timedelta(seconds=1)
+        item.error_code = "ozon_reference_sync_pending"
+        item.reference_wait_started_at = datetime.utcnow() - timedelta(minutes=1)
+        db.session.commit()
+        pipeline = _FakeCategoryPipeline()
+
+        with patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            return_value=pipeline,
+        ):
+            item, result = self._advance(run, token, product)
+
+        self.assertEqual(result.outcome, "prepared")
+        self.assertEqual(item.phase, "prepared")
+        self.assertIsNone(item.error_code)
+        self.assertEqual(pipeline.calls, 0)
+        self.assertIsNone(MarketplaceDraftService.get_draft(
+            seller_id=self.seller.id, draft_id=existing_draft.id,
+        ).product_type_id)
 
     def test_existing_manual_empty_draft_never_enters_decisions_or_gets_filled(self):
         product = self._source_product(

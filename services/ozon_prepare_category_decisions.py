@@ -137,6 +137,7 @@ class OzonPrepareCategoryWindowResult:
     physical_request_started: bool
     reservation_state: str
     finish_state: Optional[str]
+    retry_at: Optional[datetime] = None
     requires_current_scope_recheck: bool = True
 
 
@@ -1112,6 +1113,7 @@ def prepare_ozon_category_window(
         physical_request_started=pipeline_result.physical_request_started,
         reservation_state=pipeline_result.reservation_state,
         finish_state=pipeline_result.finish_state,
+        retry_at=getattr(pipeline_result, "retry_at", None),
         requires_current_scope_recheck=True,
     )
 

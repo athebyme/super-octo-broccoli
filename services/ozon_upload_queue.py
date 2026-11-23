@@ -9,7 +9,7 @@ the operation/item transaction.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import secrets
 import time
@@ -56,10 +56,24 @@ class ItemAdvanceResult:
     next_due_at: Optional[datetime] = None
 
 
+@dataclass(frozen=True)
+class _SourceCategoryPreparation:
+    draft: object
+    retry_at: Optional[datetime] = None
+    retry_reason: Optional[str] = None
+
+
 class OzonUploadQueueService:
     LEASE_SECONDS = 120
     REFERENCE_WAIT_SECONDS = 6 * 60 * 60
     REFERENCE_RECHECK = timedelta(seconds=60)
+    DECISION_CONTINUATION_WINDOW = timedelta(hours=6)
+    MAX_DECISION_CONTINUATIONS = 3
+    QUEUE_CREATED_DRAFT_CODE = "ozon_source_prepare_created"
+    DECISION_CONTINUATION_CODE_PREFIX = "ozon_decisions_waiting_"
+    DECISION_RETRY_REASONS = frozenset({
+        "rate_limited", "cache_deferred", "cache_busy",
+    })
     LOCAL_FAILURE_DELAYS = (
         timedelta(minutes=1),
         timedelta(minutes=5),
@@ -180,6 +194,133 @@ class OzonUploadQueueService:
             item.local_failure_count = local_failure_count
         db.session.commit()
         return item
+
+    @classmethod
+    def _decision_continuation_count(cls, code: Optional[str]) -> Optional[int]:
+        if code == cls.QUEUE_CREATED_DRAFT_CODE:
+            return 0
+        if not isinstance(code, str) or not code.startswith(
+            cls.DECISION_CONTINUATION_CODE_PREFIX,
+        ):
+            return None
+        suffix = code[len(cls.DECISION_CONTINUATION_CODE_PREFIX):]
+        allowed = {
+            str(value)
+            for value in range(1, cls.MAX_DECISION_CONTINUATIONS + 1)
+        }
+        if suffix not in allowed:
+            return None
+        return int(suffix)
+
+    @classmethod
+    def _decision_continuation_deadline(
+        cls,
+        *,
+        run: OzonBulkUploadRun,
+    ) -> Optional[datetime]:
+        run_created = run.created_at
+        if type(run_created) is not datetime:
+            return None
+        if run_created.tzinfo is not None:
+            try:
+                run_created = run_created.astimezone(timezone.utc).replace(tzinfo=None)
+            except (OverflowError, TypeError, ValueError):
+                return None
+        try:
+            return run_created + cls.DECISION_CONTINUATION_WINDOW
+        except OverflowError:
+            return None
+
+    @classmethod
+    def _reference_wait_window_open(
+        cls,
+        *,
+        item: OzonBulkUploadItem,
+        now: datetime,
+    ) -> bool:
+        if item.phase != "waiting_reference":
+            return True
+        started = item.reference_wait_started_at
+        if type(started) is not datetime or type(now) is not datetime:
+            return False
+        try:
+            if started.tzinfo is not None:
+                started = started.astimezone(timezone.utc).replace(tzinfo=None)
+            if now.tzinfo is not None:
+                now = now.astimezone(timezone.utc).replace(tzinfo=None)
+        except (OverflowError, TypeError, ValueError):
+            return False
+        age = (now - started).total_seconds()
+        return 0 <= age < cls.REFERENCE_WAIT_SECONDS
+
+    @classmethod
+    def _schedule_decision_continuation(
+        cls,
+        *,
+        run: OzonBulkUploadRun,
+        item: OzonBulkUploadItem,
+        draft: MarketplaceProductDraft,
+        lease_token: str,
+        retry_at: Optional[datetime],
+        retry_reason: str,
+    ) -> Optional[ItemAdvanceResult]:
+        """Persist one bounded local retry without shortening provider advice."""
+        prior_count = cls._decision_continuation_count(item.error_code)
+        if prior_count is None or prior_count >= cls.MAX_DECISION_CONTINUATIONS:
+            return None
+        now = datetime.utcnow()
+        retry_count = prior_count + 1
+        if retry_at is None:
+            due = now + cls.LOCAL_FAILURE_DELAYS[
+                min(prior_count, len(cls.LOCAL_FAILURE_DELAYS) - 1)
+            ]
+        else:
+            if type(retry_at) is not datetime:
+                logger.warning(
+                    "Ozon Decisions deferred result had invalid retry_at; "
+                    "automatic continuation disabled",
+                )
+                return None
+            try:
+                provider_due = (
+                    retry_at.astimezone(timezone.utc).replace(tzinfo=None)
+                    if retry_at.tzinfo is not None
+                    else retry_at
+                )
+            except (OverflowError, TypeError, ValueError):
+                logger.warning(
+                    "Ozon Decisions deferred result had unusable retry_at; "
+                    "automatic continuation disabled",
+                )
+                return None
+            # Stay just beyond an expiring lease/cooldown; never shorten the
+            # provider's not-before time.
+            due = max(provider_due, now + timedelta(seconds=5))
+
+        continuation_deadline = cls._decision_continuation_deadline(run=run)
+        if continuation_deadline is None or now > continuation_deadline:
+            return None
+        if due > continuation_deadline:
+            return None
+
+        cls.transition_item(
+            run_id=run.id,
+            item_id=item.id,
+            lease_token=lease_token,
+            now=now,
+            phase="preparing",
+            next_due_at=due,
+            draft_id=draft.id,
+            prepared_version=draft.version,
+            offer_id=draft.offer_id,
+            error_code=f"{cls.DECISION_CONTINUATION_CODE_PREFIX}{retry_count}",
+            error_message=(
+                "Подготовка продолжится автоматически после временной паузы"
+            ),
+        )
+        return ItemAdvanceResult(
+            True, "preparing", "waiting", next_due_at=due,
+        )
 
     @classmethod
     def _safe_text(cls, value: object, maximum: int) -> Optional[str]:
@@ -307,11 +448,40 @@ class OzonUploadQueueService:
                 and prior_draft_id_before_create is None
                 and item_draft_id_before_create is None
             )
+            lineage_attempt = cls._decision_continuation_count(item.error_code)
+            continuation_deadline = cls._decision_continuation_deadline(run=run)
+            continuation_window_open = (
+                lineage_attempt == 0
+                or (
+                    lineage_attempt is not None
+                    and continuation_deadline is not None
+                    and now <= continuation_deadline
+                )
+            )
+            queue_created_draft_continuation = bool(
+                lineage_attempt is not None
+                and continuation_window_open
+                and cls._reference_wait_window_open(item=item, now=now)
+                and item_draft_id_before_create == draft.id
+                and item_prepared_version_before_create == draft.version
+            )
+            queue_created_draft_lineage = bool(
+                current_draft_created_this_attempt
+                or queue_created_draft_continuation
+            )
             cls.transition_item(
                 run_id=run.id, item_id=item.id, lease_token=lease_token,
                 now=datetime.utcnow(), phase="preparing", next_due_at=now,
                 draft_id=draft.id, prepared_version=draft.version,
                 offer_id=draft.offer_id,
+                error_code=(
+                    (
+                        item.error_code
+                        if queue_created_draft_continuation
+                        else cls.QUEUE_CREATED_DRAFT_CODE
+                    )
+                    if queue_created_draft_lineage else None
+                ),
             )
             active = MarketplaceOperation.query.filter(
                 MarketplaceOperation.seller_id == run.seller_id,
@@ -329,7 +499,7 @@ class OzonUploadQueueService:
                     error_message="По черновику уже выполняется операция Ozon",
                 )
                 return ItemAdvanceResult(True, "needs_input", "needs_input")
-            draft = cls._prepare_source_category(
+            category_preparation = cls._prepare_source_category(
                 run=run,
                 item=item,
                 account=account,
@@ -343,9 +513,22 @@ class OzonUploadQueueService:
                 current_draft_created_this_attempt=(
                     current_draft_created_this_attempt
                 ),
+                queue_created_draft_lineage=queue_created_draft_lineage,
                 lease_token=lease_token,
                 deadline_monotonic=deadline_monotonic,
             )
+            draft = category_preparation.draft
+            if category_preparation.retry_reason is not None:
+                scheduled = cls._schedule_decision_continuation(
+                    run=run,
+                    item=item,
+                    draft=draft,
+                    lease_token=lease_token,
+                    retry_at=category_preparation.retry_at,
+                    retry_reason=category_preparation.retry_reason,
+                )
+                if scheduled is not None:
+                    return scheduled
             draft = MarketplaceDraftService.rebase_source_defaults(
                 seller_id=run.seller_id, draft_id=draft.id,
                 expected_version=draft.version,
@@ -367,9 +550,7 @@ class OzonUploadQueueService:
                 current_draft=draft,
                 lease_token=lease_token,
                 now=datetime.utcnow(),
-                current_draft_created_this_attempt=(
-                    current_draft_created_this_attempt
-                ),
+                confirmed_queue_created_draft=queue_created_draft_lineage,
                 deadline_monotonic=deadline_monotonic,
             )
             draft = MarketplaceDraftService.get_draft(
@@ -400,7 +581,11 @@ class OzonUploadQueueService:
                         phase="waiting_reference", next_due_at=due,
                         draft_id=draft.id, prepared_version=draft.version,
                         reference_wait_started_at=started,
-                        error_code="ozon_reference_sync_pending",
+                        error_code=(
+                            item.error_code
+                            if queue_created_draft_lineage
+                            else "ozon_reference_sync_pending"
+                        ),
                         error_message="Загружаем официальную схему Ozon",
                     )
                     return ItemAdvanceResult(True, "waiting_reference", "waiting", next_due_at=due)
@@ -458,22 +643,19 @@ class OzonUploadQueueService:
         item_draft_id_before_create: Optional[int],
         item_prepared_version_before_create: Optional[int],
         current_draft_created_this_attempt: bool,
+        queue_created_draft_lineage: bool,
         lease_token: str,
         deadline_monotonic: Optional[float],
     ):
         """Apply one confidence-gated exact type choice inside the run fence."""
-        if (
-            deadline_monotonic is not None
-            and deadline_monotonic - time.monotonic() < 22
-        ):
-            return draft
         fresh_create = current_draft_created_this_attempt is True and (
             prior_draft_id_before_create is None
             and item_draft_id_before_create is None
             and item_prepared_version_before_create is None
         )
         exact_retry = (
-            type(prior_draft_id_before_create) is int
+            queue_created_draft_lineage is True
+            and type(prior_draft_id_before_create) is int
             and prior_draft_id_before_create == draft.id
             and item_draft_id_before_create == draft.id
             and item_prepared_version_before_create == draft.version
@@ -486,7 +668,7 @@ class OzonUploadQueueService:
             and draft.external_type_id is None
             and draft.published_listing_id is None
         ):
-            return draft
+            return _SourceCategoryPreparation(draft=draft)
         try:
             from services.ozon_prepare_category_decisions import (
                 build_ozon_category_tree_index,
@@ -502,13 +684,22 @@ class OzonUploadQueueService:
                 account_id=account.id,
                 imported_product_id=product.id,
             ).first() is not None:
-                return draft
+                return _SourceCategoryPreparation(draft=draft)
             from services.openai_decisions_runtime import (
                 create_openai_decisions_pipeline,
             )
             pipeline = create_openai_decisions_pipeline()
             if pipeline is None:
-                return draft
+                return _SourceCategoryPreparation(draft=draft)
+
+            if (
+                deadline_monotonic is not None
+                and deadline_monotonic - time.monotonic() < 22
+            ):
+                return _SourceCategoryPreparation(
+                    draft=draft,
+                    retry_reason="tick_budget",
+                )
 
             now = datetime.utcnow()
             sibling_rows = db.session.query(
@@ -542,8 +733,20 @@ class OzonUploadQueueService:
                         deadline_monotonic is not None
                         and deadline_monotonic - time.monotonic() < 22
                     ):
+                        from services.marketplace_decisions_preparation import (
+                            decode_decision_plan_answers,
+                            plan_category_phase,
+                        )
+                        plan = plan_category_phase(contexts)
                         return SimpleNamespace(
-                            results=(),
+                            results=decode_decision_plan_answers(
+                                plan,
+                                {},
+                                missing_reasons={
+                                    fingerprint: "cache_busy"
+                                    for fingerprint in plan.question_fingerprints
+                                },
+                            ),
                             physical_request_started=False,
                             reservation_state="deadline",
                             finish_state=None,
@@ -570,15 +773,34 @@ class OzonUploadQueueService:
         except Exception:
             # This optional local suggestion must not block normal preparation.
             db.session.rollback()
-            return draft
+            return _SourceCategoryPreparation(draft=draft)
         selected_type_id = (
             window.current_product_type_id if window is not None else None
         )
         if type(selected_type_id) is not int or selected_type_id <= 0:
-            return draft
+            retry_reason = None
+            if window is not None:
+                retry_reason = (
+                    "tick_budget"
+                    if window.reservation_state == "deadline"
+                    else getattr(window.current_result, "reason", None)
+                )
+            if (
+                queue_created_draft_lineage is True
+                and (
+                    retry_reason == "tick_budget"
+                    or retry_reason in cls.DECISION_RETRY_REASONS
+                )
+            ):
+                return _SourceCategoryPreparation(
+                    draft=draft,
+                    retry_at=window.retry_at,
+                    retry_reason=retry_reason,
+                )
+            return _SourceCategoryPreparation(draft=draft)
         if db.session.new or db.session.dirty or db.session.deleted:
             db.session.rollback()
-            return draft
+            return _SourceCategoryPreparation(draft=draft)
         db.session.expire_all()
         current_time = datetime.utcnow()
         try:
@@ -623,13 +845,13 @@ class OzonUploadQueueService:
                 )
             ):
                 db.session.rollback()
-                return draft
+                return _SourceCategoryPreparation(draft=draft)
             source_category = window.current_candidate.context.source_fields.get(
                 "category",
             )
             if not isinstance(source_category, str) or not source_category:
                 db.session.rollback()
-                return draft
+                return _SourceCategoryPreparation(draft=draft)
             tree_index = build_ozon_category_tree_index(
                 fresh_account.marketplace,
                 [source_category],
@@ -662,7 +884,7 @@ class OzonUploadQueueService:
                 or verified_type_id != selected_type_id
             ):
                 db.session.rollback()
-                return draft
+                return _SourceCategoryPreparation(draft=draft)
             MarketplaceDraftService._update_draft_core(
                 seller_id=fresh_run.seller_id,
                 draft_id=fresh_draft.id,
@@ -672,14 +894,16 @@ class OzonUploadQueueService:
                 commit=False,
             )
             db.session.commit()
-            return MarketplaceDraftService.get_draft(
-                seller_id=fresh_run.seller_id, draft_id=fresh_draft.id,
+            return _SourceCategoryPreparation(
+                draft=MarketplaceDraftService.get_draft(
+                    seller_id=fresh_run.seller_id, draft_id=fresh_draft.id,
+                ),
             )
         except Exception as exc:
             db.session.rollback()
             if isinstance(exc, OzonUploadLeaseLost):
                 raise
-            return draft
+            return _SourceCategoryPreparation(draft=draft)
 
     @classmethod
     def _reviewed_item(
