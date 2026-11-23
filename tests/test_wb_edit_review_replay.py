@@ -1,5 +1,6 @@
 """Single-use, tenant-scoped WB edit preview claims."""
 
+import base64
 import copy
 import json
 import os
@@ -847,9 +848,16 @@ class WBBulkReviewReplayTest(unittest.TestCase):
             'update_brand', 'New exact brand',
             product_ids=[self.sibling_product_id, self.product_id],
         )
-        tampered_token = base['preview_token'][:-1] + (
-            'a' if base['preview_token'][-1] != 'a' else 'b'
+        token_prefix, signature = base['preview_token'].rsplit('.', 1)
+        tampered_signature = ('a' if signature[0] != 'a' else 'b') + signature[1:]
+        signature_bytes = base64.urlsafe_b64decode(
+            signature + '=' * (-len(signature) % 4),
         )
+        tampered_signature_bytes = base64.urlsafe_b64decode(
+            tampered_signature + '=' * (-len(tampered_signature) % 4),
+        )
+        self.assertNotEqual(signature_bytes, tampered_signature_bytes)
+        tampered_token = token_prefix + '.' + tampered_signature
         with self.app.app_context():
             selection = load_product_selection_token(
                 base['selection_token'],
