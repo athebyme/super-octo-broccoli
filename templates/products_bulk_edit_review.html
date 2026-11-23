@@ -4,9 +4,17 @@
 
 {% block extra_head %}
 <style>
+    .wb-review-safe-wrap {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
     .wb-review-mobile-region:focus-visible {
         outline: 2px solid var(--focus-outline);
         outline-offset: -2px;
+    }
+    #wb-source-conflict-acknowledgements input[type="checkbox"]:focus-visible {
+        outline: 2px solid var(--focus-outline);
+        outline-offset: 2px;
     }
 </style>
 {% endblock %}
@@ -40,6 +48,34 @@
         </div>
     </div>
 </div>
+{% endmacro %}
+{% macro source_comparison_note(product_id, row, source_context=false) %}
+{% set comparison = row.source_comparison|default({}, true) %}
+{% if comparison.status == 'conflict' and comparison.source_values %}
+<div class="wb-review-safe-wrap mt-2 rounded-md border-l-2 px-2.5 py-2 text-xs" style="border-color:var(--warn-border);background:var(--warn-bg);color:var(--text)" data-review-source-comparison="conflict" data-review-conflict-product-id="{{ product_id }}" data-review-conflict-characteristic-id="{{ row.characteristic_id }}">
+    <p><span class="font-medium">Из фида поставщика:</span> <span data-review-source-value>{{ comparison.source_values|join(', ') }}</span></p>
+    <a class="mt-1 inline-flex min-h-[44px] items-center rounded px-1 underline underline-offset-2" href="#wb-source-conflict-acknowledgements">Сверить расхождение</a>
+</div>
+{% elif comparison.proposed_matches_source and comparison.source_values %}
+<p class="wb-review-safe-wrap mt-2 text-xs" style="color:var(--text-secondary)" data-review-source-comparison="match">
+    <span class="font-medium">Совпадает с фидом поставщика:</span>
+    <span data-review-source-value>{{ comparison.source_values|join(', ') }}</span>
+</p>
+{% elif comparison.status == 'unknown' and (comparison.reason in ['ambiguous_wb_characteristic_mapping', 'source_value_not_exact_directory_match', 'proposed_value_not_exact_directory_match'] or (source_context and comparison.reason in ['no_exact_field_mapping', 'source_marker_unavailable'])) %}
+<p class="wb-review-safe-wrap mt-2 text-xs" style="color:var(--text-muted)" data-review-source-comparison="unknown">
+    {% if comparison.reason == 'no_exact_field_mapping' %}
+    Поле из сохранённого каталога не сопоставлено с характеристикой Wildberries.
+    {% elif comparison.reason == 'source_marker_unavailable' %}
+    Значение из фида не подтверждено; сравнение не выполнено.
+    {% elif comparison.reason == 'ambiguous_wb_characteristic_mapping' %}
+    Не удалось однозначно сопоставить это поле со схемой Wildberries.
+    {% elif comparison.reason == 'source_value_not_exact_directory_match' %}
+    Значение из фида не совпало точно со значением справочника Wildberries.
+    {% else %}
+    Предложенное значение не совпало точно со значением справочника Wildberries.
+    {% endif %}
+</p>
+{% endif %}
 {% endmacro %}
 <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <nav class="mb-6 text-sm text-gray-500" aria-label="Хлебные крошки">
@@ -118,16 +154,17 @@
     {% if preview.diff %}
     <section class="sh-card sh-card--flush mt-6 overflow-hidden">
         <div class="border-b px-5 py-4" style="border-color:var(--border)">
-            <h2 class="font-semibold" style="color:var(--text)">Изменения: текущее → новое</h2>
+            <h2 class="font-semibold" style="color:var(--text)">Проверьте сохранённые и предлагаемые значения</h2>
             <p class="mt-1 text-xs" style="color:var(--text-secondary)">{{ preview.diff_count }} полей в {{ preview.changed_count }} карточках</p>
         </div>
         <div class="hidden max-h-[32rem] overflow-x-auto overflow-y-auto md:block" tabindex="0" role="region" aria-label="Товары и проверяемые изменения" data-review-desktop-table>
             <table class="min-w-[900px] w-full divide-y divide-gray-100 text-sm">
                 <thead class="sticky top-0 text-left text-xs uppercase" style="background:var(--bg);color:var(--text-secondary)">
-                    <tr><th class="w-[20rem] px-4 py-3">Товар</th><th class="w-[13rem] px-4 py-3">Поле</th><th class="px-4 py-3">Было</th><th class="px-4 py-3">Будет</th></tr>
+                    <tr><th class="w-[20rem] px-4 py-3">Товар</th><th class="w-[13rem] px-4 py-3">Поле</th><th class="px-4 py-3">Сохранено</th><th class="px-4 py-3">Предлагается</th></tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100">
                     {% for product_group in review_products %}
+                    {% set source_evidence = product_group.supplier_evidence|default({}, true) %}
                     {% for row in product_group.changes %}
                     <tr data-review-product-change="{{ product_group.product_id }}">
                         {% if loop.first %}
@@ -139,8 +176,11 @@
                         </td>
                         {% endif %}
                         <td class="px-4 py-3" style="color:var(--text)">{{ row.characteristic }}</td>
-                        <td class="max-w-sm whitespace-pre-wrap px-4 py-3" style="color:var(--text-secondary)">{{ row.before|join(', ') if row.before else 'Пусто' }}</td>
-                        <td class="max-w-sm whitespace-pre-wrap px-4 py-3 font-medium" style="color:var(--accent-text)">{{ row.after|join(', ') if row.after else 'Пусто' }}</td>
+                        <td class="wb-review-safe-wrap max-w-sm whitespace-pre-wrap px-4 py-3" style="color:var(--text-secondary)">{{ row.before|join(', ') if row.before else 'Пусто' }}</td>
+                        <td class="wb-review-safe-wrap max-w-sm whitespace-pre-wrap px-4 py-3 font-medium" style="color:var(--accent-text)">
+                            <span>{{ row.after|join(', ') if row.after else 'Пусто' }}</span>
+                            {{ source_comparison_note(product_group.product_id, row, source_evidence.supplier_name or source_evidence.facts) }}
+                        </td>
                     </tr>
                     {% endfor %}
                     {% endfor %}
@@ -151,6 +191,7 @@
             <div class="wb-review-mobile-region max-h-[32rem] overflow-x-hidden overflow-y-auto p-3" tabindex="0" role="region" aria-label="Товары и проверяемые изменения" data-review-mobile-region>
                 <ul class="space-y-3" aria-label="Список товаров с изменениями">
                     {% for product_group in review_products %}
+                    {% set source_evidence = product_group.supplier_evidence|default({}, true) %}
                     <li data-review-product-id-mobile="{{ product_group.product_id }}" class="min-w-0 rounded-lg border p-3" style="border-color:var(--border);background:var(--bg-card)">
                         <article class="min-w-0">
                             <header class="border-b pb-3" style="border-color:var(--border)">
@@ -162,15 +203,16 @@
                             <ol class="mt-3 space-y-3">
                                 {% for row in product_group.changes %}
                                 <li data-review-product-change-mobile="{{ product_group.product_id }}" class="min-w-0 rounded-md border p-3" style="border-color:var(--border)">
-                                    <h4 class="text-sm font-medium" style="color:var(--text);overflow-wrap:anywhere">{{ row.characteristic }}</h4>
+                                    <h4 class="wb-review-safe-wrap text-sm font-medium" style="color:var(--text)">{{ row.characteristic }}</h4>
                                     <dl class="mt-2 space-y-2 text-sm">
                                         <div class="min-w-0">
-                                            <dt class="text-xs font-medium" style="color:var(--text-muted)">Было</dt>
-                                            <dd class="mt-1 whitespace-pre-wrap" style="color:var(--text-secondary);overflow-wrap:anywhere">{{ row.before|join(', ') if row.before else 'Пусто' }}</dd>
+                                            <dt class="text-xs font-medium" style="color:var(--text-muted)">Сохранено</dt>
+                                            <dd class="wb-review-safe-wrap mt-1 whitespace-pre-wrap" style="color:var(--text-secondary)">{{ row.before|join(', ') if row.before else 'Пусто' }}</dd>
                                         </div>
                                         <div class="min-w-0">
-                                            <dt class="text-xs font-medium" style="color:var(--text-muted)">Будет</dt>
-                                            <dd class="mt-1 whitespace-pre-wrap font-medium" style="color:var(--accent-text);overflow-wrap:anywhere">{{ row.after|join(', ') if row.after else 'Пусто' }}</dd>
+                                            <dt class="text-xs font-medium" style="color:var(--text-muted)">Предлагается</dt>
+                                            <dd class="wb-review-safe-wrap mt-1 whitespace-pre-wrap font-medium" style="color:var(--accent-text)">{{ row.after|join(', ') if row.after else 'Пусто' }}</dd>
+                                            {{ source_comparison_note(product_group.product_id, row, source_evidence.supplier_name or source_evidence.facts) }}
                                         </div>
                                     </dl>
                                 </li>
@@ -182,11 +224,95 @@
                 </ul>
             </div>
         </div>
+        {% if preview.review_conflicts %}
+        <section id="wb-source-conflict-acknowledgements" class="border-t px-4 py-5 sm:px-5" style="border-color:var(--border)" aria-labelledby="wb-source-conflict-heading" data-review-conflict-acknowledgements>
+            <h3 id="wb-source-conflict-heading" class="font-semibold" style="color:var(--text)">Расхождения с данными поставщика</h3>
+            <p class="mt-1 max-w-3xl text-sm" style="color:var(--text-secondary)">Для каждого поля отдельно сверьте сохранённое значение, предложение и значение из фида поставщика. Подтверждение позволит отправить выбранное предложение на Wildberries.</p>
+            <ul class="mt-3 space-y-3">
+                {% for conflict in preview.review_conflicts %}
+                <li class="wb-review-safe-wrap min-w-0 rounded-lg border p-3 sm:p-4" style="border-color:var(--warn-border);background:var(--warn-bg)" data-review-conflict-row data-review-conflict-product-id="{{ conflict.product_id }}" data-review-conflict-characteristic-id="{{ conflict.characteristic_id }}">
+                    <div class="min-w-0">
+                        <p class="wb-review-safe-wrap text-sm font-semibold" style="color:var(--text)">{{ conflict.title or 'Название не указано' }}</p>
+                        <p class="wb-review-safe-wrap mt-1 text-xs" style="color:var(--text-secondary)">Артикул: {{ conflict.vendor_code or '—' }}{% if conflict.nm_id %} · nmID WB: {{ conflict.nm_id }}{% endif %}</p>
+                        <p class="mt-2 break-words text-sm font-medium" style="color:var(--text)">{{ conflict.characteristic }}</p>
+                    </div>
+                    <dl class="mt-3 grid min-w-0 gap-2 text-sm sm:grid-cols-3">
+                        <div class="min-w-0 rounded-md border p-2" style="border-color:var(--border);background:var(--bg-card)">
+                            <dt class="text-xs font-medium" style="color:var(--text-muted)">Снимок карточки WB</dt>
+                            <dd class="wb-review-safe-wrap mt-1 whitespace-pre-wrap" style="color:var(--text-secondary)">{{ conflict.before|join(', ') if conflict.before else 'Пусто' }}</dd>
+                        </div>
+                        <div class="min-w-0 rounded-md border p-2" style="border-color:var(--border);background:var(--bg-card)">
+                            <dt class="text-xs font-medium" style="color:var(--text-muted)">Из фида поставщика</dt>
+                            <dd class="wb-review-safe-wrap mt-1 whitespace-pre-wrap font-medium" style="color:var(--text)" data-review-source-value>{{ conflict.source_values|join(', ') if conflict.source_values else 'Значение не подтверждено' }}</dd>
+                        </div>
+                        <div class="min-w-0 rounded-md border p-2" style="border-color:var(--border);background:var(--bg-card)">
+                            <dt class="text-xs font-medium" style="color:var(--text-muted)">Предлагается</dt>
+                            <dd class="wb-review-safe-wrap mt-1 whitespace-pre-wrap font-medium" style="color:var(--accent-text)">{{ conflict.after|join(', ') if conflict.after else 'Пусто' }}</dd>
+                        </div>
+                    </dl>
+                    <label for="wb-source-conflict-ack-{{ loop.index }}" class="mt-3 flex min-h-[46px] min-w-0 cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-sm" style="color:var(--text)">
+                        <input id="wb-source-conflict-ack-{{ loop.index }}" type="checkbox" name="source_conflict_ack" value="{{ conflict.ack_value }}" form="wb-review-apply" required data-review-ack-value="{{ conflict.ack_value }}" class="h-5 w-5 shrink-0">
+                        <span class="wb-review-safe-wrap min-w-0">Подтверждаю предлагаемое значение.</span>
+                    </label>
+                </li>
+                {% endfor %}
+            </ul>
+        </section>
+        {% endif %}
     </section>
     {% else %}
     <div class="sh-card mt-6 text-sm" style="border-color:var(--warn-border);background:var(--warn-bg);color:var(--warn)">
         Нет изменений для применения. Внешний вызов не будет выполнен.
     </div>
+    {% endif %}
+
+    {% set supplier_evidence_groups = namespace(items=[]) %}
+    {% for product_group in review_products %}
+    {% set evidence = product_group.supplier_evidence|default({}, true) %}
+    {% set reason = evidence.reason|string|lower %}
+    {% if evidence.facts or evidence.supplier_name or 'ambiguous' in reason or 'stale' in reason %}
+    {% set _ = supplier_evidence_groups.items.append(product_group) %}
+    {% endif %}
+    {% endfor %}
+    {% if supplier_evidence_groups.items %}
+    <details class="sh-card mt-4" data-review-supplier-evidence>
+        <summary class="cursor-pointer font-medium" style="color:var(--text)">Данные каталога поставщика</summary>
+        <ul class="mt-3 space-y-3 text-sm">
+            {% for product_group in supplier_evidence_groups.items %}
+            {% set evidence = product_group.supplier_evidence|default({}, true) %}
+            <li id="review-supplier-evidence-{{ product_group.product_id }}" class="min-w-0 rounded-md border p-3" style="border-color:var(--border);background:var(--bg-card)" data-review-supplier-evidence-product="{{ product_group.product_id }}">
+                <p class="wb-review-safe-wrap font-medium" style="color:var(--text)">{{ product_group.product.title or 'Название не указано' }}</p>
+                <p class="wb-review-safe-wrap mt-1 text-xs" style="color:var(--text-secondary)">Артикул: {{ product_group.product.vendor_code or '—' }}{% if evidence.supplier_name %} · Данные каталога: {{ evidence.supplier_name }}{% endif %}</p>
+                {% if evidence.source_checked_at %}<p class="wb-review-safe-wrap mt-1 text-xs" style="color:var(--text-muted)">Последняя синхронизация каталога: <time datetime="{{ evidence.source_checked_at }}">{{ evidence.source_checked_at|replace('T', ' ') }} UTC</time></p>{% endif %}
+                {% if evidence.status == 'unknown' %}
+                {% set reason = evidence.reason|string|lower %}
+                <p class="mt-2 text-sm" style="color:var(--text-secondary)">
+                    {% if 'ambiguous' in reason %}
+                    Не удалось выбрать одну запись каталога поставщика; сравнение не выполнено.
+                    {% elif 'stale' in reason %}
+                    Сохранённая запись каталога устарела; сравнение не выполнено.
+                    {% else %}
+                    Значения из фида не подтверждены; сравнение не выполнено.
+                    {% endif %}
+                </p>
+                {% endif %}
+                {% if evidence.facts %}
+                <dl class="mt-2 grid min-w-0 gap-x-4 gap-y-2 sm:grid-cols-2">
+                    {% for fact in evidence.facts %}
+                    <div class="min-w-0" data-review-supplier-fact="{{ fact.field }}">
+                        <dt class="wb-review-safe-wrap text-xs" style="color:var(--text-muted)">В сохранённом каталоге · {{ fact.label or 'Поле поставщика' }}</dt>
+                        <dd class="wb-review-safe-wrap mt-0.5 whitespace-pre-wrap" style="color:var(--text)">
+                            {% if fact.values %}{{ fact.values|join(', ') }}{% else %}Значение не указано{% endif %}
+                            {% if fact.unit and fact.values %} {{ fact.unit }}{% endif %}
+                        </dd>
+                    </div>
+                    {% endfor %}
+                </dl>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </details>
     {% endif %}
 
     {% if preview.skipped %}
@@ -215,7 +341,7 @@
 
     <div class="mt-8 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
         <a href="{{ return_to }}" class="sh-btn sh-btn--secondary min-h-[46px] w-full whitespace-normal sm:w-auto" data-review-mobile-back>Вернуться к товарам</a>
-        <form method="POST" action="{{ url_for('products_bulk_edit') }}" class="flex w-full items-center gap-3 sm:w-auto">
+        <form id="wb-review-apply" method="POST" action="{{ url_for('products_bulk_edit') }}" class="flex w-full items-center gap-3 sm:w-auto">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="selection_token" value="{{ selection_token }}">
             <input type="hidden" name="preview_token" value="{{ preview_token or '' }}">

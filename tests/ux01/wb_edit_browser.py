@@ -81,6 +81,7 @@ REPORT = {
     "review_exclusion_observations": None,
     "fake_wb_single_write_calls": 0,
     "fake_wb_single_write_requests": [],
+    "supplier_source_conflict_observations": None,
     "single_edit_contrast_diagnostic": [],
     "single_edit_footer_clearance": [],
     "single_edit_boundary_attempts": [],
@@ -170,6 +171,8 @@ def seed_synthetic_wb(app) -> dict[str, int]:
         MarketplaceDirectory,
         Product,
         Seller,
+        Supplier,
+        SupplierProduct,
         User,
         db,
     )
@@ -277,7 +280,7 @@ def seed_synthetic_wb(app) -> dict[str, int]:
         definitions.extend(
             (
                 500 + index,
-                f"Synthetic field {index + 1}",
+                "Цвет" if index == 27 else f"Synthetic field {index + 1}",
                 2 if index == 1 else 1,
                 3 if index == 2 else 1,
                 None,
@@ -327,6 +330,15 @@ def seed_synthetic_wb(app) -> dict[str, int]:
             synced_at=fixture_now,
             sync_status="success",
             items_count=2,
+            version=1,
+        ))
+        db.session.add(MarketplaceDirectory(
+            marketplace_id=marketplace.id,
+            directory_type="colors",
+            data_json='["Розовый", "Чёрный", "Белый"]',
+            synced_at=fixture_now,
+            sync_status="success",
+            items_count=3,
             version=1,
         ))
 
@@ -430,6 +442,73 @@ def seed_synthetic_wb(app) -> dict[str, int]:
         db.session.add_all([
             *products, foreign, unmapped, male_subject_product, *mixed_products,
         ])
+        db.session.commit()
+
+        # One exact synthetic seller-owned link supplies two parser-marked
+        # facts. The marker is the evidence for literal feed values; the
+        # normalized columns are only available as saved catalog context.
+        supplier = Supplier(
+            name="Synthetic Sexoptovik",
+            code="sexoptovik",
+            is_active=True,
+            last_sync_status="success",
+            last_sync_at=fixture_now,
+        )
+        db.session.add(supplier)
+        db.session.flush()
+        source_snapshot = {
+            "title": "Synthetic product",
+            "description": "",
+            "category": "Neutral",
+            "brand": "Synthetic",
+            "colors": ["Розовый"],
+            "country": "Россия",
+            "observed_supplier_fields_version": 1,
+            "observed_supplier_fields": {
+                "colors": ["Розовый"],
+                "country": "Россия",
+            },
+        }
+        source_snapshot_json = json.dumps(source_snapshot, ensure_ascii=False)
+        supplier_product = SupplierProduct(
+            supplier_id=supplier.id,
+            external_id="ux01-wb-edit-source-000",
+            vendor_code="PD-000",
+            title="Synthetic product",
+            description="",
+            brand="Synthetic",
+            category="Neutral",
+            wb_subject_id=5880,
+            wb_subject_name=category.subject_name,
+            colors_json=json.dumps(["Розовый"], ensure_ascii=False),
+            country="Россия",
+            original_data_json=source_snapshot_json,
+            content_revision=4,
+            status="ready",
+        )
+        db.session.add(supplier_product)
+        db.session.flush()
+        from models import ImportedProduct
+        db.session.add(ImportedProduct(
+            seller_id=seller.id,
+            product_id=products[0].id,
+            supplier_product_id=supplier_product.id,
+            supplier_id=supplier.id,
+            supplier_content_revision=supplier_product.content_revision,
+            external_id=supplier_product.external_id,
+            external_vendor_code="PD-000",
+            source_type="sexoptovik",
+            wb_nm_id=products[0].nm_id,
+            title="Synthetic product",
+            category="Neutral",
+            wb_subject_id=5880,
+            brand="Synthetic",
+            country="Россия",
+            colors=json.dumps(["Розовый"], ensure_ascii=False),
+            description="",
+            original_data=source_snapshot_json,
+            import_status="imported",
+        ))
         db.session.commit()
         return {
             "seller_id": int(seller.id),
@@ -2347,8 +2426,8 @@ def assert_bulk_review_mobile_projection(
     first_change = reviewed_identity.locator("[data-review-product-change-mobile]")
     assert first_change.count() == 1
     change_text = first_change.inner_text()
-    assert "Было" in change_text and "Pipedream" in change_text, change_text
-    assert "Будет" in change_text and "Synthetic reviewed brand" in change_text, change_text
+    assert "Сохранено" in change_text and "Pipedream" in change_text, change_text
+    assert "Предлагается" in change_text and "Synthetic reviewed brand" in change_text, change_text
 
     geometry = page.evaluate("""() => {
         const region = document.querySelector('[data-review-mobile-region]');
@@ -2468,6 +2547,191 @@ def assert_bulk_review_mobile_projection(
         scroll_top_after=after_scroll,
     )
     interaction("320px_bulk_review_uses_exact_mobile_cards_with_keyboard_scroll")
+    page.set_viewport_size({"width": 1280, "height": 900})
+    wait_for_layout_settle(page, width=1280, theme="light")
+
+
+def assert_bulk_supplier_source_review(page, fixture: dict[str, int]) -> None:
+    """Exercise exact source comparisons and per-field required acknowledgements."""
+    form = page.locator("form[x-data='bulkEditFormData()']")
+    assert form.count() == 1
+    with page.expect_response(
+        lambda response: response.request.method == "POST"
+        and response.url == BASE + "/products/bulk-edit",
+        timeout=10000,
+    ) as source_preview_response:
+        with page.expect_navigation(wait_until="domcontentloaded", timeout=10000):
+            form.evaluate("""form => {
+                const state = Alpine.$data(form);
+                state.operation = 'update_characteristic';
+                state.selectedCategory = '5880';
+                state.pendingChanges = [
+                    {charId: '527', charName: 'Цвет', value: 'Чёрный', displayValue: 'Чёрный'},
+                    {charId: '202', charName: 'Страна производства', value: 'Китай', displayValue: 'Китай'},
+                ];
+                form.requestSubmit(form.querySelector('button[type="submit"]'));
+            }""")
+    assert source_preview_response.value.status == 200
+    assert_review_summary(page, changed="50")
+
+    expected_product_id = str(fixture["product_id"])
+    conflicts = page.locator("[data-review-conflict-row]")
+    observed_rows = conflicts.evaluate_all("""nodes => nodes.map(node => ({
+        product: node.getAttribute('data-review-conflict-product-id'),
+        characteristic: node.getAttribute('data-review-conflict-characteristic-id'),
+        text: node.innerText,
+    }))""")
+    assert len(observed_rows) == 2, observed_rows
+    assert {(row["product"], row["characteristic"]) for row in observed_rows} == {
+        (expected_product_id, "527"),
+        (expected_product_id, "202"),
+    }, observed_rows
+    color_conflict = conflicts.locator('[data-review-conflict-characteristic-id="527"]')
+    country_conflict = conflicts.locator('[data-review-conflict-characteristic-id="202"]')
+    assert color_conflict.count() == country_conflict.count() == 1
+    assert "Снимок карточки WB" in color_conflict.inner_text()
+    assert "Пусто" in color_conflict.inner_text()
+    assert "Из фида поставщика" in color_conflict.inner_text()
+    assert "Розовый" in color_conflict.inner_text()
+    assert "Предлагается" in color_conflict.inner_text()
+    assert "Чёрный" in color_conflict.inner_text()
+    assert "Россия" in country_conflict.inner_text()
+    assert "Китай" in country_conflict.inner_text()
+
+    desktop_color_note = page.locator(
+        '[data-review-desktop-table] '
+        '[data-review-source-comparison="conflict"]'
+        '[data-review-conflict-characteristic-id="527"]',
+    )
+    assert desktop_color_note.count() == 1
+    assert "Розовый" in desktop_color_note.inner_text()
+    assert "Чёрный" in desktop_color_note.locator("xpath=../span").inner_text()
+
+    supplier_details = page.locator("details[data-review-supplier-evidence]")
+    assert supplier_details.count() == 1
+    supplier_details.locator("summary").click()
+    supplier_product_evidence = page.locator(
+        f'[data-review-supplier-evidence-product="{expected_product_id}"]',
+    )
+    assert supplier_product_evidence.count() == 1
+    assert "В сохранённом каталоге" in supplier_product_evidence.inner_text()
+    assert "Розовый" in supplier_product_evidence.inner_text()
+    assert "Россия" in supplier_product_evidence.inner_text()
+
+    apply_form = page.locator("#wb-review-apply")
+    acknowledgements = page.locator('input[name="source_conflict_ack"]')
+    ack_rows = acknowledgements.evaluate_all("""nodes => nodes.map(node => ({
+        value: node.value,
+        checked: node.checked,
+        required: node.required,
+        form: node.form?.id || null,
+        parentHeight: node.closest('label')?.getBoundingClientRect().height || 0,
+    }))""")
+    expected_ack_values = {
+        f"{expected_product_id}:527",
+        f"{expected_product_id}:202",
+    }
+    assert apply_form.count() == 1
+    assert len(ack_rows) == 2, ack_rows
+    assert {row["value"] for row in ack_rows} == expected_ack_values, ack_rows
+    assert all(
+        row["form"] == "wb-review-apply"
+        and row["required"] is True
+        and row["checked"] is False
+        and row["parentHeight"] >= 46
+        for row in ack_rows
+    ), ack_rows
+
+    before_no_ack_submit = {
+        "fake_clients": REPORT["fake_wb_client_instances"],
+        "fake_writes": REPORT["fake_wb_write_calls"],
+        "url": page.url,
+    }
+    native_validation = apply_form.evaluate("""form => {
+        let submitEvents = 0;
+        form.addEventListener('submit', event => {
+            submitEvents += 1;
+            event.preventDefault();
+        }, {once: true});
+        const validBeforeSubmit = form.checkValidity();
+        const invalidAcks = [...document.querySelectorAll('input[name="source_conflict_ack"]:invalid')]
+            .map(input => input.value).sort();
+        form.requestSubmit();
+        return {validBeforeSubmit, invalidAcks, submitEvents};
+    }""")
+    assert native_validation == {
+        "validBeforeSubmit": False,
+        "invalidAcks": sorted(expected_ack_values),
+        "submitEvents": 0,
+    }, native_validation
+    assert REPORT["fake_wb_client_instances"] == before_no_ack_submit["fake_clients"] == 0
+    assert REPORT["fake_wb_write_calls"] == before_no_ack_submit["fake_writes"] == 0
+    assert page.url == before_no_ack_submit["url"]
+
+    page.set_viewport_size({"width": 320, "height": 800})
+    wait_for_layout_settle(page, width=320, theme="light")
+    narrow_geometry = page.evaluate("""() => {
+        const boxes = [...document.querySelectorAll('[data-review-conflict-row]')].map(node => {
+            const rect = node.getBoundingClientRect();
+            return {width: rect.width, left: rect.left, right: rect.right};
+        });
+        const labels = [...document.querySelectorAll('#wb-source-conflict-acknowledgements label')]
+            .map(node => {
+                const rect = node.getBoundingClientRect();
+                return {width: rect.width, height: rect.height, left: rect.left, right: rect.right};
+            });
+        return {
+            viewport: window.innerWidth,
+            document: document.documentElement.scrollWidth,
+            body: document.body.scrollWidth,
+            boxes,
+            labels,
+        };
+    }""")
+    assert narrow_geometry["viewport"] == 320, narrow_geometry
+    assert narrow_geometry["document"] <= 320 and narrow_geometry["body"] <= 320, narrow_geometry
+    assert len(narrow_geometry["boxes"]) == len(narrow_geometry["labels"]) == 2, narrow_geometry
+    assert all(
+        row["left"] >= -0.75 and row["right"] <= 320.75
+        and row["width"] >= 44
+        for row in narrow_geometry["boxes"]
+    ), narrow_geometry
+    assert all(
+        row["left"] >= -0.75 and row["right"] <= 320.75
+        and row["width"] >= 44 and row["height"] >= 46
+        for row in narrow_geometry["labels"]
+    ), narrow_geometry
+    REPORT["supplier_source_conflict_observations"] = {
+        "conflicts": [
+            {"product": row["product"], "characteristic": row["characteristic"]}
+            for row in observed_rows
+        ],
+        "ack_values": sorted(expected_ack_values),
+        "all_required_unchecked": True,
+        "associated_apply_form": "wb-review-apply",
+        "empty_ack_attempt_blocked_by_native_validation": native_validation["submitEvents"] == 0,
+        "no_provider_or_write_delta": True,
+        "mobile_320_document_width": narrow_geometry["document"],
+        "mobile_ack_targets_at_least_46px": True,
+    }
+    check(
+        "bulk_source_conflicts_show_literal_values_and_require_one_ack_per_field",
+        conflicts=2,
+        distinct_fields=2,
+        same_product=True,
+        pink_vs_black=True,
+        country_value_comparison=True,
+        supplier_facts_shown_once=True,
+        unchecked_required_acknowledgements=2,
+        native_empty_ack_submission_blocked=True,
+    )
+    check(
+        "bulk_source_conflict_review_wraps_at_320px_without_root_overflow",
+        viewport_width=320,
+        document_width=narrow_geometry["document"],
+        acknowledgement_targets_at_least_46px=True,
+    )
+    interaction("source_conflicts_require_independent_unchecked_field_confirmations")
     page.set_viewport_size({"width": 1280, "height": 900})
     wait_for_layout_settle(page, width=1280, theme="light")
 
@@ -2997,6 +3261,9 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
             check("no_op_bulk_preview_has_no_apply_token_or_provider_client")
             interaction("no_op_preview_has_no_apply_token_or_provider_client")
 
+            page.locator("nav button").filter(has_text="Массовое редактирование").click()
+            page.wait_for_url("**/products/bulk-edit")
+            assert_bulk_supplier_source_review(page, fixture)
             page.locator("nav button").filter(has_text="Массовое редактирование").click()
             page.wait_for_url("**/products/bulk-edit")
             page.locator('input[name="operation"][value="update_brand"]').check()
