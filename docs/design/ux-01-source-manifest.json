@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-23T06:29:24.856699+00:00",
+  "generated_at": "2026-11-23T06:34:22.131347+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -453,7 +453,7 @@
     },
     {
       "path": "docs/design/ozon-prices.md",
-      "sha256": "4427b05a16beb9090f70f87ab147595a43e881fc27d40a763d74459222215139"
+      "sha256": "b33277f160757919e655e803705a3c26f27928b35fced0191060ec1a8eeec656"
     },
     {
       "path": "docs/design/ozon-quality-workspace.md",
@@ -5289,7 +5289,7 @@
     },
     {
       "path": "tests/ux01/bulk_workspace_browser.py",
-      "sha256": "b6c46e4f2cc3c3eb91358d092fbe9a502c67f584001aa35051cae431f657be37"
+      "sha256": "0cec431140dfb86d7e5883aab1a445c12f9612ef9c8ad74ac1d6bcc54cdd3e79"
     },
     {
       "path": "tests/ux01/common_content_browser.py",
@@ -5317,7 +5317,7 @@
     },
     {
       "path": "tests/ux01/my_products_selection_review.js",
-      "sha256": "fa7aebb4c49d231b07e7a5e8bb1a0cedf649c5e1aa51814d063ca11abd9ab577"
+      "sha256": "adb72fb72bc9d6bd2fa4fe685d6cb815a2e64fb67bef1622d18adc311af3641c"
     },
     {
       "path": "tests/ux01/operations_pricing_browser.py",
@@ -5348,5 +5348,5 @@
       "sha256": "6f39e443d991ebaa3f7ff379c1051438fd727de24a3d7ba25764acfa5691f63d"
     }
   ],
-  "aggregate_sha256": "f78c483af2269423cd4a585a386c43e326922ad6442bb5230bc2851dda535bf6"
+  "aggregate_sha256": "25c7a9be811e6d57d04973dfde29ef23cbdd2756f9d519e6f3846a8421b65b14"
 }
