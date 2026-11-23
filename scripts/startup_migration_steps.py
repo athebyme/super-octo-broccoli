@@ -157,6 +157,12 @@ def migration_steps() -> tuple[MigrationStep, ...]:
         "{database}",
     ))
 
+    steps.append(_python(
+        "migrations/migrate_add_ozon_brand_search_evidence.py",
+        "{database}",
+        dependencies=("services/ozon_brand_search_models.py",),
+    ))
+
     keys = [step.key for step in steps]
     if len(keys) != len(set(keys)):
         raise RuntimeError("Startup migration plan contains duplicate step keys")
