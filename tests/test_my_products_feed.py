@@ -457,6 +457,29 @@ class MyProductsFeedTest(unittest.TestCase):
         ])
         self.db.session.commit()
 
+        from sqlalchemy import text
+        from services.my_products_feed import MyProductsFeed
+
+        for predicate in (
+            MyProductsFeed._ozon_association(seller_id=self.seller_id),
+            MyProductsFeed._ozon_state(
+                seller_id=self.seller_id, state='active',
+            ),
+        ):
+            statement = str(ImportedProduct.query.filter(
+                ImportedProduct.seller_id == self.seller_id,
+                predicate,
+            ).statement.compile(
+                dialect=self.db.engine.dialect,
+                compile_kwargs={'literal_binds': True},
+            ))
+            plan = self.db.session.execute(
+                text('EXPLAIN QUERY PLAN ' + statement)
+            ).all()
+            details = '\n'.join(str(row[-1]) for row in plan).upper()
+            self.assertNotIn('CORRELATED', details, details)
+            self.assertIn('LIST SUBQUERY', details, details)
+
         previous = self.app.config.get('MARKETPLACE_OZON_ENABLED')
         self.app.config['MARKETPLACE_OZON_ENABLED'] = True
         try:
