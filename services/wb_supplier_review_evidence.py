@@ -537,5 +537,3 @@ def build_supplier_evidence(
         "source_rows": guard_rows,
     }).encode("utf-8")).hexdigest()
     return evidence_by_product, comparisons, guard
-
-
