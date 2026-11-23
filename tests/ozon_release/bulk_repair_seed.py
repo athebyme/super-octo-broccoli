@@ -145,74 +145,16 @@ def bulk_seed(app):
             # cache-backed fields are part of the real schema snapshot too.
             kind.attributes_count=7
         db.session.commit()
-        items=[];sources=[];draft_ids=[];supplier_source_drafts={}
+        items=[];sources=[];draft_ids=[]
         for index in range(200):
             kind=kinds[index%len(kinds)]
-            external_id='bulk-source-'+str(index)
-            supplier_product=None
-            source_snapshot_json=None
-            source_case=SOURCE_REVIEW_CASES.get(index)
-            if source_case:
-                feed_row={
-                    "external_id":external_id,
-                    "vendor_code":f"BULK-{index:03}",
-                    "title":f"Набор для проверки {index:03}",
-                    "category":"Категория "+str(index%6),
-                    "colors":list(source_case["source"]["colors"]),
-                }
-                if "country" in source_case["source"]:
-                    feed_row["country"]=source_case["source"]["country"]
-                observed=SupplierCSVParser._observed_source_fields(
-                    feed_row,review_supplier,
-                )
-                assert observed==source_case["source"]
-                source_snapshot={
-                    **feed_row,
-                    "observed_supplier_fields_version":1,
-                    "observed_supplier_fields":observed,
-                }
-                source_snapshot_json=json.dumps(
-                    source_snapshot,ensure_ascii=False,sort_keys=True,
-                )
-                supplier_product=SupplierProduct(
-                    supplier_id=review_supplier.id,
-                    external_id=external_id,
-                    vendor_code=feed_row["vendor_code"],
-                    title=feed_row["title"],
-                    category=feed_row["category"],
-                    colors_json=json.dumps(feed_row["colors"],ensure_ascii=False),
-                    country=feed_row.get("country"),
-                    original_data_json=source_snapshot_json,
-                    content_revision=1,
-                    status="ready",
-                )
-                db.session.add(supplier_product);db.session.flush()
-            source=ImportedProduct(seller_id=fixture['seller_id'],external_id=external_id,
-                external_vendor_code=f'BULK-{index:03}',category='Категория '+str(index%6),
+            source=ImportedProduct(seller_id=fixture['seller_id'],external_id='bulk-source-'+str(index),
+                external_vendor_code=f'BULK-{index:03}',source_type='synthetic',category='Категория '+str(index%6),
                 title=f'Набор для проверки {index:03}',description='Исходное описание без неподтверждённых свойств.',
-                photo_urls=json.dumps([PHOTO]) if index!=199 else '[]',
-                supplier_id=review_supplier.id if supplier_product else None,
-                supplier_product_id=supplier_product.id if supplier_product else None,
-                supplier_content_revision=supplier_product.content_revision if supplier_product else 0,
-                source_type=review_supplier.code if supplier_product else 'synthetic',
-                original_data=source_snapshot_json)
+                photo_urls=json.dumps([PHOTO]) if index!=199 else '[]')
             db.session.add(source);db.session.commit();sources.append(source.id)
             draft=MarketplaceDraftService.create_draft(seller_id=fixture['seller_id'],account_id=fixture['account_id'],
                 imported_product_id=source.id,product_type_id=kind.id)
-            if source_case:
-                for attribute_id,current_value in source_case["current"].items():
-                    dictionary_id="1494" if attribute_id=="10096" else "1935"
-                    values=current_value if isinstance(current_value,list) else [current_value]
-                    _set_draft_attribute(
-                        draft,attribute_id,
-                        [{
-                            "value":value,
-                            "dictionary_value_id":_source_value_id(
-                                attribute_id,index%6,value,
-                            ),
-                        } for value in values],
-                    )
-                supplier_source_drafts[index]=draft.id
             draft_ids.append(draft.id)
             items.append({'imported_product_id':source.id,'draft_id':draft.id,'offer_id':draft.offer_id,
                 'title':source.title,'action':'create','status':'needs_input','code':'required_attribute_missing',
@@ -225,6 +167,77 @@ def bulk_seed(app):
         OzonBulkUploadService._store_progress(job,progress);db.session.add(job);db.session.flush()
         OzonBulkUploadService._persist(job,progress)
         db.session.commit()
+
+        # Keep the long-standing 200-row repair job byte-for-byte representative
+        # of its original synthetic groups. Supplier evidence gets independent
+        # seller-owned drafts that enter through the normal draft selection flow.
+        supplier_source_drafts={}
+        for index,source_case in SOURCE_REVIEW_CASES.items():
+            kind=kinds[index%len(kinds)]
+            external_id='bulk-source-review-'+str(index)
+            feed_row={
+                "external_id":external_id,
+                "vendor_code":f"SOURCE-REVIEW-{index:03}",
+                "title":f"Проверка источника {index:03}",
+                "category":"Категория "+str(index%6),
+                "colors":list(source_case["source"]["colors"]),
+            }
+            if "country" in source_case["source"]:
+                feed_row["country"]=source_case["source"]["country"]
+            observed=SupplierCSVParser._observed_source_fields(feed_row,review_supplier)
+            assert observed==source_case["source"]
+            source_snapshot={
+                **feed_row,
+                "observed_supplier_fields_version":1,
+                "observed_supplier_fields":observed,
+            }
+            source_snapshot_json=json.dumps(source_snapshot,ensure_ascii=False,sort_keys=True)
+            supplier_product=SupplierProduct(
+                supplier_id=review_supplier.id,
+                external_id=external_id,
+                vendor_code=feed_row["vendor_code"],
+                title=feed_row["title"],
+                category=feed_row["category"],
+                colors_json=json.dumps(feed_row["colors"],ensure_ascii=False),
+                country=feed_row.get("country"),
+                original_data_json=source_snapshot_json,
+                content_revision=1,
+                status="ready",
+            )
+            db.session.add(supplier_product);db.session.flush()
+            source=ImportedProduct(
+                seller_id=fixture['seller_id'],
+                external_id=external_id,
+                external_vendor_code=feed_row["vendor_code"],
+                category=feed_row["category"],
+                title=feed_row["title"],
+                description='Синтетический пример для сверки точных свойств поставщика.',
+                photo_urls=json.dumps([PHOTO]),
+                supplier_id=review_supplier.id,
+                supplier_product_id=supplier_product.id,
+                supplier_content_revision=supplier_product.content_revision,
+                source_type=review_supplier.code,
+                original_data=source_snapshot_json,
+            )
+            db.session.add(source);db.session.commit()
+            draft=MarketplaceDraftService.create_draft(
+                seller_id=fixture['seller_id'],
+                account_id=fixture['account_id'],
+                imported_product_id=source.id,
+                product_type_id=kind.id,
+            )
+            for attribute_id,current_value in source_case["current"].items():
+                values=current_value if isinstance(current_value,list) else [current_value]
+                _set_draft_attribute(
+                    draft,attribute_id,[{
+                        "value":value,
+                        "dictionary_value_id":_source_value_id(
+                            attribute_id,index%6,value,
+                        ),
+                    } for value in values],
+                )
+            db.session.commit()
+            supplier_source_drafts[index]=draft.id
         return {**fixture,'repair_job':job.job_uid,'repair_drafts':draft_ids,'repair_sources':sources,
                 'supplier_source_drafts':supplier_source_drafts,
                 'supplier_source_cases':SOURCE_REVIEW_CASES}
