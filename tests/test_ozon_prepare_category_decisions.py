@@ -723,6 +723,46 @@ def test_unmatched_source_uses_only_observed_types_under_one_fresh_node(
     assert case.draft.product_type_id is None
 
 
+@pytest.mark.parametrize(
+    ("snapshot_field", "replacement", "candidate_expected"),
+    [
+        ("title", "Divergent peer title snapshot", True),
+        ("category", "Different peer category", False),
+    ],
+)
+def test_peer_evidence_requires_exact_category_but_not_title_snapshot(
+    case,
+    snapshot_field,
+    replacement,
+    candidate_expected,
+):
+    set_target_source_category(case, OBSERVED_SOURCE_CATEGORY)
+    _types, evidence = add_observed_evidence(case)
+    peer = evidence[0]
+    copied_snapshot = json.loads(peer.product.original_data)
+    copied_snapshot[snapshot_field] = replacement
+    peer.product.original_data = json.dumps(
+        copied_snapshot, ensure_ascii=False, sort_keys=True,
+    )
+    db.session.commit()
+
+    candidate = build_candidate(case)
+
+    if candidate_expected:
+        assert candidate is not None
+        assert [choice.type_id for choice in candidate.context.choices] == [
+            case.type_a.external_type_id,
+            case.type_b.external_type_id,
+        ]
+        assert peer.product.supplier_content_revision == (
+            peer.source.content_revision
+        )
+        assert peer.product.external_id == peer.source.external_id
+        assert peer.product.category == peer.source.category
+    else:
+        assert candidate is None
+
+
 @pytest.mark.parametrize("fault", [
     "other_account",
     "split_accounts",
