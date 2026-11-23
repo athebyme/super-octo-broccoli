@@ -109,6 +109,7 @@ EXPECTED_NEGATIVE_HTTP = {
 OBSERVED_EXPECTED_NEGATIVE_HTTP = set()
 EMPTY_PRODUCT_FORM_FILTERS = frozenset({
     "category", "has_stock", "block_status", "rating_min", "rating_max",
+    "supplier_id",
 })
 
 # Keep provider state separate from Product rows. The real single-card route
@@ -2869,7 +2870,7 @@ def run_browser(app, fixture: dict[str, int], *, bulk_schema_race_only: bool = F
 
             # Exercise a non-default page size before the existing exact-50
             # selection journey. Sorting must retain 100 and all meaningful
-            # filters; only the five known blank controls from this form are
+            # filters; only the six known blank controls from this form are
             # canonicalized by _assert_local_products_url.
             page.goto(
                 BASE + "/products?search=Pipedream&brand=Pipedream"
