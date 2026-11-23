@@ -139,7 +139,7 @@ const context={window,URL,URLSearchParams,TextEncoder,TextDecoder,AbortControlle
 vm.runInNewContext(fs.readFileSync(process.argv[1].replace('ozon-bulk-repair-vue.js','ozon-workspace-return.js'),'utf8'),context);
 vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),context);
 const core=window.ozonBulkRepair;
-const fixture=()=>({draft_id:1,draft_version:1,imported_product_id:7,offer_id:'offer-1',title:'Товар один',action:'ИСПРАВИТЬ',
+const fixture=()=>({draft_id:1,draft_version:1,imported_product_id:7,offer_id:'offer-1',title:'Товар один',action:'ИСПРАВИТЬ',source_refresh_available:false,
  product_type_id:4,product_type_name:'Тип',price_rub:'100',description:'Описание',package_width_mm:'',package_height_mm:'',
  package_depth_mm:'',package_weight_g:'',attributes:[],cleanup_candidates:[],schema_cleanup:false,status:'needs_input',
  validation_errors:[],type_change_impact:{attributes:0,complex_groups:0,removals:0}});
@@ -210,7 +210,12 @@ const response=data=>({status:200,ok:true,redirected:false,json:async()=>({...da
     assert 'v-text="urls.catalog_return_label || \'К каталогу Ozon\'"' in template
     assert "filename='ozon-workspace-return.js', v='20261122-ozon-workspace-review-return-r57'" in template
     assert "filename='ozon-bulk-repair-vue.css', v='20261123-ozon-source-review-r1'" in template
-    assert "filename='ozon-bulk-repair-vue.js', v='20261123-ozon-source-review-r1'" in template
+    assert "filename='ozon-bulk-repair-vue.js', v='20261123-ozon-source-refresh-r1'" in template
+    assert 'data-source-facts-refresh' in template
+    assert 'data-source-facts-refresh-dialog' in template
+    assert 'data-source-facts-refresh-count' in template
+    assert 'data-source-facts-refresh-confirm' in template
+    assert 'data-source-facts-refresh-result' in template
 
 
 def test_native_supplier_comparisons_use_exact_sets_and_bound_local_decisions():
@@ -226,7 +231,7 @@ const field=(id,name,value,ids,required=false,max_values=2)=>({external_id:id,na
   editable:true,source_managed:true,required,dictionary:true,dictionary_fresh:true,data_type:'String',is_collection:true,max_values});
 const makeEditor=()=>({mode:'draft_selection',scope_key:scope,job_uid:null,account_id:1,account_label:'Магазин один',
   groups:[{id:'g',source_category:'Категория',rows:[{draft_id:196,draft_version:3,imported_product_id:801,offer_id:'offer-196',title:'Пальто',
-    action:'ИСПРАВИТЬ',product_type_id:4,product_type_name:'Одежда',price_rub:'100',description:'Описание',package_width_mm:'',package_height_mm:'',
+    action:'ИСПРАВИТЬ',source_refresh_available:false,product_type_id:4,product_type_name:'Одежда',price_rub:'100',description:'Описание',package_width_mm:'',package_height_mm:'',
     package_depth_mm:'',package_weight_g:'',attributes:[field('10096','Цвет товара','Синий\nЗелёный',['5001','5002']),
       field('4389','Страна-изготовитель','Россия',['643'],false)],cleanup_candidates:[],schema_cleanup:false,status:'needs_input',validation_errors:[],
     type_change_impact:{attributes:0,complex_groups:0,removals:0},source_comparisons:{
@@ -323,6 +328,93 @@ console.log('supplier comparison scope, exact collections, evidence decisions, h
                  'data-supplier-source','data-supplier-proposed','data-supplier-conflict-ack',
                  'data-supplier-source-exclude','data-supplier-source-save'):
         assert hook in template
+
+
+def test_native_source_refresh_uses_exact_stale_rows_and_preserves_pending_edits():
+    source=Path(__file__).parents[1]/'static/ozon-bulk-repair-vue.js'
+    script=r"""
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const scope='c'.repeat(64),saved=new Map(),active={focus(){}};
+const window={ozonDraftEditor:{fieldComponent:{},photoComponent:{}},document:{activeElement:active,getElementById(){return null}},
+ location:{href:'https://app.test/repair?account_id=1&draft_ids=1,2,3',origin:'https://app.test',pathname:'/repair',search:'?account_id=1&draft_ids=1,2,3'},
+ history:{replaceState(){}},addEventListener(){},removeEventListener(){},sessionStorage:{setItem(k,v){saved.set(k,v)},getItem(k){return saved.get(k)}}};
+let transport=async()=>{throw Error('Unexpected fetch')},calls=[];
+const context={window,URL,URLSearchParams,TextEncoder,TextDecoder,AbortController,setTimeout,clearTimeout,
+ fetch:async(url,options)=>{calls.push({url,method:options.method||'GET',body:options.body?.toString(),headers:options.headers});return transport(url,options);}};
+vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),context);
+const core=window.ozonBulkRepair;
+const row=(id,stale)=>({draft_id:id,draft_version:1,imported_product_id:100+id,offer_id:'offer-'+id,title:'Товар '+id,
+ action:'ИСПРАВИТЬ',source_refresh_available:stale,product_type_id:4,product_type_name:'Тип',price_rub:'100',description:'Описание '+id,
+ package_width_mm:'',package_height_mm:'',package_depth_mm:'',package_weight_g:'',attributes:[],cleanup_candidates:[],schema_cleanup:false,
+ status:'needs_input',validation_errors:[],type_change_impact:{attributes:0,complex_groups:0,removals:0}});
+const editor=(versions=[1,1,1],fresh=[true,true,false])=>({mode:'draft_selection',scope_key:scope,job_uid:null,account_id:1,account_label:'Магазин один',
+ groups:[{id:'g',source_category:'Категория',rows:[row(1,fresh[0]),row(2,fresh[1]),row(3,fresh[2])].map((value,index)=>({...value,draft_version:versions[index]}))}],
+ review_draft_ids:[1,2,3],blocked_review_items:[],bulk_fields:[{key:'price_rub',label:'Цена продавца'}]});
+const config={editor:editor(),enabled:true,csrf:'csrf',urls:{read:'/read?account_id=1&draft_ids=1,2,3',apply:'/apply?account_id=1&draft_ids=1,2,3',types:'/types',dictionaries:'/dict/'}};
+const response=data=>({status:200,ok:true,redirected:false,json:async()=>({...data,csrf:'fresh-csrf'})});
+const options=core.createOptions(config),state=options.data();
+for(const [key,fn]of Object.entries(options.methods))state[key]=fn.bind(state);
+for(const [key,fn]of Object.entries(options.computed))Object.defineProperty(state,key,{get:fn.bind(state)});
+state.$nextTick=fn=>fn();let focused=false;
+state.$refs={modal:{showModal(){},close(){}},sourceRefreshReceipt:{isConnected:true,focus(){focused=true},scrollIntoView(){}}};
+(async()=>{
+ assert.equal(core.validEditor(config.editor,config),true);
+ const malformed=editor();delete malformed.groups[0].rows[0].source_refresh_available;
+ assert.equal(core.validEditor(malformed,config),false,'source refresh eligibility must be an exact server boolean');
+ assert.deepEqual(state.sourceRefreshTargets.map(item=>item.draft_id),[1,2],'fresh selected rows do not enter the refresh target');
+ state.rows[0].description='Unsaved seller edit';
+ assert.equal(state.openSourceRefresh(),true);
+ assert.equal(state.dialog,'source_refresh');
+ assert.deepEqual(state.sourceRefreshReview.map(item=>item.title),['Товар 1','Товар 2']);
+ const after=editor([2,2,1],[false,false,false]);
+ after.groups[0].rows[0].description='Описание 1';
+ transport=async(_url,options)=>{
+   if(options.method==='POST')return response({success:true,mode:'draft_selection',scope_key:scope,report:{
+         mode:'draft_selection',scope_key:scope,source_refresh:true,total:2,updated:2,ready_to_retry:1,needs_input:1,excluded:0,failed:0,
+     rows:[{draft_id:1,status:'ready_to_retry',version:2},{draft_id:2,status:'needs_input',version:2}]}});
+   return response({success:true,editor:after});
+ };
+ await state.confirmSourceRefresh();
+ assert.equal(calls.filter(call=>call.method==='POST').length,1);
+ assert.equal(calls.filter(call=>call.method==='GET').length,1,'refresh is followed by one exact editor readback');
+ const sent=new URLSearchParams(calls.find(call=>call.method==='POST').body);
+ assert.equal(sent.get('csrf_token'),'csrf');assert.equal(sent.get('refresh_source'),'1');assert.equal(sent.get('confirm_local'),'1');
+ assert.deepEqual(sent.getAll('selected_draft_id'),['1','2']);
+ for(const id of [1,2]){
+   assert.equal(sent.get(`row_${id}_draft_version`),'1');
+   assert.equal(sent.get(`row_${id}_imported_product_id`),String(100+id));
+ }
+ assert.equal(sent.getAll('selected_draft_id').includes('3'),false);
+ assert.equal(sent.has('row_1_description'),false,'pending form edits are not submitted as part of facts refresh');
+ assert.equal(state.uncertain,false,'matching receipt plus current readback resolves the outcome');
+ assert.equal(state.rows[0].description,'Unsaved seller edit','readback retains pending local form values');
+ assert.equal(state.rows[0].server.draft_version,2,'refreshed server version is shown through the ordinary conflict path');
+ assert.equal(state.rows[0].server.description,'Описание 1');
+ assert.equal(state.rows[2].source_refresh_available,false,'unselected fresh row is read back unchanged');
+ assert.equal(state.sourceRefreshResult.updated,2);assert.equal(focused,true,'verified refresh focuses its result receipt');
+ assert.equal(calls.filter(call=>call.method==='POST').length,1,'readback does not repeat the local action');
+
+ const jobEditor=editor();jobEditor.mode='source_prepare';jobEditor.job_uid='prepare-run';delete jobEditor.scope_key;
+ const jobConfig={...config,editor:jobEditor,urls:{...config.urls,read:'/job-read',apply:'/job-apply'}};
+ assert.equal(core.validEditor(jobEditor,jobConfig),true,'source_prepare rows carry the same explicit boolean eligibility');
+ const jobOptions=core.createOptions(jobConfig),jobState=jobOptions.data();
+ for(const [key,fn]of Object.entries(jobOptions.methods))jobState[key]=fn.bind(jobState);
+ for(const [key,fn]of Object.entries(jobOptions.computed))Object.defineProperty(jobState,key,{get:fn.bind(jobState)});
+ jobState.$nextTick=fn=>fn();jobState.$refs={modal:{showModal(){},close(){}}};
+ jobState.rows[0].selected=true;
+ let jobCalls=[];
+ transport=async(_url,options)=>{jobCalls.push(options.method||'GET');return response({success:true,report:{
+   mode:'draft_selection',source_refresh:true,total:1,updated:1,ready_to_retry:1,needs_input:0,excluded:0,failed:0,
+   rows:[{draft_id:1,status:'ready_to_retry',version:2}]}});};
+ assert.equal(jobState.openSourceRefresh(),true);
+ await jobState.confirmSourceRefresh();
+ assert.equal(jobState.uncertain,true,'wrong source_prepare report mode is an unconfirmed outcome');
+ assert.deepEqual(jobCalls,['POST'],'mismatched mode blocks success readback and automatic repeat');
+ console.log('native source refresh exact stale subset, local confirmation, readback and edit preservation: passed');
+})().catch(error=>{console.error(error);process.exitCode=1});
+"""
+    result=subprocess.run(['node','-e',script,str(source)],capture_output=True,text=True,timeout=15)
+    assert result.returncode==0,result.stdout+result.stderr
 
 
 def test_ozon_bulk_repair_template_compiles_with_flask_loader():

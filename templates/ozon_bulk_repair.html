@@ -53,6 +53,15 @@
         <p>Эти карточки остаются в точном выборе, но сейчас заняты проверенной отправкой или активной операцией.</p>
         <details><summary>Показать недоступные карточки</summary><ul><li v-for="item in blockedReviewItems" :key="item.draft_id"><strong>{{ item.title }}</strong> — {{ item.message }}</li></ul></details>
     </section>
+    <section v-if="sourceRefreshResult" ref="sourceRefreshReceipt" class="orb-receipt"
+             aria-label="Результат обновления исходных сведений" tabindex="-1"
+             data-source-facts-refresh-result>
+        <strong>Обработано черновиков: {{ sourceRefreshResult.total }}</strong>
+        <span>После проверки готовы: {{ sourceRefreshResult.ready_to_retry }}</span>
+        <span>Нужны данные: {{ sourceRefreshResult.needs_input }}</span>
+        <span v-if="sourceRefreshResult.failed">Не удалось обновить: {{ sourceRefreshResult.failed }}</span>
+        <p>Изменения останутся в Seller Hub. Проверьте обновлённые поля. Отправка на Ozon подтверждается отдельно.</p>
+    </section>
     <section v-if="report" ref="receipt" class="orb-receipt" aria-label="Результат сохранения"
              :tabindex="sourcePrepare || draftSelection ? -1 : null"
              :data-source-prepare-receipt="sourcePrepare ? '' : null"
@@ -125,11 +134,25 @@
         <div v-if="!visible.length" class="orb-empty"><h2>Нет карточек по этим условиям</h2><p>Измените поиск или состояние. Ваши правки других строк остаются в форме.</p><button type="button" class="sh-btn sh-btn--secondary" @click="query='';group='';state='';setFilters()">Сбросить фильтры</button></div>
     </section>
     <nav v-if="pages>1" class="orb-pagination" aria-label="Страницы исправления"><button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page<=1" @click="goPage(page-1)">Назад</button><span>{{ page }} из {{ pages }}</span><button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page>=pages" @click="goPage(page+1)">Далее</button></nav>
-    <footer v-if="selected.length" class="orb-toolbar"><div><strong>Выбрано {{ selected.length }}</strong><button type="button" class="orb-link" :disabled="busy" @click="clearSelection">Снять выбор</button></div><div class="orb-toolbar-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="locked" @click="openType(selected)">Тип товара</button><button type="button" class="sh-btn sh-btn--secondary" :disabled="locked" @click="openBulk">Заполнить поле</button><button type="button" class="sh-btn sh-btn--primary" :data-source-prepare-save="sourcePrepare ? '' : null" :data-draft-selection-save="draftSelection ? '' : null" :disabled="locked" @click="reviewSave">{{ busy ? 'Проверяем…' : sourcePrepare ? 'Сохранить черновики' : 'Проверить изменения' }}</button></div></footer>
+    <footer v-if="selected.length" class="orb-toolbar"><div><strong>Выбрано {{ selected.length }}</strong><button type="button" class="orb-link" :disabled="busy" @click="clearSelection">Снять выбор</button></div><div class="orb-toolbar-actions"><button v-if="(sourcePrepare || draftSelection) && sourceRefreshTargets.length" type="button" class="sh-btn sh-btn--secondary" data-source-facts-refresh :disabled="locked" @click="openSourceRefresh">Обновить из товаров ({{ sourceRefreshTargets.length }})</button><button type="button" class="sh-btn sh-btn--secondary" :disabled="locked" @click="openType(selected)">Тип товара</button><button type="button" class="sh-btn sh-btn--secondary" :disabled="locked" @click="openBulk">Заполнить поле</button><button type="button" class="sh-btn sh-btn--primary" :data-source-prepare-save="sourcePrepare ? '' : null" :data-draft-selection-save="draftSelection ? '' : null" :disabled="locked" @click="reviewSave">{{ busy ? 'Проверяем…' : sourcePrepare ? 'Сохранить черновики' : 'Проверить изменения' }}</button></div></footer>
     <dialog ref="modal" class="orb-dialog" aria-labelledby="orb-dialog-title" @cancel.prevent="close">
-        <div class="orb-dialog-head"><h2 id="orb-dialog-title">{{ dialog==='bulk' ? 'Заполнить поле' : dialog==='review' ? (draftSelection ? 'Проверка локальных изменений' : 'Сохранение черновиков') : dialog==='conflict' ? 'Сравнение изменений' : picker.kind==='type' ? 'Тип товара Ozon' : 'Значения справочника' }}</h2><button type="button" class="orb-close" :disabled="busy" aria-label="Закрыть диалог" @click="close">×</button></div>
+        <div class="orb-dialog-head"><h2 id="orb-dialog-title">{{ dialog==='bulk' ? 'Заполнить поле' : dialog==='review' ? (draftSelection ? 'Проверка локальных изменений' : 'Сохранение черновиков') : dialog==='source_refresh' ? 'Обновить исходные сведения' : dialog==='conflict' ? 'Сравнение изменений' : picker.kind==='type' ? 'Тип товара Ozon' : 'Значения справочника' }}</h2><button type="button" class="orb-close" :disabled="busy" aria-label="Закрыть диалог" @click="close">×</button></div>
         <p v-if="error" class="orb-inline-warning" role="alert">{{ error }}</p>
-        <template v-if="dialog==='bulk'">
+        <template v-if="dialog==='source_refresh'">
+            <section data-source-facts-refresh-dialog>
+                <p data-source-facts-refresh-count>Выбрано карточек с устаревшими исходными сведениями: {{ sourceRefreshReview.length }}.</p>
+                <p>Возьмём последние сохранённые данные товаров. Обновятся поля, которые всё ещё совпадают с прежними исходными значениями. Остальные правки сохранятся.</p>
+                <p>Отправка на Ozon подтверждается отдельно.</p>
+                <ul class="orb-review-list">
+                    <li v-for="item in sourceRefreshReview" :key="item.draft_id"><strong>{{ item.title }}</strong></li>
+                </ul>
+                <div class="orb-dialog-actions">
+                    <button type="button" class="sh-btn sh-btn--secondary" :disabled="busy" @click="close">Вернуться к форме</button>
+                    <button type="button" class="sh-btn sh-btn--primary" data-source-facts-refresh-confirm :disabled="locked" @click="confirmSourceRefresh">{{ busy ? 'Обновляем…' : 'Обновить черновики' }}</button>
+                </div>
+            </section>
+        </template>
+        <template v-else-if="dialog==='bulk'">
             <template v-if="!bulkPlan">
                 <label v-if="bulkAttributeChoices.length > 40" for="orb-bulk-field-query"><span class="orb-label">Найти характеристику</span><input id="orb-bulk-field-query" class="sh-input" type="search" maxlength="200" autocomplete="off" v-model="bulkFieldQuery" placeholder="Название поля"></label>
                 <label for="orb-bulk-field" class="orb-label">Поле</label><select id="orb-bulk-field" data-bulk-field-choice class="sh-input" v-model="bulkKey" @change="resetBulk">
@@ -246,5 +269,5 @@
 <script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}" defer></script>
 <script src="{{ url_for('static', filename='ozon-draft-editor.js') }}" defer></script>
 <script src="{{ url_for('static', filename='ozon-workspace-return.js', v='20261122-ozon-workspace-review-return-r57') }}" defer></script>
-<script src="{{ url_for('static', filename='ozon-bulk-repair-vue.js', v='20261123-ozon-source-review-r1') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-bulk-repair-vue.js', v='20261123-ozon-source-refresh-r1') }}" defer></script>
 {% endblock %}

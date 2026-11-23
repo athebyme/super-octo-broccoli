@@ -243,6 +243,8 @@
         const rows=value.groups.flatMap(g => g.rows);
         if (!rows.every(r => Number.isSafeInteger(r.draft_id) && r.draft_id>0 &&
             Number.isSafeInteger(r.draft_version) && r.draft_version>0 && Array.isArray(r.attributes))) return false;
+        if(['source_prepare','draft_selection'].includes(config.editor.mode) &&
+            !rows.every(r => typeof r.source_refresh_available === 'boolean')) return false;
         if(['source_prepare','draft_selection'].includes(config.editor.mode) && !rows.every(validSourceComparisons))return false;
         if (config.editor.mode==='source_prepare') {
             const expected=value.review_draft_ids,blocked=value.blocked_review_items,rowIds=rows.map(row=>row.draft_id);
@@ -302,13 +304,17 @@
             data() { return {rows:makeRows(config.editor),enabled:config.enabled,sourcePrepare,draftSelection,urls:config.urls,
                 reviewable:!!config.editor.review_draft_ids?.length,blockedReviewItems:config.editor.blocked_review_items || [],
                 blockedReviewCount:config.editor.blocked_review_items?.length || 0,busy:false,error:'',notice:'',
-                report:null,uncertain:false,sessionExpired:false,query:'',group:'',state:'',page:1,pageSize:15,dialog:'',
+                report:null,sourceRefreshReview:[],sourceRefreshResult:null,uncertain:false,sessionExpired:false,query:'',group:'',state:'',page:1,pageSize:15,dialog:'',
                 bulkKey:config.editor.bulk_fields.find(field=>!field.key.startsWith('attribute:'))?.key || 'description',
                 bulkFieldQuery:'',bulkValue:'',bulkValues:[],bulkMode:'value',bulkSource:null,bulkPlan:null,
                 fields:config.editor.bulk_fields,picker:{kind:'',rowId:null,fieldId:null,query:'',items:[],loading:false,error:'',more:false},
                 typeChoice:null,typeIds:[],rememberType:false,review:[],conflictId:null}; },
             computed:{
                 selected() { return this.rows.filter(r => r.selected); },
+                sourceRefreshTargets() {
+                    return (sourcePrepare || draftSelection) ? this.selected.filter(row =>
+                        row.source_refresh_available === true && !row.unavailable && !row.server) : [];
+                },
                 groups() { return [...new Map(this.rows.map(r => [r.group_id,{id:r.group_id,name:r.group_name}])).values()]; },
                 filtered() {
                     const term=this.query.trim().normalize('NFKC').toLocaleLowerCase('ru-RU');
@@ -584,7 +590,7 @@
                 clearSelection() { this.rows.forEach(r => {r.selected=false;});this.persist();this.selectionChanged(); },
                 selectRow(row) { if(row.unavailable)return;row.selected=!row.selected;this.persist();this.selectionChanged(); },
                 open(name) { trigger=global.document.activeElement;this.dialog=name;this.$nextTick(()=>this.$refs.modal.showModal()); },
-                close({restoreFocus=true}={}) { if(this.busy)return;this.cancelSearch();this.dialog='';this.$refs.modal.close();if(restoreFocus)trigger?.focus(); },
+                close({restoreFocus=true}={}) { if(this.busy)return;this.cancelSearch();if(this.dialog==='source_refresh')this.sourceRefreshReview=[];this.dialog='';this.$refs.modal.close();if(restoreFocus)trigger?.focus(); },
                 cancelSearch() { clearTimeout(searchTimer);searchRevision++;searchController?.abort();this.picker.loading=false; },
                 async request(url, options={}) {
                     let response;
@@ -667,6 +673,107 @@
                     }
                     this.bulkFieldQuery='';this.bulkPlan=null;this.bulkValue='';this.bulkValues=[];this.bulkMode='value';
                     this.syncBulkField();this.bulkSource=this.bulkSources[0]?.draft_id || null;this.error='';this.open('bulk');
+                },
+                openSourceRefresh() {
+                    if(this.locked || !(sourcePrepare || draftSelection))return false;
+                    const targets=this.sourceRefreshTargets;
+                    if(!targets.length)return false;
+                    this.error='';this.sourceRefreshResult=null;
+                    this.sourceRefreshReview=targets.map(row=>({
+                        draft_id:row.draft_id,
+                        draft_version:row.draft_version,
+                        imported_product_id:row.imported_product_id,
+                        title:row.title,
+                    }));
+                    this.open('source_refresh');
+                    return true;
+                },
+                async focusSourceRefreshReceipt(expectedFocus) {
+                    if(!alive || this.uncertain || !this.sourceRefreshResult)return false;
+                    await new Promise(resolve=>this.$nextTick(resolve));
+                    const receipt=this.$refs.sourceRefreshReceipt;
+                    const currentFocus=global.document.activeElement;
+                    if(!alive || this.uncertain || !receipt || receipt.isConnected===false ||
+                        currentFocus!==expectedFocus && currentFocus!==global.document.body)return false;
+                    receipt.focus({preventScroll:true});
+                    receipt.scrollIntoView({block:'start',behavior:'instant'});
+                    return true;
+                },
+                async confirmSourceRefresh() {
+                    if(this.locked || this.dialog!=='source_refresh' || !this.sourceRefreshReview.length)return;
+                    const targets=this.sourceRefreshReview.map(item=>({...item}));
+                    const ids=targets.map(item=>item.draft_id);
+                    const byId=new Map(this.rows.map(row=>[row.draft_id,row]));
+                    if(new Set(ids).size!==ids.length || targets.some(item=>{
+                        const row=byId.get(item.draft_id);
+                        return !row || !row.selected || row.source_refresh_available!==true ||
+                            row.server || row.unavailable || row.draft_version!==item.draft_version ||
+                            row.imported_product_id!==item.imported_product_id;
+                    })) {
+                        this.error='Выбор или состояние черновиков изменилось. Обновите список и проверьте его снова.';
+                        return;
+                    }
+                    const body=new URLSearchParams();
+                    body.append('csrf_token',config.csrf);
+                    body.append('refresh_source','1');
+                    body.append('confirm_local','1');
+                    for(const item of targets) {
+                        body.append('selected_draft_id',String(item.draft_id));
+                        body.append(`row_${item.draft_id}_draft_version`,String(item.draft_version));
+                        body.append(`row_${item.draft_id}_imported_product_id`,String(item.imported_product_id));
+                    }
+                    this.busy=true;this.error='';this.notice='';this.report=null;this.sourceRefreshResult=null;
+                    this.uncertain=true;this.persist();
+                    const control=new AbortController(),timeout=setTimeout(()=>control.abort(),45000);
+                    let accepted=null,focusAfterClose=null;
+                    try {
+                        const data=await this.request(this.urls.apply,{method:'POST',body,signal:control.signal});
+                        const report=data.report;
+                        const reportIds=Array.isArray(report?.rows) ? report.rows.map(row=>row?.draft_id) : [];
+                        const reportRowsValid=Array.isArray(report?.rows) && report.rows.length===ids.length &&
+                            new Set(reportIds).size===ids.length && reportIds.every(id=>ids.includes(id)) &&
+                            report.rows.every(row=>row && ['failed','needs_input','ready_to_retry'].includes(row.status) &&
+                                (row.status==='failed' || Number.isSafeInteger(row.version) && row.version>0) &&
+                                (row.version===undefined || Number.isSafeInteger(row.version) && row.version>0));
+                        const rowCount=status=>Array.isArray(report?.rows)
+                            ? report.rows.filter(row=>row?.status===status).length : -1;
+                        const countersValid=['updated','ready_to_retry','needs_input','failed','excluded'].every(key=>
+                            Number.isSafeInteger(report?.[key]) && report[key]>=0) &&
+                            report.updated<=ids.length &&
+                            report.ready_to_retry===rowCount('ready_to_retry') &&
+                            report.needs_input===rowCount('needs_input') &&
+                            report.failed===rowCount('failed') && report.excluded===0 &&
+                            report.ready_to_retry+report.needs_input+report.failed===ids.length;
+                        const expectedMode=sourcePrepare?'source_prepare':'draft_selection';
+                        if(report?.source_refresh!==true || report.mode!==expectedMode ||
+                            report.total!==ids.length || !reportRowsValid || !countersValid)
+                            throw new Error('Ответ не подтвердил точный набор обновлённых исходных сведений. Сначала сверьте состояние.');
+                        if(draftSelection && (data.mode!=='draft_selection' || data.scope_key!==config.editor.scope_key ||
+                            report.scope_key!==config.editor.scope_key))
+                            throw new Error('Ответ обновления не совпал с выбранным набором. Сначала сверьте состояние.');
+                        accepted=report;
+                        this.sourceRefreshResult=report;
+                    } catch(error) {
+                        if(alive){
+                            this.error=error.name==='AbortError'?'Ответ не получен вовремя. Сначала сверьте состояние.':error.message;
+                            if([401,403].includes(error.status)){this.uncertain=false;this.persist();}
+                        }
+                    } finally {
+                        clearTimeout(timeout);
+                        if(alive){
+                            this.busy=false;
+                            this.close({restoreFocus:!accepted});
+                            if(accepted)focusAfterClose=global.document.activeElement;
+                        }
+                    }
+                    if(accepted && alive){
+                        // A successful refresh must go through the ordinary version-conflict merge.
+                        // Returning a refreshed success row directly would discard pending local edits.
+                        const failureRows=accepted.rows.filter(row=>row.status==='failed');
+                        const confirmed=await this.reload({report:{rows:failureRows}});
+                        if(confirmed && !this.uncertain && global.document.activeElement===focusAfterClose)
+                            await this.focusSourceRefreshReceipt(focusAfterClose);
+                    }
                 },
                 resetBulk() {
                     if(this.picker.kind==='bulkDictionary') {
@@ -792,7 +899,7 @@
                     const sourcePrepare=this.sourcePrepare,draftSelection=this.draftSelection;
                     const focusLocalReceipt=sourcePrepare || draftSelection;
                     let accepted=null,focusAfterClose=null;
-                    this.busy=true;this.error='';this.report=null;
+                    this.busy=true;this.error='';this.report=null;this.sourceRefreshResult=null;
                     const control=new AbortController(),timeout=setTimeout(()=>control.abort(),45000);
                     try{
                         const sourceReviewJSON=sourcePrepare || draftSelection ? await this.sourceReviewJSON(rows) : {};
