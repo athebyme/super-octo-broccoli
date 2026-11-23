@@ -522,7 +522,6 @@ def exercise_marketplace_filters(browser, bridge, errors):
         page.on("pageerror", lambda error: errors.append(str(error)))
         open_products(page, title=MARKETPLACE_FILTER_ANCHOR_TITLE)
         assert page.evaluate("document.documentElement.dataset.theme") == theme
-        marks = page.locator(".mp-list article.mp-row [data-product-id]")
         assert_marketplace_filter(page, "all")
         source_search = "UX-R71-"
         scope_keys = {"marketplace", "marketplace_state"}
@@ -544,13 +543,32 @@ def exercise_marketplace_filters(browser, bridge, errors):
             ordered_ids = [row["id"] for row in payload["items"]]
             assert set(ordered_ids) == expected_ids and len(ordered_ids) == len(expected_ids)
             assert payload["pagination"]["total"] == len(expected_ids)
-            marks.first.wait_for()
-            page.wait_for_function("""ids => {
-                const app = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
-                const marks = document.querySelectorAll('.mp-list article.mp-row [data-product-id]');
-                return app && !app.loading && [...marks].map(box =>
-                    Number(box.dataset.productId)).join(',') === ids.join(',');
-            }""", arg=ordered_ids)
+            try:
+                page.wait_for_function("""ids => {
+                    const app = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                    const marks = document.querySelectorAll(
+                        '.mp-list article.mp-row input[type="checkbox"][data-product-id]'
+                    );
+                    return app && !app.loading && [...marks].map(box =>
+                        Number(box.dataset.productId)).join(',') === ids.join(',');
+                }""", arg=ordered_ids)
+            except Exception as error:
+                diagnostics = page.evaluate("""expected => {
+                    const app = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                    const marks = document.querySelectorAll(
+                        '.mp-list article.mp-row input[type="checkbox"][data-product-id]'
+                    );
+                    return {
+                        expectedIds: expected,
+                        checkboxIds: [...marks].map(box => Number(box.dataset.productId)),
+                        loading: app?.loading ?? null,
+                        filters: app ? {...app.filters} : null,
+                        activeTab: app?.activeTab ?? null,
+                    };
+                }""", ordered_ids)
+                raise AssertionError(
+                    f"{name} catalog checkboxes did not match feed rows: {diagnostics}"
+                ) from error
             assert_marketplace_filter(page, marketplace or "all")
             observed[name] = {"rows": len(ordered_ids), "matches": sorted(expected),
                               "query": {key: query[key] for key in query if key in scope_keys}}
@@ -574,7 +592,9 @@ def exercise_marketplace_filters(browser, bridge, errors):
             assert wb_button.evaluate(
                 "button => button === document.activeElement && button.matches(':focus-visible')",
             )
-            page.locator(f'[data-product-id="{ids["wb_active"]}"]').check()
+            page.locator(
+                f'.mp-list article.mp-row input[type="checkbox"][data-product-id="{ids["wb_active"]}"]',
+            ).check()
             apply_case("ozon_active", ["ozon_active"], lambda: click_marketplace("ozon"),
                        marketplace="ozon", state="active")
             assert selected_browser_state(page)["selected"] == [ids["wb_active"]]
