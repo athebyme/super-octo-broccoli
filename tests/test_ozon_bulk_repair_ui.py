@@ -209,7 +209,120 @@ const response=data=>({status:200,ok:true,redirected:false,json:async()=>({...da
     assert template.count('v-if="!draftSelection" class="orb-check"') == 2
     assert 'v-text="urls.catalog_return_label || \'К каталогу Ozon\'"' in template
     assert "filename='ozon-workspace-return.js', v='20261122-ozon-workspace-review-return-r57'" in template
-    assert "filename='ozon-bulk-repair-vue.js', v='20261122-ozon-workspace-review-return-r57'" in template
+    assert "filename='ozon-bulk-repair-vue.css', v='20261123-ozon-source-review-r1'" in template
+    assert "filename='ozon-bulk-repair-vue.js', v='20261123-ozon-source-review-r1'" in template
+
+
+def test_native_supplier_comparisons_use_exact_sets_and_bound_local_decisions():
+    source=Path(__file__).parents[1]/'static/ozon-bulk-repair-vue.js'
+    script=r"""
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const {webcrypto,createHash}=require('node:crypto');
+const scope='a'.repeat(64),saved=new Map(),active={focus(){}};
+const colors=[{value:'Розовый',dictionary_value_id:'1001'},{value:'Белый',dictionary_value_id:'1002'}];
+const comparison=(id,sourceField,status,literal_labels,resolved_values,evidence_receipt,reason=null,reason_label=null)=>({
+  attribute_id:id,complex_id:'0',source_field:sourceField,status,reason,reason_label,literal_labels,resolved_values,evidence_receipt});
+const field=(id,name,value,ids,required=false,max_values=2)=>({external_id:id,name,value,dictionary_value_ids:ids,dictionary_value_id:'',
+  editable:true,source_managed:true,required,dictionary:true,dictionary_fresh:true,data_type:'String',is_collection:true,max_values});
+const makeEditor=()=>({mode:'draft_selection',scope_key:scope,job_uid:null,account_id:1,account_label:'Магазин один',
+  groups:[{id:'g',source_category:'Категория',rows:[{draft_id:196,draft_version:3,imported_product_id:801,offer_id:'offer-196',title:'Пальто',
+    action:'ИСПРАВИТЬ',product_type_id:4,product_type_name:'Одежда',price_rub:'100',description:'Описание',package_width_mm:'',package_height_mm:'',
+    package_depth_mm:'',package_weight_g:'',attributes:[field('10096','Цвет товара','Синий\nЗелёный',['5001','5002']),
+      field('4389','Страна-изготовитель','Россия',['643'],false)],cleanup_candidates:[],schema_cleanup:false,status:'needs_input',validation_errors:[],
+    type_change_impact:{attributes:0,complex_groups:0,removals:0},source_comparisons:{
+      '10096':comparison('10096','colors','confirmed',['Розовый','Белый'],colors,'signed-colors'),
+      '4389':comparison('4389','country','unknown',[],[],null,'source_field_not_observed','Поставщик явно не передавал это поле')}}]}],
+  review_draft_ids:[196],blocked_review_items:[],bulk_fields:[{key:'price_rub',label:'Цена продавца'}]});
+const doc=makeEditor(),config={editor:doc,enabled:true,csrf:'csrf',urls:{read:'/read',apply:'/apply',types:'/types',dictionaries:'/dict/'}};
+const window={crypto:webcrypto,ozonDraftEditor:{fieldComponent:{},photoComponent:{}},document:{activeElement:active,getElementById(){return null}},
+  location:{href:'https://app.test/repair?account_id=1&draft_ids=196',origin:'https://app.test',pathname:'/repair',search:'?account_id=1&draft_ids=196'},
+  history:{replaceState(){}},addEventListener(){},removeEventListener(){},sessionStorage:{setItem(k,v){saved.set(k,v)},getItem(k){return saved.get(k)}}};
+const context={window,URL,URLSearchParams,TextEncoder,TextDecoder,AbortController,setTimeout,clearTimeout,fetch:async()=>{throw Error('Unexpected fetch')}};
+vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),context);
+const core=window.ozonBulkRepair,options=core.createOptions(config),state=options.data();
+for(const [key,fn] of Object.entries(options.methods))state[key]=fn.bind(state);
+for(const [key,fn] of Object.entries(options.computed))Object.defineProperty(state,key,{get:()=>fn.call(state)});
+state.$nextTick=fn=>fn();state.$refs={modal:{showModal(){},close(){}},error:{focus(){}}};
+;(async()=>{
+assert.equal(core.validEditor(doc,config),true,'native DTO preserves exact collection source comparisons');
+assert.equal(core.definition(state.rows[0].attributes[0]).required,false,'optional source field stays optional in its editor');
+assert.equal(state.sourceComparisonsFor(196).length,0,'unchanged fields do not add comparison rows');
+const row=state.rows[0],color=row.attributes.find(item=>item.external_id==='10096'),country=row.attributes.find(item=>item.external_id==='4389');
+state.review=[{id:196,title:row.title,action:'ИСПРАВИТЬ',changes:[]}];
+state.changeField(row,color,[{value:'Белый',dictionary_value_id:'1002'},{value:'Розовый',dictionary_value_id:'1001'}]);
+state.changeField(row,country,[{value:'Китай',dictionary_value_id:'156'}]);
+let comparisons=state.sourceComparisonsFor(196);
+assert.equal(comparisons.map(item=>item.attribute_id).join(','),'10096,4389','only the two changed target fields render');
+assert.equal(state.sourceDecisionRequired(196,comparisons[0]),false,'an exact resolved collection set matches regardless of order');
+assert.equal(state.sourceEvidenceStatusLabel(comparisons[1]),'Нет подтверждённых данных','missing source data is explicit');
+assert.equal(state.sourceDecisionRequired(196,comparisons[1]),false,'unknown evidence adds no acknowledgement');
+assert.equal(state.sourceCurrentLabel(196,comparisons[0]),'Синий, Зелёный');
+assert.equal(state.sourceProposedLabel(196,comparisons[0]),'Белый, Розовый');
+assert.equal(state.sourceHasDictionaryIds(196,comparisons[0]),true,'all exact IDs remain available in the details toggle');
+assert.equal(state.sourceDecisionsResolved,true,'matching and unknown values need no extra decision');
+assert.equal(state.genericReviewItems.length,0,'rows with only source comparisons do not repeat their product headings below');
+row.description='Новое описание';state.review[0].changes=state.changes(row);
+assert.equal(state.genericReviewItems.length,1,'remaining non-source edits stay in the generic review');
+assert.equal(state.genericReviewHasHeading,true,'remaining edits receive a short contextual heading');
+let json=await state.sourceReviewJSON([row]);
+let entries=JSON.parse(json[196]);
+assert.equal(entries['10096'].ack,false,'a changed source-equal proposal carries evidence without an acknowledgement');
+assert.equal(entries['4389'],undefined,'unknown evidence has no signed decision entry');
+const matchedCanonical='[{"dictionary_value_id":"","value":"Белый"},{"dictionary_value_id":"","value":"Розовый"}]';
+assert.equal(entries['10096'].proposal_sha256,createHash('sha256').update(matchedCanonical,'utf8').digest('hex'));
+let body=core.serialize([row],'csrf',false,true,json);
+assert.equal(body.get('row_196_attribute_10096'),'Белый\nРозовый');
+assert.equal(body.get('row_196_attribute_value_id_10096'),'','multi-value transport has no per-cell IDs');
+assert.equal(JSON.parse(body.get('row_196_source_review_json'))['10096'].ack,false);
+
+const conflictDoc=makeEditor(),conflictConfig={...config,editor:conflictDoc},conflictOptions=core.createOptions(conflictConfig),conflict=conflictOptions.data();
+for(const [key,fn] of Object.entries(conflictOptions.methods))conflict[key]=fn.bind(conflict);
+for(const [key,fn] of Object.entries(conflictOptions.computed))Object.defineProperty(conflict,key,{get:()=>fn.call(conflict)});
+conflict.$nextTick=fn=>fn();conflict.$refs={modal:{showModal(){},close(){}},error:{focus(){}}};
+const conflictRow=conflict.rows[0],conflictField=conflictRow.attributes[0],conflictComparison=conflict.sourceComparisonsFor(196)[0] || conflictRow.source_comparisons['10096'];
+conflict.review=[{id:196,title:conflictRow.title,action:'ИСПРАВИТЬ',changes:[]}];
+conflict.changeField(conflictRow,conflictField,[{value:'Жёлтый',dictionary_value_id:'3001'},{value:'Оранжевый',dictionary_value_id:'3002'}]);
+assert.equal(conflict.sourceDecisionRequired(196,conflictComparison),true,'a changed value set differing from confirmed source needs an individual decision');
+conflict.review=[{id:196,title:conflictRow.title,action:'ИСПРАВИТЬ',changes:conflict.changes(conflictRow)}];
+assert.equal(conflict.genericReviewItems.length,0,'source-only conflict detail is not duplicated below');
+assert.equal(conflict.sourceDecisionsResolved,false);
+conflict.setSourceDecision(196,conflictComparison,'acknowledge');
+assert.equal(conflict.sourceDecisionState(196,conflictComparison),'acknowledged');
+assert.equal(conflict.sourceDecisionsResolved,true);
+json=await conflict.sourceReviewJSON([conflictRow]);entries=JSON.parse(json[196]);
+assert.equal(entries['10096'].ack,true);
+const conflictCanonical='[{"dictionary_value_id":"","value":"Жёлтый"},{"dictionary_value_id":"","value":"Оранжевый"}]';
+assert.equal(entries['10096'].proposal_sha256,createHash('sha256').update(conflictCanonical,'utf8').digest('hex'));
+conflict.changeField(conflictRow,conflictField,[{value:'Чёрный',dictionary_value_id:'4001'},{value:'Белый',dictionary_value_id:'1002'}]);
+assert.equal(conflict.sourceDecisionState(196,conflictComparison),'unresolved','editing the proposal clears its old acknowledgement');
+
+const excludedDoc=makeEditor(),excludedOptions=core.createOptions({...config,editor:excludedDoc}),excluded=excludedOptions.data();
+for(const [key,fn] of Object.entries(excludedOptions.methods))excluded[key]=fn.bind(excluded);
+for(const [key,fn] of Object.entries(excludedOptions.computed))Object.defineProperty(excluded,key,{get:()=>fn.call(excluded)});
+excluded.$nextTick=fn=>fn();excluded.$refs={modal:{showModal(){},close(){}},error:{focus(){}}};
+const excludedRow=excluded.rows[0],excludedField=excludedRow.attributes[0],excludedComparison=excludedRow.source_comparisons['10096'];
+excluded.changeField(excludedRow,excludedField,[{value:'Жёлтый',dictionary_value_id:'3001'},{value:'Оранжевый',dictionary_value_id:'3002'}]);
+excludedRow.description='Новое описание';excluded.review=[{id:196,title:excludedRow.title,action:'ИСПРАВИТЬ',changes:excluded.changes(excludedRow)}];
+excluded.setSourceDecision(196,excludedComparison,'exclude');
+assert.equal(JSON.stringify(excludedField.values),JSON.stringify([{value:'Синий',dictionary_value_id:'5001'},{value:'Зелёный',dictionary_value_id:'5002'}]));
+assert.equal(excluded.sourceDecisionState(196,excludedComparison),'excluded');
+assert.equal(excluded.genericReviewItems.length,1,'other row edits remain visible when one source field is excluded');
+assert.equal(excluded.genericReviewHasHeading,true);
+json=await excluded.sourceReviewJSON([excludedRow]);body=core.serialize([excludedRow],'csrf',false,true,json);
+assert.equal(body.has('row_196_attribute_10096'),false,'excluded source field is omitted from POST');
+assert.equal(body.has('row_196_attribute_value_id_10096'),false,'excluded source identity is omitted from POST');
+assert.equal(body.has('row_196_source_review_json'),false,'exclusion does not send an acknowledgement');
+assert.equal(body.get('row_196_description'),'Новое описание','other local edits remain in the same save');
+console.log('supplier comparison scope, exact collections, evidence decisions, hashes and exclusions: passed');
+})().catch(error=>{console.error(error);process.exitCode=1});
+"""
+    result=subprocess.run(['node','-e',script,str(source)],capture_output=True,text=True,timeout=15)
+    assert result.returncode==0,result.stdout+result.stderr
+    template=(Path(__file__).parents[1]/'templates/ozon_bulk_repair.html').read_text()
+    for hook in ('data-supplier-source-review','data-supplier-source-row','data-supplier-current',
+                 'data-supplier-source','data-supplier-proposed','data-supplier-conflict-ack',
+                 'data-supplier-source-exclude','data-supplier-source-save'):
+        assert hook in template
 
 
 def test_ozon_bulk_repair_template_compiles_with_flask_loader():

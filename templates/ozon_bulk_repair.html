@@ -3,7 +3,7 @@
 {% block title %}{{ 'Изменение черновиков Ozon' if editor.mode == 'draft_selection' else 'Исправление карточек Ozon' }} — Seller Hub{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-editor.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='ozon-bulk-repair-vue.css', v='20261122-ozon-mixed-bulk-mobile-r49') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-bulk-repair-vue.css', v='20261123-ozon-source-review-r1') }}">
 {% endblock %}
 {% block content %}
 <script id="orb-bootstrap" type="application/json">{{ {
@@ -181,8 +181,57 @@
             <p v-if="sourcePrepare">Будут сохранены в Seller Hub <strong>{{ review.length }}</strong> черновиков. Отправка в Ozon потребует отдельной проверки версий.</p>
             <p v-else-if="draftSelection">Будут сохранены в Seller Hub <strong>{{ review.length }}</strong> черновиков. Эта проверка и сохранение не отправляют карточки в Ozon.</p>
             <p v-else>Будут сохранены и проверены <strong>{{ review.length }}</strong> карточек. Публикация в Ozon выполняется отдельным действием.</p>
-            <ul class="orb-review-list"><li v-for="item in review" :key="item.id"><strong>{{ item.title }}</strong><p v-if="item.action==='ИСКЛЮЧИТЬ'">Исключить только из повторов этой загрузки. Товар и черновик сохранятся; остальные правки строки не записываются.</p><template v-else><p v-if="item.typeChanged" class="orb-inline-warning">Смена типа заменит {{ item.impact.attributes }} характеристик и очистит {{ item.impact.complex_groups }} составных групп.</p><p v-if="!item.changes.length" class="orb-help">Повторная локальная проверка сохранённых значений.</p><div v-for="change in item.changes" :key="change.key" class="orb-review-field"><strong>{{ change.label }}</strong><div class="orb-diff"><span><small>Было</small>{{ change.beforeLabel }}<template v-if="change.showDictionaryIdentities"><small v-for="identity in change.beforeIdentities" :key="identity">{{ identity }}</small></template></span><span><small>Будет</small>{{ change.afterLabel }}<template v-if="change.showDictionaryIdentities"><small v-for="identity in change.afterIdentities" :key="identity">{{ identity }}</small></template></span></div><p v-if="change.after==='' || Array.isArray(change.after) && !change.after.length" class="orb-help">Пустое значение в массовой форме не удаляет сохранённые данные.</p></div></template></li></ul>
-            <div class="orb-dialog-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="busy" @click="close">Вернуться к форме</button><button type="button" class="sh-btn sh-btn--primary" :data-source-prepare-save="sourcePrepare ? '' : null" :data-draft-selection-save="draftSelection ? '' : null" :disabled="locked" @click="save">{{ sourcePrepare ? 'Сохранить черновики' : draftSelection ? 'Сохранить локально' : 'Сохранить и проверить' }}</button></div>
+            <section v-if="sourceReviewAvailable" class="orb-source-review" data-supplier-source-review aria-label="Сверка с поставщиком">
+                <header class="orb-source-review-head"><h3>Сверка с поставщиком</h3><p>Для отличающегося предложения подтвердите изменение или исключите это поле.</p></header>
+                <div class="orb-source-products">
+                    <template v-for="item in review" :key="item.id">
+                        <article v-if="sourceComparisonsFor(item.id).length" class="orb-source-product">
+                            <h4>{{ item.title }}</h4>
+                            <div class="orb-source-comparisons">
+                                <section v-for="comparison in sourceComparisonsFor(item.id)" :key="comparison.attribute_id"
+                                         class="orb-source-comparison"
+                                         :class="{'is-conflict':sourceDecisionRequired(item.id,comparison), 'is-excluded':sourceDecisionState(item.id,comparison)==='excluded'}"
+                                         data-supplier-source-row :data-product-id="item.id" :data-field="comparison.attribute_id"
+                                         :data-evidence-state="comparison.status" :data-decision="sourceDecisionState(item.id,comparison)">
+                                    <div class="orb-source-comparison-title"><strong>{{ sourceFieldLabel(item.id,comparison) }}</strong><span>{{ sourceEvidenceStatusLabel(comparison) }}</span></div>
+                                    <dl class="orb-source-facts">
+                                        <div data-supplier-current><dt>Сейчас</dt><dd>{{ sourceCurrentLabel(item.id,comparison) }}<small v-if="sourceShouldShowIds(item.id,comparison)" v-for="identity in sourceCurrentIdentities(item.id,comparison)" :key="identity">{{ identity }}</small></dd></div>
+                                        <div data-supplier-source><dt>Поставщик</dt><dd v-if="comparison.status==='confirmed' && comparison.literal_labels?.length">{{ sourceValuesLabel(comparison.literal_labels) }}</dd><dd v-else>Нет подтверждённых исходных данных</dd><small v-if="comparison.reason_label">{{ comparison.reason_label }}</small></div>
+                                        <div data-supplier-proposed><dt>Предложено</dt><dd>{{ sourceProposedLabel(item.id,comparison) }}<small v-if="sourceShouldShowIds(item.id,comparison)" v-for="identity in sourceProposedIdentities(item.id,comparison)" :key="identity">{{ identity }}</small></dd><small v-if="sourceProposedIsBlank(item.id,comparison)">Пустое значение не удаляет сохранённые данные.</small><small v-if="sourceDecisionState(item.id,comparison)==='excluded'">Это поле не сохранится. Останется текущее значение.</small></div>
+                                    </dl>
+                                    <details v-if="sourceHasDictionaryIds(item.id,comparison)" class="orb-source-ids"><summary>Показать идентификаторы значений</summary><dl><div v-if="sourceCurrentIdentities(item.id,comparison).length"><dt>Сейчас</dt><dd><span v-for="identity in sourceCurrentIdentities(item.id,comparison)" :key="identity">{{ identity }}</span></dd></div><div v-if="sourceResolvedIdentities(comparison).length"><dt>Сопоставлено поставщику</dt><dd><span v-for="identity in sourceResolvedIdentities(comparison)" :key="identity">{{ identity }}</span></dd></div><div v-if="sourceProposedIdentities(item.id,comparison).length"><dt>Предложено</dt><dd><span v-for="identity in sourceProposedIdentities(item.id,comparison)" :key="identity">{{ identity }}</span></dd></div></dl></details>
+                                    <fieldset v-if="sourceDecisionRequired(item.id,comparison)" class="orb-source-decisions">
+                                        <legend>Выберите действие для этого поля.</legend>
+                                        <label><input type="radio" :name="'supplier-decision-'+item.id+'-'+comparison.attribute_id" value="acknowledge" :checked="sourceDecisionState(item.id,comparison)==='acknowledged'" :disabled="locked || !comparison.evidence_receipt" :aria-label="'Подтвердить предложенные значения для '+item.title+', '+sourceFieldLabel(item.id,comparison)" :data-supplier-conflict-ack="comparison.attribute_id" @change="setSourceDecision(item.id,comparison,'acknowledge')"><span>Проверил и хочу сохранить предложенные значения</span></label>
+                                        <label><input type="radio" :name="'supplier-decision-'+item.id+'-'+comparison.attribute_id" value="exclude" :checked="sourceDecisionState(item.id,comparison)==='excluded'" :disabled="locked" :aria-label="'Не менять '+sourceFieldLabel(item.id,comparison)+' для '+item.title" :data-supplier-source-exclude="comparison.attribute_id" @change="setSourceDecision(item.id,comparison,'exclude')"><span>Не менять это поле</span></label>
+                                    </fieldset>
+                                </section>
+                            </div>
+                        </article>
+                    </template>
+                </div>
+            </section>
+            <h3 v-if="genericReviewHasHeading" class="orb-other-changes-heading">Другие изменения</h3>
+            <ul v-if="genericReviewItems.length" class="orb-review-list">
+                <li v-for="item in genericReviewItems" :key="item.id">
+                    <strong>{{ item.title }}</strong>
+                    <p v-if="item.action==='ИСКЛЮЧИТЬ'">Исключить только из повторов этой загрузки. Товар и черновик сохранятся; остальные правки строки не записываются.</p>
+                    <template v-else>
+                        <p v-if="item.typeChanged" class="orb-inline-warning">Смена типа заменит {{ item.impact.attributes }} характеристик и очистит {{ item.impact.complex_groups }} составных групп.</p>
+                        <p v-if="!visibleReviewChanges(item).length && !sourceComparisonsFor(item.id).length" class="orb-help">{{ item.changes.length ? 'Изменённое поле исключено из сохранения.' : 'Повторная локальная проверка сохранённых значений.' }}</p>
+                        <div v-for="change in visibleReviewChanges(item)" :key="change.key" class="orb-review-field">
+                            <strong>{{ change.label }}</strong>
+                            <div class="orb-diff">
+                                <span><small>Было</small>{{ change.beforeLabel }}<template v-if="change.showDictionaryIdentities"><small v-for="identity in change.beforeIdentities" :key="identity">{{ identity }}</small></template></span>
+                                <span><small>Будет</small>{{ change.afterLabel }}<template v-if="change.showDictionaryIdentities"><small v-for="identity in change.afterIdentities" :key="identity">{{ identity }}</small></template></span>
+                            </div>
+                            <p v-if="change.after==='' || Array.isArray(change.after) && !change.after.length" class="orb-help">Пустое значение в массовой форме не удаляет сохранённые данные.</p>
+                        </div>
+                    </template>
+                </li>
+            </ul>
+            <p v-if="sourceReviewAvailable && !sourceDecisionsResolved" class="orb-source-save-note" role="status">Для каждого отличающегося предложения выберите действие выше. Остальные изменения сохранятся отдельно.</p>
+            <div class="orb-dialog-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="busy" @click="close">Вернуться к форме</button><button type="button" class="sh-btn sh-btn--primary" :data-source-prepare-save="sourcePrepare ? '' : null" :data-draft-selection-save="draftSelection ? '' : null" :data-supplier-source-save="sourceReviewAvailable ? '' : null" :disabled="locked || !sourceDecisionsResolved" @click="save">{{ sourcePrepare ? 'Сохранить черновики' : draftSelection ? 'Сохранить локально' : 'Сохранить и проверить' }}</button></div>
         </template>
         <template v-else-if="dialog==='conflict' && conflictRow?.server">
             <p><strong>{{ conflictRow.title }}</strong></p><p>Сравните ваши правки с текущей версией. Поля, которые вы не меняли, при переносе берутся из текущей версии.</p>
@@ -197,5 +246,5 @@
 <script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}" defer></script>
 <script src="{{ url_for('static', filename='ozon-draft-editor.js') }}" defer></script>
 <script src="{{ url_for('static', filename='ozon-workspace-return.js', v='20261122-ozon-workspace-review-return-r57') }}" defer></script>
-<script src="{{ url_for('static', filename='ozon-bulk-repair-vue.js', v='20261122-ozon-workspace-review-return-r57') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-bulk-repair-vue.js', v='20261123-ozon-source-review-r1') }}" defer></script>
 {% endblock %}
