@@ -23,7 +23,7 @@ OUT=Path('/artifacts');OUT.mkdir(exist_ok=True)
 ASSETS=Path(__file__).with_name('assets')
 report={'status':'running','checks':[],'layouts':[],'js_errors':[],'unexpected_http':[],
         'external':[],'provider_attempts':0,'provider_write_callbacks':0,
-        'posts':0,'rows':200,'supplier_source':None}
+        'synthetic_photo_responses':0,'posts':0,'rows':200,'supplier_source':None}
 temporary=tempfile.TemporaryDirectory(prefix='ozon-bulk-repair-')
 os.environ.update(DATABASE_URL='sqlite:///'+str(Path(temporary.name)/'app.sqlite'),SKIP_SCHEDULER='1',
     SECRET_KEY='synthetic-bulk-repair-ci',ENCRYPTION_KEY=base64.urlsafe_b64encode(b'0'*32).decode(),
@@ -40,7 +40,7 @@ from seller_platform import app
 from models import (db,BackgroundJob,MarketplaceAttributeDefinition,MarketplaceAttributeValue,
                     MarketplaceProductDraft,MarketplaceOperation)
 from tests.ozon_release.bulk_repair_seed import bulk_seed, SOURCE_REVIEW_CASES
-from tests.ozon_release.seed import USERNAME,PASSWORD
+from tests.ozon_release.seed import USERNAME,PASSWORD,PHOTO
 from services.ozon_bulk_upload import OzonBulkUploadService
 
 app.config.update(TESTING=True,WTF_CSRF_ENABLED=True,SESSION_COOKIE_SECURE=False)
@@ -211,6 +211,9 @@ def bridge(route):
         route.fulfill(response=result);return
     asset=manifest.get(request.url) or manifest.get(request.url.rstrip('/'))
     if asset:route.fulfill(body=(ASSETS/asset['file']).read_bytes(),content_type=asset['content_type']);return
+    if request.method in ('GET','HEAD') and request.url==PHOTO:
+        report['synthetic_photo_responses']+=1
+        route.fulfill(body=svg,content_type='image/svg+xml');return
     report['external'].append({'host':u.hostname,'path':u.path});route.abort()
 
 def passed(name):
@@ -699,7 +702,7 @@ try:
             if draft_id not in expected_source_changes:
                 assert after==before,(draft_id,before,after)
                 continue
-            assert after['version']==before['version']+1,(draft_id,before['version'],after['version'])
+            assert after['version']==before['version']+2,(draft_id,before['version'],after['version'])
             for key in ('product_type_id','content_json','complex_attributes_json',
                         'attribute_removals_json','media_json','dimensions_json',
                         'barcodes_json','commercial_json','offer_id'):
@@ -762,6 +765,7 @@ try:
             'multi_value_exact_set':True,
             'different_category_or_field_unchanged':True,
             'local_versions_exact':True,
+            'version_increment_per_selected_draft':2,
             'apply_requests':1,
             'provider_attempts':0,
             'provider_write_callbacks':0,
