@@ -592,9 +592,10 @@ try:
         choose_supplier_dictionary_value(198,'10096','Белый')
         clear_supplier_dictionary_values(198,'4389')
         choose_supplier_dictionary_value(198,'4389','Беларусь')
-        supplier_card(198).get_by_label('Описание',exact=True).fill(
+        source_review_description=(
             'Локальное описание сохранено при исключении конфликтного цвета.'
         )
+        supplier_card(198).get_by_label('Описание',exact=True).fill(source_review_description)
 
         source_before=snapshot_drafts()
         source_before_operations=None
@@ -607,6 +608,13 @@ try:
         assert review_dialog.locator('[data-supplier-source-row]').count()==5
         assert review_dialog.locator('[data-supplier-source-row][data-evidence-state="confirmed"]').count()==4
         assert review_dialog.locator('[data-supplier-source-row][data-evidence-state="unknown"]').count()==1
+        assert review_dialog.locator('details.orb-source-ids[open]').count()==0
+        page.screenshot(path=str(OUT/'bulk-source-review-desktop-opening.png'),animations='disabled')
+
+        generic_review_rows=review_dialog.locator('ul.orb-review-list > li')
+        for index in (196,197):
+            title=editor_rows[source_review_draft_ids[index]]['title']
+            assert generic_review_rows.filter(has_text=title).count()==0,(index,title)
 
         matched_color=supplier_review_row(196,'10096')
         assert matched_color.get_attribute('data-evidence-state')=='confirmed'
@@ -703,10 +711,17 @@ try:
                 assert after==before,(draft_id,before,after)
                 continue
             assert after['version']==before['version']+2,(draft_id,before['version'],after['version'])
-            for key in ('product_type_id','content_json','complex_attributes_json',
-                        'attribute_removals_json','media_json','dimensions_json',
-                        'barcodes_json','commercial_json','offer_id'):
+            for key in ('product_type_id','complex_attributes_json','attribute_removals_json',
+                        'media_json','dimensions_json','barcodes_json','commercial_json','offer_id'):
                 assert after[key]==before[key],(draft_id,key,before[key],after[key])
+            if draft_id==source_review_draft_ids[198]:
+                before_content=json.loads(before['content_json'])
+                expected_content={**before_content,'description':source_review_description}
+                assert json.loads(after['content_json'])==expected_content
+            else:
+                assert after['content_json']==before['content_json'],(
+                    draft_id,'content_json',before['content_json'],after['content_json'],
+                )
             before_attrs=json.loads(before['attributes_json'])
             after_attrs=json.loads(after['attributes_json'])
             unrelated_before=[item for item in before_attrs if item.get('attribute_id') not in ('10096','4389')]
@@ -738,9 +753,7 @@ try:
         assert saved_values(198,'4389')==[
             {'value':'Беларусь','dictionary_value_id':source_value_id(198,'4389','Беларусь')},
         ]
-        assert json.loads(source_after[source_review_draft_ids[198]]['content_json'])['description']==(
-            'Локальное описание сохранено при исключении конфликтного цвета.'
-        )
+        assert json.loads(source_after[source_review_draft_ids[198]]['content_json'])['description']==source_review_description
         assert supplier_source_apply_checks==[{
             'selected_exact':True,
             'ack_exact':True,
@@ -769,6 +782,8 @@ try:
             'apply_requests':1,
             'provider_attempts':0,
             'provider_write_callbacks':0,
+            'opening_screenshot':'bulk-source-review-desktop-opening.png',
+            'id_details_collapsed_at_open':True,
             'layouts':source_layouts,
         }
         passed('supplier_source_comparison_exact_local_save')
