@@ -150,6 +150,87 @@ CATALOG_REFRESH_COPY = {
 }
 
 
+def _catalog_utc_datetime(value):
+    """Parse a serialized UTC catalog timestamp for a safe human label."""
+    if not isinstance(value, str) or not value or len(value) > 64:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + '+00:00' if value.endswith('Z') else value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed
+
+
+def _supplier_catalog_schedule_view(payload, *, lookup_failed=False):
+    """Expose only bounded schedule state to the admin template."""
+    unavailable = {
+        'available': False,
+        'configured': False,
+        'enabled': False,
+        'interval_hours': 24,
+        'revision': '',
+        'status_label': 'Статус недоступен',
+        'next_due_at': None,
+        'next_due_label': None,
+    }
+    if lookup_failed:
+        return unavailable
+    if payload is None:
+        return {
+            **unavailable,
+            'available': True,
+            'status_label': 'Выключено',
+            'next_due_label': 'Настройки ещё не сохранены; расписание выключено.',
+        }
+    if not isinstance(payload, dict):
+        return unavailable
+
+    enabled = payload.get('enabled')
+    interval_hours = payload.get('interval_hours')
+    revision = payload.get('revision')
+    if (
+        type(enabled) is not bool
+        or type(interval_hours) is not int
+        or not 6 <= interval_hours <= 168
+        or type(revision) is not int
+        or revision < 1
+        or type(payload.get('supplier_id')) is not int
+        or payload.get('supplier_id') < 1
+        or type(payload.get('authorized_by_user_id')) is not int
+        or payload.get('authorized_by_user_id') < 1
+    ):
+        return unavailable
+
+    next_due_value = payload.get('next_due_at')
+    next_due_at = None
+    if next_due_value is not None:
+        next_due_at = _catalog_utc_datetime(next_due_value)
+        if next_due_at is None:
+            return unavailable
+    if enabled:
+        next_due_label = (
+            f'Следующая попытка: {next_due_at.strftime("%d.%m.%Y %H:%M UTC")}.'
+            if next_due_at is not None
+            else 'Следующая попытка пока не назначена.'
+        )
+    else:
+        next_due_label = 'Расписание выключено; автоматическая попытка не запланирована.'
+    return {
+        'available': True,
+        'configured': True,
+        'enabled': enabled,
+        'interval_hours': interval_hours,
+        'revision': str(revision),
+        'status_label': 'Включено' if enabled else 'Выключено',
+        'next_due_at': next_due_at.isoformat() if next_due_at else None,
+        'next_due_label': next_due_label,
+    }
+
+
 def _supplier_catalog_refresh_view(payload, *, lookup_failed=False):
     """Prepare safe, count-aware copy for the admin catalog page."""
     if lookup_failed:
@@ -160,7 +241,9 @@ def _supplier_catalog_refresh_view(payload, *, lookup_failed=False):
             'detail': CATALOG_REFRESH_COPY['unknown']['detail'],
             'show_counts': False, 'counts': {}, 'postprocess_errors': None,
             'price_status': None, 'price_label': None, 'price_conflicts': None,
-            'error_detail': None,
+            'error_detail': None, 'trigger_kind': 'unknown',
+            'trigger_label': 'Источник не подтверждён',
+            'due_at_label': None,
         }
     if payload is None:
         return {
@@ -170,7 +253,9 @@ def _supplier_catalog_refresh_view(payload, *, lookup_failed=False):
             'detail': CATALOG_REFRESH_COPY['idle']['detail'],
             'show_counts': False, 'counts': {}, 'postprocess_errors': None,
             'price_status': None, 'price_label': None, 'price_conflicts': None,
-            'error_detail': None,
+            'error_detail': None, 'trigger_kind': 'unknown',
+            'trigger_label': 'Источник не подтверждён',
+            'due_at_label': None,
         }
 
     status = payload.get('status')
@@ -212,6 +297,17 @@ def _supplier_catalog_refresh_view(payload, *, lookup_failed=False):
         CATALOG_REFRESH_ERROR_COPY.get(payload.get('error_code'))
         if status in {'failed', 'partial', 'interrupted'} else None
     )
+    source_kind = payload.get('trigger_kind')
+    if source_kind == 'scheduled':
+        trigger_kind = 'scheduled'
+        trigger_label = 'По расписанию'
+    elif source_kind == 'manual':
+        trigger_kind = 'manual'
+        trigger_label = 'Вручную'
+    else:
+        trigger_kind = 'unknown'
+        trigger_label = 'Источник не подтверждён'
+    due_at = _catalog_utc_datetime(payload.get('due_at'))
     return {
         'state': status,
         'run_id': payload.get('id') or '',
@@ -227,6 +323,12 @@ def _supplier_catalog_refresh_view(payload, *, lookup_failed=False):
         'price_label': CATALOG_REFRESH_PRICE_LABELS.get(price_status),
         'price_conflicts': price_conflicts,
         'error_detail': error_detail,
+        'trigger_kind': trigger_kind,
+        'trigger_label': trigger_label,
+        'due_at_label': (
+            due_at.strftime('%d.%m.%Y %H:%M UTC')
+            if trigger_label == 'По расписанию' and due_at is not None else None
+        ),
     }
 
 
@@ -2648,6 +2750,127 @@ def register_supplier_routes(app):
         )
 
     @app.route(
+        '/admin/suppliers/<int:supplier_id>/catalog-schedule',
+        methods=['POST'],
+    )
+    @login_required
+    @admin_required
+    def admin_supplier_catalog_schedule(supplier_id):
+        """Save explicit administrator consent for scheduled catalog reads."""
+        def field_value(name):
+            values = request.form.getlist(name)
+            return values[0] if len(values) == 1 else None
+
+        def canonical_decimal(value, *, max_digits):
+            if (
+                not isinstance(value, str)
+                or not value
+                or len(value) > max_digits
+                or not re.fullmatch(r'[0-9]+', value, flags=re.ASCII)
+            ):
+                return None
+            parsed = int(value)
+            return parsed if str(parsed) == value else None
+
+        enabled_value = field_value('catalog_schedule_enabled')
+        interval_value = field_value('catalog_schedule_interval_hours')
+        revision_value = field_value('catalog_schedule_revision')
+        interval_hours = canonical_decimal(interval_value, max_digits=3)
+        expected_revision = (
+            None if revision_value == ''
+            else canonical_decimal(revision_value, max_digits=19)
+        )
+        if (
+            enabled_value not in {'0', '1'}
+            or interval_hours is None
+            or not 6 <= interval_hours <= 168
+            or revision_value is None
+            or (revision_value != '' and (
+                expected_revision is None
+                or not 1 <= expected_revision <= MAX_SIGNED_SQLITE_ID
+            ))
+        ):
+            flash(
+                'Форма расписания недействительна или устарела. Обновите страницу и повторите.',
+                'warning',
+            )
+            return redirect(
+                url_for(
+                    'admin_supplier_products',
+                    supplier_id=supplier_id,
+                    _anchor='catalog-schedule',
+                ),
+                code=303,
+            )
+
+        try:
+            # Keep model and persistence imports lazy until startup migrations
+            # have installed both additive schedule tables.
+            from services.supplier_catalog_refresh import set_catalog_schedule
+
+            result = set_catalog_schedule(
+                supplier_id=supplier_id,
+                admin_user_id=current_user.id,
+                enabled=enabled_value == '1',
+                interval_hours=interval_hours,
+                expected_revision=expected_revision,
+                ip_address=request.remote_addr,
+            )
+        except Exception as exc:
+            error_code = getattr(exc, 'code', None)
+            if error_code == 'schedule_conflict':
+                message = 'Настройки расписания изменились. Обновите страницу и проверьте текущее состояние.'
+                category = 'warning'
+            elif error_code in {'supplier_not_found', 'invalid_supplier_id'}:
+                message = 'Поставщик не найден.'
+                category = 'danger'
+            elif error_code == 'admin_not_authorized':
+                message = 'Право администратора изменилось; расписание не сохранено.'
+                category = 'warning'
+            else:
+                logger.warning(
+                    'Supplier catalog schedule save failed (%s)',
+                    type(exc).__name__,
+                )
+                message = 'Не удалось сохранить расписание. Проверьте его состояние и повторите позже.'
+                category = 'danger'
+            flash(message, category)
+            return redirect(
+                url_for(
+                    'admin_supplier_products',
+                    supplier_id=supplier_id,
+                    _anchor='catalog-schedule',
+                ),
+                code=303,
+            )
+
+        if not isinstance(result, dict) or type(result.get('enabled')) is not bool:
+            flash(
+                'Не удалось подтвердить сохранение расписания. Обновите страницу и проверьте состояние.',
+                'warning',
+            )
+            return redirect(
+                url_for(
+                    'admin_supplier_products',
+                    supplier_id=supplier_id,
+                    _anchor='catalog-schedule',
+                ),
+                code=303,
+            )
+        if result.get('enabled'):
+            flash('Расписание полного каталога включено.', 'success')
+        else:
+            flash('Расписание полного каталога выключено.', 'success')
+        return redirect(
+            url_for(
+                'admin_supplier_products',
+                supplier_id=supplier_id,
+                _anchor='catalog-schedule',
+            ),
+            code=303,
+        )
+
+    @app.route(
         '/admin/suppliers/<int:supplier_id>/sync-status',
         methods=['GET'],
     )
@@ -2799,10 +3022,28 @@ def register_supplier_routes(app):
                 'Supplier catalog status page read failed (%s)',
                 type(exc).__name__,
             )
+            db.session.rollback()
             catalog_refresh_lookup_failed = True
         catalog_refresh_view = _supplier_catalog_refresh_view(
             catalog_refresh_current,
             lookup_failed=catalog_refresh_lookup_failed,
+        )
+        catalog_schedule = None
+        catalog_schedule_lookup_failed = False
+        try:
+            from services.supplier_catalog_refresh import get_catalog_schedule
+
+            catalog_schedule = get_catalog_schedule(supplier_id)
+        except Exception as exc:
+            logger.warning(
+                'Supplier catalog schedule page read failed (%s)',
+                type(exc).__name__,
+            )
+            db.session.rollback()
+            catalog_schedule_lookup_failed = True
+        catalog_schedule_view = _supplier_catalog_schedule_view(
+            catalog_schedule,
+            lookup_failed=catalog_schedule_lookup_failed,
         )
         catalog_refresh_latest_id = (
             catalog_refresh_latest.get('id')
@@ -2854,7 +3095,8 @@ def register_supplier_routes(app):
                                catalog_refresh_status_url=catalog_refresh_status_url,
                                catalog_refresh_copy=CATALOG_REFRESH_COPY,
                                catalog_refresh_price_labels=CATALOG_REFRESH_PRICE_LABELS,
-                               catalog_refresh_error_copy=CATALOG_REFRESH_ERROR_COPY)
+                               catalog_refresh_error_copy=CATALOG_REFRESH_ERROR_COPY,
+                               catalog_schedule_view=catalog_schedule_view)
 
     # -------------------------------------------------------------------
     # Детали / редактирование товара поставщика
