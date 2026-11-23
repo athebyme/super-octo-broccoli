@@ -15,6 +15,7 @@ import json
 import math
 import re
 import time
+import unicodedata
 from types import SimpleNamespace
 from typing import Any, Optional
 
@@ -52,6 +53,26 @@ MIN_SELECTED_CONFIDENCE = 0.95
 MIN_DECISION_SECONDS_REMAINING = 22.0
 COLOR_ATTRIBUTE_ID = "10096"
 COLOR_DICTIONARY_ID = "1494"
+# These modifiers can describe a shade, but cannot establish its hue by
+# themselves. Shortlist scoring removes them only; the full source literal is
+# still sent to Decisions, and exact/canonical dictionary resolution runs first.
+_COLOR_MODIFIER_PREFIXES = (
+    "темно", "светло", "ярко", "бледно", "насыщенно",
+    "пастельно", "приглушенно",
+)
+_COLOR_MODIFIER_STEMS = (
+    "темн", "светл", "ярк", "бледн", "насыщенн",
+    "пастельн", "приглушенн",
+)
+_COLOR_MODIFIER_WORDS = {
+    "light", "dark", "bright", "pale", "deep", "soft", "medium",
+}
+# These roots identify the observed hair/skin/complexion context, including
+# compound forms such as "светлокожий" and "смуглокожий".
+_COLOR_CONTEXT_STEMS = (
+    "волос", "кож", "комплекц", "смугл",
+    "hair", "skin", "complexion",
+)
 
 
 @dataclass(frozen=True)
@@ -704,10 +725,33 @@ class OzonPrepareDecisionsService:
 
     @staticmethod
     def _tokens(value: str) -> set[str]:
-        return {
-            token for token in re.findall(r"[a-zа-яё0-9]+", value.casefold())
-            if len(token) >= 3 and token not in {"цвет", "цвета", "color", "the"}
-        }
+        # Only shortlist scoring uses these tokens. Exact and canonical
+        # dictionary resolution has already run; the original literal remains
+        # in context and is the value supplied to Decisions.
+        normalized = (
+            unicodedata.normalize("NFKC", value)
+            .casefold()
+            .replace("ё", "е")
+        )
+        tokens = set()
+        for raw_token in re.findall(r"[a-zа-яё0-9]+", normalized):
+            token = raw_token
+            for prefix in _COLOR_MODIFIER_PREFIXES:
+                if token.startswith(prefix):
+                    # Keep the lexical remainder (e.g. "пурпурный" in
+                    # "темнопурпурный"), but never score the modifier itself.
+                    token = token[len(prefix):]
+                    break
+            if (
+                len(token) < 3
+                or token in {"цвет", "цвета", "color", "the"}
+                or token in _COLOR_MODIFIER_WORDS
+                or token.startswith(_COLOR_MODIFIER_STEMS)
+                or token.startswith(_COLOR_CONTEXT_STEMS)
+            ):
+                continue
+            tokens.add(token)
+        return tokens
 
     @staticmethod
     def _token_evidence_score(source_tokens: set[str], choice_tokens: set[str]) -> int:

@@ -3734,8 +3734,17 @@ class MarketplaceDraftService:
                      if re.fullmatch(pattern, token)), None)
 
     @classmethod
-    def _observed_color_mentions(cls, text: str) -> Tuple[List[str], List[str]]:
+    def _observed_color_mentions(
+        cls,
+        text: str,
+        *,
+        allow_complete_bordo_alias: bool = False,
+    ) -> Tuple[List[str], List[str]]:
         """Return exact color mentions and unresolved color-like tokens."""
+        # The provider-backed alias is only for the complete normalized
+        # literal; do not extend it to forms such as ``темно-бордо``.
+        if allow_complete_bordo_alias and text.strip() == "бордо":
+            return ["Бордовый"], []
         linkers = {
             "черно": "Черный",
             "бело": "Белый",
@@ -3775,6 +3784,44 @@ class MarketplaceDraftService:
         return mentions, unresolved
 
     @classmethod
+    def _color_observation_has_unresolved_joined_compound(
+        cls,
+        value: Any,
+    ) -> bool:
+        """Detect joined color parts when any real part has no known hue.
+
+        A recognized hue must not hide an unknown joined part (for example,
+        ``"розовый с сиреневым"``). Fully recognized parts remain available
+        as separate canonical colors, preserving known mixed-color behavior.
+        """
+        texts, _tokens = cls._color_observation_tokens(value)
+        for text in texts:
+            # Split only on whole-word Russian joiners and retain each
+            # original segment so internal hyphens still carry compound hue
+            # evidence (e.g. ``серо-голубой и белый``).
+            parts = [
+                part.strip()
+                for part in re.split(
+                    r"(?<![a-zа-яё])(?:с|со|и)(?![a-zа-яё])",
+                    text,
+                )
+                if re.search(r"[a-zа-яё]", part)
+            ]
+
+            # A leading/trailing connector has no two real parts and is not a
+            # joined compound. Empty segments between repeated connectors are
+            # ignored; each substantive side still has to identify a hue.
+            if len(parts) < 2:
+                continue
+            for part in parts:
+                mentions, unresolved = cls._observed_color_mentions(
+                    part,
+                )
+                if not mentions or unresolved:
+                    return True
+        return False
+
+    @classmethod
     def _color_observation_has_uncertain_language(cls, value: Any) -> bool:
         texts, tokens = cls._color_observation_tokens(value)
         if not tokens:
@@ -3799,14 +3846,20 @@ class MarketplaceDraftService:
     @classmethod
     def _color_observation_is_uncertain(cls, value: Any) -> bool:
         """Return true for negated, uncertain, mixed, or color-like invalid text."""
-        if cls._color_observation_has_uncertain_language(value):
+        if (
+            cls._color_observation_has_uncertain_language(value)
+            or cls._color_observation_has_unresolved_joined_compound(value)
+        ):
             return True
         texts, _tokens = cls._color_observation_tokens(value)
 
         mentions = []
         unresolved = []
         for text in texts:
-            text_mentions, text_unresolved = cls._observed_color_mentions(text)
+            text_mentions, text_unresolved = cls._observed_color_mentions(
+                text,
+                allow_complete_bordo_alias=True,
+            )
             mentions.extend(text_mentions)
             unresolved.extend(text_unresolved)
         matched = set(mentions)
@@ -3820,9 +3873,16 @@ class MarketplaceDraftService:
         _texts, tokens = cls._color_observation_tokens(value)
         if cls._color_observation_has_uncertain_language(value):
             return []
+        # Do not salvage another recognized value from the same source field
+        # when any literal is an unresolved joined compound.
+        if cls._color_observation_has_unresolved_joined_compound(value):
+            return []
         result = []
         for text in _texts:
-            mentions, _unresolved = cls._observed_color_mentions(text)
+            mentions, _unresolved = cls._observed_color_mentions(
+                text,
+                allow_complete_bordo_alias=True,
+            )
             for canonical in mentions:
                 if canonical not in result:
                     result.append(canonical)

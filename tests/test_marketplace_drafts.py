@@ -1237,10 +1237,44 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         self.assertFalse(uncertain("угольно-чёрный"))
         self.assertEqual(parser("нежно-розовый"), ["Розовый"])
         self.assertFalse(uncertain("нежно-розовый"))
+        self.assertEqual(parser("бордо"), ["Бордовый"])
+        self.assertFalse(uncertain("бордо"))
+        self.assertEqual(parser(" бордо "), ["Бордовый"])
+        self.assertFalse(uncertain(" бордо "))
+        self.assertEqual(
+            parser(["бордо", "белый"]),
+            ["Бордовый", "Белый"],
+        )
+        self.assertTrue(uncertain(["бордо", "белый"]))
+        self.assertEqual(parser("темно-бордо"), [])
         self.assertEqual(parser("чёрный с розовым"), ["Черный", "Розовый"])
         self.assertTrue(uncertain("чёрный с розовым"))
         self.assertEqual(parser("серо-голубой"), ["Серый", "Голубой"])
         self.assertTrue(uncertain("серо-голубой"))
+        self.assertEqual(
+            parser("серо-голубой и белый"),
+            ["Серый", "Голубой", "Белый"],
+        )
+        self.assertTrue(uncertain("серо-голубой и белый"))
+        self.assertEqual(
+            parser(["бордовый с чёрным", "белый"]),
+            [],
+        )
+        self.assertTrue(uncertain(["бордовый с чёрным", "белый"]))
+
+        for literal in (
+            "бордовый с черным",
+            "черный с бордовым",
+            "ярко-розовый с сиреневым",
+            "серебряный с сиреневым",
+            "фуксия с серебряным",
+            "серебряный с песочным",
+            "черный и бордовый",
+            "бордо со вставками",
+        ):
+            with self.subTest(literal=literal):
+                self.assertEqual(parser(literal), [])
+                self.assertTrue(uncertain(literal))
 
         for literal in (
             "не чёрный",
@@ -1258,7 +1292,10 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         self._dictionary_attribute(
             "10096",
             "Цвет товара",
-            ["Черный", "Серый", "Синий", "Розовый"],
+            [
+                "Черный", "Серый", "Синий", "Розовый", "Серебристый",
+                "Песочный", "Бордовый", "Темно-бордовый", "Голубой", "Белый",
+            ],
             is_collection=True,
             max_value_count=4,
         )
@@ -1282,6 +1319,12 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             "чёрный?",
             "серия",
             "синтетический",
+            "бордовый с черным",
+            "черный с бордовым",
+            "ярко-розовый с сиреневым",
+            "серебряный с сиреневым",
+            "фуксия с серебряным",
+            "серебряный с песочным",
         ):
             with self.subTest(literal=literal):
                 self.assertIsNone(mapped_colors(literal))
@@ -1295,12 +1338,110 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             [{"dictionary_value_id": "10096-4", "value": "Розовый"}],
         )
         self.assertEqual(
+            mapped_colors("бордо")["values"],
+            [{"dictionary_value_id": "10096-7", "value": "Бордовый"}],
+        )
+        self.assertEqual(
             mapped_colors("чёрный с розовым")["values"],
             [
                 {"dictionary_value_id": "10096-1", "value": "Черный"},
                 {"dictionary_value_id": "10096-4", "value": "Розовый"},
             ],
         )
+
+    def test_actual_draft_auto_mapping_skips_unresolved_joined_colors(self):
+        color_attribute = self._dictionary_attribute(
+            "10096",
+            "Цвет товара",
+            [
+                "Черный", "Серый", "Синий", "Розовый", "Серебристый",
+                "Песочный", "Бордовый", "Темно-бордовый", "Голубой", "Белый",
+            ],
+            is_collection=True,
+            max_value_count=4,
+        )
+        db.session.commit()
+
+        def create_for_color(index, literal):
+            product = self._product(external_id=f"joined-color-{index}")
+            source_colors = literal if isinstance(literal, list) else [literal]
+            snapshot = json.loads(product.original_data)
+            snapshot["colors"] = source_colors
+            product.original_data = json.dumps(snapshot, ensure_ascii=False)
+            product.supplier_product.original_data_json = product.original_data
+            product.colors = json.dumps(source_colors, ensure_ascii=False)
+            product.supplier_product.colors_json = product.colors
+            db.session.commit()
+            draft = MarketplaceDraftService.create_draft(
+                seller_id=self.seller1_id,
+                account_id=self.account1.id,
+                imported_product_id=product.id,
+                product_type_id=self.product_type.id,
+            )
+            by_id = {
+                row["attribute_id"]: row
+                for row in json.loads(draft.attributes_json)
+            }
+            return by_id.get("10096")
+
+        unresolved = (
+            "бордовый с черным",
+            "черный с бордовым",
+            "ярко-розовый с сиреневым",
+            "серебряный с сиреневым",
+            "фуксия с серебряным",
+            "серебряный с песочным",
+        )
+        for index, literal in enumerate(unresolved):
+            with self.subTest(literal=literal):
+                self.assertIsNone(create_for_color(index, literal))
+        self.assertIsNone(create_for_color(
+            6, ["бордовый с чёрным", "белый"],
+        ))
+
+        self.assertEqual(
+            create_for_color(10, "бордо")["values"],
+            [{"dictionary_value_id": "10096-7", "value": "Бордовый"}],
+        )
+        self.assertEqual(
+            create_for_color(11, "угольно-чёрный")["values"],
+            [{"dictionary_value_id": "10096-1", "value": "Черный"}],
+        )
+        self.assertEqual(
+            create_for_color(12, "нежно-розовый")["values"],
+            [{"dictionary_value_id": "10096-4", "value": "Розовый"}],
+        )
+        self.assertEqual(
+            create_for_color(13, "чёрный с розовым")["values"],
+            [
+                {"dictionary_value_id": "10096-1", "value": "Черный"},
+                {"dictionary_value_id": "10096-4", "value": "Розовый"},
+            ],
+        )
+        self.assertEqual(
+            create_for_color(14, "серо-голубой и белый")["values"],
+            [
+                {"dictionary_value_id": "10096-2", "value": "Серый"},
+                {"dictionary_value_id": "10096-9", "value": "Голубой"},
+                {"dictionary_value_id": "10096-10", "value": "Белый"},
+            ],
+        )
+        self.assertEqual(
+            create_for_color(17, ["бордо", "белый"])["values"],
+            [
+                {"dictionary_value_id": "10096-7", "value": "Бордовый"},
+                {"dictionary_value_id": "10096-10", "value": "Белый"},
+            ],
+        )
+
+        bordovy = MarketplaceAttributeValue.query.filter_by(
+            attribute_id=color_attribute.id,
+            value="Бордовый",
+        ).one()
+        bordovy.is_available = False
+        db.session.commit()
+        self.assertIsNone(create_for_color(15, "бордо"))
+        self.assertIsNone(create_for_color(16, "темно-бордо"))
 
     def _official_type(self, name, path):
         marker = MarketplaceTaxonomyCategory.query.count() + 1

@@ -87,6 +87,26 @@ class _FakeDecisionsPipeline:
         )
 
 
+class _FakeAbstainingDecisionsPipeline:
+    def __init__(self):
+        self.plans = []
+
+    def run_plan(self, plan):
+        self.plans.append(plan)
+        return SimpleNamespace(
+            phase="characteristic",
+            results=tuple(
+                DecisionItemResult(
+                    signature=fingerprint,
+                    phase="characteristic",
+                    status="abstained",
+                    reason="insufficient_evidence",
+                )
+                for fingerprint in plan.question_fingerprints
+            ),
+        )
+
+
 class _FakeCategoryPipeline:
     def __init__(self):
         self.calls = 0
@@ -256,6 +276,84 @@ class OzonPrepareDecisionsQueueTest(OzonPublicationFixture, unittest.TestCase):
             ))
         self.color_definition = definition
 
+    def _append_color_dictionary_values(self, values):
+        now = datetime.utcnow()
+        for external_id, value in values:
+            db.session.add(MarketplaceAttributeValue(
+                marketplace_id=self.marketplace.id,
+                product_type_id=self.product_type.id,
+                attribute_id=self.color_definition.id,
+                external_value_id=external_id,
+                value=value,
+                value_normalized=OzonReferenceService.normalize_value(value),
+                is_available=True,
+                last_seen_at=now,
+            ))
+        self.color_definition.values_count += len(values)
+        self.color_definition.values_version += 1
+        self.color_definition.values_snapshot_hash = (
+            f"color-values-v{self.color_definition.values_version}"
+        )
+        self.color_definition.values_synced_at = now
+        db.session.flush()
+
+    def test_shortlist_uses_hue_tokens_not_brightness_or_complexion_modifiers(self):
+        self._append_color_dictionary_values([
+            ("201", "Темно-синий"),
+            ("202", "Темно-зеленый"),
+            ("203", "Светло-синий"),
+            ("204", "Светло-зеленый"),
+            ("205", "Бордовый"),
+            ("206", "Темно-бордовый"),
+            ("207", "Пурпурный"),
+            ("208", "Темно-пурпурный"),
+        ])
+
+        shortlist = OzonPrepareDecisionsService._shortlisted_dictionary_values
+        self.assertEqual(
+            shortlist(
+                definition=self.color_definition,
+                literal="темно-медовый",
+            ),
+            [],
+        )
+        self.assertEqual(
+            shortlist(
+                definition=self.color_definition,
+                literal="темноволосый",
+            ),
+            [],
+        )
+        self.assertEqual(
+            shortlist(
+                definition=self.color_definition,
+                literal="светлокожий",
+            ),
+            [],
+        )
+        self.assertEqual(
+            OzonPrepareDecisionsService._tokens("темнопурпурный"),
+            {"пурпурный"},
+        )
+        self.assertEqual(
+            OzonPrepareDecisionsService._tokens("светло-розовый"),
+            {"розовый"},
+        )
+        self.assertEqual(
+            [row.value for row, _score in shortlist(
+                definition=self.color_definition,
+                literal="бордо",
+            )],
+            ["Бордовый", "Темно-бордовый"],
+        )
+        self.assertEqual(
+            [row.value for row, _score in shortlist(
+                definition=self.color_definition,
+                literal="темнопурпурный",
+            )],
+            ["Пурпурный", "Темно-пурпурный"],
+        )
+
     def _source_product(
         self, *, external_id, color, category_evidence=False,
         create_mapping=True,
@@ -396,6 +494,113 @@ class OzonPrepareDecisionsQueueTest(OzonPublicationFixture, unittest.TestCase):
              if row.get("attribute_id") == "10096"),
             [],
         )
+
+    def test_queue_shortlists_hue_without_modifier_or_complexion_only_calls(self):
+        db.session.delete(self.draft)
+        self._append_color_dictionary_values([
+            ("201", "Темно-синий"),
+            ("202", "Темно-зеленый"),
+            ("203", "Светло-синий"),
+            ("204", "Светло-зеленый"),
+            ("205", "Бордовый"),
+            ("206", "Темно-бордовый"),
+        ])
+        products = [
+            self._source_product(external_id="queue-light-pink", color="light pink"),
+            self._source_product(external_id="queue-dark-honey", color="темно-медовый"),
+            self._source_product(external_id="queue-dark-hair", color="темноволосый"),
+            self._source_product(external_id="queue-light-skin", color="светлокожий"),
+            self._source_product(
+                external_id="queue-mixed-colors", color="чёрный с розовым",
+            ),
+        ]
+        db.session.commit()
+        run, token = self._accept_and_claim(products)
+        pipeline = _FakeDecisionsPipeline()
+        original_auto_map = MarketplaceDraftService._auto_map_attributes
+
+        def without_default_color(**kwargs):
+            attributes, report = original_auto_map(**kwargs)
+            return [
+                row for row in attributes
+                if row.get("attribute_id") != "10096"
+            ], report
+
+        with patch.object(
+            MarketplaceDraftService,
+            "_auto_map_attributes",
+            side_effect=without_default_color,
+        ), patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            return_value=pipeline,
+        ) as runtime_factory:
+            results = [
+                self._advance(run, token, product)
+                for product in products
+            ]
+
+        self.assertTrue(all(result.outcome == "prepared" for _, result in results))
+        self.assertEqual(len(pipeline.plans), 1)
+        self.assertEqual(pipeline.physical_batches, 1)
+        runtime_factory.assert_called_once()
+        for (item, _result), product in zip(results, products):
+            draft = MarketplaceDraftService.get_draft(
+                seller_id=self.seller.id, draft_id=item.draft_id,
+            )
+            expected = (
+                [{"value": "Pink", "dictionary_value_id": "101"}]
+                if product is products[0] else []
+            )
+            self.assertEqual(self._color(draft), expected)
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+
+    def test_queue_preserves_explicit_abstention_for_ambiguous_shade(self):
+        db.session.delete(self.draft)
+        product = self._source_product(
+            external_id="queue-abstained-light-pink", color="light pink",
+        )
+        db.session.commit()
+        run, token = self._accept_and_claim([product])
+        pipeline = _FakeAbstainingDecisionsPipeline()
+        original_auto_map = MarketplaceDraftService._auto_map_attributes
+
+        def without_default_color(**kwargs):
+            attributes, report = original_auto_map(**kwargs)
+            return [
+                row for row in attributes
+                if row.get("attribute_id") != "10096"
+            ], report
+
+        with patch.object(
+            MarketplaceDraftService,
+            "_auto_map_attributes",
+            side_effect=without_default_color,
+        ), patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            return_value=pipeline,
+        ) as runtime_factory:
+            item, result = self._advance(run, token, product)
+
+        draft = MarketplaceDraftService.get_draft(
+            seller_id=self.seller.id, draft_id=item.draft_id,
+        )
+        self.assertEqual(result.outcome, "prepared")
+        self.assertEqual(len(pipeline.plans), 1)
+        self.assertEqual(
+            {
+                choice.description
+                for choice in pipeline.plans[0].questions[0].choices
+                if isinstance(choice, DecisionChoice)
+            },
+            {
+                "Pink",
+                "Deep pink",
+                "Недостаточно точных сведений для выбора",
+            },
+        )
+        self.assertEqual(self._color(draft), [])
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+        runtime_factory.assert_called_once()
 
     def test_one_queue_batch_warms_virtual_sibling_and_later_reuses_cache(self):
         # The fixture draft belongs to an older/manual path and is removed so
