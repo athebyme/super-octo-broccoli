@@ -13,7 +13,7 @@ from flask import Flask, render_template, redirect, url_for, flash, request, abo
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import or_
-from sqlalchemy.orm import defer
+from sqlalchemy.orm import defer, joinedload
 
 from models import (
     db, User, Seller, Product, APILog, ProductStock,
@@ -5474,7 +5474,9 @@ def bulk_edit_history_detail(bulk_id):
     product_changes = CardEditHistory.query.filter_by(
         bulk_edit_id=bulk_id,
         seller_id=seller_id,
-    ).order_by(CardEditHistory.created_at.asc()).all()
+    ).options(joinedload(CardEditHistory.product)).order_by(
+        CardEditHistory.created_at.asc(),
+    ).all()
 
     # Error payloads may be stale or malformed. Resolve only a small visible
     # prefix and verify every candidate against the current seller before a
@@ -5508,6 +5510,7 @@ def bulk_edit_history_detail(bulk_id):
         }
 
     from services.wb_history_presentation import present_wb_bulk_operation
+    from services.wb_history_characteristics import present_legacy_wb_characteristics
 
     return render_template(
         'bulk_edit_history_detail.html',
@@ -5516,6 +5519,10 @@ def bulk_edit_history_detail(bulk_id):
         owned_product_ids=owned_product_ids,
         workspace_return=workspace_return,
         wb_history_presentation=present_wb_bulk_operation(bulk_operation),
+        legacy_wb_characteristic_presentations=present_legacy_wb_characteristics(
+            product_changes,
+            seller_id,
+        ),
     )
 
 

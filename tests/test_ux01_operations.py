@@ -212,6 +212,7 @@ def _render_bulk_history_detail(
     total_products=2,
     success_count=0,
     status="completed",
+    legacy_wb_characteristic_presentations=None,
 ):
     from services.wb_history_presentation import present_wb_bulk_operation
 
@@ -240,6 +241,9 @@ def _render_bulk_history_detail(
             product_changes=product_changes or [],
             owned_product_ids=owned_product_ids or [],
             wb_history_presentation=present_wb_bulk_operation(operation),
+            legacy_wb_characteristic_presentations=(
+                legacy_wb_characteristic_presentations or {}
+            ),
         )
 
 
@@ -494,6 +498,268 @@ def test_legacy_completed_counters_above_total_remain_unknown():
     assert result["label"] == "Завершено, счётчики результата не согласуются с числом товаров"
     assert "2 из 1" in result["message"]
     assert "Счётчики превышают общее число товаров" in result["message"]
+
+
+def test_legacy_characteristic_labels_use_only_agreeing_current_wb_cache():
+    from unittest.mock import patch
+
+    from services.wb_history_characteristics import present_legacy_wb_characteristics
+
+    class QueryStub:
+        def __init__(self, first=None, rows=None):
+            self.first_row = first
+            self.rows = rows or []
+
+        def filter_by(self, **_kwargs):
+            return self
+
+        def filter(self, *_args):
+            return self
+
+        def first(self):
+            return self.first_row
+
+        def all(self):
+            return self.rows
+
+    class ColumnStub:
+        def __eq__(self, _value):
+            return self
+
+        def is_(self, _value):
+            return self
+
+        def in_(self, _values):
+            return self
+
+    marketplace = SimpleNamespace(id=7, code="wb", is_active=True)
+    category = SimpleNamespace(
+        id=5,
+        marketplace_id=7,
+        subject_id=123,
+        subject_name="Товары для дома",
+        is_available=True,
+    )
+    schema = {
+        "usable": True,
+        "subject_id": 123,
+        "subject_name": "Товары для дома",
+        "characteristics": [
+            {"id": 101, "name": "Материал"},
+            {"id": 202, "name": "Цвет"},
+            {"id": 303, "name": "Комплектация"},
+        ],
+    }
+    before_items = [
+        {"id": 101, "value": ["до 1"]},
+        {"id": 202, "value": ["до 2"]},
+        {"id": 303, "value": ["до 3"]},
+        {"id": 404, "value": ["неизвестное поле"]},
+        {"id": 505, "name": "Сохранённое название", "value": ["сохранённое"]},
+    ]
+    after_items = [
+        {"id": 101, "value": ["после 1"]},
+        {"id": 202, "value": ["после 2"]},
+        {"id": 303, "value": ["после 3"]},
+        {"id": 404, "value": ["неизвестное поле после"]},
+        {"id": 505, "name": "Сохранённое название", "value": ["сохранённое после"]},
+    ]
+    product = SimpleNamespace(
+        id=814, seller_id=92, subject_id=123, object_name="Товары для дома",
+        title="Синтетическая карточка", vendor_code="SKU-814", nm_id=814,
+    )
+    change = SimpleNamespace(
+        id=3101,
+        product_id=814,
+        seller_id=92,
+        product=product,
+        changed_fields=["characteristics"],
+        snapshot_before={
+            "object_name": "Товары для дома",
+            "characteristics": before_items,
+        },
+        snapshot_after={
+            "object_name": "Товары для дома",
+            "characteristics": after_items,
+        },
+        reverted=False,
+        wb_synced=True,
+        wb_sync_status="success",
+        wb_error_message=None,
+    )
+    fake_marketplace_model = SimpleNamespace(
+        query=QueryStub(first=marketplace),
+    )
+    fake_category_model = SimpleNamespace(
+        query=QueryStub(rows=[category]),
+        marketplace_id=ColumnStub(),
+        is_available=ColumnStub(),
+        subject_name=ColumnStub(),
+    )
+    cached_characteristics = [
+        SimpleNamespace(
+            category_id=5, marketplace_id=7, is_available=True,
+            charc_id=101, name="Материал",
+        ),
+        SimpleNamespace(
+            category_id=5, marketplace_id=7, is_available=True,
+            charc_id=202, name="Цвет",
+        ),
+        SimpleNamespace(
+            category_id=5, marketplace_id=7, is_available=True,
+            charc_id=303, name="Комплектация",
+        ),
+    ]
+    fake_characteristic_model = SimpleNamespace(
+        query=QueryStub(rows=cached_characteristics),
+        marketplace_id=ColumnStub(),
+        category_id=ColumnStub(),
+        is_available=ColumnStub(),
+    )
+    foreign_change = SimpleNamespace(
+        **{
+            **change.__dict__,
+            "id": 3102,
+            "product": SimpleNamespace(
+                **{
+                    **product.__dict__,
+                    "seller_id": 93,
+                }
+            ),
+        }
+    )
+
+    with patch(
+        "services.wb_history_characteristics.Marketplace",
+        fake_marketplace_model,
+    ), patch(
+        "services.wb_history_characteristics.MarketplaceCategory",
+        fake_category_model,
+    ), patch(
+        "services.wb_history_characteristics.MarketplaceCategoryCharacteristic",
+        fake_characteristic_model,
+    ), patch(
+        "services.wb_history_characteristics.schema_for_subject",
+        return_value=schema,
+    ) as schema_lookup:
+        presentations = present_legacy_wb_characteristics(
+            [change, foreign_change],
+            92,
+        )
+        schema_lookup.assert_called_once()
+
+    assert set(presentations) == {3101}
+    legacy = presentations[3101]
+    assert legacy["source_label"] == "По сохранённому справочнику WB"
+    assert [item.get("name") for item in legacy["before"][:3]] == [
+        "Материал", "Цвет", "Комплектация",
+    ]
+    assert legacy["before"][3] == before_items[3]
+    assert legacy["before"][4]["name"] == "Сохранённое название"
+    assert legacy["before"][0]["value"] == ["до 1"]
+    assert "name" not in before_items[0]
+
+    html = _render_bulk_history_detail(
+        None,
+        error_count=0,
+        success_count=1,
+        total_products=1,
+        product_changes=[change],
+        owned_product_ids={814},
+        legacy_wb_characteristic_presentations=presentations,
+    )
+    assert "По сохранённому справочнику WB" in html
+    assert "Значения взяты из снимка истории" in html
+    assert "Материал" in html and "Цвет" in html and "Комплектация" in html
+    assert "неизвестное поле" in html
+    assert "Сохранённое название" in html
+    assert "до 1" in html and "после 1" in html
+
+    duplicate_category_model = SimpleNamespace(
+        query=QueryStub(rows=[category, category]),
+        marketplace_id=ColumnStub(),
+        is_available=ColumnStub(),
+        subject_name=ColumnStub(),
+    )
+    with patch(
+        "services.wb_history_characteristics.Marketplace",
+        fake_marketplace_model,
+    ), patch(
+        "services.wb_history_characteristics.MarketplaceCategory",
+        duplicate_category_model,
+    ), patch(
+        "services.wb_history_characteristics.schema_for_subject",
+        return_value=schema,
+    ) as duplicate_schema_lookup:
+        duplicate_presentations = present_legacy_wb_characteristics([change], 92)
+        duplicate_schema_lookup.assert_not_called()
+    assert duplicate_presentations == {}
+
+    ambiguous_characteristic_model = SimpleNamespace(
+        query=QueryStub(rows=[
+            *cached_characteristics,
+            SimpleNamespace(
+                category_id=5, marketplace_id=7, is_available=True,
+                charc_id=101, name="Неоднозначная подпись",
+            ),
+        ]),
+        marketplace_id=ColumnStub(),
+        category_id=ColumnStub(),
+        is_available=ColumnStub(),
+    )
+    with patch(
+        "services.wb_history_characteristics.Marketplace",
+        fake_marketplace_model,
+    ), patch(
+        "services.wb_history_characteristics.MarketplaceCategory",
+        fake_category_model,
+    ), patch(
+        "services.wb_history_characteristics.MarketplaceCategoryCharacteristic",
+        ambiguous_characteristic_model,
+    ), patch(
+        "services.wb_history_characteristics.schema_for_subject",
+        return_value=schema,
+    ):
+        ambiguous_presentations = present_legacy_wb_characteristics([change], 92)
+    assert 101 not in {
+        item.get("id") for item in ambiguous_presentations[3101]["before"]
+        if item.get("name")
+    }
+    assert ambiguous_presentations[3101]["before"][0] == before_items[0]
+    assert ambiguous_presentations[3101]["before"][1]["name"] == "Цвет"
+
+    stale_schema = {**schema, "usable": False}
+    with patch(
+        "services.wb_history_characteristics.Marketplace",
+        fake_marketplace_model,
+    ), patch(
+        "services.wb_history_characteristics.MarketplaceCategory",
+        fake_category_model,
+    ), patch(
+        "services.wb_history_characteristics.schema_for_subject",
+        return_value=stale_schema,
+    ):
+        stale_presentations = present_legacy_wb_characteristics([change], 92)
+    assert stale_presentations == {}
+
+    changed_category = SimpleNamespace(
+        **{
+            **change.__dict__,
+            "snapshot_before": {
+                "object_name": "Другая категория",
+                "characteristics": before_items,
+            },
+        }
+    )
+    assert present_legacy_wb_characteristics([changed_category], 92) == {}
+
+    string_subject_product = SimpleNamespace(
+        **{**product.__dict__, "subject_id": "123"}
+    )
+    string_subject_change = SimpleNamespace(
+        **{**change.__dict__, "product": string_subject_product}
+    )
+    assert present_legacy_wb_characteristics([string_subject_change], 92) == {}
 
 
 def test_legacy_history_without_review_summary_keeps_legacy_summary_only():

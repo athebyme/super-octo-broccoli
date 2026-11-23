@@ -454,6 +454,9 @@
         <div class="space-y-3">
             {% for change in product_changes %}
             {% set change_product_owned = change.product and change.product.id == change.product_id and change.product.seller_id == bulk_operation.seller_id %}
+            {% set legacy_characteristic_presentation =
+                legacy_wb_characteristic_presentations.get(change.id)
+                if legacy_wb_characteristic_presentations is mapping else none %}
             <div class="border border-gray-200 rounded-lg p-4 {% if change.reverted %}opacity-60{% endif %}" data-operations-product-id="{{ change.product_id }}">
                 {% if change.product and not change_product_owned %}
                 <div>
@@ -525,8 +528,17 @@
                             {% for field in change.changed_fields %}
                             <div class="operations-value-diff" data-operations-changed-field="{{ field }}">
                                 <strong>{{ field_labels.get(field, field.replace('_', ' ')|title) }}</strong>
+                                {% if field == 'characteristics' and legacy_characteristic_presentation %}
+                                <p class="mt-1 text-xs text-gray-600">
+                                    Подписи без сохранённого названия: {{ legacy_characteristic_presentation.source_label }}.
+                                    Значения взяты из снимка истории.
+                                </p>
+                                <div><span>До:</span> {{ operations_value(legacy_characteristic_presentation.before) }}</div>
+                                <div><span>После:</span> {{ operations_value(legacy_characteristic_presentation.after) }}</div>
+                                {% else %}
                                 <div><span>До:</span> {{ operations_value((change.snapshot_before or {}).get(field)) }}</div>
                                 <div><span>После:</span> {{ operations_value((change.snapshot_after or {}).get(field)) }}</div>
+                                {% endif %}
                             </div>
                             {% endfor %}
                         </div>
