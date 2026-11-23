@@ -767,6 +767,42 @@ def test_schedule_get_set_cas_noop_and_actor_audit(refresh_db):
         assert stale.value.code == "schedule_conflict"
 
 
+def test_schedule_enable_requires_valid_active_source_but_disable_is_allowed(refresh_db):
+    with refresh_db["app"].app_context():
+        supplier = db.session.get(Supplier, refresh_db["supplier_id"])
+        supplier.is_active = False
+        supplier.csv_source_url = "  "
+        db.session.commit()
+
+        with pytest.raises(SupplierCatalogRefreshError) as error:
+            set_catalog_schedule(
+                supplier_id=refresh_db["supplier_id"],
+                admin_user_id=refresh_db["admin_id"],
+                enabled=True,
+                interval_hours=24,
+                expected_revision=None,
+            )
+        assert error.value.code == "schedule_unavailable"
+        assert SupplierCatalogSchedule.query.count() == 0
+        assert AdminAuditLog.query.filter_by(
+            action="set_supplier_catalog_schedule",
+        ).count() == 0
+
+        disabled = set_catalog_schedule(
+            supplier_id=refresh_db["supplier_id"],
+            admin_user_id=refresh_db["admin_id"],
+            enabled=False,
+            interval_hours=24,
+            expected_revision=None,
+        )
+        assert disabled["enabled"] is False
+        assert disabled["revision"] == 1
+        assert SupplierCatalogSchedule.query.count() == 1
+        assert AdminAuditLog.query.filter_by(
+            action="set_supplier_catalog_schedule",
+        ).count() == 1
+
+
 @pytest.mark.parametrize(
     ("enabled", "interval_hours", "expected_code"),
     [

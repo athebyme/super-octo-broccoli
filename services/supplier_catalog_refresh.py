@@ -281,6 +281,9 @@ def set_catalog_schedule(
         if supplier is None:
             db.session.rollback()
             raise SupplierCatalogRefreshError("supplier_not_found")
+        if enabled and not _valid_supplier_catalog_source(supplier):
+            db.session.rollback()
+            raise SupplierCatalogRefreshError("schedule_unavailable")
         schedule = SupplierCatalogSchedule.query.filter_by(
             supplier_id=supplier_id,
         ).populate_existing().first()
