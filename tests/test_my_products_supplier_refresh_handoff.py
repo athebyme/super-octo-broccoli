@@ -712,8 +712,8 @@ async function finishSupplierRefresh(data, ids) {
   assert.match(templateText, /<dialog[^>]*aria-describedby="mp-ozon-dialog-help"/);
   assert.match(templateText, /Черновики сохранятся в Seller Hub\. Отправка на Ozon требует отдельного подтверждения\./);
   assert.match(templateText, /Подготовить черновики/);
-  assert.match(templateText, /filename='common-product-content\.js', v='20261122-ozon-update-return-r56'/);
-  assert.match(commonTemplateText, /filename='common-product-content\.js', v='20261123-common-content-provenance-r37'/);
+  assert.match(templateText, /filename='common-product-content\.js', v='20261123-inline-common-editor-r1'/);
+  assert.match(commonTemplateText, /filename='common-product-content\.js', v='20261123-inline-common-editor-r1'/);
   assert.match(stylesheetText, /\.mp-refresh-result\s*\{[^}]*scroll-margin-top:\s*72px/s);
   assert.match(stylesheetText, /\.mp-ozon-dialog--prepare \.mp-ozon-account-value\s*\{[^}]*overflow-wrap:\s*anywhere/s);
   assert.match(stylesheetText, /\.mp-ozon-dialog--prepare \.sh-btn\s*\{[^}]*min-height:\s*44px/s);

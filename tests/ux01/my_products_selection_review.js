@@ -590,8 +590,8 @@ async function main() {
   assert.match(css, /\.mp-marketplace-choice:focus-visible/);
   assert.match(css, /\.mp-extra-filters summary:focus-visible/);
   assert.match(css, /\.mp-selection-review[\s\S]*--focus-outline/);
-  assert.match(template, /filename='my-products-beta\.css', v='20261123-category-filter-r73'/);
-  assert.match(template, /filename='my-products-beta\.js', v='20261123-category-filter-r73'/);
+  assert.match(template, /filename='my-products-beta\.css', v='20261123-inline-common-dialog-r1'/);
+  assert.match(template, /filename='my-products-beta\.js', v='20261123-inline-common-dialog-r1'/);
 
   const legacyScope = {
     activeTab: 'pending', search: '', supplier: '', has_photos: '', stock: '',
