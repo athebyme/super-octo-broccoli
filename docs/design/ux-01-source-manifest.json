@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-23T05:40:18.267778+00:00",
+  "generated_at": "2026-11-23T06:29:24.856699+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "756d0db95453b116d8396d23114043fd14425169731e766afcf45ec5a7fc5b48"
+      "sha256": "e8e9d245b60a6e067fe1cbb3d2664dbcfc8b209e752191a749bb4b90133acdc6"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -485,7 +485,7 @@
     },
     {
       "path": "docs/design/seller-bulk-workspace-2026-11-20.md",
-      "sha256": "2bcff0a7ba09da052cd2a898e143a24fe79540676dc749770ff99dc2a237b6ea"
+      "sha256": "a5fb31f6fd88eb1587ed09f18115f7f760bb60d596d720258510a2483894dcba"
     },
     {
       "path": "docs/design/seller-cabinet-redesign-2026-11-22.md",
@@ -497,7 +497,7 @@
     },
     {
       "path": "docs/design/ux-01-action-map.md",
-      "sha256": "d61bfa2259dae3f80a3743d497477d028845632d2324a993c4d33f8a6738133f"
+      "sha256": "c70d32fc63394018f427a0a9f06c17d8caca70bafa8bef39c4b9b03306e3df09"
     },
     {
       "path": "docs/design/ux-01-preview-artifacts/dark-1440-card.png",
@@ -1557,7 +1557,7 @@
     },
     {
       "path": "routes/suppliers.py",
-      "sha256": "cd7d71b3b8c7c90eeb45d07d9c89499ad22d0d5fd380e9f672167f362c1399fe"
+      "sha256": "e4a0e410d7ef289ac934505450dcf22dbce22aa46922a4c2fb659dbd5e47f3cc"
     },
     {
       "path": "routes/telegram_alerts.py",
@@ -2201,7 +2201,7 @@
     },
     {
       "path": "services/my_products_feed.py",
-      "sha256": "08e68a146c1421367772683a1684ffe633b3a618b6ac5ff7e5bcf6d01d259f93"
+      "sha256": "807db8a94dd218a19aeed2c3b672b8e021caeaf5f9980985253be46cab7eaa84"
     },
     {
       "path": "services/ozon_account_health.py",
@@ -2681,11 +2681,11 @@
     },
     {
       "path": "static/my-products-beta.css",
-      "sha256": "0ceb440d01ff3dcdbbe7ddb2eba73172380aeeb2cedb2c3d2edb12f616daabf2"
+      "sha256": "cd314baa279dd9f7d67f95523b93c87aafb4181ae06fc0a0433c3b80cd525d95"
     },
     {
       "path": "static/my-products-beta.js",
-      "sha256": "027f9f0cef55237ea3799642aa204711893ef17d66a2daf04334322d81b49b99"
+      "sha256": "77c9cf5067a7bfe1ee2f9d1483ecf78fc8a735bb08a9850143bbf5a09041e6fd"
     },
     {
       "path": "static/operations-workspace.css",
@@ -3361,7 +3361,7 @@
     },
     {
       "path": "templates/my_products_beta.html",
-      "sha256": "553250ac4e291adeabffa3bdd4ed067a0f17fcecdddcd350a9b8d81968080257"
+      "sha256": "1110c8df5ea855c1c20255c0d370089c61a1d8924a9c3d22e5eb97cff448c5e4"
     },
     {
       "path": "templates/notifications.html",
@@ -4525,7 +4525,7 @@
     },
     {
       "path": "tests/test_my_products_feed.py",
-      "sha256": "62c249b27879e8787aecfc68b8fd454eb229965b5e51c63db2dfc1c7d778aa73"
+      "sha256": "b151ee7e7829a250d081ff4962e1db59efc463520a1d957ec603cf6154a11a94"
     },
     {
       "path": "tests/test_my_products_filters.py",
@@ -5289,11 +5289,11 @@
     },
     {
       "path": "tests/ux01/bulk_workspace_browser.py",
-      "sha256": "59c754bd6bccac60a41299c5231204a2022419f3f9a016bde5d87b7b11d6323f"
+      "sha256": "b6c46e4f2cc3c3eb91358d092fbe9a502c67f584001aa35051cae431f657be37"
     },
     {
       "path": "tests/ux01/common_content_browser.py",
-      "sha256": "6a8e031829a11901a9fbc47011232b8c1b747cc9d9c249c75732c19d2f00fd4e"
+      "sha256": "f57453426c8cbcad1c974d564949d04fd85f1e39f01bd1f4a733cc53d67a92ea"
     },
     {
       "path": "tests/ux01/common_product_content_focus_dom.js",
@@ -5317,7 +5317,7 @@
     },
     {
       "path": "tests/ux01/my_products_selection_review.js",
-      "sha256": "87de073c7e787a31bdbb07d5d41d45417ad36c4acf3ff549c3f4a46474902488"
+      "sha256": "fa7aebb4c49d231b07e7a5e8bb1a0cedf649c5e1aa51814d063ca11abd9ab577"
     },
     {
       "path": "tests/ux01/operations_pricing_browser.py",
@@ -5341,12 +5341,12 @@
     },
     {
       "path": "tests/ux01/workspace_catalog_layout_browser.py",
-      "sha256": "f83ebd2992799bb9fd061b19fea1fe1568944019c595dedc20aecee14029d45a"
+      "sha256": "7e2634626bbb15892056fc7960872f0a9225796385c8409f0650a13583605823"
     },
     {
       "path": "tests/ux01/workspace_catalog_price_browser.py",
       "sha256": "6f39e443d991ebaa3f7ff379c1051438fd727de24a3d7ba25764acfa5691f63d"
     }
   ],
-  "aggregate_sha256": "7f794abc1a0c0b99b0daa97377246f9ccf0093bfe6a5c72214d4d450712fea26"
+  "aggregate_sha256": "f78c483af2269423cd4a585a386c43e326922ad6442bb5230bc2851dda535bf6"
 }
