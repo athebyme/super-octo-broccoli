@@ -371,6 +371,53 @@
             left.every(function (id, index) { return id === right[index]; });
     }
 
+    var SELECTION_REVIEW_RETURN_KEY = 'my-products-selection-review-return-v1';
+    function validSelectionReviewIds(ids) {
+        return Array.isArray(ids) && ids.length > 0 && ids.length <= MAX_BULK_SELECTION &&
+            ids.every(function (id) { return Number.isSafeInteger(id) && id > 0; }) &&
+            new Set(ids).size === ids.length;
+    }
+    function saveSelectionReviewReturn(app, nonce, selectionIds) {
+        if (!app || app.importBatchMode || app.supplierRefreshBatchMode ||
+            !workspaceReturnHash(nonce) || !validSelectionReviewIds(selectionIds) ||
+            !app.selectionRowsVerified ||
+            (!app.selectionReviewActive && !app.selectedOutsideCurrentListCount)) return false;
+        try {
+            sessionStorage.setItem(SELECTION_REVIEW_RETURN_KEY, JSON.stringify({
+                v: 1,
+                owner: boot.workspaceOwner,
+                nonce: nonce,
+                ids: selectionIds.slice(),
+            }));
+            return true;
+        } catch (_) { return false; }
+    }
+    function readSelectionReviewReturn(capsule) {
+        try {
+            var raw = sessionStorage.getItem(SELECTION_REVIEW_RETURN_KEY);
+            if (raw === null) return null;
+            var value = JSON.parse(raw);
+            if (!value || typeof value !== 'object' || Array.isArray(value) || value.v !== 1 ||
+                value.owner !== boot.workspaceOwner || !capsule || value.nonce !== capsule.nonce ||
+                !validSelectionReviewIds(value.ids) || !sameOrderedIds(value.ids, capsule.selectionIds) ||
+                capsule.batch !== null || importBatchMode || supplierRefreshBatchMode) {
+                sessionStorage.removeItem(SELECTION_REVIEW_RETURN_KEY);
+                return null;
+            }
+            return value;
+        } catch (_) { return null; }
+    }
+    function clearSelectionReviewReturn(nonce) {
+        try {
+            var raw = sessionStorage.getItem(SELECTION_REVIEW_RETURN_KEY);
+            if (raw === null) return;
+            var value = JSON.parse(raw);
+            if (nonce === undefined || !value || value.nonce === nonce) {
+                sessionStorage.removeItem(SELECTION_REVIEW_RETURN_KEY);
+            }
+        } catch (_) {}
+    }
+
     function normalizedWbAccountId(value) {
         if (value === null) return null;
         if (typeof value !== 'string') return undefined;
@@ -409,13 +456,15 @@
         var helpers = window.SellerHubCommonContent || {};
         if (typeof helpers.storeWorkspaceReturn !== 'function') return null;
         try {
-            return helpers.storeWorkspaceReturn({
+            var nonce = helpers.storeWorkspaceReturn({
                 owner: boot.workspaceOwner,
                 priceTarget: priceTarget,
                 selectionIds: selectionIds.slice(),
                 scope: scope,
                 batch: app.importBatchMode ? app.importBatch : null,
             });
+            saveSelectionReviewReturn(app, nonce, selectionIds);
+            return nonce;
         } catch (_) {
             return null;
         }
@@ -436,6 +485,7 @@
                 scope: scope,
                 batch: app.importBatchMode ? app.importBatch : null,
             });
+            saveSelectionReviewReturn(app, nonce, selectionIds);
             return workspaceReturnHash(nonce) ? nonce : null;
         } catch (_) {
             return null;
@@ -449,7 +499,7 @@
         var helpers = window.SellerHubCommonContent || {};
         if (typeof helpers.storeWorkspaceReturn !== 'function') return null;
         try {
-            return helpers.storeWorkspaceReturn({
+            var nonce = helpers.storeWorkspaceReturn({
                 owner: boot.workspaceOwner,
                 wbEditTarget: {
                     accountId: wbAccountIdFromBootstrap,
@@ -459,6 +509,8 @@
                 scope: scope,
                 batch: app.importBatchMode ? app.importBatch : null,
             });
+            saveSelectionReviewReturn(app, nonce, selectionIds);
+            return nonce;
         } catch (_) {
             return null;
         }
@@ -482,6 +534,7 @@
                 scope: scope,
                 batch: app.importBatchMode ? app.importBatch : null,
             });
+            saveSelectionReviewReturn(app, nonce, selectionIds);
             return workspaceReturnHash(nonce) ? nonce : null;
         } catch (_) {
             return null;
@@ -1116,6 +1169,7 @@
             workspaceReturnSetupNote = workspaceChangedNote;
         }
     }
+    var workspaceSelectionReviewReturn = readSelectionReviewReturn(workspaceReturnCapsule);
 
     window.shVue.mount('#my-products-app', {
         data: function () {
@@ -1193,6 +1247,12 @@
                     sort: workspaceReturnScopeSeed ? workspaceReturnScopeSeed.sort : '',
                 },
                 selected: [],
+                selectionReviewActive: false,
+                selectionReviewLoading: false,
+                selectionReviewRows: [],
+                selectionReviewIds: [],
+                selectionReviewError: '',
+                selectionReviewUnavailableIds: [],
                 activeBulkActionGroup: '',
                 ozonIds: [],
                 ozonAccountId: '',
@@ -1299,10 +1359,45 @@
                 return visibleSelected > 0 && visibleSelected < this.items.length;
             },
             selectedItems: function () {
+                return this.selectionRowsVerified ? this.selectionItemsForIds(this.selected) : [];
+            },
+            visibleItems: function () {
+                if (!this.selectionReviewActive) return this.items;
                 var chosen = this.selected;
-                return this.items.filter(function (item) {
+                return this.selectionReviewRows.filter(function (item) {
                     return chosen.indexOf(item.id) !== -1;
                 });
+            },
+            selectionRowsVerified: function () {
+                var ids = this.selected;
+                if (!validSelectionReviewIds(ids) || this.selectionReviewLoading || this.loading ||
+                    this.loadingMore || this.selectAllLoading || this.itemsScope !== this.feedScopeKey() ||
+                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search ||
+                    (validSelectionReviewIds(this.selectionReviewUnavailableIds) &&
+                        sameIds(ids, this.selectionReviewUnavailableIds))) return false;
+                if (this.importBatchMode && this.importBatchKind === 'import' &&
+                    !this.importBatchSelectionVerified) return false;
+                if (this.selectionReviewActive && !ids.every((id) => this.selectionReviewIds.indexOf(id) !== -1)) return false;
+                var available = new Set();
+                (this.items || []).forEach(function (item) {
+                    if (item && Number.isSafeInteger(item.id) && item.id > 0) available.add(item.id);
+                });
+                if (validSelectionReviewIds(this.selectionReviewIds)) {
+                    this.selectionReviewIds.forEach(function (id) { available.add(id); });
+                }
+                return ids.every(function (id) { return available.has(id); });
+            },
+            selectedOutsideCurrentListCount: function () {
+                var visible = new Set((this.items || []).map(function (item) { return item && item.id; }));
+                return this.selected.filter(function (id) { return !visible.has(id); }).length;
+            },
+            selectionReviewAvailable: function () {
+                return !this.importBatchMode && !this.supplierRefreshBatchMode &&
+                    this.selected.length > 0 && this.selected.length <= MAX_BULK_SELECTION &&
+                    typeof this.urls.selection === 'string' && this.urls.selection.length > 0 &&
+                    !this.loading && !this.loadingMore && !this.selectAllLoading &&
+                    !this.selectionReviewLoading && this.itemsScope === this.feedScopeKey() &&
+                    (this.searchInput || '').trim().slice(0, 200) === this.filters.search;
             },
             hasUnshownResults: function () {
                 return this.itemsScope === this.feedScopeKey() &&
@@ -1357,7 +1452,7 @@
                 var wbIds = exactWbProductIds(chosen);
                 var withUpdates = chosen.filter(function (i) { return i.has_supplier_update; }).length;
                 var underLimit = chosen.length <= MAX_BULK_SELECTION;
-                var workspaceCurrent = !this.loading && !this.loadingMore && !this.selectAllLoading &&
+                var workspaceCurrent = this.selectionRowsVerified && !this.loading && !this.loadingMore && !this.selectAllLoading &&
                     this.itemsScope === this.feedScopeKey() &&
                     (this.searchInput || '').trim().slice(0, 200) === this.filters.search;
                 var ozonUpdateResult = exactOzonWorkspaceUpdateAccountChoices(
@@ -1396,6 +1491,12 @@
                                                     : 'сначала проверим выбранные карточки; применение подтвердите отдельно';
                 var ozonUpdateDisabled = !chosen.length || !underLimit || !workspaceCurrent ||
                     !ozonUpdateResult.choices.length || this.ozonWorkspaceUpdateBusy;
+                var selectionReady = this.selectionRowsVerified;
+                var selectionHint = this.selected.length > MAX_BULK_SELECTION
+                    ? 'За один запуск можно выбрать не больше 200 товаров.'
+                    : this.selectionReviewLoading
+                        ? 'проверяем точный список выбранных товаров…'
+                        : 'Сначала проверьте выбранный список кнопкой «Показать выбранные». Товары вне списка не будут включены автоматически.';
                 return [{
                     title: 'Основные действия',
                     items: [
@@ -1496,7 +1597,12 @@
                             hint: ozonUpdateHint,
                             disabled: ozonUpdateDisabled,
                         } : null,
-                    ].filter(Boolean),
+                    ].filter(Boolean).map(function (action) {
+                        return selectionReady ? action : Object.assign({}, action, {
+                            disabled: true,
+                            hint: this.selected.length ? selectionHint : action.hint,
+                        });
+                    }, this),
                 }];
             },
             bulkIntentGroups: function () {
@@ -1720,7 +1826,7 @@
                 if (next !== this.filters.search) {
                     this.cancelSupplierRefreshReview({ restoreFocus: false });
                     this.cancelFilteredSelect();
-                    this.selected = [];
+                    this.cancelSelectionReview({ clearRows: true });
                 }
                 clearTimeout(this._searchTimer);
                 this._searchTimer = setTimeout(function () {
@@ -1748,6 +1854,14 @@
                     if (this._selectAllAbort &&
                         !sameOrderedIds(next, this._selectAllSelectionSnapshot)) {
                         this.cancelFilteredSelect();
+                    }
+                    if (this._selectionReviewRequest &&
+                        !sameOrderedIds(next, this._selectionReviewRequest.ids)) {
+                        this.cancelSelectionReviewRequest();
+                    }
+                    if (validSelectionReviewIds(this.selectionReviewUnavailableIds) &&
+                        !sameIds(next, this.selectionReviewUnavailableIds)) {
+                        this.selectionReviewUnavailableIds = [];
                     }
                     var review = this.supplierRefreshReview;
                     if (review && review.phase !== 'applying' &&
@@ -1794,9 +1908,183 @@
             this._supplierRefreshUnmounted = true;
             this.cancelSupplierRefreshReview({ restoreFocus: false, force: true });
             this.cancelFilteredSelect();
+            this.cancelSelectionReviewRequest();
         },
 
         methods: {
+            selectionItemsForIds: function (ids) {
+                if (!validSelectionReviewIds(ids)) return [];
+                var byId = new Map();
+                (this.items || []).forEach(function (item) {
+                    if (item && Number.isSafeInteger(item.id) && item.id > 0 && !byId.has(item.id)) {
+                        byId.set(item.id, item);
+                    }
+                });
+                (this.selectionReviewRows || []).forEach(function (item) {
+                    if (item && Number.isSafeInteger(item.id) && item.id > 0) byId.set(item.id, item);
+                });
+                var result = ids.map(function (id) { return byId.get(id); });
+                return result.some(function (item) { return !item; }) ? [] : result;
+            },
+            cancelSelectionReviewRequest: function () {
+                var request = this._selectionReviewRequest;
+                this._selectionReviewRequest = null;
+                this._selectionReviewRevision = (this._selectionReviewRevision || 0) + 1;
+                if (request && request.abort) request.abort.abort();
+                if (request && typeof request.cancel === 'function') request.cancel();
+                this.selectionReviewLoading = false;
+            },
+            cancelSelectionReview: function (options) {
+                options = options || {};
+                this.cancelSelectionReviewRequest();
+                this.selectionReviewActive = false;
+                this.selectionReviewError = '';
+                if (options.clearRows) {
+                    this.selectionReviewRows = [];
+                    this.selectionReviewIds = [];
+                }
+            },
+            selectionReviewRequestIsCurrent: function (request) {
+                return !!request && this._selectionReviewRequest === request &&
+                    request.abort && (!request.abort.signal.aborted || request.timedOut) &&
+                    this._selectionReviewRevision === request.revision &&
+                    this._feedRevision === request.feedRevision &&
+                    this.feedScopeKey() === request.scopeKey &&
+                    this.itemsScope === request.scopeKey &&
+                    sameOrderedIds(this.selected, request.ids) &&
+                    (this.searchInput || '').trim().slice(0, 200) === this.filters.search &&
+                    (!request.restore || (this.workspaceReturnPending &&
+                        this.workspaceSelectionReviewReturnMatches(request.capsule))) &&
+                    !this.importBatchMode && !this.supplierRefreshBatchMode;
+            },
+            validSelectionReviewResponse: function (data, expectedIds) {
+                var responseIds = data && orderedProductIds(data.items);
+                return !!data && typeof data === 'object' && !Array.isArray(data) &&
+                    data.success === true && Array.isArray(data.items) &&
+                    validSelectionReviewIds(expectedIds) && responseIds &&
+                    sameOrderedIds(responseIds, expectedIds);
+            },
+            readSelectionReviewRows: function (ids, options) {
+                options = options || {};
+                if (!validSelectionReviewIds(ids) || typeof this.urls.selection !== 'string' ||
+                    !this.urls.selection) return Promise.resolve({ ok: false, invalid: true });
+                this.cancelSelectionReviewRequest();
+                var request = {
+                    ids: ids.slice(),
+                    scopeKey: this.feedScopeKey(),
+                    feedRevision: this._feedRevision || 0,
+                    revision: (this._selectionReviewRevision || 0) + 1,
+                    abort: new AbortController(),
+                    restore: options.restore === true,
+                    capsule: options.capsule || null,
+                };
+                this._selectionReviewRevision = request.revision;
+                this._selectionReviewRequest = request;
+                this.selectionReviewActive = false;
+                this.selectionReviewRows = [];
+                this.selectionReviewIds = [];
+                this.selectionReviewError = '';
+                this.selectionReviewLoading = true;
+                var result;
+                try {
+                    result = this.$api.post(this.urls.selection, { ids: request.ids.slice() }, {
+                        signal: request.abort.signal,
+                    });
+                } catch (err) {
+                    result = Promise.reject(err);
+                }
+                var self = this;
+                var timeoutId = null;
+                var cancelledResult = { selectionReviewCancelled: true };
+                var guard = new Promise(function (resolve, reject) {
+                    request.cancel = function () { resolve(cancelledResult); };
+                    timeoutId = setTimeout(function () {
+                        request.timedOut = true;
+                        var timeoutError = new Error('Selection read timed out');
+                        timeoutError.name = 'SelectionReviewTimeoutError';
+                        reject(timeoutError);
+                        request.abort.abort();
+                    }, 12000);
+                });
+                return Promise.race([Promise.resolve(result), guard]).then(function (data) {
+                    if (data === cancelledResult) return { ok: false, stale: true };
+                    if (!self.selectionReviewRequestIsCurrent(request)) return { ok: false, stale: true };
+                    if (!self.validSelectionReviewResponse(data, request.ids) ||
+                        (request.restore && !self.workspaceReturnSelectionMatches(data.items, request.ids))) {
+                        self.selectionReviewUnavailableIds = request.ids.slice();
+                        self.selectionReviewError = 'Не удалось подтвердить точный список выбранных товаров. Повторите чтение.';
+                        return { ok: false, mismatch: true };
+                    }
+                    self.selectionReviewRows = data.items;
+                    self.selectionReviewIds = request.ids.slice();
+                    self.selectionReviewUnavailableIds = [];
+                    if (options.activate === true) {
+                        self.selectionReviewActive = true;
+                        self.$nextTick(function () {
+                            self.$refs.selectionReviewHeading?.focus({ preventScroll: true });
+                        });
+                    }
+                    return { ok: true, items: data.items };
+                }).catch(function (err) {
+                    if (!self.selectionReviewRequestIsCurrent(request) ||
+                        (err && err.name === 'AbortError')) return { ok: false, stale: true };
+                    self.selectionReviewUnavailableIds = request.ids.slice();
+                    self.selectionReviewError = err && err.name === 'SelectionReviewTimeoutError'
+                        ? 'Чтение заняло слишком много времени. Повторите попытку.'
+                        : err && err.status === 404
+                        ? 'Часть выбранных товаров больше недоступна. Обновите список и выберите товары снова.'
+                        : err && err.status === 409
+                            ? 'Состав товаров изменился. Повторите чтение выбранного списка.'
+                            : 'Не удалось прочитать точный список выбранных товаров. Повторите попытку.';
+                    return { ok: false, status: err && err.status };
+                }).finally(function () {
+                    if (timeoutId !== null) clearTimeout(timeoutId);
+                    if (self._selectionReviewRequest === request) {
+                        self._selectionReviewRequest = null;
+                        self.selectionReviewLoading = false;
+                    }
+                });
+            },
+            showSelected: function () {
+                if (!this.selectionReviewAvailable || !validSelectionReviewIds(this.selected)) return false;
+                this.error = '';
+                var ids = this.selected.slice();
+                return this.readSelectionReviewRows(ids, { activate: true }).then(function (result) {
+                    return !!(result && result.ok);
+                });
+            },
+            returnToCatalog: function () {
+                this.selectionReviewActive = false;
+                this.selectionReviewError = '';
+                this.$nextTick(function () {
+                    this.$refs.catalogListFocus?.focus({ preventScroll: true });
+                });
+            },
+            onProductSelectionChange: function (id, event) {
+                var checkbox = event && event.currentTarget;
+                var checked = !!(checkbox && checkbox.checked);
+                if (!Number.isSafeInteger(id) || id <= 0 || this.loading || this.loadingMore ||
+                    this.selectionReviewLoading || this.itemsScope !== this.feedScopeKey() ||
+                    !this.visibleItems.some(function (item) { return item && item.id === id; })) {
+                    if (checkbox) checkbox.checked = this.selected.indexOf(id) !== -1;
+                    return false;
+                }
+                var next = this.selected.slice();
+                var currentIndex = next.indexOf(id);
+                if (checked && currentIndex === -1) {
+                    if (next.length >= MAX_BULK_SELECTION) {
+                        checkbox.checked = false;
+                        this.error = 'За один раз можно выбрать не больше 200 товаров. Снимите часть отметок и повторите.';
+                        return false;
+                    }
+                    next.push(id);
+                } else if (!checked && currentIndex !== -1) {
+                    next.splice(currentIndex, 1);
+                }
+                this.selected = next;
+                this.markWbCreateSelectionIntent();
+                return true;
+            },
             openSupplierImport: function () {
                 if (!this.importPanelAvailable) return false;
                 this.closeBulkActionPanel(false);
@@ -1936,16 +2224,15 @@
                 }
             },
             priceWorkspaceItemsBySelection: function (selectionIds) {
-                if (!Array.isArray(selectionIds) || !selectionIds.length ||
-                    new Set(selectionIds).size !== selectionIds.length) return null;
-                var byId = new Map();
-                for (var index = 0; index < this.items.length; index += 1) {
-                    var item = this.items[index];
-                    if (!item || !Number.isSafeInteger(item.id) || item.id <= 0 || byId.has(item.id)) return null;
-                    byId.set(item.id, item);
-                }
-                var selectedItems = selectionIds.map(function (id) { return byId.get(id); });
-                return selectedItems.some(function (item) { return !item; }) ? null : selectedItems;
+                if (!validSelectionReviewIds(selectionIds)) return null;
+                var selectedItems = this.selectionItemsForIds(selectionIds);
+                if (!selectedItems.length || selectedItems.length !== selectionIds.length) return null;
+                var currentIds = orderedProductIds(this.items) || [];
+                var reviewIds = this.selectionReviewIds;
+                if (selectionIds.some(function (id) {
+                    return currentIds.indexOf(id) === -1 && reviewIds.indexOf(id) === -1;
+                })) return null;
+                return selectedItems;
             },
             priceWorkspaceLaunchIsCurrent: function (launch) {
                 if (!launch || this.loading || this.loadingMore || this.selectAllLoading ||
@@ -1960,7 +2247,7 @@
                 if (launch.marketplace === 'wb') {
                     return this.wbConnected && this.wbAccountKnown &&
                         this.wbAccountId === launch.wbAccountId &&
-                        sameOrderedIds(orderedWbProductIds(this.items, launch.localSelectionIds), launch.productIds);
+                        sameOrderedIds(orderedWbProductIds(sourceItems, launch.localSelectionIds), launch.productIds);
                 }
                 if (launch.marketplace !== 'ozon') return false;
                 var accountResult = this.resolveOzonPriceAccountChoices(sourceItems, launch.localSelectionIds);
@@ -1979,7 +2266,8 @@
                     (this.searchInput || '').trim().slice(0, 200) !== this.filters.search ||
                     !Array.isArray(localSelectionIds) || !localSelectionIds.length ||
                     new Set(localSelectionIds).size !== localSelectionIds.length ||
-                    (source === 'bulk' && !sameOrderedIds(this.selected, localSelectionIds)) ||
+                    (source === 'bulk' && (!this.selectionRowsVerified ||
+                        !sameOrderedIds(this.selected, localSelectionIds))) ||
                     (source === 'row' && localSelectionIds.length !== 1)) {
                     this.error = 'Список или выбор изменился. Обновите список и отметьте товары заново.';
                     return false;
@@ -1993,7 +2281,7 @@
                 var accountId = null;
                 var accountLabel = '';
                 if (marketplace === 'wb') {
-                    productIds = orderedWbProductIds(this.items, localSelectionIds);
+                    productIds = orderedWbProductIds(sourceItems, localSelectionIds);
                     if (!productIds || productIds.length > MAX_BULK_SELECTION ||
                         !this.wbConnected || !this.wbAccountKnown) {
                         this.error = 'Для изменения цены выберите точные карточки Wildberries и проверьте подключение кабинета.';
@@ -2334,14 +2622,49 @@
             },
             consumeWorkspaceReturn: function (nonce) {
                 this.workspaceReturnPending = false;
+                clearSelectionReviewReturn(nonce);
+                if (workspaceSelectionReviewReturn && workspaceSelectionReviewReturn.nonce === nonce) {
+                    workspaceSelectionReviewReturn = null;
+                }
                 if (typeof workspaceHelpers.consumeWorkspaceReturn === 'function') {
                     try { workspaceHelpers.consumeWorkspaceReturn(nonce); } catch (_) {}
                 }
             },
             workspaceReturnChanged: function () {
                 this.selected = [];
+                this.cancelSelectionReview({ clearRows: true });
                 this.workspaceReturnNote = workspaceChangedNote;
                 if (workspaceReturnCapsule) this.consumeWorkspaceReturn(workspaceReturnCapsule.nonce);
+            },
+            workspaceSelectionReviewReturnMatches: function (capsule) {
+                return !!capsule && !this.importBatchMode && !this.supplierRefreshBatchMode &&
+                    !!workspaceSelectionReviewReturn &&
+                    workspaceSelectionReviewReturn.owner === boot.workspaceOwner &&
+                    workspaceSelectionReviewReturn.nonce === capsule.nonce &&
+                    sameOrderedIds(workspaceSelectionReviewReturn.ids, capsule.selectionIds);
+            },
+            restoreWorkspaceSelectionReview: function (capsule, scope, feedRevision) {
+                var ids = capsule && capsule.selectionIds;
+                if (!this.workspaceSelectionReviewReturnMatches(capsule) ||
+                    !validSelectionReviewIds(ids) || this.itemsScope !== scope ||
+                    this.feedScopeKey() !== scope || this._feedRevision !== feedRevision) {
+                    this.workspaceReturnChanged();
+                    this.error = 'Не удалось восстановить точный выбранный список. Проверьте список и отметьте товары заново.';
+                    return Promise.resolve(false);
+                }
+                this.selected = ids.slice();
+                var self = this;
+                return this.readSelectionReviewRows(ids, {
+                    activate: true,
+                    restore: true,
+                    capsule: capsule,
+                }).then(function (result) {
+                    if (!result.ok && !result.stale) {
+                        self.workspaceReturnChanged();
+                        self.error = 'Не удалось восстановить точный выбранный список. Проверьте список и отметьте товары заново.';
+                    }
+                    return !!result.ok;
+                });
             },
             workspaceReturnScopeMatches: function (scope) {
                 return this.importBatchMode
@@ -2437,18 +2760,19 @@
                     JSON.stringify(this.buildWorkspaceReturnScope()) !==
                         JSON.stringify(handoff.returnScope)) return false;
                 return sameOrderedIds(
-                    orderedWbProductIds(this.items, handoff.selectionIds),
+                    orderedWbProductIds(this.selectionItemsForIds(handoff.selectionIds), handoff.selectionIds),
                     handoff.productIds,
                 );
             },
             openWbBulkEdit: function (selectionIds) {
                 if (this._wbEditHandoff) this.invalidateWbEditHandoff();
-                var productIds = orderedWbProductIds(this.items, selectionIds);
+                var selectionItems = this.selectionItemsForIds(selectionIds);
+                var productIds = orderedWbProductIds(selectionItems, selectionIds);
                 if (!this.wbConnected || !this.wbAccountKnown) {
                     this.error = 'Подключите кабинет Wildberries и обновите список перед изменением карточек.';
                     return false;
                 }
-                if (!productIds || !sameOrderedIds(this.selected, selectionIds) ||
+                if (!this.selectionRowsVerified || !productIds || !sameOrderedIds(this.selected, selectionIds) ||
                     selectionIds.length > MAX_BULK_SELECTION ||
                     this.loading || this.loadingMore || this.selectAllLoading ||
                     this.itemsScope !== this.feedScopeKey() ||
@@ -2588,6 +2912,7 @@
                             scope: scope,
                             batch: this.importBatchMode ? this.importBatch : null,
                         });
+                        saveSelectionReviewReturn(this, nonce, selectionIds);
                     } catch (_) {
                         nonce = null;
                     }
@@ -2644,12 +2969,22 @@
                     this.workspaceReturnChanged();
                     workspaceReturn = null;
                 }
+                var restoreSelectionReview = !!workspaceReturn &&
+                    this.workspaceSelectionReviewReturnMatches(workspaceReturn);
+                this.cancelSelectionReviewRequest();
+                if (!restoreSelectionReview) {
+                    this.cancelSelectionReview({ clearRows: true });
+                } else {
+                    this.selectionReviewActive = false;
+                    this.selectionReviewRows = [];
+                    this.selectionReviewIds = [];
+                }
                 if (this._abort) this._abort.abort();
                 if (this._loadMoreAbort) this._loadMoreAbort.abort();
                 this._loadMoreAbort = null;
                 this.loadingMore = false;
                 this.cancelFilteredSelect();
-                this.selected = [];
+                if (this.importBatchMode || this.supplierRefreshBatchMode) this.selected = [];
                 if (this.importBatchMode) this.importBatchSelectionVerified = false;
                 var revision = (this._feedRevision || 0) + 1;
                 this._feedRevision = revision;
@@ -2738,6 +3073,11 @@
                                 pages: Math.ceil(returnedPage.pagination.total / 50),
                                 has_next: data.items.length < returnedPage.pagination.total,
                             });
+                            if (restoreSelectionReview) {
+                                return self.restoreWorkspaceSelectionReview(
+                                    workspaceReturn, scope, revision,
+                                );
+                            }
                             if (workspaceReturn.selectionIds.every(function (id) {
                                 return returnedPage.ids.indexOf(id) !== -1;
                             }) && self.workspaceReturnSelectionMatches(
@@ -2899,7 +3239,7 @@
                     });
             },
             loadMore: function () {
-                if (this.importBatchMode || this.supplierRefreshBatchMode) return;
+                if (this.importBatchMode || this.supplierRefreshBatchMode || this.selectionReviewActive) return;
                 if (this.loading || this.loadingMore || !this.pagination.has_next ||
                     this.itemsScope !== this.feedScopeKey()) return;
                 var self = this;
@@ -2957,7 +3297,7 @@
                     });
             },
             selectAllFiltered: function () {
-                if (this.importBatchMode || this.supplierRefreshBatchMode) return;
+                if (this.importBatchMode || this.supplierRefreshBatchMode || this.selectionReviewActive) return;
                 if (!this.canSelectAllFiltered || this.selectAllLoading) return;
                 var self = this;
                 var total = this.pagination.total;
@@ -3000,6 +3340,14 @@
                             return;
                         }
 
+                        var union = selectionSnapshot.slice();
+                        fullIds.forEach(function (id) {
+                            if (union.indexOf(id) === -1) union.push(id);
+                        });
+                        if (union.length > MAX_BULK_SELECTION) {
+                            self.error = 'За один раз можно выбрать не больше 200 товаров. Снимите часть отметок и повторите.';
+                            return;
+                        }
                         self._selectAllAbort = null;
                         self._selectAllSelectionSnapshot = null;
                         self.selectAllLoading = false;
@@ -3010,7 +3358,7 @@
                         self.items = data.items;
                         self.pagination = responsePage;
                         self.itemsScope = scope;
-                        self.selected = fullIds.slice();
+                        self.selected = union;
                     }).catch(function (err) {
                         if ((err && err.name === 'AbortError') || abort.signal.aborted ||
                             self._selectAllAbort !== abort || self._selectAllRevision !== revision ||
@@ -3035,7 +3383,6 @@
                 if (this.importBatchMode || this.supplierRefreshBatchMode) return;
                 if (this.activeTab === key) return;
                 this.activeTab = key;
-                this.selected = [];
                 this.load();
             },
             toggleSupplierUpdates: function () {
@@ -3061,9 +3408,27 @@
                 this.filters.stock = '';
             },
             toggleAll: function () {
-                this.selected = this.allSelected
-                    ? []
-                    : this.items.map(function (item) { return item.id; });
+                if (this.selectionReviewActive || this.loading || this.loadingMore ||
+                    this.itemsScope !== this.feedScopeKey()) return;
+                var shownIds = orderedProductIds(this.items);
+                if (!shownIds) {
+                    this.error = 'Не удалось проверить показанные товары. Обновите список и повторите выбор.';
+                    return;
+                }
+                if (this.allSelected) {
+                    var shown = new Set(shownIds);
+                    this.selected = this.selected.filter(function (id) { return !shown.has(id); });
+                } else {
+                    var next = this.selected.slice();
+                    shownIds.forEach(function (id) {
+                        if (next.indexOf(id) === -1) next.push(id);
+                    });
+                    if (next.length > MAX_BULK_SELECTION) {
+                        this.error = 'За один раз можно выбрать не больше 200 товаров. Снимите часть отметок и повторите.';
+                        return;
+                    }
+                    this.selected = next;
+                }
                 this.markWbCreateSelectionIntent();
             },
             resolveOzonPriceAccountChoices: function (items, selectionIds) {
@@ -3084,7 +3449,7 @@
                 this.error = '';
                 this.ozonWorkspaceUpdateDialogError = '';
                 if (this.ozonWorkspaceUpdateBusy) return false;
-                if (!sameOrderedIds(this.selected, selectionIds) ||
+                if (!this.selectionRowsVerified || !sameOrderedIds(this.selected, selectionIds) ||
                     selectionIds.length > MAX_BULK_SELECTION) {
                     this.error = 'Выбор изменился или превышает 200 товаров. Отметьте товары заново.';
                     return false;
@@ -3450,6 +3815,12 @@
                 if (this.loading || this.itemsScope !== this.feedScopeKey() ||
                     (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) {
                     this.error = 'Список обновляется. Дождитесь загрузки и выберите товары снова.';
+                    return;
+                }
+                if (!this.selectionRowsVerified) {
+                    this.error = this.selectionReviewLoading
+                        ? 'Проверяем точный список выбранных товаров. Подождите завершения чтения.'
+                        : 'Сначала проверьте точный список кнопкой «Показать выбранные». Действия по непроверенному выбору недоступны.';
                     return;
                 }
                 var chosen = this.selectedItems;
@@ -4226,6 +4597,10 @@
             clearSelection: function () {
                 this.selected = [];
                 this.markWbCreateSelectionIntent();
+                this.cancelSelectionReview({ clearRows: true });
+                this.$nextTick(function () {
+                    this.$refs.catalogListFocus?.focus({ preventScroll: true });
+                });
             },
             wbCreateActionUrl: function (kind) {
                 var value = kind === 'result' ? this.urls.wbCreateResult : this.urls.pushToWb;

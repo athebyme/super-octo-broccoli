@@ -89,6 +89,7 @@ function makeApp(selection = [22, 21], {batch = false} = {}) {
     searchInput: '', activeTab: '',
     pagination: {page: 1, per_page: 50, total: items.length, has_next: false},
     loading: false, loadingMore: false, selectAllLoading: false,
+    selectionRowsVerified: true,
     itemsScope: '', _feedRevision: 4,
     wbConnected: true, wbAccountKnown: true, wbAccountId: null, wbEditBusy: false,
     importBatchMode: batch, importBatch: batch ? 'signed.import-batch_token' : '',

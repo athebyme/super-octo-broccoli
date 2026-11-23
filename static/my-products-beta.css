@@ -108,6 +108,24 @@
 .mp-select-limit { font-size: 12px; color: var(--text-muted); }
 .mp-listhead-count { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
+.mp-selection-review {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:9px 12px;
+    border-bottom:1px solid var(--border-light);
+    background:var(--bg-hover);
+}
+.mp-selection-review-copy { display:flex; align-items:baseline; flex-wrap:wrap; gap:8px; min-width:0; }
+.mp-selection-review-copy h2 { margin:0; color:var(--text); font-size:13px; font-weight:650; line-height:1.35; }
+.mp-selection-review-copy h2:focus { outline:2px solid var(--focus-outline); outline-offset:2px; border-radius:2px; }
+.mp-selection-review-copy span { color:var(--text-muted); font-size:12px; font-variant-numeric:tabular-nums; }
+.mp-selection-review-actions { display:flex; flex:0 0 auto; flex-wrap:wrap; gap:6px; }
+.mp-selection-review-actions .sh-btn { min-height:40px; }
+.mp-selection-review-error { padding:9px 12px; border-bottom:1px solid var(--border-light); color:var(--danger); background:var(--danger-bg); font-size:12px; line-height:1.4; }
+.mp-listhead:focus { outline:2px solid var(--focus-outline); outline-offset:2px; border-radius:var(--r-xs); }
+
 /* One compact task rail replaces the long all-actions menu. */
 .mp-bulkbar.shk-bulkbar { isolation:isolate; background-color:var(--bg-card) !important; }
 .mp-bulkbar.shk-bulkbar.shk-rise-enter-active,
@@ -116,6 +134,11 @@
 .mp-bulkbar.shk-bulkbar.shk-rise-leave-to { opacity:1; }
 .mp-bulkbar .shk-bulkbar-actions { display:contents; }
 .mp-bulk-topline { display:flex; align-items:center; gap:5px; }
+.mp-selection-tools { display:flex; align-items:center; flex-wrap:wrap; gap:4px 8px; }
+.mp-selection-outside-count { color:var(--text-muted); font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.mp-selection-review-trigger { min-height:40px; padding-inline:10px; white-space:nowrap; }
+.mp-selection-review-trigger:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
+.mp-selection-review-trigger:disabled { color:var(--text-muted); cursor:wait; }
 .mp-bulkbar .shk-bulkbar-clear { display:none !important; }
 .mp-bulk-clear { display:inline-flex; align-items:center; justify-content:center; min-height:44px; padding:0 8px; border:0; border-radius:var(--r-xs); color:var(--text-secondary); background:transparent; font-size:12px; white-space:nowrap; cursor:pointer; }
 .mp-bulk-clear:hover { color:var(--text); background:var(--bg-hover); }
@@ -142,6 +165,7 @@
 }
 .mp-bulk-intent:hover,
 .mp-bulk-intent[aria-expanded="true"] { border-color:var(--accent); background:var(--accent-light); }
+.mp-bulk-intent:disabled { color:var(--text-muted); background:var(--bg-hover); cursor:not-allowed; }
 .mp-bulk-intent:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
 .mp-bulk-intent:not([aria-expanded]) { padding-right:11px; }
 .mp-bulk-intent-name { font-size:13px; font-weight:650; line-height:1.2; }
@@ -340,12 +364,20 @@
     .mp-head-actions .sh-btn--primary { width:100%; min-height:44px; }
     .mp-bulkbar { gap:8px; padding:9px 10px; }
     .mp-bulkbar .shk-bulkbar-count { order:0; flex:1 1 auto; white-space:nowrap; }
-    .mp-bulk-topline { order:1; flex:0 0 auto; }
+    .mp-bulk-topline { order:1; flex:1 1 auto; flex-wrap:wrap; }
+    .mp-selection-tools { flex:1 1 100%; justify-content:space-between; }
+    .mp-selection-review-trigger { min-height:44px; }
     .mp-bulk-intents { order:2; flex:1 1 100%; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:7px; }
     .mp-bulk-intent { min-height:48px; padding-left:10px; }
     .mp-bulk-intent-group:nth-child(even) .mp-bulk-intent-popover { left:auto; right:0; }
     .mp-more-actions { flex:0 0 auto; }
     .mp-bulkbar .sh-btn { white-space:normal; }
+}
+
+@media (max-width:700px) {
+    .mp-selection-review { align-items:flex-start; flex-direction:column; gap:8px; padding:9px; }
+    .mp-selection-review-actions { display:grid; width:100%; grid-template-columns:minmax(0,1fr); }
+    .mp-selection-review-actions .sh-btn { min-height:44px; padding-inline:8px; white-space:normal; }
 }
 
 /* Local-only Ozon preparation, separate from the WB bulk confirmation. */

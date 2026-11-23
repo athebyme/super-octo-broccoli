@@ -95,6 +95,7 @@ function makeApp(items, accounts, {batch = null} = {}) {
   app.ozonAccounts = plain(accounts);
   app.importBatchMode = batch !== null;
   app.importBatch = batch || '';
+  app.importBatchSelectionVerified = batch !== null;
   app.loading = false;
   app.loadingMore = false;
   app.selectAllLoading = false;

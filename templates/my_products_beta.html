@@ -6,7 +6,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-supplier-entry-r65') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-workspace-selection-r70') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261123-unified-catalog-prices-r63b') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
@@ -26,6 +26,7 @@
         'feed': url_for('api_my_products_list'),
         'workspace': url_for('seller_my_products_beta'),
         'facets': url_for('api_my_products_facets'),
+        'selection': url_for('api_my_products_selection'),
         'jobStatus': '/api/jobs/',
         'pushToWb': url_for('seller_push_to_wb_bulk'),
         'wbCreateResult': url_for('seller_push_to_wb_bulk_result'),
@@ -310,7 +311,7 @@
 
     <section class="mp-catalog-surface" data-workspace-catalog aria-label="Каталог товаров">
     <!-- Вкладки статуса, точный выбор и карточки остаются на одной поверхности. -->
-    <nav v-if="!importBatchMode && !supplierRefreshBatchMode" class="mp-tabs" aria-label="Статус карточек">
+    <nav v-if="!importBatchMode && !supplierRefreshBatchMode && !selectionReviewActive" class="mp-tabs" aria-label="Статус карточек">
         <button v-for="tab in statusTabs" :key="tab.key" type="button"
                 class="mp-tab" :class="{'is-active': activeTab === tab.key}"
                 :aria-pressed="activeTab === tab.key"
@@ -320,7 +321,7 @@
         </button>
     </nav>
 
-    <sh-filter-bar v-if="!importBatchMode && !supplierRefreshBatchMode" v-model="searchInput" placeholder="Название, бренд или артикул"
+    <sh-filter-bar v-if="!importBatchMode && !supplierRefreshBatchMode && !selectionReviewActive" v-model="searchInput" placeholder="Название, бренд или артикул"
                    :chips="[]" :sticky="true">
         <select v-model="filters.supplier" class="mp-select" aria-label="Поставщик">
             <option value="">Все поставщики</option>
@@ -345,10 +346,32 @@
         </select>
     </sh-filter-bar>
 
-    <div class="mp-listhead" :class="{'mp-listhead--import-batch': importBatchMode || supplierRefreshBatchMode}" v-if="items.length || loading">
-        <div class="mp-select-controls">
+    <section v-if="selectionReviewActive" class="mp-selection-review" data-selection-review
+             role="region" aria-labelledby="mp-selection-review-title">
+        <div class="mp-selection-review-copy">
+            <h2 id="mp-selection-review-title" ref="selectionReviewHeading" tabindex="-1">Выбранные товары</h2>
+            <span>
+                {{ selected.length }} {{ $fmt.plural(selected.length, 'товар', 'товара', 'товаров') }}
+                <template v-if="selectedOutsideCurrentListCount">
+                    · <span data-selection-outside-count>{{ selectedOutsideCurrentListCount }} вне текущего списка</span>
+                </template>
+            </span>
+        </div>
+        <div class="mp-selection-review-actions">
+            <button type="button" class="sh-btn sh-btn--secondary" data-selection-review-return
+                    @click="returnToCatalog">Вернуться к списку</button>
+        </div>
+    </section>
+    <div v-if="selectionReviewError" class="mp-selection-review-error"
+         data-selection-review-error role="alert" aria-live="assertive">{{ selectionReviewError }}</div>
+
+    <div class="mp-listhead" ref="catalogListFocus" tabindex="-1"
+         :class="{'mp-listhead--import-batch': importBatchMode || supplierRefreshBatchMode}"
+         v-if="!selectionReviewActive && (items.length || loading)">
+        <div v-if="!selectionReviewActive" class="mp-select-controls">
             <label class="mp-selectall">
                 <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected"
+                       :disabled="loading || loadingMore || selectionReviewLoading"
                        @change="toggleAll"
                        :aria-label="supplierRefreshResultBatchMode ? (allSelected ? 'Снять выбор обновлённых товаров' : 'Выбрать обновлённые товары') : (importBatchMode ? 'Выбрать товары из импорта' : (supplierRefreshBatchMode ? 'Выбрать товары для обновления' : (allSelected ? 'Снять выбор всех загруженных товаров' : 'Выбрать все загруженные товары')))">
                 <span>{{ supplierRefreshResultBatchMode ? (allSelected ? 'Снять выбор' : 'Выбрать обновлённые') : (importBatchMode ? 'Выбрать товары из импорта' : (supplierRefreshBatchMode ? 'Выбрать товары для обновления' : (allSelected ? 'Снять выбор' : 'Выбрать загруженные'))) }}</span>
@@ -362,18 +385,19 @@
             </span>
         </div>
         <span class="mp-listhead-count">
-            {{ $fmt.int(pagination.total || 0) }} {{ $fmt.plural(pagination.total || 0, 'товар', 'товара', 'товаров') }}
+            <template v-if="selectionReviewActive">{{ $fmt.int(selected.length) }} выбрано</template>
+            <template v-else>{{ $fmt.int(pagination.total || 0) }} {{ $fmt.plural(pagination.total || 0, 'товар', 'товара', 'товаров') }}</template>
         </span>
     </div>
 
-    <div v-if="items.length || loading" class="mp-grid-head" aria-hidden="true">
+    <div v-if="visibleItems.length || loading" class="mp-grid-head" aria-hidden="true">
         <span></span><span></span><span>Товар</span><span data-workspace-column="category">Категория каталога</span>
         <span data-workspace-column="supplier">Закупка · остаток</span><span data-workspace-column="wb">WB</span>
         <span data-workspace-column="ozon">Ozon</span><span></span>
     </div>
 
     <div class="mp-list">
-        <template v-if="loading && !items.length">
+        <template v-if="!selectionReviewActive && loading && !items.length">
             <div v-for="n in 8" :key="'sk' + n" class="mp-row mp-row--skeleton">
                 <div class="mp-photo sh-skeleton"></div>
                 <div class="mp-main">
@@ -383,8 +407,9 @@
             </div>
         </template>
 
-        <sh-empty v-else-if="!items.length && !error"
-                  :title="emptyState.title" :text="emptyState.text">
+        <sh-empty v-else-if="!visibleItems.length && !error"
+                  :title="selectionReviewActive ? 'Выбор пуст' : emptyState.title"
+                  :text="selectionReviewActive ? 'Снимите режим выбора или вернитесь к списку товаров.' : emptyState.text">
             <button v-if="emptyState.action === 'reset'" type="button"
                     class="sh-btn sh-btn--secondary" @click="resetFilters">Сбросить фильтры</button>
             <button v-else-if="emptyState.action === 'catalog' && importPanelAvailable" type="button"
@@ -393,11 +418,14 @@
                :href="urls.supplierCatalog">Открыть каталог поставщика</a>
         </sh-empty>
 
-        <article v-for="item in items" :key="item.id" class="mp-row"
+        <article v-for="item in visibleItems" :key="item.id" class="mp-row"
+                 :data-selection-review-row="selectionReviewActive ? item.id : null"
                  :class="{'is-selected': selected.includes(item.id)}">
             <label class="mp-check">
-                <input type="checkbox" :value="item.id" v-model="selected"
-                       @change="markWbCreateSelectionIntent"
+                <input type="checkbox" :value="item.id" :checked="selected.includes(item.id)"
+                       :data-product-id="item.id"
+                       :disabled="loading || loadingMore || selectionReviewLoading"
+                       @change="onProductSelectionChange(item.id, $event)"
                        :aria-label="'Выбрать ' + (item.title || item.vendor_code)">
             </label>
 
@@ -520,7 +548,7 @@
         </article>
     </div>
 
-    <div v-if="(items.length || !loading) && (!(importBatchMode || supplierRefreshBatchMode) || (items.length && !error))" class="mp-foot">
+    <div v-if="!selectionReviewActive && (items.length || !loading) && (!(importBatchMode || supplierRefreshBatchMode) || (items.length && !error))" class="mp-foot">
         <span class="mp-foot-info">Показано {{ items.length }} из {{ $fmt.int(pagination.total || 0) }}</span>
         <button v-if="pagination.has_next" type="button" class="sh-btn sh-btn--secondary"
                 :class="{'is-loading': loadingMore}" :disabled="loading || loadingMore || selectAllLoading" @click="loadMore">Показать ещё</button>
@@ -531,6 +559,18 @@
     <!-- Выбранный список сразу показывает четыре понятных намерения. -->
     <sh-bulk-bar class="mp-bulkbar" :count="selected.length" @clear="clearSelection">
         <div class="mp-bulk-topline">
+            <div v-if="!importBatchMode && !supplierRefreshBatchMode && !selectionReviewActive"
+                 class="mp-selection-tools">
+                <span v-if="selectedOutsideCurrentListCount && !loading"
+                      class="mp-selection-outside-count" data-selection-outside-count>
+                    {{ selectedOutsideCurrentListCount }} вне текущего списка
+                </span>
+                <button type="button" class="sh-btn sh-btn--secondary mp-selection-review-trigger"
+                        data-selection-review-show :disabled="!selectionReviewAvailable"
+                        @click="showSelected">
+                    {{ selectionReviewLoading ? 'Проверяем…' : 'Показать выбранные' }}
+                </button>
+            </div>
             <details ref="moreActions" class="mp-more-actions" v-if="selected.length"
                      @toggle="onMoreActionsToggle">
                 <summary>Ещё</summary>
@@ -577,6 +617,7 @@
                 <button type="button" class="mp-bulk-intent"
                         :data-bulk-action-group="group.key"
                         :data-bulk-direct-action="group.actions.length === 1 ? group.actions[0].key : null"
+                        :disabled="!selectionRowsVerified"
                         :aria-expanded="group.actions.length !== 1 ? (activeBulkActionGroup === group.key ? 'true' : 'false') : null"
                         @click="activateBulkIntent(group, $event)">
                     <span class="mp-bulk-intent-name">{{ group.label }}</span>
@@ -734,5 +775,5 @@
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261122-ozon-update-return-r56') }}"></script>
 <script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261123-unified-catalog-prices-r63b') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-supplier-entry-r65') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-workspace-selection-r70') }}"></script>
 {% endblock %}

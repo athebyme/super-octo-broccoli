@@ -121,6 +121,9 @@ function makeApp(items, accounts, selected = items.map(row => row.id)) {
       return this.items.filter(row => ids.has(row.id));
     },
   });
+  Object.defineProperty(app, 'selectionRowsVerified', {
+    get() { return component.computed.selectionRowsVerified.call(this); },
+  });
   Object.assign(app, component.methods);
   Object.defineProperty(app, 'actionGroups', {
     get() { return component.computed.actionGroups.call(this); },
@@ -205,6 +208,7 @@ assigned.length = 0;
 const batchApp = makeApp(bothShops, [accounts[0]]);
 batchApp.importBatchMode = true;
 batchApp.importBatch = 'signed-import-batch-token';
+batchApp.importBatchSelectionVerified = true;
 batchApp.itemsScope = batchApp.feedScopeKey();
 batchApp.startAction({key: 'ozon_prices'});
 assertHandoffUrl(11, [1001, 1002]);
