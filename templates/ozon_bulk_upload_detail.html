@@ -7,6 +7,7 @@
 {% set summary = run.summary %}
 {% if run.mode in ['source_prepare', 'reviewed_drafts'] %}
 {% set local_only = run.mode == 'source_prepare' %}
+{% set prepare_retry_count = run.prepare_retry_count|default(0, true)|int %}
 {% set review_recovery_draft_ids = run.review_recovery_draft_ids|default([], true) %}
 {% set review_drafts = namespace(ids=[]) %}
 {% set repair_drafts = namespace(ids=[]) %}
@@ -63,6 +64,10 @@
             </a>
             {% endif %}
             {% if local_only %}
+            {% if prepare_retry_parent_url|default('', true) %}
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" data-source-prepare-parent
+               style="min-height:44px" href="{{ prepare_retry_parent_url }}">К исходному запуску</a>
+            {% endif %}
             <a class="text-xs underline underline-offset-2" data-source-prepare-products
                style="color:var(--text-secondary)"
                href="{{ url_for('seller_my_products_beta') }}">Мои товары</a>
@@ -102,6 +107,30 @@
         </div>
         {% if local_only %}
         <p class="mt-4 text-sm" style="color:var(--text-secondary)">Откройте проверку, исправьте нужные черновики и отдельно подтвердите отправку выбранных версий.</p>
+        {% if run.mode == 'source_prepare' and run.status == 'completed' and prepare_retry_count > 0 and prepare_retry_request_key|default('', true) %}
+        <form class="mt-5 border-t pt-4" style="border-color:var(--border)"
+              data-source-prepare-retry
+              method="post" action="{{ url_for('ozon_bulk_uploads.retry', job_uid=run.job_uid) }}"
+              data-confirm="Создать новый локальный запуск подготовки для магазина «{{ run.account_label or ('#' ~ run.account_id) }}», охватить {{ prepare_retry_count }} позиций? Отправки в Ozon не будет."
+              onsubmit="return confirm(this.dataset.confirm)">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="confirm_prepare" value="1">
+            <input type="hidden" name="request_key" value="{{ prepare_retry_request_key }}">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p id="source-prepare-retry-help" class="text-sm" style="color:var(--text-secondary)">
+                    После изменения данных товара или обновления справочника можно повторить локальную подготовку для магазина
+                    <strong>{{ run.account_label or ('#' ~ run.account_id) }}</strong> · позиций:
+                    <strong data-source-prepare-retry-count>{{ prepare_retry_count }}</strong>.
+                    Результат откроется отдельным запуском; данные в Ozon не отправляются.
+                </p>
+                <button class="sh-btn sh-btn--primary sh-btn--md shrink-0" style="min-height:44px"
+                        type="submit" aria-describedby="source-prepare-retry-help"
+                        aria-label="Повторить локальную подготовку для {{ prepare_retry_count }} позиций магазина {{ run.account_label or ('#' ~ run.account_id) }}">
+                    Повторить локальную подготовку ({{ prepare_retry_count }})
+                </button>
+            </div>
+        </form>
+        {% endif %}
         {% elif summary.status_counts.uncertain %}
         <p class="mt-4 text-sm" style="color:var(--text-secondary)">Откройте связанную операцию, чтобы узнать состояние карточки с неизвестным результатом.</p>
         {% endif %}
@@ -179,16 +208,6 @@
             <p class="sh-page-subtitle">{{ run.account_label or ('Кабинет #' ~ run.account_id) }} · результат сохранён. Статус проверяется автоматически.</p>
         </div>
         <div class="sh-page-actions">
-            {% if summary.ready_to_retry or summary.needs_input or summary.failed %}
-            <form method="post" action="{{ url_for('ozon_bulk_uploads.retry', job_uid=run.job_uid) }}"
-                  onsubmit="return confirm('Создать новый запуск только для готовых и явно исправляемых карточек? Перед отправкой они ещё раз пройдут полную локальную проверку. Неопределённые и исключённые операции не повторяются.')">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="confirm_write" value="1">
-                <button class="sh-btn sh-btn--white-outline sh-btn--md" type="submit">
-                    {{ 'Повторить готовые' if summary.ready_to_retry else 'Повторить проблемные' }}
-                </button>
-            </form>
-            {% endif %}
             <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('ozon_bulk_uploads.index', account_id=run.account_id) }}">Загрузки кабинета</a>
             <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('seller_my_products', account_id=run.account_id) }}">Мои товары</a>
         </div>
