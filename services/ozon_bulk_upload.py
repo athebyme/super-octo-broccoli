@@ -2792,6 +2792,12 @@ class OzonBulkUploadService:
                 "updated_at": job.updated_at.isoformat() if job.updated_at else None,
             }
             if detail and run.mode == "source_prepare":
+                # This is a durable page-transition signal.  A locally
+                # terminal-looking item summary is insufficient until the
+                # coordinator has also committed the run's terminal state.
+                document["source_prepare_complete"] = (
+                    run.state == "completed" and summary["active"] == 0
+                )
                 retry_product_ids = cls.prepare_retry_product_ids(
                     mode=run.mode, state=run.state, items=observed["items"],
                 )

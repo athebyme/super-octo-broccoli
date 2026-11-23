@@ -222,6 +222,35 @@ class OzonUploadV3ServiceTest(OzonPublicationFixture, unittest.TestCase):
         document = OzonBulkUploadService.public_document(accepted.job, detail=True)
         self.assertEqual(document["mode"], "source_prepare")
         self.assertEqual(document["items"][0]["phase"], "pending")
+        self.assertFalse(document["source_prepare_complete"])
+
+    def test_source_prepare_completion_requires_durable_terminal_and_settled_items(self):
+        accepted = self._source(key="source-completion-proof-0001")
+        run = OzonBulkUploadRun.query.filter_by(job_id=accepted.job.id).one()
+        item = OzonBulkUploadItem.query.filter_by(run_id=run.id).one()
+
+        # Terminal-looking item rows alone do not prove the coordinator's
+        # durable terminal commit.
+        item.phase = "needs_input"
+        item.next_due_at = None
+        db.session.commit()
+        document = OzonBulkUploadService.public_document(accepted.job, detail=True)
+        self.assertEqual(document["summary"]["active"], 0)
+        self.assertFalse(document["source_prepare_complete"])
+
+        run.state = "completed"
+        run.next_due_at = None
+        db.session.commit()
+        document = OzonBulkUploadService.public_document(accepted.job, detail=True)
+        self.assertTrue(document["source_prepare_complete"])
+
+        # A stale or inconsistent completed run with active items remains
+        # explicitly incomplete until all item work is settled.
+        item.phase = "preparing"
+        db.session.commit()
+        document = OzonBulkUploadService.public_document(accepted.job, detail=True)
+        self.assertGreater(document["summary"]["active"], 0)
+        self.assertFalse(document["source_prepare_complete"])
 
     def test_source_retry_selects_exact_terminal_local_problems_and_replays(self):
         accepted, parent, items, products = self._retry_parent(

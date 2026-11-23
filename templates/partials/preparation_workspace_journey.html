@@ -1,4 +1,8 @@
-{% macro journey(current, account, object, next_action, source_url=none, internal_url=none, draft_url=none, review_url=false, publish_url=false, result_url=none, listing_url=none, channel='Ozon', review_reason='Сначала сохраните черновик и выберите точный набор.', publish_reason='Доступно после свежей проверки выбранных версий.', compact=false) -%}
+{% macro journey_stylesheet() -%}
+<link rel="stylesheet" href="{{ url_for('static', filename='preparation-workspace.css', v='20261122-compact-preparation-journey') }}">
+{%- endmacro %}
+
+{% macro journey(current, account, object, next_action, source_url=none, internal_url=none, draft_url=none, review_url=false, publish_url=false, result_url=none, listing_url=none, channel='Ozon', review_reason='Сначала сохраните черновик и выберите точный набор.', publish_reason='Доступно после свежей проверки выбранных версий.', compact=false, include_stylesheet=true) -%}
 {% set source_href = source_url if source_url is not none else url_for('supplier_catalog') %}
 {% set internal_href = internal_url if internal_url is not none else url_for('seller_my_products') %}
 {% set draft_href = draft_url if draft_url is not none else url_for('marketplace_drafts.index') %}
@@ -14,7 +18,7 @@
     ('result', 'Результат операции', 'Состояние и ответ Ozon', result_href, 'Читайте результат и связанные операции; неопределённое состояние нельзя повторять вслепую.'),
     ('listing', 'Карточка ' ~ channel, 'Статус площадки и видимость', listing_href, 'Сверьте синхронизированную карточку: обработка не означает, что она видна покупателю.')
 ] %}
-<link rel="stylesheet" href="{{ url_for('static', filename='preparation-workspace.css', v='20261122-compact-preparation-journey') }}">
+{% if include_stylesheet %}{{ journey_stylesheet() }}{% endif %}
 <section class="preparation-journey preparation-journey--compact" aria-label="Этапы подготовки">
     <details class="preparation-journey-path">
         <summary>Этапы подготовки</summary>
