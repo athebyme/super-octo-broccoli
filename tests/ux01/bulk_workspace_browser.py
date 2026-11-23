@@ -4547,9 +4547,9 @@ def run():
         })
         mixed_provider_attempts_before = fixture.REPORT["provider_attempts"]
         mixed_external_before = len(fixture.REPORT["unexpected_external_requests"])
-        mixed_write_watch = begin_domain_write_watch()
         mixed_context = browser.new_context(viewport={"width": 320, "height": 900})
         mixed_context.add_cookies([fixture.synthetic_login_cookie()])
+        mixed_write_watch = begin_domain_write_watch()
         mixed_context.route("**/*", bridge)
         mixed_page = mixed_context.new_page()
         mixed_page.on("pageerror", lambda error: errors.append(str(error)))
