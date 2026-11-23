@@ -112,6 +112,7 @@ REPORT = {
     "api_reads": [],
     "price_initialization": [],
     "history_scenario_checks": [],
+    "wb_history_presentation_checks": [],
     "history_domain_sql_writes": [],
     "history_domain_state": {},
     "request_failures": [],
@@ -194,6 +195,8 @@ def seed_synthetic_rows(app) -> dict:
         BulkEditHistory,
         CardEditHistory,
         Marketplace,
+        MarketplaceCategory,
+        MarketplaceCategoryCharacteristic,
         MarketplaceCommercialProposal,
         MarketplaceOperation,
         PriceChangeBatch,
@@ -221,6 +224,46 @@ def seed_synthetic_rows(app) -> dict:
             )
             db.session.add(wb)
             db.session.flush()
+        wb.categories_synced_at = now
+        wb.categories_sync_status = "success"
+        history_subject_id = 990001
+        history_category_name = "Тестовый товар"
+        history_category = MarketplaceCategory(
+            marketplace_id=wb.id,
+            subject_id=history_subject_id,
+            subject_name=history_category_name,
+            is_enabled=True,
+            is_leaf=True,
+            is_available=True,
+            characteristics_synced_at=now,
+            characteristics_sync_status="success",
+            characteristics_schema_hash="r69-history-schema",
+            characteristics_version=1,
+            characteristics_count=3,
+        )
+        db.session.add(history_category)
+        db.session.flush()
+        history_characteristic_names = {
+            990101: "Материал",
+            990102: "Цвет",
+            990103: "Комплектация",
+        }
+        db.session.add_all([
+            MarketplaceCategoryCharacteristic(
+                category_id=history_category.id,
+                marketplace_id=wb.id,
+                charc_id=characteristic_id,
+                name=name,
+                charc_type=1,
+                required=False,
+                max_count=1,
+                dictionary_json="[]",
+                dictionary_source="none",
+                is_enabled=True,
+                is_available=True,
+            )
+            for characteristic_id, name in history_characteristic_names.items()
+        ])
 
         product = Product(
             seller_id=seller_id,
@@ -456,7 +499,11 @@ def seed_synthetic_rows(app) -> dict:
                         if is_foreign else f"Синтетический товар истории {index + 1:02d}"
                     ),
                     brand="R10 Synthetic",
-                    object_name="Read-only fixture",
+                    object_name=(
+                        history_category_name
+                        if index == 0 else "Read-only fixture"
+                    ),
+                    subject_id=history_subject_id if index == 0 else None,
                     quantity=201 + index,
                     is_active=False,
                     photos_json="[]",
@@ -488,9 +535,36 @@ def seed_synthetic_rows(app) -> dict:
                     seller_id=seller_id,
                     bulk_edit_id=history_batch.id,
                     action="update",
-                    changed_fields=["quantity"],
-                    snapshot_before={"quantity": 200 + index},
-                    snapshot_after={"quantity": 201 + index},
+                    changed_fields=(
+                        ["quantity", "characteristics"]
+                        if index == 0 else ["quantity"]
+                    ),
+                    snapshot_before=(
+                        {
+                            "quantity": 200 + index,
+                            "object_name": history_category_name,
+                            "subject_id": history_subject_id,
+                            "characteristics": [
+                                {"id": 990101, "value": ["Хлопок"]},
+                                {"id": 990102, "value": ["Синий"]},
+                                {"id": 990103, "value": ["1 шт."]},
+                            ],
+                        }
+                        if index == 0 else {"quantity": 200 + index}
+                    ),
+                    snapshot_after=(
+                        {
+                            "quantity": 201 + index,
+                            "object_name": history_category_name,
+                            "subject_id": history_subject_id,
+                            "characteristics": [
+                                {"id": 990101, "value": ["Лён"]},
+                                {"id": 990102, "value": ["Зелёный"]},
+                                {"id": 990103, "value": ["2 шт."]},
+                            ],
+                        }
+                        if index == 0 else {"quantity": 201 + index}
+                    ),
                     wb_synced=status == "success",
                     wb_sync_status=status,
                     created_at=now + timedelta(seconds=3, microseconds=index),
@@ -523,6 +597,93 @@ def seed_synthetic_rows(app) -> dict:
                 "product_id": int(history_product_ids[25]),
                 "error": "Synthetic failed row; no WB request was made.",
             }]
+
+            reviewed_batch_ids = {}
+            reviewed_product_ids = {}
+
+            def add_reviewed_history_batch(*, key, description, success_count, error_count):
+                batch = BulkEditHistory(
+                    seller_id=seller_id,
+                    operation_type="reviewed_update",
+                    operation_params={
+                        "review_summary": {
+                            "selected": 50,
+                            "eligible": 2,
+                            "changed": 2,
+                            "skipped": 48,
+                            "errors": 0,
+                        },
+                    },
+                    description=description,
+                    total_products=50,
+                    success_count=success_count,
+                    error_count=error_count,
+                    errors_details=None,
+                    status="completed",
+                    wb_synced=error_count == 0,
+                    created_at=now + timedelta(seconds=7 if key == "completed" else 8),
+                    completed_at=now + timedelta(seconds=8 if key == "completed" else 9),
+                    duration_seconds=1.0,
+                )
+                db.session.add(batch)
+                db.session.flush()
+                product_ids = []
+                for row_index in range(2):
+                    product = Product(
+                        seller_id=seller_id,
+                        nm_id=990003000 + (0 if key == "completed" else 10) + row_index,
+                        vendor_code=f"R69-{key.upper()}-{row_index + 1}",
+                        title=f"Синтетическая проверенная карточка {key} {row_index + 1}",
+                        brand="R69 Synthetic",
+                        object_name="Read-only reviewed fixture",
+                        quantity=501 + row_index,
+                        is_active=False,
+                        photos_json="[]",
+                        sizes_json="[]",
+                        characteristics_json="[]",
+                    )
+                    db.session.add(product)
+                    db.session.flush()
+                    product_ids.append(product.id)
+                    row_status = (
+                        "failed" if key == "partial" and row_index == 1
+                        else "success"
+                    )
+                    db.session.add(CardEditHistory(
+                        product_id=product.id,
+                        seller_id=seller_id,
+                        bulk_edit_id=batch.id,
+                        action="update",
+                        changed_fields=["quantity"],
+                        snapshot_before={"quantity": 500 + row_index},
+                        snapshot_after={"quantity": 501 + row_index},
+                        wb_synced=row_status == "success",
+                        wb_sync_status=row_status,
+                        created_at=now + timedelta(
+                            seconds=10 if key == "completed" else 11,
+                            microseconds=row_index,
+                        ),
+                        user_comment="Synthetic reviewed history; no WB request.",
+                        wb_error_message=(
+                            "Synthetic row failure; no provider call."
+                            if row_status == "failed" else None
+                        ),
+                    ))
+                reviewed_batch_ids[key] = int(batch.id)
+                reviewed_product_ids[key] = [int(value) for value in product_ids]
+
+            add_reviewed_history_batch(
+                key="completed",
+                description="R69 checked WB 50/2/48 completed",
+                success_count=2,
+                error_count=0,
+            )
+            add_reviewed_history_batch(
+                key="partial",
+                description="R69 checked WB 50/2/48 partial",
+                success_count=1,
+                error_count=1,
+            )
 
             rollback_history_product = Product(
                 seller_id=seller_id,
@@ -581,12 +742,17 @@ def seed_synthetic_rows(app) -> dict:
             "proposal_id": proposal.id,
             "product_id": product.id,
             "listing_id": listing.id,
+            "wb_marketplace_id": int(wb.id),
             **({
                 "history_batch31_id": history_batch.id,
                 "history_batch31_row_ids": history_row_ids,
                 "history_batch31_product_ids": history_product_ids,
                 "history_batch31_owned_product_ids": history_owned_product_ids,
                 "history_batch31_foreign_product_id": foreign_history_product_id,
+                "history_batch31_characteristic_product_id": history_product_ids[0],
+                "history_batch31_category_id": history_category.id,
+                "reviewed_batch_ids": reviewed_batch_ids,
+                "reviewed_product_ids": reviewed_product_ids,
                 "quantity_rollback_batch_id": rollback_history_batch.id,
                 "quantity_rollback_product_id": rollback_history_product.id,
                 "quantity_rollback_history_id": rollback_history_row.id,
@@ -1043,7 +1209,15 @@ def _pricing_mobile_nav_check(page, *, include_ozon_proposals: bool = True) -> d
 def main() -> None:
     from seller_platform import app
     from sqlalchemy import event
-    from models import BulkEditHistory, CardEditHistory, Product, Seller, db
+    from models import (
+        BulkEditHistory,
+        CardEditHistory,
+        MarketplaceCategory,
+        MarketplaceCategoryCharacteristic,
+        Product,
+        Seller,
+        db,
+    )
     from tests.ozon_release.seed import USERNAME
 
     app.config.update(
@@ -1589,21 +1763,50 @@ def main() -> None:
                 rollback_batch_id = int(fixture["quantity_rollback_batch_id"])
                 rollback_product_id = int(fixture["quantity_rollback_product_id"])
                 rollback_history_id = int(fixture["quantity_rollback_history_id"])
+                reviewed_batch_ids = {
+                    key: int(value)
+                    for key, value in fixture["reviewed_batch_ids"].items()
+                }
+                reviewed_product_ids = {
+                    key: [int(value) for value in values]
+                    for key, values in fixture["reviewed_product_ids"].items()
+                }
+                reviewed_history_batch_ids = list(reviewed_batch_ids.values())
+                all_history_batch_ids = [
+                    bulk_id, rollback_batch_id, *reviewed_history_batch_ids,
+                ]
+                all_history_product_ids = [
+                    *expected_product_ids,
+                    rollback_product_id,
+                    *[
+                        product_id
+                        for product_ids in reviewed_product_ids.values()
+                        for product_id in product_ids
+                    ],
+                ]
                 history_url = f"/bulk-history/{bulk_id}"
                 rollback_history_url = f"/bulk-history/{rollback_batch_id}"
 
                 def history_domain_counts():
                     return {
                         "bulk_edit_history": BulkEditHistory.query.filter(
-                            BulkEditHistory.id.in_((bulk_id, rollback_batch_id)),
+                            BulkEditHistory.id.in_(all_history_batch_ids),
                             BulkEditHistory.seller_id == fixture["seller_id"],
                         ).count(),
                         "card_edit_history": CardEditHistory.query.filter(
-                            CardEditHistory.bulk_edit_id.in_((bulk_id, rollback_batch_id)),
+                            CardEditHistory.bulk_edit_id.in_(all_history_batch_ids),
                             CardEditHistory.seller_id == fixture["seller_id"],
                         ).count(),
                         "products": Product.query.filter(
-                            Product.id.in_(expected_product_ids + [rollback_product_id]),
+                            Product.id.in_(all_history_product_ids),
+                        ).count(),
+                        "wb_reference_categories": MarketplaceCategory.query.filter_by(
+                            id=int(fixture["history_batch31_category_id"]),
+                            marketplace_id=fixture["wb_marketplace_id"],
+                        ).count(),
+                        "wb_reference_characteristics": MarketplaceCategoryCharacteristic.query.filter_by(
+                            category_id=int(fixture["history_batch31_category_id"]),
+                            marketplace_id=fixture["wb_marketplace_id"],
                         ).count(),
                     }
 
@@ -1853,6 +2056,377 @@ def main() -> None:
                         **aggregate_map,
                     },
                     "aggregate_cards": aggregate_cards,
+                })
+
+                reviewed_descriptions = {
+                    "completed": "R69 checked WB 50/2/48 completed",
+                    "partial": "R69 checked WB 50/2/48 partial",
+                }
+                reviewed_expectations = {
+                    "completed": {
+                        "label": "Завершено",
+                        "success_count": "2",
+                        "error_count": "0",
+                        "ratio": "100%",
+                        "execution_phrase": "Фактически обработано без ошибки: 2 из 2",
+                        "row_status_counts": {"success": 2},
+                    },
+                    "partial": {
+                        "label": "Завершено частично",
+                        "success_count": "1",
+                        "error_count": "1",
+                        "ratio": "50%",
+                        "execution_phrase": "Фактически обработано без ошибки: 1 из 2",
+                        "row_status_counts": {"failed": 1, "success": 1},
+                    },
+                }
+                reviewed_list_proofs = []
+                reviewed_detail_proofs = []
+                legacy_characteristic_proofs = []
+                history_external_requests_before = len(
+                    REPORT["unexpected_external_requests"],
+                )
+                history_provider_attempts_before = REPORT["provider_attempts"]
+                for theme in ("light", "dark"):
+                    review_page = context.new_page()
+                    review_page.set_default_timeout(12000)
+                    review_page.set_viewport_size({"width": 320, "height": 1000})
+                    review_page.add_init_script(
+                        "if (location.origin === " + json.dumps(base) + ") {"
+                        + "localStorage.setItem('sh-theme', " + json.dumps(theme) + ");"
+                        + "localStorage.setItem('sh-sidebar', 'closed');"
+                        + "}"
+                    )
+                    review_page.on(
+                        "pageerror",
+                        lambda error: REPORT["javascript_errors"].append(str(error)),
+                    )
+                    review_page.on(
+                        "console",
+                        lambda message: REPORT["console_errors"].append(message.text)
+                        if message.type == "error" else None,
+                    )
+                    review_page.on("response", observe_response)
+                    review_page.on(
+                        "requestfailed",
+                        lambda request, page_theme=theme: capture_request_failure(
+                            request,
+                            page_label="r69_history_reviewed_routes",
+                            page_theme=page_theme,
+                        ),
+                    )
+
+                    list_response = review_page.goto(
+                        base + "/bulk-history", wait_until="domcontentloaded",
+                    )
+                    assert list_response and list_response.status == 200
+                    assert list_response.request.method == "GET"
+                    actual_theme = review_page.evaluate(
+                        "document.documentElement.dataset.theme",
+                    )
+                    assert actual_theme == theme
+                    list_layout = _measure(
+                        review_page,
+                        path="/bulk-history",
+                        width=320,
+                        theme=theme,
+                        scale=100,
+                    )
+                    list_layout_failures = _after_failures(list_layout)
+                    assert not list_layout_failures, list_layout_failures
+                    rendered_list_records = review_page.evaluate("""descriptions => {
+                        return Object.entries(descriptions).map(([key, description]) => {
+                            const matches = Array.from(
+                                document.querySelectorAll('#main-content h3'),
+                            ).filter(node => node.innerText.trim() === description);
+                            const heading = matches[0];
+                            const card = heading?.closest('div.bg-white.rounded-xl.border');
+                            const stats = Array.from(
+                                card?.querySelectorAll('.grid.grid-cols-3 > div') || [],
+                            ).map(item => {
+                                const paragraphs = Array.from(item.querySelectorAll('p'));
+                                return {
+                                    label: paragraphs[0]?.innerText.trim() || '',
+                                    value: paragraphs[1]?.innerText.trim() || '',
+                                };
+                            });
+                            const result = card?.querySelector('.operations-wb-result');
+                            const detail = Array.from(card?.querySelectorAll('a') || [])
+                                .find(node => node.getAttribute('href')?.startsWith('/bulk-history/'));
+                            return {
+                                key,
+                                heading_count: matches.length,
+                                status: result?.getAttribute('data-execution-status') || null,
+                                label: result?.querySelector('.operations-wb-outcome')?.innerText.trim() || null,
+                                message: (result?.querySelector('p')?.innerText || '')
+                                    .replace(/\\s+/g, ' ').trim(),
+                                stats,
+                                detail_href: detail?.getAttribute('href') || null,
+                            };
+                        });
+                    }""", reviewed_descriptions)
+                    records_by_key = {
+                        row["key"]: row for row in rendered_list_records
+                    }
+                    assert set(records_by_key) == set(reviewed_expectations)
+                    for key, expected in reviewed_expectations.items():
+                        row = records_by_key[key]
+                        expected_stats = {
+                            "Всего товаров": "50",
+                            "Обработано без ошибки": expected["success_count"],
+                            "Ошибок": expected["error_count"],
+                        }
+                        assert row["heading_count"] == 1
+                        assert row["status"] == "completed"
+                        assert row["label"] == expected["label"]
+                        assert all(phrase in row["message"] for phrase in (
+                            "Выбрано 50",
+                            "Подготовлено к записи 2",
+                            "Пропущено 48",
+                        ))
+                        assert row["stats"] == [
+                            {"label": label, "value": value}
+                            for label, value in expected_stats.items()
+                        ]
+                        assert row["detail_href"] == (
+                            f"/bulk-history/{reviewed_batch_ids[key]}"
+                        )
+                    reviewed_list_proofs.append({
+                        "theme": theme,
+                        "actual_theme": actual_theme,
+                        "width": 320,
+                        "method": list_response.request.method,
+                        "path": "/bulk-history",
+                        "http_status": list_response.status,
+                        "layout_failures": list_layout_failures,
+                        "records": rendered_list_records,
+                    })
+
+                    for key, expected in reviewed_expectations.items():
+                        detail_path = f"/bulk-history/{reviewed_batch_ids[key]}"
+                        detail_response = review_page.goto(
+                            base + detail_path, wait_until="domcontentloaded",
+                        )
+                        assert detail_response and detail_response.status == 200
+                        assert detail_response.request.method == "GET"
+                        assert review_page.locator(
+                            "#main-content h1",
+                        ).inner_text().strip() == reviewed_descriptions[key]
+                        assert review_page.evaluate(
+                            "document.documentElement.dataset.theme",
+                        ) == theme
+                        detail_layout = _measure(
+                            review_page,
+                            path=detail_path,
+                            width=320,
+                            theme=theme,
+                            scale=100,
+                        )
+                        detail_layout_failures = _after_failures(detail_layout)
+                        assert not detail_layout_failures, detail_layout_failures
+                        detail_data = review_page.evaluate("""() => {
+                            const result = document.querySelector('.operations-wb-result');
+                            const summary = document.querySelector('[data-operations-review-summary]');
+                            const labels = Array.from(summary?.querySelectorAll('dl > div') || [])
+                                .map(item => ({
+                                    label: item.querySelector('dt')?.innerText.trim() || '',
+                                    value: item.querySelector('dd')?.innerText.trim() || '',
+                                }));
+                            const stats = Array.from(
+                                document.querySelectorAll('.operations-stats-grid > div'),
+                            ).map(item => {
+                                const paragraphs = Array.from(item.querySelectorAll('p'));
+                                return {
+                                    label: paragraphs[0]?.innerText.trim() || '',
+                                    value: paragraphs[1]?.innerText.trim() || '',
+                                };
+                            });
+                            const rows = Array.from(
+                                document.querySelectorAll('[data-operations-product-id]'),
+                            ).map(row => row.querySelector('.operations-row-result')
+                                ?.getAttribute('data-wb-sync-status') || 'unknown');
+                            const row_status_counts = rows.reduce((counts, status) => {
+                                counts[status] = (counts[status] || 0) + 1;
+                                return counts;
+                            }, {});
+                            return {
+                                status: result?.getAttribute('data-execution-status') || null,
+                                label: result?.querySelector('.operations-wb-outcome')?.innerText.trim() || null,
+                                summary_present: !!summary,
+                                labels,
+                                summary_text: (summary?.innerText || '').replace(/\\s+/g, ' ').trim(),
+                                stats,
+                                row_status_counts,
+                                revert_form_count: document.querySelectorAll(
+                                    'form[action$="/revert"]',
+                                ).length,
+                            };
+                        }""")
+                        assert detail_data["status"] == "completed"
+                        assert detail_data["label"] == expected["label"]
+                        assert detail_data["summary_present"]
+                        assert detail_data["labels"] == [
+                            {"label": "Выбрано", "value": "50"},
+                            {"label": "Допущено к изменению", "value": "2"},
+                            {"label": "Подготовлено к записи", "value": "2"},
+                            {"label": "Пропущено", "value": "48"},
+                        ]
+                        assert expected["execution_phrase"] in detail_data["summary_text"]
+                        assert expected["ratio"] in detail_data["summary_text"]
+                        assert detail_data["row_status_counts"] == expected["row_status_counts"]
+                        assert detail_data["revert_form_count"] == 0
+                        detail_stats = {
+                            row["label"]: row["value"] for row in detail_data["stats"]
+                        }
+                        assert detail_stats == {
+                            "Всего товаров": "50",
+                            "Обработано без ошибки": expected["success_count"],
+                            "Ошибок": expected["error_count"],
+                            "Без ошибки из подготовленных": expected["ratio"],
+                        }
+                        reviewed_detail_proofs.append({
+                            "key": key,
+                            "theme": theme,
+                            "actual_theme": theme,
+                            "width": 320,
+                            "method": detail_response.request.method,
+                            "path": detail_path,
+                            "http_status": detail_response.status,
+                            "layout_failures": detail_layout_failures,
+                            **detail_data,
+                        })
+
+                    batch31_detail_response = review_page.goto(
+                        base + history_url, wait_until="domcontentloaded",
+                    )
+                    assert batch31_detail_response and batch31_detail_response.status == 200
+                    assert batch31_detail_response.request.method == "GET"
+                    characteristic_product_id = int(
+                        fixture["history_batch31_characteristic_product_id"],
+                    )
+                    legacy_characteristics = review_page.evaluate("""productId => {
+                        const row = document.querySelector(
+                            `[data-operations-product-id="${productId}"]`,
+                        );
+                        const diff = row?.querySelector(
+                            '[data-operations-changed-field="characteristics"]',
+                        );
+                        const valueLine = (label) => Array.from(diff?.children || [])
+                            .find(node => node.querySelector('span')?.textContent.trim() === label);
+                        const items = label => Array.from(
+                            valueLine(label)?.querySelectorAll('li') || [],
+                        ).map(item => item.innerText.trim().replace(/\\s+/g, ' '));
+                        return {
+                            source_text: (diff?.querySelector('p')?.innerText || '')
+                                .replace(/\\s+/g, ' ').trim() || null,
+                            before: items('До:'),
+                            after: items('После:'),
+                        };
+                    }""", characteristic_product_id)
+                    assert legacy_characteristics == {
+                        "source_text": (
+                            "Подписи без сохранённого названия: По сохранённому "
+                            "справочнику WB. Значения взяты из снимка истории."
+                        ),
+                        "before": [
+                            "Материал: Хлопок",
+                            "Цвет: Синий",
+                            "Комплектация: 1 шт.",
+                        ],
+                        "after": [
+                            "Материал: Лён",
+                            "Цвет: Зелёный",
+                            "Комплектация: 2 шт.",
+                        ],
+                    }
+                    legacy_characteristic_proofs.append({
+                        "theme": theme,
+                        "width": 320,
+                        "method": batch31_detail_response.request.method,
+                        "path": history_url,
+                        "http_status": batch31_detail_response.status,
+                        "product_id": characteristic_product_id,
+                        **legacy_characteristics,
+                    })
+                    review_page.close()
+
+                with app.app_context():
+                    stored_characteristic_row = db.session.get(
+                        CardEditHistory,
+                        int(fixture["history_batch31_row_ids"][0]),
+                    )
+                    stored_characteristic_snapshots_unchanged = (
+                        stored_characteristic_row.snapshot_before == {
+                            "quantity": 200,
+                            "object_name": "Тестовый товар",
+                            "subject_id": 990001,
+                            "characteristics": [
+                                {"id": 990101, "value": ["Хлопок"]},
+                                {"id": 990102, "value": ["Синий"]},
+                                {"id": 990103, "value": ["1 шт."]},
+                            ],
+                        }
+                        and stored_characteristic_row.snapshot_after == {
+                            "quantity": 201,
+                            "object_name": "Тестовый товар",
+                            "subject_id": 990001,
+                            "characteristics": [
+                                {"id": 990101, "value": ["Лён"]},
+                                {"id": 990102, "value": ["Зелёный"]},
+                                {"id": 990103, "value": ["2 шт."]},
+                            ],
+                        }
+                    )
+                assert stored_characteristic_snapshots_unchanged
+                assert len(reviewed_list_proofs) == 2
+                assert len(reviewed_detail_proofs) == 4
+                assert len(legacy_characteristic_proofs) == 2
+                assert REPORT["provider_attempts"] == history_provider_attempts_before == 0
+                assert len(REPORT["unexpected_external_requests"]) == history_external_requests_before
+                assert not REPORT["browser_mutations"]
+                assert history_sql["writes"] == []
+                REPORT["wb_history_presentation_checks"].append({
+                    "name": "wb_history_reviewed_50_2_48_list_and_detail_routes",
+                    "status": "passed",
+                    "source": "synthetic_disposable_sqlite",
+                    "fixtures": {
+                        "completed": {
+                            "batch_id": reviewed_batch_ids["completed"],
+                            "selected": 50,
+                            "changed": 2,
+                            "skipped": 48,
+                            "succeeded": 2,
+                            "failed": 0,
+                        },
+                        "partial": {
+                            "batch_id": reviewed_batch_ids["partial"],
+                            "selected": 50,
+                            "changed": 2,
+                            "skipped": 48,
+                            "succeeded": 1,
+                            "failed": 1,
+                        },
+                    },
+                    "list_routes": reviewed_list_proofs,
+                    "detail_routes": reviewed_detail_proofs,
+                    "provider_attempts": REPORT["provider_attempts"],
+                    "unexpected_external_requests_delta": (
+                        len(REPORT["unexpected_external_requests"])
+                        - history_external_requests_before
+                    ),
+                    "domain_sql_writes": history_sql["writes"],
+                    "browser_mutations": REPORT["browser_mutations"],
+                })
+                REPORT["wb_history_presentation_checks"].append({
+                    "name": "wb_history_batch31_cached_characteristic_labels_and_values",
+                    "status": "passed",
+                    "source_label": "По сохранённому справочнику WB",
+                    "legacy_characteristic_routes": legacy_characteristic_proofs,
+                    "stored_snapshots_unchanged": stored_characteristic_snapshots_unchanged,
+                    "named_seller_owned_link_label": "Карточка WB",
+                    "named_seller_owned_link_path": f"/products/{owned_product_ids[0]}",
+                    "provider_attempts": REPORT["provider_attempts"],
+                    "domain_sql_writes": history_sql["writes"],
                 })
 
                 # The row-level repair link must navigate to the actual owned
@@ -2145,12 +2719,28 @@ def main() -> None:
             )
         )
     )
+    expected_wb_history_presentation_checks = {
+        "wb_history_reviewed_50_2_48_list_and_detail_routes",
+        "wb_history_batch31_cached_characteristic_labels_and_values",
+    }
+    wb_history_presentation_checks_passed = (
+        SOURCE != "worktree"
+        or (
+            {row.get("name") for row in REPORT["wb_history_presentation_checks"]}
+            == expected_wb_history_presentation_checks
+            and all(
+                row.get("status") == "passed"
+                for row in REPORT["wb_history_presentation_checks"]
+            )
+        )
+    )
     passed = safe_capture and (
         SOURCE == "ba63371"
         or (
             not REPORT["after_failures"]
             and not failed_checks
             and not failed_interactions
+            and wb_history_presentation_checks_passed
             and all(row.get("status") == "passed" for row in REPORT["checks"]
                     if row.get("name") == "wb_price_change_initializes_once_and_renders_products")
         )
