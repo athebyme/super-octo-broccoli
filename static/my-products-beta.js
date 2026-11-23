@@ -2331,6 +2331,7 @@
                 this.supplierRefreshBatchInvalid = false;
                 this.importBatch = result.import_batch;
                 this.importBatchMode = true;
+                this.cancelCatalogCategoryRequest();
                 this.importBatchKind = 'import';
                 this.inlineSupplierImportToken = result.import_batch;
                 this.importBatchInvalid = false;
@@ -2391,6 +2392,7 @@
                 // the one ordinary feed read after the signed batch is cleared.
                 // Calling load here as well starts a duplicate request.
                 this.loadFacets();
+                this.refreshCatalogCategories();
                 return true;
             },
             closeBulkActionPanel: function (restoreFocus) {
@@ -2770,6 +2772,7 @@
                 this.supplierRefreshBatchInvalid = false;
                 this.importBatch = token;
                 this.importBatchMode = true;
+                this.cancelCatalogCategoryRequest();
                 this.importBatchKind = 'supplier_refresh_result';
                 this.importBatchInvalid = false;
                 this.supplierRefreshResultBatchMode = true;
@@ -3575,7 +3578,8 @@
                     .then(function (data) {
                         if (self._mpUnmounted || abort.signal.aborted ||
                             self._catalogCategoriesAbort !== abort ||
-                            self._catalogCategoriesRequestId !== requestId) return false;
+                            self._catalogCategoriesRequestId !== requestId ||
+                            self.importBatchMode || self.supplierRefreshBatchMode) return false;
                         if (!validCatalogCategoryPage(data, requestedPage)) {
                             throw new Error('invalid_categories_response');
                         }
@@ -3609,6 +3613,25 @@
                             self.catalogCategoriesLoading = false;
                         }
                     });
+            },
+            cancelCatalogCategoryRequest: function () {
+                this._catalogCategoriesRequestId = (this._catalogCategoriesRequestId || 0) + 1;
+                var abort = this._catalogCategoriesAbort;
+                this._catalogCategoriesAbort = null;
+                if (abort) abort.abort();
+                this.catalogCategoriesLoading = false;
+            },
+            refreshCatalogCategories: function () {
+                this.cancelCatalogCategoryRequest();
+                if (this._mpUnmounted || this.importBatchMode || this.supplierRefreshBatchMode) {
+                    return Promise.resolve(false);
+                }
+                this.catalogCategoryOptions = [];
+                this.catalogCategoriesPage = 0;
+                this.catalogCategoriesHasNext = false;
+                this.catalogCategoriesHasUncategorized = false;
+                this.catalogCategoriesError = '';
+                return this.loadCatalogCategories();
             },
             handleCatalogCategoryChange: function (event) {
                 var select = event && event.currentTarget;
@@ -4560,6 +4583,7 @@
                         self.supplierRefreshResult = outcome;
                         self.load();
                         self.loadFacets();
+                        if (outcome.updated > 0) self.refreshCatalogCategories();
                     } else {
                         self.supplierRefreshResult = supplierRefreshNotice(
                             'unknown', labelsAtReview.length,
@@ -5270,6 +5294,7 @@
             refreshListAfterSupplierResult: function () {
                 this.load();
                 this.loadFacets();
+                this.refreshCatalogCategories();
             },
             prepareRefreshedForOzon: function (event) {
                 var productIds = this.supplierRefreshOzonIds;
