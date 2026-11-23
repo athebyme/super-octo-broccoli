@@ -768,7 +768,7 @@
     min-width:0;
     min-height:44px;
 }
-#my-products-app .mp-extra-filter-body .mp-select { max-width:none; }
+#my-products-app .mp-catalog-surface .mp-extra-filter-body .mp-select { max-width:none; }
 #my-products-app .mp-catalog-surface .mp-select {
     height:44px;
     max-width:176px;
