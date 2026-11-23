@@ -644,7 +644,11 @@ class SupplierCSVRefreshRoutesTest(unittest.TestCase):
 
         def pre_fetch_check():
             events.append('scope')
-            self.assertFalse(db.session().in_transaction())
+            checked_supplier = Supplier.query.filter_by(
+                id=self.supplier_id,
+            ).populate_existing().first()
+            self.assertIsNotNone(checked_supplier)
+            self.assertTrue(db.session().in_transaction())
 
         def fetch_raw():
             events.append('fetch')

@@ -1788,6 +1788,8 @@ class SupplierService:
         if pre_fetch_check is not None:
             try:
                 pre_fetch_check()
+                if db.session.new or db.session.dirty or db.session.deleted:
+                    raise RuntimeError("catalog_pre_fetch_check_mutated_session")
             except Exception as exc:
                 logger.info(
                     "Catalog pre-fetch fence rejected supplier %s (%s)",
@@ -1797,6 +1799,9 @@ class SupplierService:
                     "Проверка разрешения на чтение каталога не пройдена",
                     code=_catalog_pre_fetch_error_code(exc),
                 )
+            # Scheduler scope revalidation performs read-only ORM queries.
+            # Close their read transaction immediately before the network GET.
+            db.session.rollback()
 
         raw_bytes = parser.fetch_csv_raw()
         if raw_bytes is None:
