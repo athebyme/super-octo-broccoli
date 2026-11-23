@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-23T19:48:37.382841+00:00",
+  "generated_at": "2026-11-23T21:00:01.627248+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "3c6cca57b7970b1697ea0637bf26a67f867d87ae24dd984afbeff1eee6dc90e9"
+      "sha256": "af8f7437437c011832b9b7e9e098f16885930ab20f80d6a3330a825f6d11088c"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -381,7 +381,7 @@
     },
     {
       "path": "docs/design/marketplace-decisions-preparation.md",
-      "sha256": "586fbc0b6fcc079e40292bdf866f15159b5b2b88a961af1b9b732e67b8f610d0"
+      "sha256": "00ce503bdae674de4c6ee6d7e95e32322658d0beb844fb425f2154593f7adbb1"
     },
     {
       "path": "docs/design/ozon-account-health.md",
@@ -2325,7 +2325,7 @@
     },
     {
       "path": "services/ozon_prepare_category_decisions.py",
-      "sha256": "f368ccd76ca35b79bde8a61a94a46beb5baa1ca077040f6c0f97f59a03c144ba"
+      "sha256": "5496112666b440531c273499ffc6520b280c2c1c7b2f59f57dd49ad13c4b48ed"
     },
     {
       "path": "services/ozon_prepare_decisions.py",
@@ -4833,11 +4833,11 @@
     },
     {
       "path": "tests/test_ozon_prepare_category_decisions.py",
-      "sha256": "a245f62a73c019590813269645dcb55609cb81acebbe92d888b0381f6e0fd622"
+      "sha256": "c7abca802e5e9b0bcf559f2bb5fc5c55708d64da5a4bb332c07565846618e78d"
     },
     {
       "path": "tests/test_ozon_prepare_decisions.py",
-      "sha256": "da76ef3889e0c9f3ce1a9c334d55a8c512a95c99ccd7107e036e83682c4e8a0f"
+      "sha256": "b1206cda6cc5e32c4802dee9a831d997edcefc95ea1d164c0893ca31c65ef992"
     },
     {
       "path": "tests/test_ozon_product_type_visibility_migration.py",
@@ -5456,5 +5456,5 @@
       "sha256": "260973076a516b81bba3cae3adcd6b652fdee5585e27fbd0b7401062b78aefb1"
     }
   ],
-  "aggregate_sha256": "057eeb5a93e466dcf0287afd2511bd0788e3cbc03209bbda914e2db96312e4fe"
+  "aggregate_sha256": "728469d8037ff6e3bec05a672f680217973e62d505a52d43028170732c9120aa"
 }
