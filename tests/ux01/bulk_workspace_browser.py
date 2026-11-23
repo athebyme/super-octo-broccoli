@@ -998,12 +998,6 @@ def run():
     wb_bulk_edit_handoff = None
     selection_review_expected = {"ids": None, "titles_by_id": {}}
     selection_review_posts = []
-    mixed_scope_state = {
-        "armed": False,
-        "ids": None,
-        "titles_by_id": {},
-        "selection_posts": [],
-    }
     ozon_mixed_workspace_scope = None
     ozon_workspace_handoff_receipts = []
     ozon_workspace_preview_reads = []
@@ -1143,8 +1137,7 @@ def run():
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "POST":
             if parsed.path == LOCAL_SELECTION_REVIEW:
                 body = request.post_data_json
-                review_state = mixed_scope_state if mixed_scope_state["armed"] else selection_review_expected
-                expected_ids = review_state["ids"]
+                expected_ids = selection_review_expected["ids"]
                 assert isinstance(body, dict) and set(body) == {"ids"}
                 assert body["ids"] == expected_ids
                 assert request.headers.get("x-csrftoken") or request.headers.get("X-CSRFToken")
@@ -1162,23 +1155,18 @@ def run():
                 ).lower()
                 assert returned_ids == expected_ids
                 assert [item.get("title") for item in resolved["items"]] == [
-                    review_state["titles_by_id"][product_id]
+                    selection_review_expected["titles_by_id"][product_id]
                     for product_id in expected_ids
                 ]
-                review_receipt = {
+                selection_review_posts.append({
                     "status": response.status,
                     "ids": expected_ids[:],
                     "returned_ids": returned_ids,
                     "csrf_header_present": True,
                     "cache_control_private_no_store": "private" in cache_control
                     and "no-store" in cache_control,
-                }
-                target_posts = (
-                    mixed_scope_state["selection_posts"]
-                    if mixed_scope_state["armed"] else selection_review_posts
-                )
-                target_posts.append(review_receipt)
-                assert target_posts[-1]["cache_control_private_no_store"] is True
+                })
+                assert selection_review_posts[-1]["cache_control_private_no_store"] is True
                 route.fulfill(response=response)
                 return
             if parsed.path == LOCAL_OZON_WORKSPACE_HANDOFF:
@@ -4551,11 +4539,6 @@ def run():
             fixture.FIXTURE["seller_id"], fixture_ids["ozon_account_id"],
         )
         mixed_ids = mixed_fixture["selected_ids"]
-        mixed_scope_state.update({
-            "ids": mixed_ids[:],
-            "titles_by_id": mixed_fixture["titles_by_id"],
-            "selection_posts": [],
-        })
         wb_bulk_edit_expected.update({
             "source_ids": [mixed_fixture["ozon_source_id"]],
             "wb_ids": [],
@@ -4760,42 +4743,29 @@ def run():
 
         return_link = mixed_page.locator('dialog[open] [data-workspace-return-dialog]')
         return_link.wait_for(state="visible")
-        mixed_scope_state["armed"] = True
+        mixed_posts_before_return = len(mixed_browser_post_paths)
         with mixed_page.expect_response(lambda response: feed_matches(response, {
                 "search": "R94-MIXED-",
         })) as mixed_return_feed:
-            with mixed_page.expect_response(
-                    lambda response: urlsplit(response.url).path == LOCAL_SELECTION_REVIEW
-                    and response.request.method == "POST") as mixed_return_selection:
-                with mixed_page.expect_navigation(wait_until="domcontentloaded"):
-                    return_link.click()
+            with mixed_page.expect_navigation(wait_until="domcontentloaded"):
+                return_link.click()
         assert mixed_return_feed.value.status == 200
-        assert mixed_return_selection.value.status == 200
         mixed_page.wait_for_url(lambda value: urlsplit(str(value)).path == "/my-products/beta")
         mixed_page.wait_for_function("""ids => {
             const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
-            return proxy && !proxy.loading && proxy.selectionReviewActive &&
+            return proxy && !proxy.loading && !proxy.workspaceReturnPending &&
+                !proxy.selectionReviewActive &&
+                proxy.selectionRowsVerified &&
                 proxy.selected.join(',') === ids.join(',') &&
-                proxy.selectionReviewRows.map(item => item.id).join(',') === ids.join(',');
+                ids.every(id => proxy.items.some(item => item.id === id));
         }""", arg=mixed_ids)
-        assert mixed_scope_state["selection_posts"] == [{
-            "status": 200,
-            "ids": mixed_ids,
-            "returned_ids": mixed_ids,
-            "csrf_header_present": True,
-            "cache_control_private_no_store": True,
-        }]
-        assert mixed_page.locator("[data-selection-review-row]").evaluate_all(
-            "rows => rows.map(row => Number(row.dataset.selectionReviewRow))",
-        ) == mixed_ids
-        assert mixed_page.locator(
-            f'[data-selection-review-row="{mixed_fixture["ozon_source_id"]}"]',
-        ).locator(".mp-title-link").inner_text() == mixed_fixture["ozon_title"]
-        assert mixed_page.locator(
-            f'[data-selection-review-row="{mixed_fixture["wb_source_id"]}"]',
-        ).locator(".mp-title-link").inner_text() == mixed_fixture["wb_title"]
+        assert mixed_browser_post_paths[mixed_posts_before_return:] == []
+        assert mixed_page.locator("[data-selection-review-row]").count() == 0
+        for product_id in mixed_ids:
+            returned_checkbox = mixed_page.locator(f'input[data-product-id="{product_id}"]')
+            returned_checkbox.wait_for(state="visible")
+            assert returned_checkbox.is_checked()
         assert selected_browser_state(mixed_page)["selected"] == mixed_ids
-        mixed_scope_state["armed"] = False
 
         # Price review stays inline and narrows only its target IDs; the full
         # mixed workspace selection remains selected until the dialog is closed.
@@ -4883,8 +4853,12 @@ def run():
             "card_handoff_source_ids": mixed_card_receipt["source_ids"],
             "card_handoff_listing_ids": mixed_card_receipt["listing_ids"],
             "card_preview_listing_ids": mixed_card_preview["preview_row_ids"],
-            "restored_selection_ids": mixed_ids,
-            "restored_review_ids": mixed_scope_state["selection_posts"][-1]["returned_ids"],
+            "restored_checked_ids": mixed_ids,
+            "selection_review_posts_on_return": sum(
+                path == LOCAL_SELECTION_REVIEW
+                for path in mixed_browser_post_paths[mixed_posts_before_return:]
+            ),
+            "browser_posts_on_return": mixed_browser_post_paths[mixed_posts_before_return:],
             "escape_restored_toolbar_focus": True,
             "chooser_geometry_320": chooser_geometry,
             "price_selection_ids": mixed_price_launch["selectionIds"],
@@ -4911,8 +4885,9 @@ def run():
         assert ozon_mixed_workspace_scope["excluded_count"] == 1
         assert ozon_mixed_workspace_scope["card_posts_before_continue"] == 0
         assert ozon_mixed_workspace_scope["card_handoff_posts"] == 1
-        assert ozon_mixed_workspace_scope["restored_selection_ids"] == mixed_ids
-        assert ozon_mixed_workspace_scope["restored_review_ids"] == mixed_ids
+        assert ozon_mixed_workspace_scope["restored_checked_ids"] == mixed_ids
+        assert ozon_mixed_workspace_scope["selection_review_posts_on_return"] == 0
+        assert ozon_mixed_workspace_scope["browser_posts_on_return"] == []
         assert ozon_mixed_workspace_scope["price_selection_ids"] == mixed_ids
         assert ozon_mixed_workspace_scope["price_action_source_ids"] == [mixed_fixture["ozon_source_id"]]
         assert ozon_mixed_workspace_scope["price_target_listing_ids"] == [mixed_fixture["ozon_listing_id"]]
