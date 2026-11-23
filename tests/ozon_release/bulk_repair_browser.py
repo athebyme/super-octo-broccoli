@@ -935,7 +935,8 @@ try:
             control=page.locator('[data-draft-selection-check="'+str(draft_id)+'"]')
             control.wait_for()
             control.check()
-        page.get_by_role('button',name='Изменить карточки',exact=True).click()
+        assert 'Для изменения выбрано 4' in page.locator('[data-draft-selection-summary]').inner_text()
+        page.locator('[data-draft-selection-start]').click()
         page.wait_for_url('**/marketplaces/ozon/uploads/selection/repair?*')
         selection_query=parse_qs(urlsplit(page.url).query)
         assert selection_query.get('account_id')==[str(fixture['account_id'])]
