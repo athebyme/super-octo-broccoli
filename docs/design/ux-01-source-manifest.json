@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-23T18:50:46.168677+00:00",
+  "generated_at": "2026-11-23T19:21:54.917565+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "60eb207d9b129fd55d140fafcac43f5aaea35743ecf3ce7999acd6f94d5c6103"
+      "sha256": "5617f5b0fe9bd610aab25699bbe276f09e956791e2d0881714dcd75bf8880c49"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -1276,6 +1276,10 @@
       "sha256": "e33e6ebed7eeaf18f65eadcb2afdc309e89a199f9ddefde103da5059ca48fb0f"
     },
     {
+      "path": "migrations/migrate_add_supplier_catalog_schedule.py",
+      "sha256": "fc906d995ffc21eeb4ca2b9dc264528146e85cfbd60151afe8446dae41d14d92"
+    },
+    {
       "path": "migrations/migrate_add_supplier_database.py",
       "sha256": "3aff9384e05b271b6f156ad8a461302f226cfee0fd668bcb566e60610c4546a6"
     },
@@ -1561,7 +1565,7 @@
     },
     {
       "path": "routes/suppliers.py",
-      "sha256": "0bfc74adb63c69c8574882dced0e65ca011f73d48e09b19c19ca6e0080fe4082"
+      "sha256": "139a4e0417ab3b0384486eed241deb5810e13195e8e6572a5e81a5c758f33104"
     },
     {
       "path": "routes/telegram_alerts.py",
@@ -1773,7 +1777,7 @@
     },
     {
       "path": "scripts/startup_migration_steps.py",
-      "sha256": "be62e7c5433b88ff0686585d045ba835fa1de1645f2c0d469dac8fb42ca5cbb2"
+      "sha256": "5babb3a2445dd4703774990a1a14caa050fbffbe1c64560f20395ade13300a20"
     },
     {
       "path": "scripts/startup_migrations.py",
@@ -1805,7 +1809,7 @@
     },
     {
       "path": "seller_platform.py",
-      "sha256": "3ceb9a9cd73f73d9457a83200db0b09fa29f627550ef081dd86900fff3bcbf89"
+      "sha256": "12786572ad30bf3b4347831149b065587d53aad3be91c91914f572726f9a300e"
     },
     {
       "path": "services/__init__.py",
@@ -2465,11 +2469,15 @@
     },
     {
       "path": "services/supplier_catalog_refresh.py",
-      "sha256": "921f5a361608d1487f4ca290e466dbefe46bf59826df2b5a1f336352fe671226"
+      "sha256": "726f47d3c84e0a888db14a14f343d5925f3ce95fc9fe92bad58d78a9c118047b"
     },
     {
       "path": "services/supplier_catalog_refresh_models.py",
       "sha256": "e108820464391741ca97028a903e802d2ae1c8e4b1fa9b33e6292b1808cfa1ab"
+    },
+    {
+      "path": "services/supplier_catalog_schedule_models.py",
+      "sha256": "8f7bec2c2afd61793815dc69827a2c56050f73e041cab7b319852608212f2073"
     },
     {
       "path": "services/supplier_color_observation_feed.py",
@@ -2501,11 +2509,11 @@
     },
     {
       "path": "services/supplier_price_sync.py",
-      "sha256": "b85cc1432f6d3d9727719219452d7c33de5a02304c2a8ba292e184856490016d"
+      "sha256": "fb6060529a3a87560914dc08c4ff63e29d103ea5b6a2e08e8646ce9d46fb2640"
     },
     {
       "path": "services/supplier_service.py",
-      "sha256": "550e8e013e47af947cdc76e48658dd5f0d2894eb203f0b81d881168cf86e073e"
+      "sha256": "630af4c4f4091534760308e6ebca7fe72e547378885d153e9d5ecb841afa9737"
     },
     {
       "path": "services/supplier_update_hub.py",
@@ -3093,7 +3101,7 @@
     },
     {
       "path": "templates/admin_supplier_products.html",
-      "sha256": "656249a71b18ccb48187cdacb38d7147eaec07186081fe7c9398ba412c4eb702"
+      "sha256": "d4e19776a35f98f9ff30f1843c251de5c39157848a50dbe313fc53a5c05d99e8"
     },
     {
       "path": "templates/admin_supplier_sellers.html",
@@ -5057,7 +5065,7 @@
     },
     {
       "path": "tests/test_startup_migrations.py",
-      "sha256": "0bbd61794a8841a358db96b9b9978cd533b0dc3d85234f52822a8e0b36e94aa4"
+      "sha256": "f74a8bfc09808269c8f2e539d2c2d2190f721b6b7ded727861446a55a4b11ce5"
     },
     {
       "path": "tests/test_subject_charcs_cache.py",
@@ -5089,11 +5097,19 @@
     },
     {
       "path": "tests/test_supplier_catalog_refresh.py",
-      "sha256": "1b3d0a2bf8d8a8bb43f7113081f621e07cb6b9271edd7dfb0b648bc49bc04f8d"
+      "sha256": "43579751c7de6fc23062768230bfc970fc5d9672918c16b058508a3c5454a49d"
     },
     {
       "path": "tests/test_supplier_catalog_refresh_migration.py",
       "sha256": "2b533aa91769ce1ed948139338315e8c0f38eb5cf5b964191366168c81069eb0"
+    },
+    {
+      "path": "tests/test_supplier_catalog_schedule_migration.py",
+      "sha256": "e3a945b2d0362c0cd45d4c7db36b4e92b3c63459a0ae0dd0aabe43eed4a77013"
+    },
+    {
+      "path": "tests/test_supplier_catalog_schedule_routes.py",
+      "sha256": "d7433c1f0e1a2ba1144c33632230768d30bcb84b2be77acef8b05a6728c0dd64"
     },
     {
       "path": "tests/test_supplier_catalog_update_all.py",
@@ -5113,7 +5129,7 @@
     },
     {
       "path": "tests/test_supplier_csv_refresh_routes.py",
-      "sha256": "1f7c58d86c5f9d39f414df74875fc92222fe858b3b416f4167de01a54995cab4"
+      "sha256": "35e8c6bbf87c4185e4d7efe47e33eec1ecde9181603367f17b9f1976ccef8d7d"
     },
     {
       "path": "tests/test_supplier_enrichment_bulk.py",
@@ -5153,7 +5169,7 @@
     },
     {
       "path": "tests/test_supplier_price_sync.py",
-      "sha256": "e34dea50e85e8233a8cb381d543e36d3b98cb8800491ab362663bd7d2c8827a1"
+      "sha256": "7e864c2b7db255a9bb169fec580c5ce22d0cd9a63fb39adeb29bc433924941f0"
     },
     {
       "path": "tests/test_supplier_product_detail_facts.py",
@@ -5364,6 +5380,10 @@
       "sha256": "f9dd80551c75ff476c3699f85f978ea0a0f491718135a73b5ad72c21d90bae37"
     },
     {
+      "path": "tests/ux01/admin_supplier_catalog_schedule_browser.py",
+      "sha256": "fb3dcb394a6f009ad26a8e6947a02dcf5ec10ed9b5573b1ffb1fce675e41b178"
+    },
+    {
       "path": "tests/ux01/analytics_browser.py",
       "sha256": "cbb476dec6b9e035945ec2cb9f9983f110895fbc94777bed93ea3a9d0917f03f"
     },
@@ -5440,5 +5460,5 @@
       "sha256": "260973076a516b81bba3cae3adcd6b652fdee5585e27fbd0b7401062b78aefb1"
     }
   ],
-  "aggregate_sha256": "6619fe4f57aded9b12eb3d7cb4a820d73394e46e4cd62c88c15af1e91c079609"
+  "aggregate_sha256": "a29028ed148e402fca231eeaa094b812184afb4754c92c228ad297e3e35e7fc1"
 }
