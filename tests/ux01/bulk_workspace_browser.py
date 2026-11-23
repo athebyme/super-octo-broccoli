@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timedelta
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -24,8 +25,8 @@ from tests.ux01.bulk_action_controls import (
     workspace_action_launcher,
 )
 from models import (
-    BackgroundJob, EnrichmentJob, ImportedProduct, PriceChangeBatch,
-    PriceChangeItem, Product, Seller, SupplierProduct, db,
+    BackgroundJob, EnrichmentJob, ImportedProduct, Marketplace, MarketplaceListing,
+    PriceChangeBatch, PriceChangeItem, Product, Seller, SupplierProduct, db,
 )
 
 
@@ -36,7 +37,10 @@ MANUAL_TITLE = "Внутренний товар без поставщика"
 LOCAL_REFRESH = "/my-products/refresh-from-supplier"
 LOCAL_REFRESH_PREVIEW = "/api/my-products/supplier-refresh-preview"
 LOCAL_REFRESH_RESULT = "/api/my-products/supplier-refresh-result"
+LOCAL_SELECTION_REVIEW = "/api/my-products/selection"
 LOCAL_OZON_PREPARE = "/marketplaces/ozon/uploads/"
+LOCAL_OZON_WORKSPACE_HANDOFF = "/marketplaces/listings/update-drafts/workspace-handoff"
+LOCAL_OZON_WORKSPACE_PREVIEW = "/marketplaces/listings/update-drafts/preview"
 LOCAL_WB_ENRICH_REVIEW = "/products/enrich-bulk"
 LOCAL_WB_ENRICH_START = "/api/products/enrich-bulk/start"
 LOCAL_WB_SELECTION_RESOLVE = "/products/selection/resolve"
@@ -114,6 +118,27 @@ def seed_bulk_selection():
             price_change_percent=-10,
             safety_level="safe",
         ))
+        ozon_marketplace = Marketplace.query.filter_by(code="ozon").one()
+        ozon_listings = [MarketplaceListing(
+            seller_id=seller_id,
+            marketplace_id=ozon_marketplace.id,
+            account_id=fixture.FIXTURE["account_id"],
+            imported_product_id=preview_sources[index].id,
+            offer_id=f"UX-BULK-WORKSPACE-{index}",
+            external_product_id=f"990000{index}",
+            primary_sku=f"880000{index}",
+            title=f"Synthetic Ozon workspace listing {index}",
+            normalized_status="active",
+            is_available=True,
+            is_archived=False,
+            link_status="linked",
+            link_source="synthetic-ux01",
+            link_version=1,
+            sync_fingerprint=hashlib.sha256(
+                f"UX-BULK-WORKSPACE-{index}".encode("ascii"),
+            ).hexdigest(),
+        ) for index in (0, 1, 2)]
+        db.session.add_all(ozon_listings)
         supplier_item = db.session.get(SupplierProduct, fixture.FIXTURE["supplier_product_id"])
         supplier_item.content_revision = 2
         supplier_item.title = REFRESHED_TITLE
@@ -177,10 +202,13 @@ def seed_bulk_selection():
                 "refresh_source_id": supplier_item.id,
                 "unrelated_price_batch_id": unrelated_price_batch.id,
                 "bulk_ids": [row.id for row in bulk_rows],
+                "other_filter_id": other_filter.id,
                 "preview_wb_ids": [item[0] for item in preview_specs],
                 "preview_nm_ids": [item[1] for item in preview_specs],
                 "preview_local_ids": [source.id for source in preview_sources],
-                "preview_titles": [item[2] for item in preview_specs]}
+                "preview_titles": [item[2] for item in preview_specs],
+                "preview_ozon_listing_ids": [listing.id for listing in ozon_listings],
+                "ozon_account_id": fixture.FIXTURE["account_id"]}
 
 
 def verify_bounds(page):
@@ -499,6 +527,11 @@ def run():
     wb_bulk_edit_photo_requests = []
     wb_bulk_edit_expected = {"source_ids": None, "wb_ids": None, "photo_urls": []}
     wb_bulk_edit_handoff = None
+    selection_review_expected = {"ids": None, "titles_by_id": {}}
+    selection_review_posts = []
+    ozon_workspace_handoff_receipts = []
+    ozon_workspace_preview_reads = []
+    catalog_selection_review = None
     price_create_posts = []
     price_create_receipts = []
     price_create_attempts = []
@@ -619,6 +652,106 @@ def run():
                     route.fulfill(status=204, body=b"")
                     return
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "POST":
+            if parsed.path == LOCAL_SELECTION_REVIEW:
+                body = request.post_data_json
+                expected_ids = selection_review_expected["ids"]
+                assert isinstance(body, dict) and set(body) == {"ids"}
+                assert body["ids"] == expected_ids
+                assert request.headers.get("x-csrftoken") or request.headers.get("X-CSRFToken")
+                assert isinstance(expected_ids, list) and expected_ids
+                response = route.fetch(max_redirects=0)
+                assert response.status == 200, response.status
+                resolved = response.json()
+                assert isinstance(resolved, dict) and set(resolved) == {"success", "items"}
+                assert resolved.get("success") is True and isinstance(resolved.get("items"), list)
+                returned_ids = [item.get("id") for item in resolved["items"]]
+                cache_control = (
+                    response.headers.get("cache-control")
+                    or response.headers.get("Cache-Control")
+                    or ""
+                ).lower()
+                assert returned_ids == expected_ids
+                assert [item.get("title") for item in resolved["items"]] == [
+                    selection_review_expected["titles_by_id"][product_id]
+                    for product_id in expected_ids
+                ]
+                selection_review_posts.append({
+                    "status": response.status,
+                    "ids": expected_ids[:],
+                    "returned_ids": returned_ids,
+                    "csrf_header_present": True,
+                    "cache_control_private_no_store": "private" in cache_control
+                    and "no-store" in cache_control,
+                })
+                assert selection_review_posts[-1]["cache_control_private_no_store"] is True
+                route.fulfill(response=response)
+                return
+            if parsed.path == LOCAL_OZON_WORKSPACE_HANDOFF:
+                body = request.post_data_json
+                expected_ids = wb_bulk_edit_expected["source_ids"]
+                expected_listing_ids = wb_bulk_edit_expected["ozon_listing_ids"]
+                assert isinstance(body, dict) and set(body) == {
+                    "account_id", "source_ids", "listing_ids", "return_to",
+                }
+                assert body["account_id"] == fixture_ids["ozon_account_id"]
+                assert body["source_ids"] == expected_ids
+                assert body["listing_ids"] == expected_listing_ids
+                return_parts = urlsplit(body["return_to"])
+                assert return_parts.path == "/my-products/beta" and return_parts.query == ""
+                assert re.fullmatch(r"workspace-return=[A-Za-z0-9_-]+", return_parts.fragment)
+                assert request.headers.get("x-csrftoken") or request.headers.get("X-CSRFToken")
+                response = route.fetch(max_redirects=0)
+                assert response.status == 200, response.status
+                resolved = response.json()
+                assert resolved.get("success") is True and isinstance(resolved.get("url"), str)
+                target = urlsplit(resolved["url"])
+                assert target.path == "/marketplaces/listings/"
+                assert parse_qs(target.query) == {
+                    "marketplace": ["ozon"],
+                    "account_id": [str(fixture_ids["ozon_account_id"])],
+                    "workspace_update": ["1"],
+                }
+                assert re.fullmatch(r"workspace-update=[A-Za-z0-9_.-]+", target.fragment)
+                ozon_workspace_handoff_receipts.append({
+                    "status": response.status,
+                    "account_id": body["account_id"],
+                    "source_ids": body["source_ids"][:],
+                    "listing_ids": body["listing_ids"][:],
+                    "return_fragment_present": bool(return_parts.fragment),
+                    "target_path": target.path,
+                    "target_query_keys": sorted(parse_qs(target.query)),
+                    "signed_target_fragment_present": bool(target.fragment),
+                })
+                route.fulfill(response=response)
+                return
+            if parsed.path == LOCAL_OZON_WORKSPACE_PREVIEW:
+                body = request.post_data_json
+                assert isinstance(body, dict) and set(body) == {"workspace_update"}
+                assert isinstance(body["workspace_update"], str) and body["workspace_update"]
+                response = route.fetch(max_redirects=0)
+                assert response.status == 200, response.status
+                resolved = response.json()
+                expected_ids = wb_bulk_edit_expected["source_ids"]
+                expected_listing_ids = wb_bulk_edit_expected["ozon_listing_ids"]
+                workspace = resolved.get("workspace_update")
+                preview = resolved.get("preview")
+                assert resolved.get("success") is True
+                assert isinstance(workspace, dict) and workspace.get("account_id") == fixture_ids[
+                    "ozon_account_id"
+                ]
+                assert workspace.get("listing_ids") == expected_listing_ids
+                assert isinstance(workspace.get("return_to"), str)
+                assert isinstance(preview, dict) and preview.get("listing_ids") == expected_listing_ids
+                assert len(preview.get("rows", [])) == len(expected_listing_ids)
+                ozon_workspace_preview_reads.append({
+                    "status": response.status,
+                    "account_id": workspace["account_id"],
+                    "source_count": len(expected_ids),
+                    "listing_ids": workspace["listing_ids"][:],
+                    "preview_row_ids": [row["listing_id"] for row in preview["rows"]],
+                })
+                route.fulfill(response=response)
+                return
             if parsed.path == LOCAL_WB_SELECTION_RESOLVE:
                 body = request.post_data_json
                 if not isinstance(body, dict) or body.get("mode") != "workspace":
@@ -978,6 +1111,210 @@ def run():
             context.close()
         checks.append("intent_choice_keyboard_escape_focus_and_secondary_overlay_fit_all_layouts")
 
+        selection_review_layouts = []
+        selection_review_screenshots = []
+        selection_review_ids = [fixture_ids["other_filter_id"], fixture_ids["bulk_ids"][52]]
+        selection_review_titles = {
+            fixture_ids["other_filter_id"]: "UX-BULK-OWNED-000-NO-PHOTO",
+            fixture_ids["bulk_ids"][52]: "UX-BULK-OWNED-053",
+        }
+        for theme in ("light", "dark"):
+            selection_review_expected.update({
+                "ids": selection_review_ids[:],
+                "titles_by_id": selection_review_titles.copy(),
+            })
+            review_context = browser.new_context(viewport={"width": 320, "height": 900})
+            review_context.add_init_script(f"localStorage.setItem('sh-theme', '{theme}');")
+            review_context.add_cookies([fixture.synthetic_login_cookie()])
+            review_context.route("**/*", bridge)
+            review_page = review_context.new_page()
+            review_page.on("pageerror", lambda error: errors.append(str(error)))
+            open_products(review_page)
+            review_search = review_page.get_by_placeholder("Название, бренд или артикул")
+            hidden_title = selection_review_titles[selection_review_ids[0]]
+            with review_page.expect_response(lambda response: feed_matches(response, {
+                    "search": hidden_title,
+            })) as no_photo_search:
+                review_search.fill(hidden_title)
+            assert no_photo_search.value.status == 200
+            with review_page.expect_response(lambda response: feed_matches(response, {
+                    "search": hidden_title, "has_photos": "no",
+            })) as no_photo_filter:
+                review_page.get_by_label("Фото").select_option("no")
+            assert no_photo_filter.value.status == 200
+            review_page.get_by_role(
+                "checkbox", name=f"Выбрать {hidden_title}", exact=True,
+            ).check()
+            assert selected_browser_state(review_page)["selected"] == [selection_review_ids[0]]
+            with review_page.expect_response(lambda response: feed_matches(response, {
+                    "search": "UX-BULK-OWNED", "has_photos": "no",
+            })) as broader_no_photo_filter:
+                review_search.fill("UX-BULK-OWNED")
+            assert broader_no_photo_filter.value.status == 200
+            with review_page.expect_response(lambda response: feed_matches(response, {
+                    "search": "UX-BULK-OWNED", "has_photos": "yes",
+            })) as photo_filter:
+                review_page.get_by_label("Фото").select_option("yes")
+            assert photo_filter.value.status == 200
+            with review_page.expect_response(lambda response: feed_matches(response, {
+                    "search": "UX-BULK-OWNED", "has_photos": "yes", "sort": "title",
+            })) as title_sort:
+                review_page.get_by_label("Сортировка").select_option("title")
+            assert title_sort.value.status == 200
+            with review_page.expect_response(lambda response: feed_matches(response, {
+                    "search": "UX-BULK-OWNED", "has_photos": "yes", "sort": "title",
+                    "page": "2", "per_page": "50",
+            })) as second_page:
+                review_page.get_by_role("button", name="Показать ещё", exact=True).click()
+            assert second_page.value.status == 200
+            review_page.get_by_role(
+                "checkbox", name="Выбрать UX-BULK-OWNED-053", exact=True,
+            ).check()
+            assert selected_browser_state(review_page)["selected"] == selection_review_ids
+            hidden_count = review_page.locator("[data-selection-outside-count]")
+            assert hidden_count.count() == 1 and hidden_count.inner_text() == "1 вне текущего списка"
+            before_review = review_page.evaluate("""() => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                if (!proxy) return null;
+                return {
+                    ids: proxy.items.map(item => item.id),
+                    itemsScope: proxy.itemsScope,
+                    feedScope: proxy.feedScopeKey(),
+                    page: proxy.pagination.page,
+                    total: proxy.pagination.total,
+                    perPage: proxy.pagination.per_page,
+                    hasNext: proxy.pagination.has_next,
+                    filters: {...proxy.filters},
+                    selected: proxy.selected.slice(),
+                };
+            }""")
+            assert before_review and before_review["page"] == 2
+            assert before_review["total"] == 53 and before_review["perPage"] == 50
+            assert before_review["hasNext"] is False
+            assert before_review["ids"] == fixture_ids["bulk_ids"]
+            assert before_review["filters"] == {
+                "search": "UX-BULK-OWNED", "supplier": "", "has_photos": "yes",
+                "stock": "", "sort": "title",
+            }
+            provider_attempts_before_review = fixture.REPORT["provider_attempts"]
+            external_before_review = len(fixture.REPORT["unexpected_external_requests"])
+            review_writes = begin_domain_write_watch()
+            before_selection_post = len(selection_review_posts)
+            with review_page.expect_response(
+                lambda response: urlsplit(response.url).path == LOCAL_SELECTION_REVIEW
+                and response.request.method == "POST",
+                timeout=10000,
+            ) as selected_list_read:
+                review_page.locator("[data-selection-review-show]").click()
+            assert selected_list_read.value.status == 200
+            review_page.locator("[data-selection-review]").wait_for()
+            review_rows = review_page.locator("[data-selection-review-row]")
+            review_row_ids = review_rows.evaluate_all(
+                "rows => rows.map(row => Number(row.dataset.selectionReviewRow))",
+            )
+            assert review_row_ids == selection_review_ids
+            assert review_page.locator("[data-selection-outside-count]").inner_text() == (
+                "1 вне текущего списка"
+            )
+            assert review_page.locator(".shk-filters").count() == 0
+            reviewed_state = review_page.evaluate("""() => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                if (!proxy) return null;
+                return {
+                    ids: proxy.items.map(item => item.id),
+                    itemsScope: proxy.itemsScope,
+                    feedScope: proxy.feedScopeKey(),
+                    page: proxy.pagination.page,
+                    total: proxy.pagination.total,
+                    perPage: proxy.pagination.per_page,
+                    hasNext: proxy.pagination.has_next,
+                    filters: {...proxy.filters},
+                    selected: proxy.selected.slice(),
+                    reviewIds: proxy.selectionReviewRows.map(item => item.id),
+                    reviewActive: proxy.selectionReviewActive,
+                };
+            }""")
+            assert reviewed_state == {
+                **before_review,
+                "reviewIds": selection_review_ids,
+                "reviewActive": True,
+            }
+            assert len(selection_review_posts) == before_selection_post + 1
+            assert selection_review_posts[-1]["ids"] == selection_review_ids
+            assert selection_review_posts[-1]["returned_ids"] == selection_review_ids
+            verify_bounds(review_page)
+            if theme == "light":
+                mobile_screenshot = OUTPUT / "catalog-selection-review-light-320.png"
+                review_page.screenshot(path=mobile_screenshot, animations="disabled", full_page=True)
+                selection_review_screenshots.append(mobile_screenshot.name)
+                review_page.set_viewport_size({"width": 1440, "height": 950})
+                verify_bounds(review_page)
+                desktop_screenshot = OUTPUT / "catalog-selection-review-light-1440.png"
+                review_page.screenshot(path=desktop_screenshot, animations="disabled", full_page=True)
+                selection_review_screenshots.append(desktop_screenshot.name)
+                review_page.set_viewport_size({"width": 320, "height": 900})
+            else:
+                dark_screenshot = OUTPUT / "catalog-selection-review-dark-320.png"
+                review_page.screenshot(path=dark_screenshot, animations="disabled", full_page=True)
+                selection_review_screenshots.append(dark_screenshot.name)
+            review_page.locator(
+                f'[data-selection-review-row="{selection_review_ids[0]}"] input[type="checkbox"]',
+            ).uncheck()
+            assert selected_browser_state(review_page)["selected"] == [selection_review_ids[1]]
+            assert review_page.locator("[data-selection-review]").count() == 1
+            assert review_page.locator("[data-selection-review-row]").evaluate_all(
+                "rows => rows.map(row => Number(row.dataset.selectionReviewRow))",
+            ) == [selection_review_ids[1]]
+            assert len(selection_review_posts) == before_selection_post + 1
+            feed_gets_before_catalog_return = len(feed_gets)
+            review_page.locator("[data-selection-review-return]").click()
+            review_page.locator(".shk-filters").wait_for()
+            assert len(feed_gets) == feed_gets_before_catalog_return
+            review_page.wait_for_function("""({page, ids}) => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                return proxy && !proxy.selectionReviewActive && !proxy.loading &&
+                    proxy.filters.search === 'UX-BULK-OWNED' && proxy.filters.has_photos === 'yes' &&
+                    proxy.filters.sort === 'title' && proxy.pagination.page === page &&
+                    proxy.items.map(item => item.id).join(',') === ids.join(',') &&
+                    proxy.selected.join(',') === String(ids.at(-1));
+            }""", arg={"page": before_review["page"], "ids": before_review["ids"]})
+            returned_state = review_page.evaluate("""() => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                return proxy ? {
+                    items: proxy.items.map(item => item.id),
+                    itemsScope: proxy.itemsScope,
+                    feedScope: proxy.feedScopeKey(),
+                    page: proxy.pagination.page,
+                    selected: proxy.selected.slice(),
+                    filters: {...proxy.filters},
+                } : null;
+            }""")
+            assert returned_state == {
+                "items": before_review["ids"],
+                "itemsScope": before_review["itemsScope"],
+                "feedScope": before_review["feedScope"],
+                "page": before_review["page"],
+                "selected": [selection_review_ids[1]],
+                "filters": before_review["filters"],
+            }
+            assert len(selection_review_posts) == before_selection_post + 1
+            review_write_statements = end_domain_write_watch(review_writes)
+            assert review_write_statements == [], review_write_statements
+            assert fixture.REPORT["provider_attempts"] == provider_attempts_before_review
+            assert len(fixture.REPORT["unexpected_external_requests"]) == external_before_review
+            selection_review_layouts.append({
+                "width": 320,
+                "theme": theme,
+                "hidden_selected_count": 1,
+                "review_response_ids": selection_review_posts[-1]["returned_ids"],
+                "deselected_id": selection_review_ids[0],
+                "restored_page": returned_state["page"],
+                "restored_filters": returned_state["filters"],
+                "sql_writes": len(review_write_statements),
+                "provider_attempts": fixture.REPORT["provider_attempts"] - provider_attempts_before_review,
+            })
+            review_context.close()
+
         # Hand the exact ordered workspace selection to the native WB editor,
         # then return through its signed same-tab URL and restore those marks.
         wb_context = browser.new_context(viewport={"width": 320, "height": 900})
@@ -1008,6 +1345,17 @@ def run():
             fixture_ids["preview_wb_ids"][2],
             fixture_ids["preview_wb_ids"][0],
         ]
+        expected_ozon_listing_ids = [
+            fixture_ids["preview_ozon_listing_ids"][2],
+            fixture_ids["preview_ozon_listing_ids"][0],
+        ]
+        selection_review_expected.update({
+            "ids": expected_workspace_ids[:],
+            "titles_by_id": {
+                fixture_ids["preview_local_ids"][2]: fixture_ids["preview_titles"][2],
+                fixture_ids["preview_local_ids"][0]: fixture_ids["preview_titles"][0],
+            },
+        })
         expected_photo_urls = [
             f"{WB_THUMBNAIL_ORIGIN}/vol{fixture_ids['preview_nm_ids'][index] // 100000}"
             f"/part{fixture_ids['preview_nm_ids'][index] // 1000}/"
@@ -1017,6 +1365,7 @@ def run():
         wb_bulk_edit_expected.update({
             "source_ids": expected_workspace_ids,
             "wb_ids": expected_editor_ids,
+            "ozon_listing_ids": expected_ozon_listing_ids,
             "photo_urls": expected_photo_urls,
         })
         for index in (2, 0):
@@ -1024,6 +1373,19 @@ def run():
                 "checkbox", name=f"Выбрать {fixture_ids['preview_titles'][index]}", exact=True,
             ).check()
         assert selected_browser_state(wb_page)["selected"] == expected_workspace_ids
+        selection_post_count_before_wb_review = len(selection_review_posts)
+        with wb_page.expect_response(
+            lambda response: urlsplit(response.url).path == LOCAL_SELECTION_REVIEW
+            and response.request.method == "POST",
+            timeout=10000,
+        ) as wb_reviewed:
+            wb_page.locator("[data-selection-review-show]").click()
+        assert wb_reviewed.value.status == 200
+        wb_review_rows = wb_page.locator("[data-selection-review-row]")
+        assert wb_review_rows.evaluate_all(
+            "rows => rows.map(row => Number(row.dataset.selectionReviewRow))",
+        ) == expected_workspace_ids
+        assert len(selection_review_posts) == selection_post_count_before_wb_review + 1
         provider_attempts_before_handoff = fixture.REPORT["provider_attempts"]
         unexpected_external_before_handoff = len(
             fixture.REPORT["unexpected_external_requests"]
@@ -1102,6 +1464,13 @@ def run():
         }""", arg={"ids": expected_workspace_ids, "search": "Сравнение цен WB"})
         assert urlsplit(wb_page.url).fragment == return_parts.fragment
         assert selected_browser_state(wb_page)["selected"] == expected_workspace_ids
+        assert wb_page.locator("[data-selection-review]").count() == 1
+        assert wb_page.locator("[data-selection-review-row]").evaluate_all(
+            "rows => rows.map(row => Number(row.dataset.selectionReviewRow))",
+        ) == expected_workspace_ids
+        assert len(selection_review_posts) == selection_post_count_before_wb_review + 2
+        assert selection_review_posts[-1]["ids"] == expected_workspace_ids
+        assert selection_review_posts[-1]["returned_ids"] == expected_workspace_ids
         restored_scope = wb_page.evaluate("""() => {
             const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
             return proxy ? {
@@ -1135,6 +1504,7 @@ def run():
         verify_bounds(wb_page)
         returned_screenshot = OUTPUT / "wb-bulk-from-workspace-returned-320.png"
         wb_page.screenshot(path=returned_screenshot, animations="disabled")
+        selection_review_screenshots.append(returned_screenshot.name)
         wb_bulk_edit_handoff = {
             "selected_workspace_rows": len(expected_workspace_ids),
             "exact_mapped_editor_rows": resolver_result["count"],
@@ -1162,6 +1532,109 @@ def run():
         assert wb_bulk_edit_handoff["apply_posts"] == 0
         assert wb_bulk_edit_handoff["provider_attempts"] == 0
         checks.append("wb_workspace_exact_order_handoff_opens_review_and_restores_exact_selection")
+
+        wb_selection_review_return = {
+            "selection_ids": expected_workspace_ids,
+            "review_endpoint_reads": 2,
+            "restored_review_ids": expected_workspace_ids,
+            "scope_restored": restored_scope == {
+                "search": "Сравнение цен WB",
+                "sort": "title",
+                "selected": expected_workspace_ids,
+            },
+            "local_db_write_statements": 0,
+            "provider_attempts": 0,
+            "screenshot": returned_screenshot.name,
+        }
+        assert wb_selection_review_return["scope_restored"] is True
+        assert wb_selection_review_return["review_endpoint_reads"] == 2
+        assert wb_selection_review_return["local_db_write_statements"] == 0
+        assert wb_selection_review_return["provider_attempts"] == 0
+
+        # The same verified selection can enter the real local Ozon workspace
+        # handoff and return to its exact review snapshot without applying it.
+        ozon_route_selection_posts_before = len(selection_review_posts)
+        ozon_route_provider_attempts = fixture.REPORT["provider_attempts"]
+        ozon_route_external_before = len(fixture.REPORT["unexpected_external_requests"])
+        ozon_route_watch = begin_domain_write_watch()
+        with wb_page.expect_response(
+            lambda response: urlsplit(response.url).path == LOCAL_OZON_WORKSPACE_HANDOFF
+            and response.request.method == "POST",
+            timeout=10000,
+        ) as ozon_handoff:
+            pick_action(wb_page, "Изменить карточки Ozon")
+        assert ozon_handoff.value.status == 200
+        wb_page.wait_for_url(lambda value: urlsplit(str(value)).path == "/marketplaces/listings/")
+        ozon_query = parse_qs(urlsplit(wb_page.url).query)
+        assert ozon_query == {
+            "marketplace": ["ozon"],
+            "account_id": [str(fixture_ids["ozon_account_id"])],
+            "workspace_update": ["1"],
+        }
+        wb_page.locator("[data-workspace-update]").wait_for()
+        wb_page.locator("[data-workspace-return]").wait_for()
+        wb_page.wait_for_function("""expected => {
+            const proxy = document.querySelector('#marketplace-catalog-app')?._vnode?.component?.proxy;
+            return proxy && proxy.workspaceUpdate &&
+                proxy.workspaceUpdate.listingIds.join(',') === expected.join(',') &&
+                proxy.listingUpdate.phase === 'review';
+        }""", arg=expected_ozon_listing_ids)
+        assert ozon_workspace_handoff_receipts[-1]["source_ids"] == expected_workspace_ids
+        assert ozon_workspace_handoff_receipts[-1]["listing_ids"] == expected_ozon_listing_ids
+        assert ozon_workspace_preview_reads[-1]["preview_row_ids"] == expected_ozon_listing_ids
+        with wb_page.expect_response(lambda response: feed_matches(response, {
+                "search": "Сравнение цен WB", "sort": "title", "per_page": "50",
+        })) as ozon_returned:
+            with wb_page.expect_navigation(wait_until="domcontentloaded"):
+                wb_page.locator("[data-workspace-return]").first.click()
+        assert ozon_returned.value.status == 200
+        wb_page.wait_for_url(lambda value: urlsplit(str(value)).path == "/my-products/beta")
+        wb_page.wait_for_function("""({ids, search}) => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy && !proxy.loading && proxy.selectionReviewActive &&
+                proxy.filters.search === search && proxy.filters.sort === 'title' &&
+                proxy.selected.join(',') === ids.join(',') &&
+                proxy.selectionReviewRows.map(item => item.id).join(',') === ids.join(',');
+        }""", arg={"ids": expected_workspace_ids, "search": "Сравнение цен WB"})
+        assert wb_page.locator("[data-selection-review]").count() == 1
+        assert wb_page.locator("[data-selection-review-row]").evaluate_all(
+            "rows => rows.map(row => Number(row.dataset.selectionReviewRow))",
+        ) == expected_workspace_ids
+        assert len(selection_review_posts) == ozon_route_selection_posts_before + 1
+        assert selection_review_posts[-1]["ids"] == expected_workspace_ids
+        assert selection_review_posts[-1]["returned_ids"] == expected_workspace_ids
+        ozon_route_writes = end_domain_write_watch(ozon_route_watch)
+        assert ozon_route_writes == [], ozon_route_writes
+        assert fixture.REPORT["provider_attempts"] == ozon_route_provider_attempts
+        assert len(fixture.REPORT["unexpected_external_requests"]) == ozon_route_external_before
+        ozon_return_screenshot = OUTPUT / "catalog-selection-review-ozon-return-320.png"
+        verify_bounds(wb_page)
+        wb_page.screenshot(path=ozon_return_screenshot, animations="disabled", full_page=True)
+        selection_review_screenshots.append(ozon_return_screenshot.name)
+        ozon_selection_review_return = {
+            "selection_ids": expected_workspace_ids,
+            "listing_ids": expected_ozon_listing_ids,
+            "handoff_posts": len(ozon_workspace_handoff_receipts),
+            "workspace_preview_reads": len(ozon_workspace_preview_reads),
+            "review_endpoint_reads": len(selection_review_posts) - ozon_route_selection_posts_before,
+            "restored_review_ids": expected_workspace_ids,
+            "restored_scope": {
+                "search": "Сравнение цен WB",
+                "sort": "title",
+            },
+            "local_db_write_statements": len(ozon_route_writes),
+            "provider_attempts": fixture.REPORT["provider_attempts"] - ozon_route_provider_attempts,
+            "unexpected_external_requests": len(
+                fixture.REPORT["unexpected_external_requests"]
+            ) - ozon_route_external_before,
+            "screenshot": ozon_return_screenshot.name,
+        }
+        assert ozon_selection_review_return["handoff_posts"] == 1
+        assert ozon_selection_review_return["workspace_preview_reads"] == 1
+        assert ozon_selection_review_return["review_endpoint_reads"] == 1
+        assert ozon_selection_review_return["local_db_write_statements"] == 0
+        assert ozon_selection_review_return["provider_attempts"] == 0
+        assert ozon_selection_review_return["unexpected_external_requests"] == 0
         wb_context.close()
 
         context = browser.new_context(viewport={"width": 320, "height": 900})
@@ -3349,6 +3822,47 @@ def run():
         assert not fixture.REPORT["unexpected_http"] and not fixture.REPORT["unexpected_external_requests"]
         assert fixture.REPORT["provider_attempts"] == 0
         browser.close()
+    assert len(selection_review_layouts) == 2, selection_review_layouts
+    assert len(selection_review_posts) == 5, selection_review_posts
+    assert all(post["status"] == 200 and post["ids"] == post["returned_ids"]
+               and post["csrf_header_present"] and post["cache_control_private_no_store"]
+               for post in selection_review_posts), selection_review_posts
+    assert wb_selection_review_return["restored_review_ids"] == expected_workspace_ids
+    assert ozon_selection_review_return["restored_review_ids"] == expected_workspace_ids
+    assert "catalog-selection-review-light-1440.png" in selection_review_screenshots
+    assert "catalog-selection-review-light-320.png" in selection_review_screenshots
+    assert "catalog-selection-review-dark-320.png" in selection_review_screenshots
+    assert all(row["hidden_selected_count"] == 1 and row["sql_writes"] == 0
+               and row["provider_attempts"] == 0 for row in selection_review_layouts)
+    catalog_selection_review = {
+        "status": "passed",
+        "cross_filter_review": {
+            "selected_ids": selection_review_ids,
+            "api_returned_ids": selection_review_ids,
+            "hidden_selected_count": 1,
+            "deselected_while_reviewing": selection_review_ids[0],
+            "page_preserved": 2,
+            "filters_preserved": {
+                "search": "UX-BULK-OWNED",
+                "has_photos": "yes",
+                "sort": "title",
+            },
+            "layouts": selection_review_layouts,
+        },
+        "wb_workspace_return": wb_selection_review_return,
+        "ozon_workspace_return": ozon_selection_review_return,
+        "selection_endpoint_reads": selection_review_posts,
+        "local_db_write_statements": sum(
+            row["sql_writes"] for row in selection_review_layouts
+        ) + wb_bulk_edit_handoff["local_db_write_statements"]
+          + ozon_selection_review_return["local_db_write_statements"],
+        "provider_attempts": fixture.REPORT["provider_attempts"],
+        "unexpected_external_requests": len(fixture.REPORT["unexpected_external_requests"]),
+        "screenshots": selection_review_screenshots,
+    }
+    assert catalog_selection_review["local_db_write_statements"] == 0
+    assert catalog_selection_review["provider_attempts"] == 0
+    assert catalog_selection_review["unexpected_external_requests"] == 0
     result = {
         "status": "passed",
         "layouts": layouts,
@@ -3356,6 +3870,7 @@ def run():
         "provider_attempts": 0,
         "wb_bulk_edit_handoff": wb_bulk_edit_handoff,
         "supplier_refresh_zero_update": supplier_refresh_zero_update_report,
+        "catalog_selection_review": catalog_selection_review,
     }
     (OUTPUT / "report.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(result, ensure_ascii=False))
