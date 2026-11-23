@@ -1206,6 +1206,296 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             ))
         return attribute
 
+    def _color_name_attribute(
+        self,
+        *,
+        is_collection=False,
+        dictionary_id=None,
+        name="Название цвета",
+        external_id="10097",
+    ):
+        attribute = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id,
+            product_type_id=self.product_type.id,
+            external_attribute_id=external_id,
+            name=name,
+            data_type="String",
+            is_required=False,
+            dictionary_id=dictionary_id,
+            max_value_count=1,
+            is_collection=is_collection,
+            is_available=True,
+            is_enabled=True,
+            last_seen_at=self.now,
+        )
+        db.session.add(attribute)
+        db.session.flush()
+        return attribute
+
+    def test_color_name_10097_joins_only_observed_colors_for_exact_scalar_schema(self):
+        self._color_name_attribute()
+        self._dictionary_attribute(
+            "10096",
+            "Цвет товара",
+            ["Черный", "Белый"],
+            is_collection=True,
+            max_value_count=4,
+        )
+        db.session.commit()
+        facts_document = {"facts": {
+            "identity": {},
+            "identifiers": {},
+            "attributes": {"colors": ["Черный", "Белый"]},
+        }}
+        provenance = {"attributes.colors": {
+            "source": "imported_product.original_data.colors",
+            "trust": "observed",
+        }}
+
+        attributes, _report = MarketplaceDraftService._auto_map_attributes(
+            product_type=self.product_type,
+            facts_document=facts_document,
+            source_provenance=provenance,
+        )
+        by_id = {row["attribute_id"]: row for row in attributes}
+        self.assertEqual(
+            by_id["10097"]["values"],
+            [{"value": "Черный / Белый"}],
+        )
+        self.assertEqual(
+            by_id["10096"]["values"],
+            [
+                {"dictionary_value_id": "10096-1", "value": "Черный"},
+                {"dictionary_value_id": "10096-2", "value": "Белый"},
+            ],
+        )
+
+        explicit_facts = {"facts": {
+            "identity": {},
+            "identifiers": {},
+            "attributes": {
+                "colors": ["Черный", "Белый"],
+                "characteristics": [{
+                    "name": "Название цвета",
+                    "value": "Оттенок с явного источника",
+                }],
+            },
+        }}
+        explicit, _report = MarketplaceDraftService._auto_map_attributes(
+            product_type=self.product_type,
+            facts_document=explicit_facts,
+            source_provenance=provenance,
+        )
+        explicit_by_id = {row["attribute_id"]: row for row in explicit}
+        self.assertEqual(
+            explicit_by_id["10097"]["values"],
+            [{"value": "Оттенок с явного источника"}],
+        )
+
+    def test_color_name_10097_keeps_unsupported_schema_and_provenance_behavior(self):
+        attribute = self._color_name_attribute(is_collection=True)
+        db.session.commit()
+        facts_document = {"facts": {
+            "identity": {},
+            "identifiers": {},
+            "attributes": {"colors": ["Черный", "Белый"]},
+        }}
+        provenance = {"attributes.colors": {
+            "source": "imported_product.original_data.colors",
+            "trust": "observed",
+        }}
+
+        def mapped():
+            attributes, _report = MarketplaceDraftService._auto_map_attributes(
+                product_type=self.product_type,
+                facts_document=facts_document,
+                source_provenance=provenance,
+            )
+            return next(
+                row for row in attributes
+                if row["attribute_id"] == str(attribute.external_attribute_id)
+            )
+
+        self.assertEqual(
+            mapped()["values"],
+            [{"value": "Черный"}, {"value": "Белый"}],
+        )
+
+        attribute.name = "Название оттенка"
+        db.session.commit()
+        wrong_name, _report = MarketplaceDraftService._auto_map_attributes(
+            product_type=self.product_type,
+            facts_document=facts_document,
+            source_provenance=provenance,
+        )
+        self.assertNotIn(
+            "10097", {row["attribute_id"] for row in wrong_name},
+        )
+        attribute.name = "Название цвета"
+        attribute.external_attribute_id = "99998"
+        db.session.commit()
+        self.assertEqual(
+            mapped()["values"],
+            [{"value": "Черный"}, {"value": "Белый"}],
+        )
+        attribute.external_attribute_id = "10097"
+        db.session.commit()
+
+        attribute.is_collection = False
+        attribute.dictionary_id = "color-name-dictionary"
+        attribute.values_synced_at = self.now
+        attribute.values_sync_status = "success"
+        attribute.values_snapshot_hash = "color-name-values"
+        attribute.values_version = 1
+        attribute.values_count = 2
+        db.session.add_all([
+            MarketplaceAttributeValue(
+                marketplace_id=self.marketplace.id,
+                product_type_id=self.product_type.id,
+                attribute_id=attribute.id,
+                external_value_id="10097-black",
+                value="Черный",
+                value_normalized=OzonReferenceService.normalize_value("Черный"),
+                is_available=True,
+                last_seen_at=self.now,
+            ),
+            MarketplaceAttributeValue(
+                marketplace_id=self.marketplace.id,
+                product_type_id=self.product_type.id,
+                attribute_id=attribute.id,
+                external_value_id="10097-white",
+                value="Белый",
+                value_normalized=OzonReferenceService.normalize_value("Белый"),
+                is_available=True,
+                last_seen_at=self.now,
+            ),
+        ])
+        db.session.commit()
+        self.assertEqual(
+            mapped()["values"],
+            [
+                {"dictionary_value_id": "10097-black", "value": "Черный"},
+                {"dictionary_value_id": "10097-white", "value": "Белый"},
+            ],
+        )
+
+        attribute.dictionary_id = None
+        db.session.commit()
+        untrusted = {"attributes.colors": {
+            "source": "imported_product.original_data.colors",
+            "trust": "seller_override",
+        }}
+        attributes, _report = MarketplaceDraftService._auto_map_attributes(
+            product_type=self.product_type,
+            facts_document=facts_document,
+            source_provenance=untrusted,
+        )
+        self.assertEqual(
+            next(row for row in attributes if row["attribute_id"] == "10097")["values"],
+            [{"value": "Черный"}, {"value": "Белый"}],
+        )
+
+    def test_color_name_10097_overlength_join_keeps_existing_values(self):
+        self._color_name_attribute()
+        db.session.commit()
+        colors = ["А" * 600, "Б" * 500]
+        facts_document = {"facts": {
+            "identity": {},
+            "identifiers": {},
+            "attributes": {"colors": colors},
+        }}
+        provenance = {"attributes.colors": {
+            "source": "imported_product.original_data.colors",
+            "trust": "observed",
+        }}
+        attributes, _report = MarketplaceDraftService._auto_map_attributes(
+            product_type=self.product_type,
+            facts_document=facts_document,
+            source_provenance=provenance,
+        )
+        row = next(row for row in attributes if row["attribute_id"] == "10097")
+        self.assertEqual(
+            row["values"],
+            [{"value": colors[0]}, {"value": colors[1]}],
+        )
+        self.assertNotIn(" / ", row["values"][0]["value"])
+
+    def test_color_name_10097_rebase_follows_legacy_default_and_keeps_manual_edit(self):
+        self._color_name_attribute()
+        product = self._product(external_id="color-name-rebase")
+        original = json.loads(product.original_data)
+        original["colors"] = ["Черный", "Белый"]
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.supplier_product.original_data_json = product.original_data
+        db.session.commit()
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+
+        def color_row(value):
+            return {
+                "attribute_id": "10097",
+                "complex_id": "0",
+                "values": value,
+            }
+
+        current_attributes = json.loads(draft.attributes_json)
+        self.assertIn(
+            color_row([{"value": "Черный / Белый"}]), current_attributes,
+        )
+
+        # Simulate an existing draft saved by the pre-release list renderer.
+        legacy_row = color_row([{"value": "Черный"}, {"value": "Белый"}])
+        current_attributes = [
+            row for row in current_attributes if row.get("attribute_id") != "10097"
+        ]
+        current_attributes.append(legacy_row)
+        draft.attributes_json = json.dumps(current_attributes, ensure_ascii=False)
+        db.session.commit()
+
+        original = json.loads(product.original_data)
+        original["colors"] = ["Черный", "Синий"]
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.supplier_product.original_data_json = product.original_data
+        db.session.commit()
+        rebased = MarketplaceDraftService.rebase_source_defaults(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+        rebased_attributes = json.loads(rebased.attributes_json)
+        self.assertIn(
+            color_row([{"value": "Черный / Синий"}]),
+            rebased_attributes,
+        )
+
+        manual_row = color_row([{"value": "Ручное значение продавца"}])
+        rebased_attributes = [
+            row for row in rebased_attributes if row.get("attribute_id") != "10097"
+        ]
+        rebased_attributes.append(manual_row)
+        rebased.attributes_json = json.dumps(rebased_attributes, ensure_ascii=False)
+        db.session.commit()
+
+        original = json.loads(product.original_data)
+        original["colors"] = ["Белый", "Серый"]
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.supplier_product.original_data_json = product.original_data
+        db.session.commit()
+        manually_rebased = MarketplaceDraftService.rebase_source_defaults(
+            seller_id=self.seller1_id,
+            draft_id=rebased.id,
+            expected_version=rebased.version,
+        )
+        manual_color = next(
+            row for row in json.loads(manually_rebased.attributes_json)
+            if row["attribute_id"] == "10097"
+        )
+        self.assertEqual(manual_color, manual_row)
+
     def test_observed_colors_require_complete_forms_and_preserve_exact_compounds(self):
         parser = MarketplaceDraftService._observed_colors
         uncertain = MarketplaceDraftService._color_observation_is_uncertain

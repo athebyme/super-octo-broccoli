@@ -134,6 +134,7 @@ class MarketplaceDraftService:
     OZON_HASHTAG_ATTRIBUTE_ID = "23171"
     OZON_ACCESSORY_GENDER_ATTRIBUTE_ID = "4539"
     OZON_CLOTHING_GENDER_ATTRIBUTE_ID = "9163"
+    OZON_COLOR_NAME_ATTRIBUTE_ID = "10097"
     OZON_BRAND_ATTRIBUTE_IDS = frozenset({"31", "85"})
     AUTOMATIC_CLEANUP_ATTRIBUTE_ID = "4543"
     AUTOMATIC_CLEANUP_PROVENANCE_KEY = "automatic_attribute_cleanup.4543"
@@ -4858,11 +4859,55 @@ class MarketplaceDraftService:
         return result
 
     @classmethod
+    def _observed_color_name_text(
+        cls,
+        *,
+        facts_document: dict,
+        source_provenance: Optional[dict],
+        candidate: Any,
+    ) -> Optional[str]:
+        """Render exact observed source colors only when the join is lossless."""
+        facts = facts_document.get("facts", {})
+        attributes = facts.get("attributes", {}) if isinstance(facts, dict) else {}
+        source_colors = (
+            attributes.get("colors") if isinstance(attributes, dict) else None
+        )
+        color_provenance = (
+            source_provenance.get("attributes.colors")
+            if isinstance(source_provenance, dict) else None
+        )
+        source_path = (
+            color_provenance.get("source")
+            if isinstance(color_provenance, dict) else None
+        )
+        if not (
+            isinstance(source_colors, list)
+            and len(source_colors) > 1
+            and len(source_colors) <= cls.MAX_ATTRIBUTE_VALUES
+            and all(
+                isinstance(value, str)
+                and value
+                and value == value.strip()
+                and " / " not in value
+                for value in source_colors
+            )
+            and candidate == source_colors
+            and isinstance(color_provenance, dict)
+            and color_provenance.get("trust") == "observed"
+            and isinstance(source_path, str)
+            and source_path.endswith(".colors")
+        ):
+            return None
+        rendered = " / ".join(source_colors)
+        return rendered if len(rendered) <= 1_000 else None
+
+    @classmethod
     def _auto_map_attributes(
         cls,
         *,
         product_type: MarketplaceProductType,
         facts_document: dict,
+        source_provenance: Optional[dict] = None,
         category_mapping: Optional[MarketplaceCategoryMapping] = None,
     ) -> Tuple[list, dict]:
         """Return ``(attributes, compliance_report)``.
@@ -5015,6 +5060,23 @@ class MarketplaceDraftService:
                 raw_value = candidates.get(
                     cls._normalized_text(attribute.name)
                 )
+            if (
+                str(attribute.external_attribute_id)
+                == cls.OZON_COLOR_NAME_ATTRIBUTE_ID
+                and attribute.name == "Название цвета"
+                and str(attribute.data_type or "").strip().lower() == "string"
+                and attribute.is_required is False
+                and attribute.is_collection is False
+                and not attribute.dictionary_id
+                and not attribute.attribute_complex_id
+            ):
+                rendered_colors = cls._observed_color_name_text(
+                    facts_document=facts_document,
+                    source_provenance=source_provenance,
+                    candidate=raw_value,
+                )
+                if rendered_colors is not None:
+                    raw_value = rendered_colors
             # Preserve every bounded source-backed candidate that resolves to
             # the exact current dictionary. Cropping here used to hide source
             # ambiguity and discard meaningful values before draft preflight
@@ -5395,6 +5457,9 @@ class MarketplaceDraftService:
         auto_attributes, compliance_report = cls._auto_map_attributes(
             product_type=mapping.product_type,
             facts_document=facts_document,
+            source_provenance=cls._stored_json(
+                draft.provenance_json, dict,
+            ),
             category_mapping=mapping,
         )
         cls._bind_type(draft, mapping.product_type)
@@ -6357,6 +6422,9 @@ class MarketplaceDraftService:
             auto_attributes, compliance_report = cls._auto_map_attributes(
                 product_type=listing.product_type,
                 facts_document=facts_document,
+                source_provenance=cls._stored_json(
+                    draft.provenance_json, dict,
+                ),
             )
             cls._bind_type(draft, listing.product_type)
             draft.category_mapping_id = None
@@ -6995,6 +7063,7 @@ class MarketplaceDraftService:
             auto_attributes, compliance_report = cls._auto_map_attributes(
                 product_type=selected_type,
                 facts_document=facts_document,
+                source_provenance=provenance,
                 category_mapping=mapping,
             )
             draft.attributes_json = cls._canonical_json(auto_attributes, list)
@@ -7562,6 +7631,9 @@ class MarketplaceDraftService:
             auto_attributes, compliance_report = cls._auto_map_attributes(
                 product_type=selected_type,
                 facts_document=facts,
+                source_provenance=cls._stored_json(
+                    draft.provenance_json, dict,
+                ),
             )
         elif changing:
             auto_attributes, compliance_report = [], None
@@ -7935,6 +8007,9 @@ class MarketplaceDraftService:
                     auto_attributes, compliance_report = cls._auto_map_attributes(
                         product_type=selected_type,
                         facts_document=facts_document,
+                        source_provenance=cls._stored_json(
+                            draft.provenance_json, dict,
+                        ),
                     )
                     draft.attributes_json = cls._canonical_json(auto_attributes, list)
                     cls._merge_compliance_provenance(draft, compliance_report)
@@ -8122,6 +8197,9 @@ class MarketplaceDraftService:
         cls._assert_no_active_publication(draft)
 
         previous_facts = cls._stored_json(draft.source_facts_json, dict)
+        previous_provenance = cls._stored_json(
+            draft.provenance_json, dict,
+        )
         current_facts, provenance, fact_hash = cls._fact_snapshot(
             draft.imported_product
         )
@@ -8209,11 +8287,13 @@ class MarketplaceDraftService:
             previous_auto, _ = cls._auto_map_attributes(
                 product_type=draft.product_type,
                 facts_document=previous_facts,
+                source_provenance=previous_provenance,
                 category_mapping=draft.category_mapping,
             )
             current_auto, _ = cls._auto_map_attributes(
                 product_type=draft.product_type,
                 facts_document=current_facts,
+                source_provenance=provenance,
                 category_mapping=draft.category_mapping,
             )
 
@@ -8309,6 +8389,51 @@ class MarketplaceDraftService:
                 for item in previous_auto
                 if isinstance(item, dict)
             }
+            stored_attributes = cls._stored_json(draft.attributes_json, list)
+            color_name_identity = (cls.OZON_COLOR_NAME_ATTRIBUTE_ID, "0")
+            stored_color_row = next((
+                item for item in stored_attributes
+                if isinstance(item, dict) and identity(item) == color_name_identity
+            ), None)
+            previous_legacy_color_row = None
+            stored_color_values = (
+                stored_color_row.get("values")
+                if isinstance(stored_color_row, dict) else None
+            )
+            previous_color_default = previous_by_identity.get(
+                color_name_identity
+            )
+            if (
+                isinstance(stored_color_values, list)
+                and len(stored_color_values) > 1
+                and previous_color_default is not None
+            ):
+                # Before this release, the generated default for 10097 was
+                # the original list of observed colors. Check that one legacy
+                # shape only when the stored row is multi-valued and the
+                # already-built previous default is its exact one-text form.
+                previous_color_candidate = cls._attribute_candidate_values(
+                    previous_facts
+                ).get("название цвета")
+                previous_joined_color = cls._observed_color_name_text(
+                    facts_document=previous_facts,
+                    source_provenance=previous_provenance,
+                    candidate=previous_color_candidate,
+                )
+                legacy_values = cls._value_strings(previous_color_candidate)
+                legacy_color_row = {
+                    "attribute_id": cls.OZON_COLOR_NAME_ATTRIBUTE_ID,
+                    "complex_id": "0",
+                    "values": [{"value": value} for value in legacy_values],
+                }
+                if (
+                    previous_joined_color is not None
+                    and previous_color_default.get("values")
+                    == [{"value": previous_joined_color}]
+                    and legacy_values
+                    and stored_color_row == legacy_color_row
+                ):
+                    previous_legacy_color_row = legacy_color_row
             current_by_identity = {
                 identity(item): item
                 for item in current_auto
@@ -8316,13 +8441,20 @@ class MarketplaceDraftService:
             }
             merged_attributes = []
             occupied = set()
-            for item in cls._stored_json(draft.attributes_json, list):
+            for item in stored_attributes:
                 if not isinstance(item, dict):
                     merged_attributes.append(item)
                     continue
                 item_identity = identity(item)
                 previous_item = previous_by_identity.get(item_identity)
-                if previous_item is not None and item == previous_item:
+                if (
+                    (previous_item is not None and item == previous_item)
+                    or (
+                        item_identity == color_name_identity
+                        and previous_legacy_color_row is not None
+                        and item == previous_legacy_color_row
+                    )
+                ):
                     replacement = current_by_identity.get(item_identity)
                     if replacement is not None:
                         merged_attributes.append(replacement)
@@ -8453,6 +8585,9 @@ class MarketplaceDraftService:
             facts_document=cls._stored_json(
                 draft.source_facts_json,
                 dict,
+            ),
+            source_provenance=cls._stored_json(
+                draft.provenance_json, dict,
             ),
             category_mapping=draft.category_mapping,
         )
