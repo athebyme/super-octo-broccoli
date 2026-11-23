@@ -464,10 +464,10 @@
                     <p class="mt-2 text-sm text-gray-600">Сведения об этой карточке скрыты, потому что её принадлежность продавцу не подтверждена.</p>
                 </div>
                 {% else %}
-                <div class="flex items-start justify-between">
-                    <div class="flex-1">
-                        <div class="flex items-center space-x-2 mb-1">
-                            <h4 class="font-semibold text-gray-900">
+                <div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div class="min-w-0 flex-1">
+                        <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 mb-1">
+                            <h4 class="min-w-0 max-w-full break-words font-semibold text-gray-900">
                                 {{ change.product.title if change_product_owned else 'Товар #' + change.product_id|string }}
                             </h4>
                             {% if change.reverted %}
@@ -545,7 +545,7 @@
                         {% endif %}
                     </div>
 
-                    <div class="flex items-center space-x-2">
+                    <div class="flex flex-wrap items-center gap-x-3 gap-y-2 sm:shrink-0">
                         {% if change_product_owned %}
                         <a href="{{ url_for('product_detail', product_id=change.product_id) }}"
                            class="text-indigo-600 hover:text-indigo-700 text-sm" data-operations-change-fix-link>
