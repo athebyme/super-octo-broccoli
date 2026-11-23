@@ -448,6 +448,9 @@ def assert_wb_status_filter(page, value):
     assert wb_filter.input_value() == value
 
 
+MARKETPLACE_FILTER_ANCHOR_TITLE = "UX-R71-MARKETPLACE-FILTER-ANCHOR"
+
+
 def seed_marketplace_filter_rows():
     with fixture.app.app_context():
         seller_id = fixture.FIXTURE["seller_id"]
@@ -459,7 +462,7 @@ def seed_marketplace_filter_rows():
         db.session.add(wb_card)
         db.session.flush()
         specs = (
-            ("wb_active", "Карточка WB", "imported"),
+            ("wb_active", MARKETPLACE_FILTER_ANCHOR_TITLE, "imported"),
             ("wb_preparation", "Подготовка WB", "validated"),
             ("wb_attention", "Ошибка WB", "failed"),
             ("ozon_active", "Карточка Ozon", "pending"),
@@ -517,7 +520,7 @@ def exercise_marketplace_filters(browser, bridge, errors):
         context.route("**/*", bridge)
         page = context.new_page()
         page.on("pageerror", lambda error: errors.append(str(error)))
-        open_products(page)
+        open_products(page, title=MARKETPLACE_FILTER_ANCHOR_TITLE)
         assert page.evaluate("document.documentElement.dataset.theme") == theme
         marks = page.locator(".mp-list article.mp-row [data-product-id]")
         assert_marketplace_filter(page, "all")
