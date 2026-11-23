@@ -169,10 +169,21 @@ def _supplier_catalog_config_snapshot(supplier) -> dict:
     }
 
 
-def supplier_catalog_config_digest(supplier) -> str:
-    """Hash the effective supplier source config without retaining its values."""
+def supplier_catalog_config_digest(supplier, *, catalog_only: bool = False) -> str:
+    """Hash supplier source settings without retaining their values.
+
+    The default payload is the original full catalog-and-price snapshot. Keep
+    that exact shape for existing manual refresh receipts. Scheduled catalog
+    reads can opt into a digest that fences only settings used by the catalog
+    feed, so an unrelated price-feed edit does not invalidate that read.
+    """
+    snapshot = _supplier_catalog_config_snapshot(supplier)
+    if catalog_only:
+        snapshot.pop('price_file_url', None)
+        snapshot.pop('price_file_encoding', None)
+        snapshot.pop('price_file_delimiter', None)
     canonical = json.dumps(
-        _supplier_catalog_config_snapshot(supplier),
+        snapshot,
         sort_keys=True,
         ensure_ascii=False,
         separators=(',', ':'),
@@ -209,6 +220,31 @@ class BulkActionResult:
 
 class SupplierRefreshReviewStale(ValueError):
     """The selected supplier refresh no longer matches its reviewed state."""
+
+
+def _supplier_sync_config_digest(supplier, *, catalog_only: bool) -> str:
+    # Preserve one-argument calls for existing integrations and tests that
+    # instrument the legacy manual digest path.
+    if catalog_only:
+        return supplier_catalog_config_digest(supplier, catalog_only=True)
+    return supplier_catalog_config_digest(supplier)
+
+
+_SCHEDULED_CATALOG_PREFETCH_ERROR_CODES = frozenset({
+    'scheduled_consent_revoked',
+    'admin_not_authorized',
+    'supplier_not_found',
+    'configuration_changed',
+    'configuration_unavailable',
+    'claim_lost',
+})
+
+
+def _catalog_pre_fetch_error_code(error: BaseException) -> str:
+    code = getattr(error, 'code', None)
+    if isinstance(code, str) and code in _SCHEDULED_CATALOG_PREFETCH_ERROR_CODES:
+        return code
+    return 'catalog_pre_fetch_check_failed'
 
 
 SUPPLIER_REFRESH_REVIEW_PRODUCT_FIELDS = (
@@ -1437,8 +1473,9 @@ def _supplier_catalog_sync_lock(supplier_id: int):
         yield False
         return
 
+    supplier_key = int(supplier_id)
     lock_path = os.path.join(
-        '/tmp', f'supplier-catalog-sync-{int(supplier_id)}.lock',
+        '/tmp', f'supplier-catalog-sync-{supplier_key}.lock',
     )
     try:
         handle = open(lock_path, 'a+b')
@@ -1454,7 +1491,18 @@ def _supplier_catalog_sync_lock(supplier_id: int):
             acquired = True
         except (BlockingIOError, OSError):
             pass
-        yield acquired
+        held = getattr(_supplier_catalog_lock_state, 'supplier_ids', None)
+        if held is None:
+            held = set()
+            _supplier_catalog_lock_state.supplier_ids = held
+        registered = acquired and supplier_key not in held
+        if registered:
+            held.add(supplier_key)
+        try:
+            yield acquired
+        finally:
+            if registered:
+                held.discard(supplier_key)
     finally:
         if acquired:
             try:
@@ -1462,6 +1510,20 @@ def _supplier_catalog_sync_lock(supplier_id: int):
             except OSError:
                 pass
         handle.close()
+
+
+_supplier_catalog_lock_state = threading.local()
+
+
+def _supplier_catalog_sync_lock_is_held(supplier_id: int) -> bool:
+    """Whether this thread already owns the supplier's process-shared lock."""
+    try:
+        supplier_key = int(supplier_id)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return supplier_key in getattr(
+        _supplier_catalog_lock_state, 'supplier_ids', set(),
+    )
 
 
 # ============================================================================
@@ -1626,6 +1688,8 @@ class SupplierService:
         start_time: float,
         expected_config_digest: Optional[str] = None,
         raw_checkpoint=None,
+        catalog_only: bool = False,
+        pre_fetch_check=None,
     ) -> SyncResult:
         result = SyncResult()
         supplier = (
@@ -1641,7 +1705,9 @@ class SupplierService:
             return result
 
         config = _supplier_catalog_config_snapshot(supplier)
-        config_digest = supplier_catalog_config_digest(supplier)
+        config_digest = _supplier_sync_config_digest(
+            supplier, catalog_only=catalog_only,
+        )
         if (
             expected_config_digest is not None
             and expected_config_digest != config_digest
@@ -1693,7 +1759,9 @@ class SupplierService:
                 .first()
             )
             current_digest = (
-                supplier_catalog_config_digest(live_supplier)
+                _supplier_sync_config_digest(
+                    live_supplier, catalog_only=catalog_only,
+                )
                 if live_supplier else None
             )
             config_still_current = (
@@ -1717,6 +1785,19 @@ class SupplierService:
             )
 
         parser = SupplierCSVParser(parser_supplier)
+        if pre_fetch_check is not None:
+            try:
+                pre_fetch_check()
+            except Exception as exc:
+                logger.info(
+                    "Catalog pre-fetch fence rejected supplier %s (%s)",
+                    supplier_id, _catalog_pre_fetch_error_code(exc),
+                )
+                return mark_failed(
+                    "Проверка разрешения на чтение каталога не пройдена",
+                    code=_catalog_pre_fetch_error_code(exc),
+                )
+
         raw_bytes = parser.fetch_csv_raw()
         if raw_bytes is None:
             return mark_failed(
@@ -1760,7 +1841,9 @@ class SupplierService:
                 .first()
             )
             current_digest = (
-                supplier_catalog_config_digest(live_supplier)
+                _supplier_sync_config_digest(
+                    live_supplier, catalog_only=catalog_only,
+                )
                 if live_supplier else None
             )
             if current_digest != config_digest:
@@ -1971,9 +2054,12 @@ class SupplierService:
                 config['code'], type(exc).__name__,
             )
 
-        # Preserve the established bounded price/stock follow-on lane.
+        # Scheduled reads stop after the catalog and local postprocessing. The
+        # manual path retains its existing bounded price/stock follow-on.
         price_url = config['price_file_url']
-        if isinstance(price_url, str) and price_url.strip():
+        if catalog_only:
+            result.price_followup_status = 'skipped'
+        elif isinstance(price_url, str) and price_url.strip():
             try:
                 price_result = SupplierService.sync_prices_and_stock(
                     supplier_id,

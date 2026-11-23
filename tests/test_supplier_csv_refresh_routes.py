@@ -1,6 +1,9 @@
 """Registered admin routes for an explicit supplier CSV catalog refresh."""
 
 from datetime import datetime
+import hashlib
+import json
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -10,9 +13,15 @@ from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.datastructures import MultiDict
 
-from models import Supplier, User, db
+from models import (
+    ImportedProduct, Seller, SellerSupplier, Supplier, SupplierProduct, User, db,
+)
 from routes.suppliers import register_supplier_routes
 from services.supplier_catalog_refresh_models import SupplierCatalogRefreshRun
+from services.supplier_catalog_schedule_models import (  # noqa: F401
+    SupplierCatalogScheduledRun,
+)
+from services.supplier_price_feed import SupplierPriceFeed, SupplierPriceRow
 from services.supplier_service import SupplierCSVParser, SupplierService
 
 
@@ -256,11 +265,14 @@ class SupplierCSVRefreshRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(set(response.get_json()), {
             'id', 'status', 'created_at', 'started_at', 'raw_committed_at',
-            'completed_at', 'total', 'added', 'updated', 'postprocess_errors',
-            'price_status', 'price_conflicts', 'error_code',
+            'completed_at', 'trigger_kind', 'due_at', 'total', 'added',
+            'updated', 'postprocess_errors', 'price_status', 'price_conflicts',
+            'error_code',
         })
         self.assertEqual(response.get_json()['id'], RUN_ID)
         self.assertEqual(response.get_json()['status'], 'completed')
+        self.assertEqual(response.get_json()['trigger_kind'], 'manual')
+        self.assertIsNone(response.get_json()['due_at'])
         self.assertEqual(response.get_json()['total'], 5)
         self.assertIn('no-store', response.headers['Cache-Control'])
         self.assertEqual(wrong_scope.status_code, 404)
@@ -513,6 +525,278 @@ class SupplierCSVRefreshRoutesTest(unittest.TestCase):
                 'data-supplier-color-observation-status', 1,
             )[1].split('</details>', 1)[0]
             self.assertNotIn('товаров:', panel)
+
+    def test_catalog_only_digest_excludes_price_settings_and_legacy_digest_is_unchanged(self):
+        supplier = SimpleNamespace(
+            id=17,
+            created_at=datetime(2026, 11, 21, 12, 34, 56),
+            code='digest-fixture',
+            csv_source_url='https://supplier.invalid/catalog.csv',
+            csv_delimiter='|',
+            csv_encoding='utf-8',
+            csv_column_mapping={'title': {'type': 'string', 'column': 1}},
+            csv_has_header=True,
+            is_active=True,
+            price_file_url='https://supplier.invalid/prices.csv',
+            price_file_encoding='utf-8-sig',
+            price_file_delimiter=',',
+        )
+        legacy_snapshot = {
+            'supplier_id': 17,
+            'created_at': '2026-11-21T12:34:56',
+            'code': 'digest-fixture',
+            'csv_source_url': 'https://supplier.invalid/catalog.csv',
+            'csv_delimiter': '|',
+            'csv_encoding': 'utf-8',
+            'csv_column_mapping': {'title': {'type': 'string', 'column': 1}},
+            'csv_has_header': True,
+            'is_active': True,
+            'price_file_url': 'https://supplier.invalid/prices.csv',
+            'price_file_encoding': 'utf-8-sig',
+            'price_file_delimiter': ',',
+        }
+        legacy_canonical = json.dumps(
+            legacy_snapshot,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(',', ':'),
+            allow_nan=False,
+        )
+        expected_legacy = hashlib.sha256(
+            legacy_canonical.encode('utf-8'),
+        ).hexdigest()
+
+        legacy_digest = SupplierService.supplier_catalog_config_digest(supplier)
+        catalog_digest = SupplierService.supplier_catalog_config_digest(
+            supplier, catalog_only=True,
+        )
+        supplier.price_file_url = 'https://supplier.invalid/prices-v2.csv'
+        supplier.price_file_encoding = 'cp1251'
+        supplier.price_file_delimiter = ';'
+
+        self.assertEqual(legacy_digest, expected_legacy)
+        self.assertNotEqual(
+            SupplierService.supplier_catalog_config_digest(supplier),
+            expected_legacy,
+        )
+        self.assertEqual(
+            SupplierService.supplier_catalog_config_digest(
+                supplier, catalog_only=True,
+            ),
+            catalog_digest,
+        )
+
+    def test_catalog_only_sync_checks_scope_before_get_and_skips_price_followup(self):
+        supplier = db.session.get(Supplier, self.supplier_id)
+        supplier.price_file_url = 'https://supplier.invalid/prices.csv'
+        supplier.price_file_encoding = 'utf-8'
+        supplier.price_file_delimiter = '|'
+        user = User(username='catalog-only-seller', email='catalog-only@test.local')
+        user.set_password('synthetic-password')
+        seller = Seller(user=user, company_name='Catalog-only seller')
+        source = SupplierProduct(
+            supplier_id=self.supplier_id,
+            external_id='123',
+            title='Previous catalog title',
+            supplier_price=44.0,
+            supplier_quantity=8,
+            original_data_json='{"old":true}',
+        )
+        db.session.add_all([seller, source])
+        db.session.flush()
+        db.session.add(SellerSupplier(
+            seller_id=seller.id,
+            supplier_id=self.supplier_id,
+            is_active=True,
+        ))
+        imported = ImportedProduct(
+            seller_id=seller.id,
+            supplier_id=self.supplier_id,
+            supplier_product_id=source.id,
+            external_id='seller-copy-123',
+            supplier_price=44.0,
+            supplier_quantity=8,
+            calculated_price=100.0,
+            content_overrides_json='{"schema_version":1,"fields":{}}',
+        )
+        db.session.add(imported)
+        seller_id = seller.id
+        db.session.commit()
+        expected_digest = SupplierService.supplier_catalog_config_digest(
+            supplier, catalog_only=True,
+        )
+        events = []
+        product_data = {
+            'external_id': '123',
+            'vendor_code': 'SKU-123',
+            'title': 'Scheduled catalog item',
+            'description': 'Catalog description',
+            'supplier_price': 31.0,
+            'supplier_quantity': 6,
+            'all_categories': ['Fixture'],
+            'colors': [],
+            'materials': [],
+            'barcodes': [],
+            'photo_urls': [],
+            'characteristics': {},
+        }
+        preflight = SimpleNamespace(is_valid=True, warnings=[], errors=[])
+
+        def pre_fetch_check():
+            events.append('scope')
+            self.assertFalse(db.session().in_transaction())
+
+        def fetch_raw():
+            events.append('fetch')
+            self.assertFalse(db.session().in_transaction())
+            return b'synthetic catalog'
+
+        def checkpoint(result, raw_at):
+            events.append('checkpoint')
+            self.assertTrue(db.session().in_transaction())
+            self.assertEqual(result.total_in_csv, 1)
+            self.assertIsInstance(raw_at, datetime)
+
+        parse_result = SimpleNamespace(
+            errors=0,
+            brand_resolved_count=0,
+            category_mapped_count=0,
+            avg_readiness_score=0.0,
+        )
+        with patch.object(
+            SupplierCSVParser,
+            'fetch_csv_raw',
+            side_effect=fetch_raw,
+        ), patch.object(
+            SupplierCSVParser,
+            'preflight_raw',
+            return_value=([product_data], preflight),
+        ), patch(
+            'services.smart_product_parser.SmartProductParser.parse_and_apply_bulk',
+            return_value=parse_result,
+        ), patch.object(
+            SupplierService,
+            'sync_prices_and_stock',
+        ) as price_followup:
+            result = SupplierService._sync_from_csv_locked(
+                self.supplier_id,
+                start_time=time.time(),
+                expected_config_digest=expected_digest,
+                catalog_only=True,
+                pre_fetch_check=pre_fetch_check,
+                raw_checkpoint=checkpoint,
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.price_followup_status, 'skipped')
+        self.assertEqual(events, ['scope', 'fetch', 'checkpoint'])
+        price_followup.assert_not_called()
+        db.session.expire_all()
+        source = SupplierProduct.query.filter_by(
+            supplier_id=self.supplier_id,
+            external_id='123',
+        ).one()
+        imported = ImportedProduct.query.filter_by(
+            seller_id=seller_id,
+            supplier_id=self.supplier_id,
+        ).one()
+        self.assertEqual(source.title, 'Scheduled catalog item')
+        self.assertEqual(source.supplier_price, 31.0)
+        self.assertEqual(source.supplier_quantity, 6)
+        self.assertEqual(imported.supplier_price, 44.0)
+        self.assertEqual(imported.supplier_quantity, 8)
+        self.assertEqual(imported.calculated_price, 100.0)
+
+    def test_catalog_pre_fetch_fence_preserves_safe_error_and_blocks_get(self):
+        class FenceError(Exception):
+            code = 'scheduled_consent_revoked'
+
+        supplier = db.session.get(Supplier, self.supplier_id)
+        expected_digest = SupplierService.supplier_catalog_config_digest(
+            supplier, catalog_only=True,
+        )
+        with patch.object(SupplierCSVParser, 'fetch_csv_raw') as fetch_raw:
+            result = SupplierService._sync_from_csv_locked(
+                self.supplier_id,
+                start_time=time.time(),
+                expected_config_digest=expected_digest,
+                catalog_only=True,
+                pre_fetch_check=lambda: (_ for _ in ()).throw(FenceError()),
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.catalog_error_code, 'scheduled_consent_revoked')
+        self.assertEqual(result.price_followup_status, 'skipped')
+        fetch_raw.assert_not_called()
+
+    def test_manual_catalog_sync_runs_price_followup_under_held_shared_lock(self):
+        supplier = db.session.get(Supplier, self.supplier_id)
+        supplier.price_file_url = 'https://supplier.invalid/prices.csv'
+        supplier.price_file_encoding = 'utf-8'
+        supplier.price_file_delimiter = '|'
+        db.session.commit()
+        product_data = {
+            'external_id': '123',
+            'vendor_code': 'SKU-123',
+            'title': 'Manual catalog item',
+            'description': 'Catalog description',
+            'supplier_price': 31.0,
+            'supplier_quantity': 6,
+            'all_categories': ['Fixture'],
+            'colors': [],
+            'materials': [],
+            'barcodes': [],
+            'photo_urls': [],
+            'characteristics': {},
+        }
+        preflight = SimpleNamespace(is_valid=True, warnings=[], errors=[])
+        parse_result = SimpleNamespace(
+            errors=0,
+            brand_resolved_count=0,
+            category_mapped_count=0,
+            avg_readiness_score=0.0,
+        )
+        feed = SupplierPriceFeed(
+            rows={123: SupplierPriceRow(
+                vendor_code=None,
+                price=27.0,
+                quantity=2,
+                status=None,
+                additional_vendor_code=None,
+                barcode=None,
+                rrp=None,
+            )},
+            conflicting_ids=frozenset(),
+        )
+        with patch.object(
+            SupplierCSVParser,
+            'fetch_csv_raw',
+            return_value=b'synthetic catalog',
+        ), patch.object(
+            SupplierCSVParser,
+            'preflight_raw',
+            return_value=([product_data], preflight),
+        ), patch(
+            'services.smart_product_parser.SmartProductParser.parse_and_apply_bulk',
+            return_value=parse_result,
+        ), patch(
+            'services.supplier_price_sync.read_supplier_price_feed',
+            return_value=feed,
+        ) as read_price_feed:
+            result = SupplierService.sync_from_csv(self.supplier_id)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.price_followup_status, 'success')
+        product = SupplierProduct.query.filter_by(
+            supplier_id=self.supplier_id,
+            external_id='123',
+        ).one()
+        self.assertEqual(product.supplier_price, 27.0)
+        read_price_feed.assert_called_once_with(
+            'https://supplier.invalid/prices.csv',
+            encoding='utf-8',
+            delimiter='|',
+        )
 
     def test_non_admin_edit_does_not_read_color_observation_store(self):
         auth_patch, login_patch = self._auth(admin=False)

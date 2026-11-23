@@ -4,6 +4,7 @@ import io
 import os
 import sqlite3
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta
@@ -30,6 +31,7 @@ from services.supplier_price_sync import (
     run_auto_supplier_price_sync_tick,
     sync_supplier_price_feed,
 )
+from services.supplier_service import SupplierService, _supplier_catalog_sync_lock
 
 
 class SupplierPriceSyncTest(unittest.TestCase):
@@ -164,6 +166,62 @@ class SupplierPriceSyncTest(unittest.TestCase):
             # The attempt timestamp gates failures as well as successes.
             self.assertIsNone(run_auto_supplier_price_sync_tick(self.app))
             reader.assert_called_once()
+
+    def test_price_feed_does_not_read_while_catalog_lock_is_owned(self):
+        supplier = self._supplier()
+        supplier_id = supplier.id
+        db.session.commit()
+        lock_ready = threading.Event()
+        release_lock = threading.Event()
+        lock_results = []
+
+        def hold_catalog_lock():
+            with _supplier_catalog_sync_lock(supplier_id) as acquired:
+                lock_results.append(acquired)
+                lock_ready.set()
+                release_lock.wait(timeout=5)
+
+        holder = threading.Thread(target=hold_catalog_lock)
+        holder.start()
+        try:
+            self.assertTrue(lock_ready.wait(timeout=2))
+            self.assertEqual(lock_results, [True])
+            with patch(
+                'services.supplier_price_sync.read_supplier_price_feed',
+            ) as reader:
+                result = sync_supplier_price_feed(supplier_id)
+        finally:
+            release_lock.set()
+            holder.join(timeout=2)
+
+        self.assertFalse(result.success)
+        self.assertTrue(result.busy)
+        self.assertEqual(result.error_messages, ['sync_busy'])
+        reader.assert_not_called()
+
+    def test_manual_catalog_price_followup_reuses_held_catalog_lock(self):
+        supplier = self._supplier()
+        product = self._product(supplier, external_id='123')
+        db.session.commit()
+
+        with _supplier_catalog_sync_lock(supplier.id) as acquired:
+            self.assertTrue(acquired)
+            with patch(
+                'services.supplier_price_sync.read_supplier_price_feed',
+                return_value=self._feed({123: self._row()}),
+            ) as reader:
+                result = SupplierService.sync_prices_and_stock(
+                    supplier.id,
+                    force=True,
+                )
+
+        self.assertTrue(result.success)
+        self.assertEqual(product.supplier_price, 25.0)
+        reader.assert_called_once_with(
+            'https://supplier.invalid/prices.csv',
+            encoding='utf-8',
+            delimiter=';',
+        )
 
     def test_positive_unchanged_price_refreshes_evidence_and_only_active_exact_sellers(self):
         supplier = self._supplier()

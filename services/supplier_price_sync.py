@@ -456,14 +456,14 @@ def _apply_feed(
         raise
 
 
-def sync_supplier_price_feed(
+def _sync_supplier_price_feed_locked(
     supplier_id: int,
     *,
     automatic: bool = False,
     expected_config: Optional[dict] = None,
+    started_at: float,
 ):
     """Claim, read, validate, and atomically apply one supplier price feed."""
-    started_at = time.monotonic()
     now = datetime.utcnow()
     try:
         snapshot, claim_error = _claim_supplier(
@@ -529,6 +529,50 @@ def sync_supplier_price_feed(
             )
         logger.warning("Supplier price sync apply failed (%s)", type(error).__name__)
         return _failure_result(code, started_at, busy=code == "database_busy")
+
+
+def sync_supplier_price_feed(
+    supplier_id: int,
+    *,
+    automatic: bool = False,
+    expected_config: Optional[dict] = None,
+):
+    """Run one price read under the supplier's shared catalog/price fence.
+
+    The manual catalog sync already owns this lock while it runs its legacy
+    price follow-up. Detect that same-thread lock ownership so the follow-up
+    can use the locked implementation without attempting a non-reentrant
+    second flock.
+    """
+    started_at = time.monotonic()
+    try:
+        from services.supplier_service import (
+            _supplier_catalog_sync_lock,
+            _supplier_catalog_sync_lock_is_held,
+        )
+    except Exception as error:
+        logger.warning(
+            "Supplier price sync lock unavailable (%s)", type(error).__name__,
+        )
+        return _failure_result("sync_busy", started_at, busy=True)
+
+    if _supplier_catalog_sync_lock_is_held(supplier_id):
+        return _sync_supplier_price_feed_locked(
+            supplier_id,
+            automatic=automatic,
+            expected_config=expected_config,
+            started_at=started_at,
+        )
+
+    with _supplier_catalog_sync_lock(supplier_id) as acquired:
+        if not acquired:
+            return _failure_result("sync_busy", started_at, busy=True)
+        return _sync_supplier_price_feed_locked(
+            supplier_id,
+            automatic=automatic,
+            expected_config=expected_config,
+            started_at=started_at,
+        )
 
 
 def run_auto_supplier_price_sync_tick(flask_app) -> Optional[Any]:
