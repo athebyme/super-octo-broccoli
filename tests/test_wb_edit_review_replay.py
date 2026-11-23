@@ -1828,6 +1828,338 @@ class WBBulkReviewReplayTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'изменил|изменились'):
                 validate_preview_against_current(payload, [product])
 
+    def _install_exact_supplier_evidence_fixture(self):
+        from models import (
+            ImportedProduct,
+            MarketplaceCategory,
+            MarketplaceCategoryCharacteristic,
+            MarketplaceDirectory,
+            Product,
+            Supplier,
+            SupplierProduct,
+        )
+
+        with self.app.app_context():
+            category = MarketplaceCategory.query.filter_by(subject_id=5880).one()
+            category.characteristics_count = 5
+            self.db.session.add(MarketplaceCategoryCharacteristic(
+                category_id=category.id,
+                marketplace_id=category.marketplace_id,
+                charc_id=527,
+                name='Цвет',
+                charc_type=1,
+                required=False,
+                max_count=2,
+                dictionary_json='[]',
+                dictionary_source='none',
+                is_enabled=True,
+                is_available=True,
+            ))
+            self.db.session.add(MarketplaceDirectory(
+                marketplace_id=category.marketplace_id,
+                directory_type='colors',
+                data_json=json.dumps(['Розовый', 'Чёрный'], ensure_ascii=False),
+                synced_at=datetime.utcnow(),
+                sync_status='success',
+                items_count=2,
+            ))
+            supplier = Supplier(
+                name='Synthetic supplier',
+                code='synthetic_supplier',
+                last_sync_at=datetime.utcnow(),
+                # A later failed attempt does not invalidate the last committed
+                # snapshot when its exact revision and raw marker still match.
+                last_sync_status='failed',
+            )
+            self.db.session.add(supplier)
+            self.db.session.flush()
+            supplier_product = SupplierProduct(
+                supplier_id=supplier.id,
+                external_id='SRC-9741',
+                title='Supplier source row',
+                wb_subject_id=5880,
+                content_revision=1,
+                original_data_json=json.dumps({
+                    'observed_supplier_fields_version': 1,
+                    'observed_supplier_fields': {
+                        'colors': ['Розовый'],
+                        'country': 'Россия',
+                    },
+                    'colors': ['Розовый'],
+                    'country': 'Россия',
+                    'materials': ['Хлопок'],
+                    'sizes': {'raw': 'S, M'},
+                    'characteristics': {'unsafe free text': 'not surfaced'},
+                }, ensure_ascii=False),
+            )
+            self.db.session.add(supplier_product)
+            self.db.session.flush()
+            self.db.session.add(ImportedProduct(
+                seller_id=self.seller_id,
+                product_id=self.product_id,
+                supplier_product_id=supplier_product.id,
+                supplier_id=supplier.id,
+                supplier_content_revision=1,
+                external_id='SRC-9741',
+                source_type=supplier.code,
+                wb_subject_id=5880,
+                wb_nm_id=self.nm_id,
+                original_data=json.dumps({
+                    'colors': ['Розовый'],
+                    'country': 'Россия',
+                    'materials': ['Хлопок'],
+                    'sizes': {'raw': 'S, M'},
+                }, ensure_ascii=False),
+            ))
+            self.db.session.commit()
+            return supplier_product.id
+
+    def test_supplier_evidence_requires_exact_values_and_each_conflict_ack(self):
+        from models import ImportedProduct, Product, SupplierProduct
+        from services.wb_edit_review import (
+            WBEditReviewError,
+            build_bulk_characteristic_preview,
+            validate_source_conflict_acknowledgements,
+            issue_wb_edit_preview_token,
+            validate_preview_against_current,
+        )
+
+        supplier_product_id = self._install_exact_supplier_evidence_fixture()
+        changes = [
+            {'char_id': '527', 'value': ['Чёрный']},
+            {'char_id': '202', 'value': ['Китай']},
+        ]
+        with self.app.app_context():
+            product = Product.query.filter_by(id=self.product_id).one()
+            preview = build_bulk_characteristic_preview(
+                [product], operation='update_characteristic',
+                subject_id=5880, change_input=changes,
+            )
+            comparisons = {
+                row['characteristic_id']: row['source_comparison']
+                for row in preview['diff']
+            }
+            self.assertEqual(comparisons[527]['status'], 'conflict')
+            self.assertEqual(comparisons[527]['source_values'], ['Розовый'])
+            self.assertEqual(comparisons[202]['status'], 'conflict')
+            self.assertEqual(comparisons[202]['source_values'], ['Россия'])
+            facts = preview['supplier_evidence_by_product'][str(self.product_id)]
+            self.assertEqual(facts['status'], 'available')
+            self.assertEqual(
+                {fact['field']: fact['availability'] for fact in facts['facts']},
+                {
+                    'colors': 'confirmed',
+                    'country': 'confirmed',
+                    'materials': 'snapshot_only',
+                    'sizes': 'snapshot_only',
+                },
+            )
+            self.assertNotIn('unsafe free text', [fact['label'] for fact in facts['facts']])
+
+            acknowledgements = [row['ack_value'] for row in preview['review_conflicts']]
+            with self.assertRaises(WBEditReviewError):
+                validate_source_conflict_acknowledgements(preview, [])
+            with self.assertRaises(WBEditReviewError):
+                validate_source_conflict_acknowledgements(preview, acknowledgements[:1])
+            with self.assertRaises(WBEditReviewError):
+                validate_source_conflict_acknowledgements(
+                    preview, [acknowledgements[0], acknowledgements[0]],
+                )
+            with self.assertRaises(WBEditReviewError):
+                validate_source_conflict_acknowledgements(
+                    preview, acknowledgements + ['999:527'],
+                )
+            validate_source_conflict_acknowledgements(preview, acknowledgements)
+
+            # An unmapped WB characteristic remains unknown even when the
+            # source marker itself is exact and current.
+            unmapped = build_bulk_characteristic_preview(
+                [product], operation='update_characteristic', subject_id=5880,
+                change_input=[{'char_id': '101', 'value': ['new']}],
+            )
+            self.assertEqual(unmapped['diff'][0]['source_comparison']['status'], 'unknown')
+            self.assertEqual(
+                unmapped['diff'][0]['source_comparison']['reason'],
+                'no_exact_field_mapping',
+            )
+            self.assertEqual(unmapped['review_conflicts'], [])
+
+            from services.product_selection import (
+                issue_product_selection_token,
+                load_product_selection_token,
+                parse_product_list_state,
+            )
+            state = parse_product_list_state({}, strict=True)
+            selection_token = issue_product_selection_token(
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id, seller_id=self.seller_id,
+                product_ids=[self.product_id], state=state,
+                return_to='/products', wb_account_id='synthetic-wb-account',
+            )
+            selection = load_product_selection_token(
+                selection_token, secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id, seller_id=self.seller_id,
+                wb_account_id='synthetic-wb-account',
+            )
+            token = issue_wb_edit_preview_token(
+                secret_key=self.app.config['SECRET_KEY'], user_id=self.user_id,
+                seller_id=self.seller_id, selection_payload=selection,
+                preview=preview,
+            )
+            from services.wb_edit_review import load_wb_edit_preview_token
+            payload = load_wb_edit_preview_token(
+                token, secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id, seller_id=self.seller_id,
+            )
+            current_source = SupplierProduct.query.filter_by(id=supplier_product_id).one()
+            current_source.content_revision = 2
+            self.db.session.commit()
+            with self.assertRaisesRegex(WBEditReviewError, 'Источник поставщика изменился'):
+                validate_preview_against_current(payload, [product])
+
+            # A second seller row mapping the same card makes identity
+            # ambiguous, so no copied observation is displayed or compared.
+            current_source.content_revision = 1
+            original = ImportedProduct.query.filter_by(
+                seller_id=self.seller_id, product_id=self.product_id,
+            ).one()
+            self.db.session.add(ImportedProduct(
+                seller_id=original.seller_id,
+                product_id=original.product_id,
+                supplier_product_id=original.supplier_product_id,
+                supplier_id=original.supplier_id,
+                supplier_content_revision=original.supplier_content_revision,
+                external_id=original.external_id,
+                source_type=original.source_type,
+                wb_subject_id=original.wb_subject_id,
+                wb_nm_id=original.wb_nm_id,
+                original_data=original.original_data,
+            ))
+            self.db.session.commit()
+            ambiguous = build_bulk_characteristic_preview(
+                [product], operation='update_characteristic',
+                subject_id=5880, change_input=changes,
+            )
+            self.assertTrue(all(
+                row['source_comparison']['status'] == 'unknown'
+                and row['source_comparison']['source_values'] == []
+                for row in ambiguous['diff']
+            ))
+            self.assertEqual(
+                ambiguous['supplier_evidence_by_product'][str(self.product_id)]['facts'],
+                [],
+            )
+
+    def test_v2_characteristic_review_token_round_trips_200_distinct_rows(self):
+        from models import Product
+        from services.product_selection import (
+            issue_product_selection_token,
+            load_product_selection_token,
+            parse_product_list_state,
+        )
+        from services.wb_edit_review import (
+            build_bulk_characteristic_preview,
+            issue_wb_edit_preview_token,
+            load_wb_edit_preview_token,
+            product_content_fingerprint,
+            validate_preview_against_current,
+        )
+
+        with self.app.app_context():
+            products = [Product.query.filter_by(id=self.product_id).one()]
+            extra_products = [
+                Product(
+                    seller_id=self.seller_id,
+                    nm_id=30000 + index,
+                    vendor_code=f'V2-200-{index}',
+                    title=f'Distinct token product {index}',
+                    subject_id=5880,
+                    characteristics_json='[]',
+                    is_active=True,
+                )
+                for index in range(199)
+            ]
+            self.db.session.add_all(extra_products)
+            self.db.session.commit()
+            products.extend(extra_products)
+            exact_ids = [int(product.id) for product in products]
+            self.assertEqual(len(set(exact_ids)), 200)
+            self.assertEqual(len({product_content_fingerprint(product) for product in products}), 200)
+
+            selection_token = issue_product_selection_token(
+                secret_key=self.app.config['SECRET_KEY'], user_id=self.user_id,
+                seller_id=self.seller_id, product_ids=exact_ids,
+                state=parse_product_list_state({}, strict=True),
+                return_to='/products', wb_account_id='synthetic-wb-account',
+            )
+            selection = load_product_selection_token(
+                selection_token, secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id, seller_id=self.seller_id,
+                wb_account_id='synthetic-wb-account',
+            )
+            preview = build_bulk_characteristic_preview(
+                products, operation='update_characteristic', subject_id=5880,
+                change_input=[{'char_id': '101', 'value': ['new']}],
+            )
+            self.assertEqual(preview['changed_count'], 200)
+            token = issue_wb_edit_preview_token(
+                secret_key=self.app.config['SECRET_KEY'], user_id=self.user_id,
+                seller_id=self.seller_id, selection_payload=selection,
+                preview=preview,
+            )
+            self.assertLess(len(token), 4096)
+            payload = load_wb_edit_preview_token(
+                token, secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id, seller_id=self.seller_id,
+            )
+            self.assertEqual(payload['v'], 2)
+            self.assertNotIn('local_fingerprints', payload)
+            self.assertNotIn('schema_revisions', payload)
+            checked = validate_preview_against_current(payload, products)
+            self.assertEqual(checked['changed_count'], 200)
+
+    def test_signed_source_conflict_apply_accepts_exact_per_row_acknowledgements(self):
+        self._install_exact_supplier_evidence_fixture()
+        changes = [
+            {'char_id': '527', 'value': ['Чёрный']},
+            {'char_id': '202', 'value': ['Китай']},
+        ]
+        submission = self._characteristic_review_submission(
+            'update_characteristic', changes=changes,
+        )
+        unsigned_submission = dict(submission)
+        unsigned_submission.pop('preview_token')
+        review_response = self._client().post(
+            '/products/bulk-edit', data=unsigned_submission,
+        )
+        self.assertEqual(review_response.status_code, 200)
+        self.assertIn('Розовый'.encode(), review_response.data)
+        _selection_token, fresh_preview_token = self._submitted_review_tokens(
+            review_response.get_data(as_text=True),
+        )
+        submission['preview_token'] = fresh_preview_token
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('conflict must block before provider construction'),
+        ):
+            missing_ack_response = self._client().post(
+                '/products/bulk-edit', data=submission,
+            )
+        self.assertEqual(missing_ack_response.status_code, 200)
+        from models import BulkEditHistory
+        with self.app.app_context():
+            self.assertEqual(
+                BulkEditHistory.query.filter_by(seller_id=self.seller_id).count(), 0,
+            )
+        submission['source_conflict_ack'] = [
+            f'{self.product_id}:527', f'{self.product_id}:202',
+        ]
+        fake_state, _history_id = self._run_review_with_fake_provider(
+            submission=submission,
+        )
+        self.assertEqual(fake_state, {'reads': 1, 'writes': 1})
+
     def test_product_edit_get_uses_cached_schema_and_keeps_sizes_read_only(self):
         with patch.object(
             self.seller_platform,

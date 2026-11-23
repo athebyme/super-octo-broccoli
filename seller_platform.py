@@ -3307,6 +3307,7 @@ def products_bulk_edit():
         parse_exact_wb_subject_id,
         assert_provider_value_matches_review,
         validate_preview_against_current,
+        validate_source_conflict_acknowledgements,
     )
 
     # The catalog hands this route a signed, exact, bounded selection via POST.
@@ -3505,6 +3506,11 @@ def products_bulk_edit():
                     'photo_url': photo_url,
                     'last_sync_iso': last_sync_iso,
                     'last_sync_label': last_sync_label,
+                    'supplier_evidence': (
+                        (preview.get('supplier_evidence_by_product') or {}).get(
+                            str(product_id),
+                        )
+                    ),
                     'changes': [],
                 }
                 review_products_by_id[product_id] = group
@@ -3764,6 +3770,11 @@ def products_bulk_edit():
         if not operation:
             return render_bulk_editor()
 
+        source_ack_values = request.form.getlist('source_conflict_ack')
+        if operation not in {'update_characteristic', 'add_characteristic'} and source_ack_values:
+            flash('Подтверждение расхождения источника не относится к этой операции.', 'warning')
+            return render_bulk_editor()
+
         reviewed_manual_operations = {
             'update_brand', 'append_description', 'replace_description',
             'update_keywords', 'update_characteristic', 'add_characteristic',
@@ -3821,6 +3832,9 @@ def products_bulk_edit():
                     current_preview = validate_preview_against_current(
                         apply_preview_payload, products,
                     )
+                    validate_source_conflict_acknowledgements(
+                        current_preview, source_ack_values,
+                    )
                     if current_preview.get('changed_count', 0) <= 0 or current_preview.get('error_count', 0):
                         raise WBEditReviewError('Нет безопасных изменений для применения')
                 else:
@@ -3832,6 +3846,10 @@ def products_bulk_edit():
                         char_id=request.form.get('char_id'),
                         value=request.form.get('value'),
                     )
+                    if source_ack_values:
+                        raise WBEditReviewError(
+                            'Подтверждение расхождения допускается только для подписанного предпросмотра'
+                        )
                     preview_token = ''
                     if preview.get('changed_count', 0) > 0 and preview.get('error_count', 0) == 0:
                         preview_token = issue_wb_edit_preview_token(
@@ -3892,6 +3910,9 @@ def products_bulk_edit():
                         return redirect(bulk_history_detail_url(existing_review.id))
                     current_preview = validate_preview_against_current(
                         apply_preview_payload, products,
+                    )
+                    validate_source_conflict_acknowledgements(
+                        current_preview, source_ack_values,
                     )
                     if current_preview.get('changed_count', 0) <= 0 or current_preview.get('error_count', 0):
                         raise WBEditReviewError('Нет безопасных изменений для применения')
@@ -4764,9 +4785,9 @@ def products_bulk_edit():
                     # compare-and-set predicate, so a concurrent local edit
                     # cannot be overwritten by this review.
                     for product in fresh_products:
-                        expected_fingerprint = apply_preview_payload.get(
+                        expected_fingerprint = (current_preview.get(
                             'local_fingerprints', {},
-                        ).get(str(product.id))
+                        ) or {}).get(str(product.id))
                         if product_content_fingerprint(product) != expected_fingerprint:
                             raise WBEditReviewError(
                                 f'Локальные данные товара {product.vendor_code} изменились; откройте предпросмотр снова'

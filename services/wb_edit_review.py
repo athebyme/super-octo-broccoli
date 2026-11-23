@@ -41,6 +41,8 @@ from services.product_selection import (
 WB_EDIT_REVIEW_MAX_AGE_SECONDS = 15 * 60
 WB_EDIT_REVIEW_SALT = 'wb-edit-preview-v2'
 _WB_REVIEW_KEY_RE = re.compile(r'^[0-9a-f]{64}$')
+_WB_REVIEW_GUARD_RE = re.compile(r'^[0-9a-f]{64}$')
+_WB_REVIEW_ACK_RE = re.compile(r'^[1-9][0-9]*:[1-9][0-9]*$')
 
 
 class WBEditReviewError(ValueError):
@@ -578,7 +580,6 @@ def build_bulk_characteristic_preview(
         raise WBEditReviewError(details or 'Характеристики не прошли проверку по WB-схеме')
     normalized_changes = validation['normalized']
     schema_by_id = {int(row['id']): row for row in schema['characteristics']}
-
     selected_count = len(products)
     eligible = 0
     diff = []
@@ -688,6 +689,56 @@ def build_bulk_characteristic_preview(
             })
             changed_product_ids.add(int(product.id))
 
+    products_with_changes = [
+        product for product in products if int(product.id) in changed_product_ids
+    ]
+    changes_by_product: dict[int, list[Mapping[str, Any]]] = {}
+    normalized_by_id = {int(row['id']): row for row in normalized_changes}
+    for row in diff:
+        changes_by_product.setdefault(int(row['product_id']), []).append(
+            normalized_by_id[int(row['characteristic_id'])],
+        )
+    from services.wb_supplier_review_evidence import build_supplier_evidence
+
+    supplier_evidence_by_product, supplier_comparisons, source_comparison_guard = (
+        build_supplier_evidence(
+            products_with_changes,
+            subject_id=subject_id,
+            schema=schema,
+            changes_by_product=changes_by_product,
+        )
+    )
+    for row in diff:
+        char_id = int(row['characteristic_id'])
+        row['source_comparison'] = supplier_comparisons.get(
+            f"{int(row['product_id'])}:{char_id}",
+            {
+                'characteristic_id': char_id,
+                'characteristic': row['characteristic'],
+                'status': 'unknown',
+                'reason': 'source_marker_unavailable',
+                'source_values': [],
+                'proposed_matches_source': None,
+            },
+        )
+
+    review_conflicts = [
+        {
+            'product_id': row['product_id'],
+            'nm_id': row['nm_id'],
+            'vendor_code': row['vendor_code'],
+            'title': row['title'],
+            'characteristic_id': row['characteristic_id'],
+            'characteristic': row['characteristic'],
+            'before': row['before'],
+            'after': row['after'],
+            'source_values': row['source_comparison']['source_values'],
+            'ack_value': f"{row['product_id']}:{row['characteristic_id']}",
+        }
+        for row in diff
+        if row.get('source_comparison', {}).get('status') == 'conflict'
+    ]
+
     skipped_only_product_ids = skipped_product_ids.difference(
         changed_product_ids, error_product_ids,
     )
@@ -712,6 +763,9 @@ def build_bulk_characteristic_preview(
         'normalized_changes': normalized_changes,
         'schema_revisions': revisions,
         'local_fingerprints': local_fingerprints,
+        'supplier_evidence_by_product': supplier_evidence_by_product,
+        'source_comparison_guard': source_comparison_guard,
+        'review_conflicts': review_conflicts,
         'created_at': datetime.utcnow().isoformat(),
     }
 
@@ -870,7 +924,19 @@ def build_bulk_manual_preview(
     }
 
 
-def review_digest(preview: Mapping[str, Any], product_ids: list[int]) -> str:
+def review_digest(
+    preview: Mapping[str, Any],
+    product_ids: list[int],
+    *,
+    include_source_evidence: bool = True,
+) -> str:
+    diff = preview.get('diff')
+    if not include_source_evidence and isinstance(diff, list):
+        diff = [
+            {key: value for key, value in row.items() if key != 'source_comparison'}
+            if isinstance(row, dict) else row
+            for row in diff
+        ]
     payload = {
         'seller_product_ids': [int(value) for value in product_ids],
         'operation': preview.get('operation'),
@@ -879,7 +945,7 @@ def review_digest(preview: Mapping[str, Any], product_ids: list[int]) -> str:
         'normalized_changes': preview.get('normalized_changes'),
         'local_fingerprints': preview.get('local_fingerprints'),
         'schema_revisions': preview.get('schema_revisions'),
-        'diff': preview.get('diff'),
+        'diff': diff,
         'skipped': preview.get('skipped'),
         'errors': preview.get('errors'),
         'counts': [
@@ -888,6 +954,10 @@ def review_digest(preview: Mapping[str, Any], product_ids: list[int]) -> str:
             preview.get('error_count'),
         ],
     }
+    if include_source_evidence and preview.get('source_comparison_guard') is not None:
+        payload['source_comparison_guard'] = preview.get(
+            'source_comparison_guard',
+        )
     encoded = json.dumps(
         payload, sort_keys=True, ensure_ascii=False, separators=(',', ':'),
     ).encode('utf-8')
@@ -906,7 +976,7 @@ def issue_wb_edit_preview_token(
         raise WBEditReviewError('Нет безопасных изменений для подтверждения')
     ids = parse_selected_product_ids(selection_payload.get('ids'))
     payload = {
-        'v': 1,
+        'v': 2,
         'user_id': int(user_id),
         'seller_id': int(seller_id),
         'marketplace': 'wb',
@@ -919,10 +989,10 @@ def issue_wb_edit_preview_token(
             int(preview['subject_id']) if preview.get('subject_id') is not None else None
         ),
         'normalized_changes': preview['normalized_changes'],
-        'local_fingerprints': preview['local_fingerprints'],
-        'schema_revisions': preview['schema_revisions'],
         'digest': review_digest(preview, ids),
     }
+    if preview.get('source_comparison_guard') is not None:
+        payload['source_comparison_guard'] = preview['source_comparison_guard']
     return URLSafeTimedSerializer(secret_key, salt=WB_EDIT_REVIEW_SALT).dumps(payload)
 
 
@@ -944,7 +1014,7 @@ def load_wb_edit_preview_token(
     except BadSignature as exc:
         raise WBEditReviewError('Подпись предпросмотра неверна') from exc
     if not isinstance(payload, dict) or (
-        payload.get('v') != 1
+        payload.get('v') not in (1, 2)
         or payload.get('marketplace') != 'wb'
         or payload.get('user_id') != int(user_id)
         or payload.get('seller_id') != int(seller_id)
@@ -957,6 +1027,16 @@ def load_wb_edit_preview_token(
         raise WBEditReviewError('Ключ однократного подтверждения отсутствует или повреждён')
     if not isinstance(payload.get('normalized_changes'), list) or not payload['normalized_changes']:
         raise WBEditReviewError('Предпросмотр не содержит изменений')
+    if payload.get('v') == 2 and (
+        payload.get('source_comparison_guard') is not None
+        and (
+            not isinstance(payload.get('source_comparison_guard'), str)
+            or not _WB_REVIEW_GUARD_RE.fullmatch(
+                payload['source_comparison_guard'],
+            )
+        )
+    ):
+        raise WBEditReviewError('Подпись источника предпросмотра повреждена')
     return payload
 
 
@@ -1052,14 +1132,63 @@ def validate_preview_against_current(
     if [int(product.id) for product in products] != payload.get('product_ids'):
         raise WBEditReviewError('Точный набор товаров предпросмотра изменился')
     preview = build_preview_from_review_payload(payload, products)
-    expected_digest = review_digest(preview, payload['product_ids'])
+    is_legacy = payload.get('v') == 1
+    if is_legacy and preview.get('review_conflicts'):
+        raise WBEditReviewError(
+            'Источник поставщика расходится с изменением; проверьте карточки заново'
+        )
+    if not is_legacy and (
+        payload.get('source_comparison_guard')
+        != preview.get('source_comparison_guard')
+    ):
+        raise WBEditReviewError(
+            'Источник поставщика изменился после предпросмотра; проверьте снова'
+        )
+    expected_digest = review_digest(
+        preview,
+        payload['product_ids'],
+        include_source_evidence=not is_legacy,
+    )
     if expected_digest != payload.get('digest'):
         raise WBEditReviewError('Карточка или схема WB изменилась после предпросмотра; проверьте снова')
-    if payload.get('local_fingerprints') != preview.get('local_fingerprints'):
+    if is_legacy and payload.get('local_fingerprints') != preview.get('local_fingerprints'):
         raise WBEditReviewError('Локальные данные товара изменились после предпросмотра')
-    if payload.get('schema_revisions') != preview.get('schema_revisions'):
+    if is_legacy and payload.get('schema_revisions') != preview.get('schema_revisions'):
         raise WBEditReviewError('Схема WB изменилась после предпросмотра')
     return preview
+
+
+def validate_source_conflict_acknowledgements(
+    preview: Mapping[str, Any],
+    submitted_values: Any,
+) -> None:
+    """Require one explicit acknowledgement for each fresh source mismatch."""
+    if not isinstance(submitted_values, list) or any(
+        not isinstance(value, str) or not _WB_REVIEW_ACK_RE.fullmatch(value)
+        for value in submitted_values
+    ):
+        raise WBEditReviewError('Подтверждения расхождений источника повреждены')
+    expected = []
+    conflicts = preview.get('review_conflicts') or []
+    if not isinstance(conflicts, list):
+        raise WBEditReviewError('Список расхождений источника повреждён')
+    for row in conflicts:
+        if not isinstance(row, Mapping):
+            raise WBEditReviewError('Список расхождений источника повреждён')
+        ack_value = row.get('ack_value')
+        if not isinstance(ack_value, str) or not _WB_REVIEW_ACK_RE.fullmatch(ack_value):
+            raise WBEditReviewError('Идентификатор расхождения источника повреждён')
+        expected.append(ack_value)
+    if len(expected) != len(set(expected)):
+        raise WBEditReviewError('Список расхождений источника содержит повторы')
+    if (
+        len(submitted_values) != len(set(submitted_values))
+        or set(submitted_values) != set(expected)
+        or len(submitted_values) != len(expected)
+    ):
+        raise WBEditReviewError(
+            'Подтвердите каждое расхождение источника отдельно; проверка обновлена'
+        )
 
 
 def reviewed_diff_by_product(preview: Mapping[str, Any]) -> dict[int, list[dict[str, Any]]]:
