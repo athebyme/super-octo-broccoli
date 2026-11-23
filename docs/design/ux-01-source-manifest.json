@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-23T04:27:07.348379+00:00",
+  "generated_at": "2026-11-23T04:45:50.661532+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -3801,7 +3801,7 @@
     },
     {
       "path": "tests/ozon_release/ozon_bulk_price_proposals_browser.py",
-      "sha256": "32471dbdc6fe5cec120db054bbf6419f49d4d3552cc5b812c3f4894e2768811a"
+      "sha256": "d35bb323d84272e9199c031313ba64e5697c12f961f2308e6c1d793028d48c7c"
     },
     {
       "path": "tests/ozon_release/ozon_bulk_ready_review_browser.py",
@@ -3813,7 +3813,7 @@
     },
     {
       "path": "tests/ozon_release/ozon_existing_listing_update_browser.py",
-      "sha256": "1e88db5f03a16d9987e85b5ce0b4fa13d45248c26327933deba686520eab0abe"
+      "sha256": "939645b068ae7426efc18c9272bf33a2a794fa900e182d9634fb6ee1670aeb76"
     },
     {
       "path": "tests/ozon_release/quarantine_browser.py",
@@ -5293,7 +5293,7 @@
     },
     {
       "path": "tests/ux01/common_content_browser.py",
-      "sha256": "0e7bbbf610c3b5766c93a0dc1aacccf09aea7b68c89be67ff54a6c3ebe3eae47"
+      "sha256": "0b6f5355dafabdc5f94db233648c6d3eaea3a27cda5818b5b222a19839ad58e3"
     },
     {
       "path": "tests/ux01/common_product_content_focus_dom.js",
@@ -5317,7 +5317,7 @@
     },
     {
       "path": "tests/ux01/my_products_selection_review.js",
-      "sha256": "77bd1b26437c33f02a813b974a4adf0b725ff377ed12f96c7f5927f6e38f3560"
+      "sha256": "87de073c7e787a31bdbb07d5d41d45417ad36c4acf3ff549c3f4a46474902488"
     },
     {
       "path": "tests/ux01/operations_pricing_browser.py",
@@ -5348,5 +5348,5 @@
       "sha256": "6f39e443d991ebaa3f7ff379c1051438fd727de24a3d7ba25764acfa5691f63d"
     }
   ],
-  "aggregate_sha256": "78edcc46b3fd4365230549fe972f2c309cad574133ba4a80eb559106905e7311"
+  "aggregate_sha256": "e5772ed17203eb241a8ae7eeae7a54c0faa22caf6299da78001e81feb34c78c6"
 }
