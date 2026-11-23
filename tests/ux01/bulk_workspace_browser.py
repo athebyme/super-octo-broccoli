@@ -26,7 +26,8 @@ from tests.ux01.bulk_action_controls import (
 )
 from models import (
     BackgroundJob, EnrichmentJob, ImportedProduct, Marketplace, MarketplaceListing,
-    PriceChangeBatch, PriceChangeItem, Product, Seller, SupplierProduct, db,
+    MarketplaceProductDraft, PriceChangeBatch, PriceChangeItem, Product, Seller,
+    SupplierProduct, db,
 )
 
 
@@ -425,19 +426,181 @@ def filter_bulk_results(page):
     assert searching.value.status == 200
 
 
-def assert_status_filter_state(page, active_index):
-    tabs = page.locator(".mp-tabs .mp-tab")
-    state = tabs.evaluate_all("""items => items.map(item => ({
-        label: item.innerText.trim(),
-        pressed: item.getAttribute('aria-pressed'),
-        styledActive: item.classList.contains('is-active'),
-    }))""")
-    assert len(state) == 6, state
-    assert all(item["label"] != "Обновления поставщика" for item in state), state
-    expected_active = [] if active_index is None else [active_index]
-    assert [index for index, item in enumerate(state) if item["pressed"] == "true"] == expected_active, state
-    assert all(item["pressed"] in ("true", "false") for item in state), state
-    assert all((item["pressed"] == "true") == item["styledActive"] for item in state), state
+def assert_marketplace_filter(page, active_marketplace):
+    state = page.locator("[data-catalog-marketplace]").evaluate_all(
+        """items => items.map(item => [item.dataset.catalogMarketplace,
+                                       item.getAttribute('aria-pressed')])""",
+    )
+    assert state == [
+        [value, "true" if value == active_marketplace else "false"]
+        for value in ("all", "wb", "ozon")
+    ], state
+
+
+def assert_wb_status_filter(page, value):
+    wb_filter = page.locator("[data-catalog-wb-status]")
+    options = wb_filter.locator("option").evaluate_all(
+        "options => options.map(option => option.value)",
+    )
+    assert set(options) == {
+        "", "pending", "validated", "imported", "imported_pending_sync", "failed",
+    }, options
+    assert wb_filter.input_value() == value
+
+
+def seed_marketplace_filter_rows():
+    with fixture.app.app_context():
+        seller_id = fixture.FIXTURE["seller_id"]
+        ozon_id = Marketplace.query.filter_by(code="ozon").one().id
+        wb_card = Product(
+            seller_id=seller_id, nm_id=4419921, vendor_code="UX-R71-WB-CARD",
+            title="Товар Wildberries", is_active=True,
+        )
+        db.session.add(wb_card)
+        db.session.flush()
+        specs = (
+            ("wb_active", "Карточка WB", "imported"),
+            ("wb_preparation", "Подготовка WB", "validated"),
+            ("wb_attention", "Ошибка WB", "failed"),
+            ("ozon_active", "Карточка Ozon", "pending"),
+            ("ozon_preparation", "Черновик Ozon", "pending"),
+            ("ozon_attention", "Ошибка Ozon", "pending"),
+            ("ozon_unknown", "Статус Ozon неизвестен", "pending"),
+            ("unlinked", "Внутренний товар", "pending"),
+        )
+        sources = {}
+        for key, title, state in specs:
+            row = ImportedProduct(
+                seller_id=seller_id, external_id=f"UX-R71-{key}",
+                source_type="manual", title=title, photo_urls="[]",
+                supplier_quantity=5, import_status=state,
+            )
+            if key == "wb_active":
+                row.product_id = wb_card.id
+                row.wb_nm_id = wb_card.nm_id
+            sources[key] = row
+            db.session.add(row)
+        db.session.flush()
+        for key, status, suffix in (("ozon_active", "active", 1),
+                                    ("ozon_unknown", "unknown", 2)):
+            db.session.add(MarketplaceListing(
+                seller_id=seller_id, marketplace_id=ozon_id,
+                account_id=fixture.FIXTURE["account_id"], imported_product_id=sources[key].id,
+                offer_id=sources[key].external_id, title=sources[key].title,
+                external_product_id=str(3370000 + suffix), primary_sku=str(3380000 + suffix),
+                normalized_status=status, is_available=True, is_archived=False,
+                link_status="linked", link_source="synthetic-ux01", link_version=1,
+                sync_fingerprint=hashlib.sha256(key.encode("ascii")).hexdigest(),
+            ))
+        for key, status in (("ozon_preparation", "ready"), ("ozon_attention", "blocked")):
+            db.session.add(MarketplaceProductDraft(
+                seller_id=seller_id, marketplace_id=ozon_id,
+                account_id=fixture.FIXTURE["account_id"], imported_product_id=sources[key].id,
+                offer_id=sources[key].external_id, status=status,
+                source_fact_hash=hashlib.sha256(key.encode("ascii")).hexdigest(),
+            ))
+        ids = {key: row.id for key, row in sources.items()}
+        db.session.commit()
+        return ids
+
+
+def exercise_marketplace_filters(browser, bridge, errors):
+    ids = seed_marketplace_filter_rows()
+    cases = (
+        (320, "light"), (320, "dark"), (1440, "light"),
+    )
+    report = []
+    for width, theme in cases:
+        context = browser.new_context(viewport={"width": width, "height": 900})
+        context.add_init_script(f"localStorage.setItem('sh-theme', '{theme}');")
+        context.add_cookies([fixture.synthetic_login_cookie()])
+        context.route("**/*", bridge)
+        page = context.new_page()
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        open_products(page)
+        assert page.evaluate("document.documentElement.dataset.theme") == theme
+        marks = page.locator(".mp-list article.mp-row [data-product-id]")
+        assert_marketplace_filter(page, "all")
+        source_search = "UX-R71-"
+        scope_keys = {"marketplace", "marketplace_state"}
+        observed = {}
+
+        def apply_case(name, expected, action, *, marketplace="", state=""):
+            query = {"search": source_search}
+            if marketplace:
+                query["marketplace"] = marketplace
+            if state:
+                query["marketplace_state"] = state
+            with page.expect_response(lambda response: feed_matches(response, query)) as response:
+                action()
+            assert response.value.status == 200
+            actual_query = parse_qs(urlsplit(response.value.url).query)
+            assert set(actual_query).intersection(scope_keys) == set(query).intersection(scope_keys)
+            payload = response.value.json()
+            expected_ids = {ids[key] for key in expected}
+            ordered_ids = [row["id"] for row in payload["items"]]
+            assert set(ordered_ids) == expected_ids and len(ordered_ids) == len(expected_ids)
+            assert payload["pagination"]["total"] == len(expected_ids)
+            marks.first.wait_for()
+            page.wait_for_function("""ids => {
+                const app = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                const marks = document.querySelectorAll('.mp-list article.mp-row [data-product-id]');
+                return app && !app.loading && [...marks].map(box =>
+                    Number(box.dataset.productId)).join(',') === ids.join(',');
+            }""", arg=ordered_ids)
+            assert_marketplace_filter(page, marketplace or "all")
+            observed[name] = {"rows": len(ordered_ids), "matches": sorted(expected),
+                              "query": {key: query[key] for key in query if key in scope_keys}}
+
+        def click_marketplace(name):
+            page.locator(f'[data-catalog-marketplace="{name}"]').click()
+
+        wb_button = page.locator('[data-catalog-marketplace="wb"]')
+        pick_state = page.locator("[data-catalog-marketplace-status]").select_option
+        provider_before = fixture.REPORT["provider_attempts"]
+        external_before = len(fixture.REPORT["unexpected_external_requests"])
+        watch = begin_domain_write_watch()
+        try:
+            apply_case("all_products", ids, lambda: page.get_by_placeholder(
+                "Название, бренд или артикул",
+            ).fill(source_search))
+            apply_case("both_active", ["wb_active", "ozon_active"],
+                       lambda: pick_state("active"), state="active")
+            apply_case("wb_active", ["wb_active"], lambda: wb_button.press("Enter"),
+                       marketplace="wb", state="active")
+            assert wb_button.evaluate(
+                "button => button === document.activeElement && button.matches(':focus-visible')",
+            )
+            page.locator(f'[data-product-id="{ids["wb_active"]}"]').check()
+            apply_case("ozon_active", ["ozon_active"], lambda: click_marketplace("ozon"),
+                       marketplace="ozon", state="active")
+            assert selected_browser_state(page)["selected"] == [ids["wb_active"]]
+            assert page.locator("[data-selection-outside-count]").inner_text() == "1 вне текущего списка"
+            apply_case("ozon_preparation", ["ozon_preparation"],
+                       lambda: pick_state("preparation"), marketplace="ozon", state="preparation")
+            screenshot = OUTPUT / f"catalog-marketplace-filter-{theme}-{width}.png"
+            verify_bounds(page)
+            page.screenshot(path=screenshot, animations="disabled")
+            apply_case("both_preparation", ["wb_preparation", "ozon_preparation"],
+                       lambda: click_marketplace("all"), state="preparation")
+            apply_case("both_attention", ["wb_attention", "ozon_attention"],
+                       lambda: pick_state("attention"), state="attention")
+            apply_case("ozon_attention", ["ozon_attention"], lambda: click_marketplace("ozon"),
+                       marketplace="ozon", state="attention")
+            apply_case("ozon_associated", [
+                "ozon_active", "ozon_preparation", "ozon_attention", "ozon_unknown",
+            ], lambda: pick_state(""), marketplace="ozon")
+        finally:
+            writes = end_domain_write_watch(watch)
+        assert writes == []
+        assert fixture.REPORT["provider_attempts"] == provider_before
+        assert len(fixture.REPORT["unexpected_external_requests"]) == external_before
+        report.append({"width": width, "theme": theme, "cases": observed,
+                       "marks_preserved": True, "local_db_write_statements": len(writes),
+                       "keyboard_activation": True, "provider_attempts": 0,
+                       "screenshot": screenshot.name})
+        context.close()
+    return report
 
 
 def assert_supplier_updates_entry_state(page, *, pressed, selected_count=0):
@@ -1349,6 +1512,22 @@ def run():
         })) as wb_handoff_sorted:
             wb_page.get_by_label("Сортировка").select_option("title")
         assert wb_handoff_sorted.value.status == 200
+        marketplace_scope = {"marketplace": "ozon", "marketplace_state": "active"}
+        handoff_feed_scope = {
+            "search": "Сравнение цен WB", "sort": "title", "per_page": "50",
+            **marketplace_scope,
+        }
+        with wb_page.expect_response(lambda response: feed_matches(response, {
+                "search": "Сравнение цен WB", "marketplace": "ozon",
+        })) as marketplace_filter:
+            wb_page.locator('[data-catalog-marketplace="ozon"]').click()
+        assert marketplace_filter.value.status == 200
+        with wb_page.expect_response(lambda response: feed_matches(response, handoff_feed_scope)) as active_filter:
+            wb_page.locator("[data-catalog-marketplace-status]").select_option("active")
+        assert active_filter.value.status == 200
+        assert {row["id"] for row in active_filter.value.json()["items"]} == set(
+            fixture_ids["preview_local_ids"]
+        )
         expected_workspace_ids = [
             fixture_ids["preview_local_ids"][2],
             fixture_ids["preview_local_ids"][0],
@@ -1435,6 +1614,7 @@ def run():
             assert capsule["owner"] == source_owner
             assert capsule["batch"] is None
             assert capsule["selectionIds"] == expected_workspace_ids
+            assert all(capsule["scope"][key] == value for key, value in marketplace_scope.items())
             assert capsule["wbEditTarget"] == {
                 "accountId": None,
                 "productIds": expected_editor_ids,
@@ -1460,9 +1640,9 @@ def run():
         }
         return_watch = begin_domain_write_watch()
         try:
-            with wb_page.expect_response(lambda response: feed_matches(response, {
-                    "search": "Сравнение цен WB", "sort": "title", "per_page": "50",
-            })) as wb_handoff_returned:
+            with wb_page.expect_response(lambda response: feed_matches(
+                    response, handoff_feed_scope,
+            )) as wb_handoff_returned:
                 with wb_page.expect_navigation(wait_until="domcontentloaded"):
                     editor_return.click()
             assert wb_handoff_returned.value.status == 200
@@ -1554,6 +1734,7 @@ def run():
                 "sort": "title",
                 "selected": expected_workspace_ids,
             },
+            "marketplace_scope_restored": marketplace_scope,
             "local_db_write_statements": 0,
             "provider_attempts": 0,
             "screenshot": returned_screenshot.name,
@@ -1608,9 +1789,9 @@ def run():
         assert dialog_return_parts.path == "/my-products/beta"
         assert dialog_return_parts.query == ""
         assert re.fullmatch(r"workspace-return=[A-Za-z0-9_-]+", dialog_return_parts.fragment)
-        with wb_page.expect_response(lambda response: feed_matches(response, {
-                "search": "Сравнение цен WB", "sort": "title", "per_page": "50",
-        })) as ozon_returned:
+        with wb_page.expect_response(lambda response: feed_matches(
+                response, handoff_feed_scope,
+        )) as ozon_returned:
             with wb_page.expect_navigation(wait_until="domcontentloaded"):
                 dialog_return.click()
         assert ozon_returned.value.status == 200
@@ -1647,6 +1828,7 @@ def run():
             "restored_scope": {
                 "search": "Сравнение цен WB",
                 "sort": "title",
+                **marketplace_scope,
             },
             "local_db_write_statements": len(ozon_route_writes),
             "provider_attempts": fixture.REPORT["provider_attempts"] - ozon_route_provider_attempts,
@@ -1669,8 +1851,8 @@ def run():
         page = context.new_page()
         page.on("pageerror", lambda error: errors.append(str(error)))
         open_products(page)
-        status_tabs = page.locator(".mp-tabs .mp-tab")
-        assert_status_filter_state(page, 0)
+        assert_marketplace_filter(page, "all")
+        assert_wb_status_filter(page, "")
         updates_entry = page.locator("[data-supplier-updates-entry]")
         assert_supplier_updates_entry_state(page, pressed=False)
         catalog_url = page.url
@@ -1678,7 +1860,8 @@ def run():
             updates_entry.click()
         assert updates_filter.value.status == 200
         assert page.url == catalog_url
-        assert_status_filter_state(page, None)
+        assert_marketplace_filter(page, "all")
+        assert_wb_status_filter(page, "")
         assert_supplier_updates_entry_state(page, pressed=True)
         with page.expect_response(lambda response: feed_matches(response, {})
                                   and "status" not in parse_qs(urlsplit(response.url).query)
@@ -1686,19 +1869,24 @@ def run():
             updates_entry.click()
         assert all_from_updates.value.status == 200
         assert page.url == catalog_url
-        assert_status_filter_state(page, 0)
+        assert_marketplace_filter(page, "all")
+        assert_wb_status_filter(page, "")
         assert_supplier_updates_entry_state(page, pressed=False)
-        checks.append("supplier_updates_header_toggle_uses_aria_pressed_without_a_seventh_status_tab")
+        checks.append("supplier_updates_header_toggle_keeps_marketplace_controls_independent")
+        extra_filters = page.locator("[data-catalog-extra-filters]")
+        extra_filters.locator("summary").click()
+        wb_status = extra_filters.locator("[data-catalog-wb-status]")
         with page.expect_response(lambda response: feed_matches(response, {"status": "pending"})) as pending_filter:
-            status_tabs.nth(1).click()
+            wb_status.select_option("pending")
         assert pending_filter.value.status == 200
-        assert_status_filter_state(page, 1)
+        assert_wb_status_filter(page, "pending")
         with page.expect_response(lambda response: feed_matches(response, {})
                                   and "status" not in parse_qs(urlsplit(response.url).query)
                                   and "updates" not in parse_qs(urlsplit(response.url).query)) as all_filter:
-            status_tabs.nth(0).click()
+            wb_status.select_option("")
         assert all_filter.value.status == 200
-        assert_status_filter_state(page, 0)
+        assert_wb_status_filter(page, "")
+        extra_filters.locator("summary").click()
         checks.append("my_products_status_filter_exposes_current_selection_to_accessibility_tree")
         filter_bulk_results(page)
         select_all = page.get_by_role("button", name=f"Выбрать все {len(fixture_ids['bulk_ids'])}")
@@ -3845,6 +4033,8 @@ def run():
         checks.append("supplier_refresh_zero_update_error_keeps_signed_result_on_reload_without_handoff")
         mobile_context.close()
 
+        marketplace_filters = exercise_marketplace_filters(browser, bridge, errors)
+        assert not errors, errors
         assert not fixture.REPORT["unexpected_http"] and not fixture.REPORT["unexpected_external_requests"]
         assert fixture.REPORT["provider_attempts"] == 0
         browser.close()
@@ -3897,6 +4087,7 @@ def run():
         "wb_bulk_edit_handoff": wb_bulk_edit_handoff,
         "supplier_refresh_zero_update": supplier_refresh_zero_update_report,
         "catalog_selection_review": catalog_selection_review,
+        "marketplace_filters": marketplace_filters,
     }
     (OUTPUT / "report.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(result, ensure_ascii=False))

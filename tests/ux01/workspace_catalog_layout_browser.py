@@ -139,6 +139,22 @@ with sync_playwright() as playwright:
             }""")
             assert cols["device"] == cols["full"], cols
             assert cols["left"] >= -1 and cols["right"] <= cols["device"] + 1
+            filter_buttons = page.locator("[data-catalog-marketplace]")
+            expect(filter_buttons).to_have_count(3)
+            filter_geometry = []
+            for control in (
+                *filter_buttons.all(),
+                page.locator("[data-catalog-marketplace-status]"),
+                page.locator("[data-catalog-extra-filters] summary"),
+            ):
+                expect(control).to_be_visible()
+                box = control.bounding_box()
+                assert box and box["x"] >= 0 and box["x"] + box["width"] <= width + 1, box
+                if width <= 390:
+                    assert box["width"] >= 44 and box["height"] >= 44, box
+                filter_geometry.append({"width": box["width"], "height": box["height"]})
+            expect(filter_buttons.first).to_have_attribute("aria-pressed", "true")
+            assert page.locator("[data-catalog-extra-filters]").evaluate("details => !details.open")
             for city in ("Северный склад", "Южный склад"):
                 label = row.get_by_text(city, exact=False).last
                 expect(label).to_be_visible()
@@ -159,7 +175,7 @@ with sync_playwright() as playwright:
                 expect(updates_entry).to_be_visible()
                 expect(updates_entry).to_have_attribute("aria-pressed", "false")
                 expect(updates_entry.locator(".mp-supplier-updates-count")).to_be_visible()
-                expect(page.locator(".mp-tabs").get_by_text("Обновления поставщика", exact=True)).to_have_count(0)
+                expect(filter_buttons.get_by_text("Обновления поставщика", exact=True)).to_have_count(0)
                 action_boxes = [control.bounding_box() for control in (import_entry, updates_entry)]
                 assert all(box and box["width"] >= 44 and box["height"] >= 44 for box in action_boxes), action_boxes
                 assert abs(action_boxes[0]["y"] - action_boxes[1]["y"]) <= 1, action_boxes
@@ -280,7 +296,9 @@ with sync_playwright() as playwright:
                 expect(wb_cell).to_contain_text("Есть связь")
                 expect(wb_cell).not_to_contain_text("На площадке")
                 expect(ambiguous_row.locator('[data-row-price-action="wb"]')).to_have_count(0)
-            report["layouts"].append({"width": width, "theme": theme, "screenshot": snapshot, "row_width": cols["right"] - cols["left"]})
+            report["layouts"].append({"width": width, "theme": theme, "screenshot": snapshot,
+                                      "row_width": cols["right"] - cols["left"],
+                                      "filter_targets": filter_geometry})
             context.unroute_all(behavior="wait")
             context.close()
     browser.close()
