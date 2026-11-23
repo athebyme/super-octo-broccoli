@@ -313,6 +313,17 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         coalesce=True,
     )
 
+    from services.ozon_warehouse_reads import run_warehouse_catalog_discovery_tick
+    scheduler.add_job(
+        func=lambda: run_warehouse_catalog_discovery_tick(flask_app),
+        trigger=IntervalTrigger(minutes=5),
+        id='ozon_warehouse_catalog_discovery',
+        name='Enqueue due Ozon warehouse catalogs',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # Первый reference refresh не должен ждать сутки после нового deploy.
     scheduler.add_job(
         func=lambda: sync_marketplaces(flask_app),

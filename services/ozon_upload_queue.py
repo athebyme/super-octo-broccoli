@@ -323,6 +323,7 @@ class OzonUploadQueueService:
             draft = MarketplaceDraftService.validate_draft(
                 seller_id=run.seller_id, draft_id=draft.id,
                 expected_version=draft.version,
+                stage_automatic_cleanup=True,
             )
             if draft.status != "ready":
                 if OzonBulkUploadService._reference_wait_required(draft):

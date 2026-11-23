@@ -10,7 +10,8 @@ import pytest
 from models import (
     Marketplace, MarketplaceListing, MarketplaceWarehouse,
     MarketplaceWarehouseReadItem, MarketplaceWarehouseReadJob,
-    MarketplaceWarehouseStock, Seller, SellerMarketplaceAccount, User, db,
+    MarketplaceWarehouseStock, MarketplaceWarehouseSync, Seller,
+    SellerMarketplaceAccount, User, db,
 )
 from migrations.migrate_add_ozon_warehouse_reads import apply_migration
 from services.ozon_api_client import OzonRateLimitError
@@ -104,8 +105,139 @@ def enqueue(setup, kind='warehouses', now=T):
     return reads.enqueue_refresh(**args)
 
 
+def add_account(setup, suffix, **values):
+    original = db.session.get(SellerMarketplaceAccount, setup['account'])
+    account = SellerMarketplaceAccount(
+        seller_id=setup['seller'], marketplace_id=original.marketplace_id,
+        external_account_id=f'synthetic-client-{suffix}', label=f'Ozon {suffix}',
+        is_active=True, connection_status='connected', **values,
+    )
+    account.set_credentials({'api_key': f'synthetic-secret-{suffix}'})
+    db.session.add(account)
+    db.session.commit()
+    return account.id
+
+
 def advance(job_id, fake, when):
     return reads.run_read_step(job_id, now=when, adapter_factory=lambda credentials: fake)
+
+
+def test_periodic_catalog_discovery_enqueues_only_one_exact_account_without_provider_io(setup):
+    other = add_account(setup, 'other')
+
+    first = reads.enqueue_due_warehouse_catalogs(now=T)
+    jobs = MarketplaceWarehouseReadJob.query.filter_by(kind='warehouses').all()
+    assert first['selected'] == first['enqueued'] == 1
+    assert first['refresh']['status'] == 'queued'
+    assert len(jobs) == 1
+    assert jobs[0].account_id in (setup['account'], other)
+
+    second = reads.enqueue_due_warehouse_catalogs(now=T)
+    jobs = MarketplaceWarehouseReadJob.query.filter_by(kind='warehouses').all()
+    assert second['selected'] == second['enqueued'] == 1
+    assert len(jobs) == 2
+    assert {job.account_id for job in jobs} == {setup['account'], other}
+    assert MarketplaceWarehouseReadJob.query.filter_by(kind='fbs_stock').count() == 0
+    # Discovery only writes local intent. The fake provider is used only by the
+    # separate worker tests below and is never constructed here.
+
+
+def test_periodic_catalog_discovery_waits_for_six_hour_freshness_and_terminal_cooldown(setup):
+    job = enqueue(setup)
+    assert advance(job['id'], FakeAdapter(), T + timedelta(seconds=1))['outcome'] == 'completed'
+    completed = db.session.get(MarketplaceWarehouseReadJob, job['id']).completed_at
+
+    before_ttl = completed + reads.WAREHOUSE_CATALOG_TTL - timedelta(seconds=1)
+    assert reads.enqueue_due_warehouse_catalogs(now=before_ttl)['selected'] == 0
+    due = completed + reads.WAREHOUSE_CATALOG_TTL
+    refresh = reads.enqueue_due_warehouse_catalogs(now=due)
+    assert refresh['selected'] == refresh['enqueued'] == 1
+    assert refresh['refresh']['account_id'] == setup['account']
+
+    # A failed terminal job's retry due and Retry-After remain authoritative,
+    # even when the last good catalog is already stale.
+    db.session.rollback()
+    active = MarketplaceWarehouseReadJob.query.filter_by(account_id=setup['account']).filter(
+        MarketplaceWarehouseReadJob.status.in_(reads.ACTIVE),
+    ).one()
+    active.status = 'failed'
+    active.completed_at = due
+    active.next_due_at = due + timedelta(days=2)
+    active.cooldown_until = due + timedelta(days=2)
+    db.session.commit()
+    assert reads.enqueue_due_warehouse_catalogs(now=due + timedelta(days=1))['selected'] == 0
+    matured = reads.enqueue_due_warehouse_catalogs(now=due + timedelta(days=2))
+    assert matured['selected'] == matured['enqueued'] == 1
+
+
+def test_periodic_catalog_discovery_respects_legacy_completed_snapshot(setup):
+    account = db.session.get(SellerMarketplaceAccount, setup['account'])
+    db.session.add(MarketplaceWarehouseSync(
+        seller_id=setup['seller'], marketplace_id=account.marketplace_id,
+        account_id=account.id, status='completed', started_at=T,
+        completed_at=T,
+    ))
+    db.session.commit()
+
+    assert reads.enqueue_due_warehouse_catalogs(
+        now=T + reads.WAREHOUSE_CATALOG_TTL - timedelta(seconds=1),
+    )['selected'] == 0
+    assert reads.enqueue_due_warehouse_catalogs(
+        now=T + reads.WAREHOUSE_CATALOG_TTL,
+    )['enqueued'] == 1
+
+
+def test_periodic_catalog_discovery_defers_cancelled_and_rechecks_access_denial_daily(setup):
+    job = enqueue(setup)
+    assert reads.cancel_refresh(
+        seller_id=setup['seller'], job_id=job['id'], now=T,
+    )['status'] == 'cancelled'
+    assert reads.enqueue_due_warehouse_catalogs(
+        now=T + reads.WAREHOUSE_CATALOG_TTL - timedelta(seconds=1),
+    )['selected'] == 0
+    assert reads.enqueue_due_warehouse_catalogs(
+        now=T + reads.WAREHOUSE_CATALOG_TTL,
+    )['enqueued'] == 1
+
+    row = MarketplaceWarehouseReadJob.query.filter_by(account_id=setup['account']).filter(
+        MarketplaceWarehouseReadJob.status.in_(reads.ACTIVE),
+    ).one()
+    row.status = 'waiting_access'
+    row.completed_at = T + reads.WAREHOUSE_CATALOG_TTL
+    row.next_due_at = row.completed_at
+    row.cooldown_until = None
+    db.session.commit()
+    assert reads.enqueue_due_warehouse_catalogs(
+        now=row.completed_at + reads.WAREHOUSE_ACCESS_RECHECK - timedelta(seconds=1),
+    )['selected'] == 0
+    assert reads.enqueue_due_warehouse_catalogs(
+        now=row.completed_at + reads.WAREHOUSE_ACCESS_RECHECK,
+    )['enqueued'] == 1
+
+
+def test_periodic_catalog_discovery_excludes_ineligible_accounts_and_unknown_retry_deadline(setup):
+    account = db.session.get(SellerMarketplaceAccount, setup['account'])
+    account.connection_status = 'disconnected'
+    db.session.commit()
+    expired = add_account(setup, 'expired', credential_expires_at=T)
+    expired_account = db.session.get(SellerMarketplaceAccount, expired)
+    expired_account.credential_expires_at = T - timedelta(seconds=1)
+    db.session.commit()
+    assert reads.enqueue_due_warehouse_catalogs(now=T)['selected'] == 0
+
+    account.connection_status = 'connected'
+    db.session.commit()
+    row = MarketplaceWarehouseReadJob(
+        seller_id=setup['seller'], marketplace_id=account.marketplace_id,
+        account_id=account.id, kind='warehouses',
+        external_account_id=account.external_account_id,
+        credential_fingerprint=reads.ozon_credential_fingerprint(account),
+        status='failed', next_due_at=T, error_code='retry_delay_out_of_range',
+        completed_at=T, requested_at=T, created_at=T, updated_at=T,
+    )
+    db.session.add(row)
+    db.session.commit()
+    assert reads.enqueue_due_warehouse_catalogs(now=T + timedelta(days=30))['selected'] == 0
 
 
 def test_enqueue_deduplicates_and_two_pages_apply_atomically(setup):

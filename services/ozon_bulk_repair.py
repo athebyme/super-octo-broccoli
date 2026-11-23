@@ -882,7 +882,19 @@ class OzonBulkRepairService:
             field = error.get("field")
             if not isinstance(field, str):
                 continue
-            item = path_items.get(field)
+            item_path = field
+            if item_path not in path_items:
+                # Cardinality errors point at ``.values``. Strip only that
+                # exact suffix after validating the owner path grammar.
+                if not field.endswith(".values"):
+                    continue
+                item_path = field[:-len(".values")]
+                if (
+                    cls.FLAT_ATTRIBUTE_PATH.fullmatch(item_path) is None
+                    and cls.COMPLEX_ATTRIBUTE_PATH.fullmatch(item_path) is None
+                ):
+                    continue
+            item = path_items.get(item_path)
             identity = MarketplaceDraftService._attribute_identity(item)
             if (
                 identity is None

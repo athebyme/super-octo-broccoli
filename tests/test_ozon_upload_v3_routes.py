@@ -934,6 +934,50 @@ assert.equal(malformed.link.href,'/my-products/beta');assert.equal(malformed.cal
         self.assertEqual(self.draft.validation_status, "valid")
         self.assertEqual(writes, [])
 
+    def test_review_exposes_only_current_automatic_cleanup_summary(self):
+        note = {
+            "attribute_id": "4543",
+            "complex_id": "0",
+            "attribute_name": "Назначение товара 18+",
+            "reason": "unchanged_optional_attribute_exceeds_schema_max",
+            "before_count": 5,
+            "max_value_count": 4,
+            "action": "omit_entire_attribute",
+        }
+        self.draft.validation_status = "invalid"
+        self.draft.validation_result_json = json.dumps({
+            "publishable": False,
+            "automatic_attribute_cleanup": note,
+        })
+        self.draft.validated_at = datetime.utcnow()
+        # Original values are private evidence and must never be copied to the review DTO.
+        self.draft.provenance_json = json.dumps({
+            "automatic_attribute_cleanup_source_values": ["private value one", "private value two"],
+        })
+        db.session.commit()
+        version = self.draft.version
+
+        document = OzonUploadReviewService.document(
+            seller_id=self.seller.id,
+            account_id=self.account.id,
+            draft_ids=[self.draft.id],
+        )
+        row = document["items"][0]
+        self.assertEqual(row["version"], version)
+        self.assertEqual(row["automatic_attribute_cleanup"], note)
+        self.assertNotIn("provenance_json", row)
+        self.assertNotIn("private value", json.dumps(row))
+
+        # Once validation is stale, an old note cannot be presented as current.
+        self.draft.validation_status = "stale"
+        db.session.commit()
+        stale = OzonUploadReviewService.document(
+            seller_id=self.seller.id,
+            account_id=self.account.id,
+            draft_ids=[self.draft.id],
+        )
+        self.assertIsNone(stale["items"][0]["automatic_attribute_cleanup"])
+
     def test_review_rejects_mixed_foreign_selection_and_repeated_query(self):
         result = self.client.get(f"/marketplaces/ozon/uploads/api/review?account_id={self.account.id}"
                                 f"&draft_ids={self.draft.id},9223372036854775807")

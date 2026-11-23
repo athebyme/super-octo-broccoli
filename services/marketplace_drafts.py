@@ -127,6 +127,9 @@ class MarketplaceDraftService:
     OZON_ACCESSORY_GENDER_ATTRIBUTE_ID = "4539"
     OZON_CLOTHING_GENDER_ATTRIBUTE_ID = "9163"
     OZON_BRAND_ATTRIBUTE_IDS = frozenset({"31", "85"})
+    AUTOMATIC_CLEANUP_ATTRIBUTE_ID = "4543"
+    AUTOMATIC_CLEANUP_PROVENANCE_KEY = "automatic_attribute_cleanup.4543"
+    AUTOMATIC_CLEANUP_REASON = "unchanged_optional_attribute_exceeds_schema_max"
     MAX_VALIDATION_ITEMS = 250
     DIMENSION_UNITS = {"MILLIMETERS", "CENTIMETERS", "INCHES"}
     WEIGHT_UNITS = {"GRAMS", "KILOGRAMS", "POUNDS"}
@@ -4904,6 +4907,7 @@ class MarketplaceDraftService:
                 if not OzonReferenceService.dictionary_is_fresh(attribute):
                     continue
                 restriction = set(attribute.restriction_value_ids)
+                seen_dictionary_ids = set()
                 for value in values:
                     key = (
                         attribute.id,
@@ -4935,6 +4939,14 @@ class MarketplaceDraftService:
                         if len(literal_matches) != 1:
                             continue
                         row = literal_matches[0]
+                    # Distinct source strings can resolve to the same exact
+                    # provider dictionary ID (for example, case variants).
+                    # Keep the first canonical occurrence in source order;
+                    # do not impose this dedupe on literal/non-dictionary
+                    # source fields.
+                    if row.external_value_id in seen_dictionary_ids:
+                        continue
+                    seen_dictionary_ids.add(row.external_value_id)
                     canonical_values.append({
                         "dictionary_value_id": row.external_value_id,
                         "value": row.value,
@@ -4992,30 +5004,176 @@ class MarketplaceDraftService:
         draft: MarketplaceProductDraft,
         fresh_provenance: dict,
     ) -> dict:
-        """Merge a freshly-snapshotted fact provenance without discarding
-        ``compliance.*`` markers recorded by a separate layer.
+        """Merge fresh fact provenance while retaining separate local evidence.
 
-        ``refresh_facts``/``rebase_source_defaults`` fully replace
-        ``provenance_json`` with a new fact-derived snapshot on every source
-        sync -- a normal, frequent draft lifecycle event unrelated to
-        compliance defaults. Neither of them recomputes the compliance
-        layer's own provenance, so a blind overwrite would silently erase it
-        even though the compliance attribute's *value* in ``attributes_json``
-        is left untouched by the same call (they already exclude compliance
-        attribute IDs from their diff). Without this, the very first routine
-        facts refresh after a type bind would make the admin-refresh path
-        (``ozon_compliance_admin.apply_to_existing_drafts(refresh=True)``)
-        treat the stored value as "not ours" and stop refreshing it, even
-        though nothing about it changed.
+        ``refresh_facts``/``rebase_source_defaults`` replace fact provenance
+        on source sync. They do not recompute compliance attribution, and a
+        staged ``automatic_attribute_cleanup.4543`` record must survive an
+        unrelated facts rebase until its field changes or a seller overrides
+        the generated removal.
         """
         current_provenance = cls._stored_json(draft.provenance_json, dict)
         preserved_compliance = {
             key: value for key, value in current_provenance.items()
             if isinstance(key, str) and key.startswith("compliance.")
         }
+        preserved_automatic_cleanup = {
+            key: value for key, value in current_provenance.items()
+            if key == cls.AUTOMATIC_CLEANUP_PROVENANCE_KEY
+        }
         merged = dict(fresh_provenance)
         merged.update(preserved_compliance)
+        merged.update(preserved_automatic_cleanup)
         return merged
+
+    @classmethod
+    def _automatic_cleanup_canonical_values(
+        cls,
+        attribute: Any,
+    ) -> Optional[list]:
+        """Canonicalize a dictionary field by unique provider ID, preserving order."""
+        values = attribute.get("values") if isinstance(attribute, dict) else None
+        if (
+            not isinstance(values, list)
+            or not values
+            or len(values) > cls.MAX_ATTRIBUTE_VALUES
+        ):
+            return None
+        result = []
+        seen = {}
+        for raw in values:
+            if (
+                not isinstance(raw, dict)
+                or set(raw) - {"dictionary_value_id", "value"}
+                or not isinstance(raw.get("dictionary_value_id"), str)
+                or not raw["dictionary_value_id"]
+                or len(raw["dictionary_value_id"]) > 100
+                or not isinstance(raw.get("value"), str)
+                or not raw["value"]
+                or len(raw["value"]) > 1_000
+            ):
+                return None
+            canonical = {
+                "dictionary_value_id": raw["dictionary_value_id"],
+                "value": raw["value"],
+            }
+            previous = seen.get(canonical["dictionary_value_id"])
+            if previous is not None:
+                if previous != canonical:
+                    return None
+                continue
+            seen[canonical["dictionary_value_id"]] = canonical
+            result.append(canonical)
+        return result
+
+    @classmethod
+    def _automatic_cleanup_dictionary_values_match(
+        cls,
+        *,
+        draft: MarketplaceProductDraft,
+        definition: MarketplaceAttributeDefinition,
+        values: list,
+    ) -> bool:
+        value_ids = [item["dictionary_value_id"] for item in values]
+        rows = MarketplaceAttributeValue.query.filter(
+            MarketplaceAttributeValue.marketplace_id == draft.marketplace_id,
+            MarketplaceAttributeValue.product_type_id == draft.product_type_id,
+            MarketplaceAttributeValue.attribute_id == definition.id,
+            MarketplaceAttributeValue.external_value_id.in_(value_ids),
+            MarketplaceAttributeValue.is_available.is_(True),
+        ).all()
+        resolved = {}
+        for row in rows:
+            resolved.setdefault(row.external_value_id, []).append(row)
+        return all(
+            len(resolved.get(value_id, [])) == 1
+            and resolved[value_id][0].value == value["value"]
+            for value_id, value in zip(value_ids, values)
+        )
+
+    @classmethod
+    def _automatic_cleanup_evidence(
+        cls,
+        draft: MarketplaceProductDraft,
+    ) -> Optional[dict]:
+        """Return the bounded private evidence for a staged cleanup, if valid."""
+        provenance = cls._stored_json(draft.provenance_json, dict)
+        evidence = provenance.get(cls.AUTOMATIC_CLEANUP_PROVENANCE_KEY)
+        if (
+            not isinstance(evidence, dict)
+            or type(evidence.get("version")) is not int
+            or evidence["version"] != 1
+            or evidence.get("attribute_id") != cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID
+            or evidence.get("complex_id") != "0"
+            or evidence.get("reason") != cls.AUTOMATIC_CLEANUP_REASON
+            or not isinstance(evidence.get("attribute_name"), str)
+            or not evidence.get("attribute_name")
+            or not isinstance(evidence.get("dictionary_id"), str)
+            or not evidence.get("dictionary_id")
+            or evidence.get("is_collection") is not True
+            or evidence.get("was_required") is not False
+            or type(evidence.get("before_count")) is not int
+            or evidence["before_count"] <= 0
+            or type(evidence.get("max_value_count")) is not int
+            or evidence["max_value_count"] <= 0
+        ):
+            return None
+        values = cls._automatic_cleanup_canonical_values(
+            {"values": evidence.get("source_values")}
+        )
+        if (
+            values is None
+            or len(values) != evidence["before_count"]
+            or len(values) <= evidence["max_value_count"]
+        ):
+            return None
+        return {**evidence, "source_values": values}
+
+    @classmethod
+    def _automatic_cleanup_summary(
+        cls,
+        draft: MarketplaceProductDraft,
+    ) -> Optional[dict]:
+        """Public, non-value-bearing summary of a versioned staged cleanup."""
+        evidence = cls._automatic_cleanup_evidence(draft)
+        if evidence is None:
+            return None
+        return {
+            "attribute_id": evidence["attribute_id"],
+            "complex_id": evidence["complex_id"],
+            "attribute_name": evidence["attribute_name"][:500],
+            "reason": evidence["reason"],
+            "before_count": evidence["before_count"],
+            "max_value_count": evidence["max_value_count"],
+            "action": "omit_entire_attribute",
+        }
+
+    @classmethod
+    def _clear_automatic_cleanup(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        remove_staged_removal: bool = False,
+    ) -> bool:
+        """Clear one generated cleanup marker, optionally its staged removal."""
+        provenance = cls._stored_json(draft.provenance_json, dict)
+        if cls.AUTOMATIC_CLEANUP_PROVENANCE_KEY not in provenance:
+            return False
+        provenance.pop(cls.AUTOMATIC_CLEANUP_PROVENANCE_KEY, None)
+        draft.provenance_json = cls._canonical_json(provenance, dict)
+        if remove_staged_removal:
+            removals = cls._normalize_attribute_removals(
+                cls._stored_json(draft.attribute_removals_json, list)
+            )
+            draft.attribute_removals_json = cls._canonical_json(
+                [
+                    item for item in removals
+                    if (item["attribute_id"], item.get("complex_id", "0"))
+                    != (cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID, "0")
+                ],
+                list,
+            )
+        return True
 
     @classmethod
     def _bind_type(
@@ -5338,7 +5496,10 @@ class MarketplaceDraftService:
 
         complex_groups = []
         for baseline_group in baseline["complex_attributes"]:
-            if not isinstance(baseline_group, dict):
+            if (
+                not isinstance(baseline_group, dict)
+                or not isinstance(baseline_group.get("attributes"), list)
+            ):
                 complex_groups.append(baseline_group)
                 continue
             remaining = [
@@ -5365,7 +5526,10 @@ class MarketplaceDraftService:
                     positions.setdefault(identities, index)
             for group in draft["complex_attributes"]:
                 identities = ()
-                if isinstance(group, dict):
+                if (
+                    isinstance(group, dict)
+                    and isinstance(group.get("attributes"), list)
+                ):
                     identities = tuple(
                         identity
                         for identity in (
@@ -5446,6 +5610,353 @@ class MarketplaceDraftService:
         }
 
     @classmethod
+    def _automatic_attribute_cleanup_plan(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        now: datetime,
+    ) -> Optional[dict]:
+        """Plan one exact, optional 4543 cleanup from fresh cached state only."""
+        provenance = cls._stored_json(draft.provenance_json, dict)
+        if (
+            draft.published_listing_id is None
+            or draft.product_type_id is None
+            or draft.marketplace_id is None
+            or cls.AUTOMATIC_CLEANUP_PROVENANCE_KEY in provenance
+        ):
+            return None
+        listing = MarketplaceListing.query.filter_by(
+            id=draft.published_listing_id,
+            seller_id=draft.seller_id,
+            marketplace_id=draft.marketplace_id,
+            account_id=draft.account_id,
+        ).first()
+        product_type = draft.product_type
+        if (
+            listing is None
+            or listing.imported_product_id != draft.imported_product_id
+            or listing.offer_id != draft.offer_id
+            or not listing.external_product_id
+            or not listing.is_available
+            or listing.is_archived
+            or listing.product_type_id != draft.product_type_id
+            or listing.external_category_id != draft.external_category_id
+            or listing.external_type_id != draft.external_type_id
+            or product_type is None
+            or product_type.marketplace_id != draft.marketplace_id
+            or not product_type.is_available
+            or not product_type.is_seller_selectable
+            or product_type.category is None
+            or not product_type.category.is_available
+            or draft.external_category_id
+            != product_type.category.external_category_id
+            or draft.external_type_id != product_type.external_type_id
+            or not OzonReferenceService.reference_is_fresh(
+                product_type,
+                now=now,
+            )
+        ):
+            return None
+        try:
+            state, _freshness = cls._listing_projection_state(
+                listing,
+                now=now,
+            )
+        except MarketplaceDraftError:
+            return None
+        baseline = OzonProductStateContract.draft_documents(
+            state["payload"]
+        )
+
+        definitions = MarketplaceAttributeDefinition.query.filter_by(
+            marketplace_id=draft.marketplace_id,
+            product_type_id=draft.product_type_id,
+            external_attribute_id=cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID,
+            is_available=True,
+            is_enabled=True,
+        ).all()
+        if len(definitions) != 1:
+            return None
+        definition = definitions[0]
+        maximum = definition.max_value_count
+        from services.ozon_compliance_defaults import (
+            MARKING_ATTRIBUTE_ID,
+            TNVED_ATTRIBUTE_ID,
+        )
+        if (
+            str(definition.external_attribute_id)
+            in {MARKING_ATTRIBUTE_ID, TNVED_ATTRIBUTE_ID}
+            or definition.is_required
+            or definition.attribute_complex_id
+            or not definition.is_collection
+            or not definition.dictionary_id
+            or type(maximum) is not int
+            or maximum <= 0
+            or not OzonReferenceService.dictionary_is_fresh(definition)
+        ):
+            return None
+
+        identity = (cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID, "0")
+        draft_complex_groups = cls._stored_json(
+            draft.complex_attributes_json,
+            list,
+        )
+        if not isinstance(draft_complex_groups, list) or any(
+            not isinstance(group, dict)
+            or not isinstance(group.get("attributes"), list)
+            for group in draft_complex_groups
+        ):
+            return None
+        draft_rows = [
+            item for item in cls._stored_json(draft.attributes_json, list)
+            if cls._attribute_identity(item) == identity
+        ]
+        baseline_rows = [
+            item for item in baseline["attributes"]
+            if cls._attribute_identity(item) == identity
+        ]
+        complex_matches = [
+            item
+            for group in draft_complex_groups
+            for item in group.get("attributes", [])
+            if cls._attribute_identity(item) == identity
+        ]
+        baseline_complex_matches = [
+            item
+            for group in baseline["complex_attributes"]
+            if (
+                isinstance(group, dict)
+                and isinstance(group.get("attributes"), list)
+            )
+            for item in group.get("attributes", [])
+            if cls._attribute_identity(item) == identity
+        ]
+        if (
+            len(draft_rows) != 1
+            or len(baseline_rows) != 1
+            or complex_matches
+            or baseline_complex_matches
+        ):
+            return None
+
+        draft_values = cls._automatic_cleanup_canonical_values(draft_rows[0])
+        baseline_values = cls._automatic_cleanup_canonical_values(
+            baseline_rows[0]
+        )
+        if (
+            draft_values is None
+            or baseline_values is None
+            or draft_values != baseline_values
+            or len(draft_values) <= maximum
+        ):
+            return None
+
+        try:
+            removals = cls._normalize_attribute_removals(
+                cls._stored_json(draft.attribute_removals_json, list)
+            )
+        except MarketplaceDraftValidationError:
+            return None
+        if any(
+            (item["attribute_id"], item.get("complex_id", "0")) == identity
+            for item in removals
+        ):
+            return None
+
+        if not cls._automatic_cleanup_dictionary_values_match(
+            draft=draft,
+            definition=definition,
+            values=draft_values,
+        ):
+            return None
+
+        return {
+            "attribute_id": cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID,
+            "complex_id": "0",
+            "attribute_name": definition.name[:500],
+            "reason": cls.AUTOMATIC_CLEANUP_REASON,
+            "before_count": len(draft_values),
+            "max_value_count": maximum,
+            "dictionary_id": definition.dictionary_id,
+            "is_collection": True,
+            "was_required": False,
+            "source_values": draft_values,
+        }
+
+    @classmethod
+    def _assert_automatic_cleanup_matches_baseline(
+        cls,
+        *,
+        draft: MarketplaceProductDraft,
+        baseline: dict,
+        attribute_removals: Sequence[dict],
+        now: Optional[datetime] = None,
+    ) -> Optional[dict]:
+        """Stop full-replace preparation if staged cleanup evidence drifted."""
+        provenance = cls._stored_json(draft.provenance_json, dict)
+        if cls.AUTOMATIC_CLEANUP_PROVENANCE_KEY not in provenance:
+            return None
+        evidence = cls._automatic_cleanup_evidence(draft)
+        if evidence is None:
+            raise cls._listing_state_error(
+                "ozon_automatic_attribute_cleanup_changed",
+                "Сведения об автоматической очистке повреждены. "
+                "Откройте черновик и проверьте удаление заново",
+            )
+
+        def changed() -> MarketplaceDraftConflict:
+            return cls._listing_state_error(
+                "ozon_automatic_attribute_cleanup_changed",
+                "Атрибут 4543 или его актуальная схема изменились после подготовки. "
+                "Откройте черновик и проверьте удаление заново",
+            )
+
+        identity = (cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID, "0")
+        current_time = now or datetime.utcnow()
+        removal_identities = {
+            (item["attribute_id"], item.get("complex_id", "0"))
+            for item in attribute_removals
+        }
+        draft_rows = [
+            item for item in cls._stored_json(draft.attributes_json, list)
+            if cls._attribute_identity(item) == identity
+        ]
+        if draft_rows or identity not in removal_identities:
+            raise changed()
+
+        complex_groups = cls._stored_json(draft.complex_attributes_json, list)
+        if not isinstance(complex_groups, list) or any(
+            not isinstance(group, dict)
+            or not isinstance(group.get("attributes"), list)
+            for group in complex_groups
+        ):
+            raise changed()
+        if any(
+            cls._attribute_identity(item) == identity
+            for group in complex_groups
+            for item in group["attributes"]
+        ):
+            raise changed()
+
+        baseline_rows = [
+            item for item in baseline.get("attributes", [])
+            if cls._attribute_identity(item) == identity
+        ]
+        baseline_complex = baseline.get("complex_attributes", [])
+        if not isinstance(baseline_complex, list) or any(
+            not isinstance(group, dict)
+            or not isinstance(group.get("attributes"), list)
+            for group in baseline_complex
+        ):
+            raise changed()
+        if any(
+            cls._attribute_identity(item) == identity
+            for group in baseline_complex
+            for item in group["attributes"]
+        ) or len(baseline_rows) != 1:
+            raise changed()
+        current_values = cls._automatic_cleanup_canonical_values(
+            baseline_rows[0]
+        )
+        if (
+            current_values != evidence["source_values"]
+            or current_values is None
+            or len(current_values) != evidence["before_count"]
+        ):
+            raise changed()
+
+        product_type = draft.product_type
+        if (
+            product_type is None
+            or product_type.marketplace_id != draft.marketplace_id
+            or not product_type.is_available
+            or not product_type.is_seller_selectable
+            or product_type.category is None
+            or not product_type.category.is_available
+            or draft.external_category_id
+            != product_type.category.external_category_id
+            or draft.external_type_id != product_type.external_type_id
+            or not OzonReferenceService.reference_is_fresh(
+                product_type,
+                now=current_time,
+            )
+        ):
+            raise changed()
+        definitions = MarketplaceAttributeDefinition.query.filter_by(
+            marketplace_id=draft.marketplace_id,
+            product_type_id=draft.product_type_id,
+            external_attribute_id=cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID,
+            is_available=True,
+            is_enabled=True,
+        ).all()
+        if len(definitions) != 1:
+            raise changed()
+        definition = definitions[0]
+        if (
+            definition.is_required is not evidence["was_required"]
+            or definition.max_value_count != evidence["max_value_count"]
+            or definition.name != evidence["attribute_name"]
+            or definition.dictionary_id != evidence["dictionary_id"]
+            or definition.is_collection is not evidence["is_collection"]
+            or definition.attribute_complex_id
+            or not definition.dictionary_id
+            or not OzonReferenceService.dictionary_is_fresh(
+                definition,
+                now=current_time,
+            )
+            or not cls._automatic_cleanup_dictionary_values_match(
+                draft=draft,
+                definition=definition,
+                values=current_values,
+            )
+        ):
+            raise changed()
+        return cls._automatic_cleanup_summary(draft)
+
+    @classmethod
+    def _stage_automatic_attribute_cleanup(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        now: datetime,
+    ) -> bool:
+        """Version one exact generated removal in the local draft."""
+        plan = cls._automatic_attribute_cleanup_plan(draft, now=now)
+        if plan is None:
+            return False
+        identity = (plan["attribute_id"], plan["complex_id"])
+        attributes = cls._stored_json(draft.attributes_json, list)
+        matching = [
+            item for item in attributes
+            if cls._attribute_identity(item) == identity
+        ]
+        if len(matching) != 1:
+            return False
+        removals = cls._normalize_attribute_removals(
+            cls._stored_json(draft.attribute_removals_json, list)
+        )
+        removals.append({
+            "attribute_id": plan["attribute_id"],
+            "complex_id": plan["complex_id"],
+        })
+        provenance = cls._stored_json(draft.provenance_json, dict)
+        evidence = {
+            "version": 1,
+            **plan,
+        }
+        provenance[cls.AUTOMATIC_CLEANUP_PROVENANCE_KEY] = evidence
+        draft.attributes_json = cls._canonical_json(
+            [
+                item for item in attributes
+                if cls._attribute_identity(item) != identity
+            ],
+            list,
+        )
+        draft.attribute_removals_json = cls._canonical_json(removals, list)
+        draft.provenance_json = cls._canonical_json(provenance, dict)
+        return True
+
+    @classmethod
     def publication_documents(
         cls,
         draft: MarketplaceProductDraft,
@@ -5519,6 +6030,12 @@ class MarketplaceDraftService:
         state, freshness = cls._listing_projection_state(listing, now=now)
         baseline_documents = OzonProductStateContract.draft_documents(
             state["payload"]
+        )
+        cls._assert_automatic_cleanup_matches_baseline(
+            draft=draft,
+            baseline=baseline_documents,
+            attribute_removals=attribute_removals,
+            now=now,
         )
         try:
             effective_documents = cls._merge_listing_documents(
@@ -7290,6 +7807,21 @@ class MarketplaceDraftService:
                     cls._canonical_json(normalized, expected_type),
                 )
 
+        if product_type_changed:
+            cls._clear_automatic_cleanup(draft)
+        elif "attributes" in patch and any(
+            cls._attribute_identity(item)
+            == (cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID, "0")
+            for item in cls._stored_json(draft.attributes_json, list)
+        ):
+            # A seller-supplied value for the staged identity is a deliberate
+            # override. It replaces the generated removal instead of being
+            # silently omitted by a leftover baseline-removal marker.
+            cls._clear_automatic_cleanup(
+                draft,
+                remove_staged_removal=("attribute_removals" not in patch),
+            )
+
         if draft.product_type_id:
             draft.status = "draft"
         elif product_type_changed:
@@ -7544,6 +8076,53 @@ class MarketplaceDraftService:
                     item.get("complex_id", "0"),
                 )
 
+            cleanup_evidence = cls._automatic_cleanup_evidence(draft)
+            cleanup_identity = (
+                cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID,
+                "0",
+            )
+            if cleanup_evidence is not None:
+                previous_cleanup_row = next((
+                    item for item in previous_auto
+                    if isinstance(item, dict)
+                    and identity(item) == cleanup_identity
+                ), None)
+                current_cleanup_row = next((
+                    item for item in current_auto
+                    if isinstance(item, dict)
+                    and identity(item) == cleanup_identity
+                ), None)
+                previous_cleanup_values = (
+                    cls._automatic_cleanup_canonical_values(
+                        previous_cleanup_row
+                    )
+                    if previous_cleanup_row is not None else None
+                )
+                current_cleanup_values = (
+                    cls._automatic_cleanup_canonical_values(
+                        current_cleanup_row
+                    )
+                    if current_cleanup_row is not None else None
+                )
+                if previous_cleanup_values == current_cleanup_values:
+                    # A source rebase outside 4543 must not restore the
+                    # already reviewed omission of the unchanged field.
+                    current_auto = [
+                        item for item in current_auto
+                        if not (
+                            isinstance(item, dict)
+                            and identity(item) == cleanup_identity
+                        )
+                    ]
+                else:
+                    # When the source-derived field itself changes, withdraw
+                    # the generated cleanup and let the normal three-way
+                    # rebase apply the new source value for seller review.
+                    cls._clear_automatic_cleanup(
+                        draft,
+                        remove_staged_removal=True,
+                    )
+
             previous_by_identity = {
                 identity(item): item
                 for item in previous_auto
@@ -7704,6 +8283,23 @@ class MarketplaceDraftService:
                 item.get("complex_id", "0"),
             ) not in identities
         ]
+        cleanup_evidence = cls._automatic_cleanup_evidence(draft)
+        if cleanup_evidence is not None:
+            cleanup_identity = (
+                cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID,
+                "0",
+            )
+            additions = [
+                item for item in additions
+                if not (
+                    (
+                        item.get("attribute_id"),
+                        item.get("complex_id", "0"),
+                    ) == cleanup_identity
+                    and cls._automatic_cleanup_canonical_values(item)
+                    == cleanup_evidence["source_values"]
+                )
+            ]
         if not additions:
             return draft
 
@@ -8449,6 +9045,9 @@ class MarketplaceDraftService:
             },
             "validated_at": now.isoformat(),
         }
+        automatic_cleanup = cls._automatic_cleanup_summary(draft)
+        if automatic_cleanup is not None:
+            result["automatic_attribute_cleanup"] = automatic_cleanup
         if update_baseline is not None:
             result["update_baseline"] = update_baseline
         return result
@@ -8591,8 +9190,13 @@ class MarketplaceDraftService:
         seller_id: int,
         draft_id: int,
         expected_version: int,
+        stage_automatic_cleanup: bool = False,
     ) -> MarketplaceProductDraft:
         expected_version = cls._positive_integer(expected_version, "expected_version")
+        stage_automatic_cleanup = cls._strict_boolean(
+            stage_automatic_cleanup,
+            "stage_automatic_cleanup",
+        )
         draft = cls.get_draft(seller_id=seller_id, draft_id=draft_id)
         if draft.version != expected_version:
             raise MarketplaceDraftConflict(
@@ -8603,6 +9207,11 @@ class MarketplaceDraftService:
                 "Архивный черновик нельзя валидировать до восстановления listing"
             )
         cls._assert_no_active_publication(draft)
+        if stage_automatic_cleanup:
+            cls._stage_automatic_attribute_cleanup(
+                draft,
+                now=datetime.utcnow(),
+            )
         result = cls._build_validation_result(draft)
         draft.validation_result_json = cls._canonical_json(result, dict)
         draft.validation_status = "valid" if result["publishable"] else "invalid"

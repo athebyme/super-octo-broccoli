@@ -6,7 +6,8 @@ from unittest.mock import patch
 import unittest
 
 from models import (
-    BackgroundJob, ImportedProduct, MarketplaceListingSnapshot, MarketplaceOperation,
+    BackgroundJob, ImportedProduct, MarketplaceAttributeDefinition,
+    MarketplaceAttributeValue, MarketplaceListingSnapshot, MarketplaceOperation,
     OzonBulkUploadItem, OzonBulkUploadRun, db,
 )
 from services.marketplace_drafts import MarketplaceDraftService
@@ -18,6 +19,7 @@ from services.ozon_bulk_upload import (
 from services.ozon_upload_queue import (
     ItemAdvanceResult, OzonUploadLeaseLost, OzonUploadQueueService,
 )
+from services.ozon_upload_review import OzonUploadReviewService
 from services.ozon_product_import import OzonProductImportContract
 from tests.test_marketplace_publications import OzonPublicationFixture
 
@@ -213,7 +215,7 @@ class OzonUploadV3ServiceTest(OzonPublicationFixture, unittest.TestCase):
             MarketplaceDraftService, "apply_account_defaults", return_value=self.draft,
         ), patch.object(
             MarketplaceDraftService, "validate_draft", return_value=self.draft,
-        ), patch.object(
+        ) as validate_draft, patch.object(
             MarketplacePublicationService, "enqueue_reviewed_upload_item",
             side_effect=AssertionError("local preparation submitted a write"),
         ):
@@ -224,6 +226,127 @@ class OzonUploadV3ServiceTest(OzonPublicationFixture, unittest.TestCase):
         self.assertEqual(item.phase, "prepared")
         self.assertEqual(item.draft_id, self.draft.id)
         self.assertEqual(MarketplaceOperation.query.count(), 0)
+        validate_draft.assert_called_once()
+        self.assertIs(validate_draft.call_args.kwargs["stage_automatic_cleanup"], True)
+
+    def test_normal_preparation_stages_and_reviews_exact_4543_cleanup(self):
+        now = datetime.utcnow()
+        values = [(str(4543000 + index), f"Назначение {index}") for index in range(1, 6)]
+        definition = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id,
+            product_type_id=self.product_type.id,
+            external_attribute_id="4543",
+            name="Назначение товара 18+",
+            data_type="String",
+            is_required=False,
+            max_value_count=4,
+            is_collection=True,
+            dictionary_id="dictionary-4543",
+            is_available=True,
+            is_enabled=True,
+            last_seen_at=now,
+            values_synced_at=now,
+            values_sync_status="success",
+            values_snapshot_hash="values-4543",
+            values_version=1,
+            values_count=len(values),
+        )
+        db.session.add(definition)
+        db.session.flush()
+        for value_id, label in values:
+            db.session.add(MarketplaceAttributeValue(
+                marketplace_id=self.marketplace.id,
+                product_type_id=self.product_type.id,
+                attribute_id=definition.id,
+                external_value_id=value_id,
+                value=label,
+                value_normalized=label.casefold(),
+                is_available=True,
+                last_seen_at=now,
+            ))
+        payload = self.prior_payload()
+        payload["items"][0]["attributes"].append({
+            "id": "4543",
+            "complex_id": None,
+            "values": [{
+                "dictionary_value_id": value_id,
+                "value": label,
+            } for value_id, label in values],
+        })
+        listing = self.attach_listing(payload)
+        try:
+            MarketplaceDraftService._listing_projection_state(listing)
+        except Exception as exc:
+            self.fail(f"synthetic listing projection failed: {exc!r}; cause={exc.__cause__!r}")
+        self.product_type.attributes_count += 1
+        self.draft.attributes_json = json.dumps([{
+            "attribute_id": "4543",
+            "complex_id": "0",
+            "values": [{
+                "dictionary_value_id": value_id,
+                "value": label,
+            } for value_id, label in values],
+        }], ensure_ascii=False)
+        db.session.commit()
+
+        accepted = self._source(key="a" * 24)
+        with patch.object(
+            MarketplaceDraftService, "reconcile_observed_category_mappings",
+            return_value={"success": True, "code": "observed_category_mapping_reconciled"},
+        ), patch(
+            "services.supplier_service.hydrate_missing_imported_observed_snapshot",
+            return_value=False,
+        ):
+            result = OzonBulkUploadService.run_due_preparation()
+
+        self.assertEqual(result["processed_items"], 1)
+        run = OzonBulkUploadRun.query.filter_by(job_id=accepted.job.id).one()
+        item = OzonBulkUploadItem.query.filter_by(run_id=run.id).one()
+        draft = MarketplaceDraftService.get_draft(
+            seller_id=self.seller.id,
+            draft_id=item.draft_id,
+        )
+        self.assertEqual(item.phase, "prepared", f"{item.error_code}: {item.error_message}")
+        self.assertEqual(item.prepared_version, draft.version)
+        self.assertEqual(json.loads(draft.attributes_json), [])
+        self.assertEqual(json.loads(draft.attribute_removals_json), [{
+            "attribute_id": "4543",
+            "complex_id": "0",
+        }])
+        summary = json.loads(draft.validation_result_json)["automatic_attribute_cleanup"]
+        self.assertEqual(summary["attribute_name"], "Назначение товара 18+")
+        self.assertEqual(summary["before_count"], 5)
+        self.assertEqual(summary["max_value_count"], 4)
+        self.assertEqual(summary["action"], "omit_entire_attribute")
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+
+        review = OzonUploadReviewService.document(
+            seller_id=self.seller.id,
+            account_id=self.account.id,
+            draft_ids=[draft.id],
+        )
+        row = review["items"][0]
+        self.assertEqual(row["version"], item.prepared_version)
+        self.assertEqual(row["automatic_attribute_cleanup"], summary)
+
+        # A confirmation tied to this review cannot enqueue after any version change.
+        reviewed_version = draft.version
+        draft.version += 1
+        db.session.commit()
+        with self.assertRaises(OzonBulkUploadConflict):
+            OzonBulkUploadService.accept_reviewed_publish(
+                seller_id=self.seller.id,
+                account_id=self.account.id,
+                draft_ids=[draft.id],
+                expected_versions={str(draft.id): reviewed_version},
+                request_key="stale-cleanup-confirm-0123456789",
+                created_by_user_id=self.user.id,
+            )
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+        self.assertEqual(
+            OzonBulkUploadRun.query.filter_by(mode="reviewed_drafts").count(),
+            0,
+        )
 
     def test_reviewed_enqueue_links_operation_and_snapshot_atomically(self):
         accepted = self._reviewed()

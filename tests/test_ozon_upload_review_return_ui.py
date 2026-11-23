@@ -121,6 +121,13 @@ console.log('scoped Ozon review workspace return and compact navigation: passed'
     assert "workspace_selection=review.workspace_selection" in template
     assert "filename='ozon-workspace-return.js', v='20261122-ozon-workspace-review-return-r57'" in template
     assert "filename='ozon-upload-review.js', v='20261122-ozon-workspace-review-return-r57'" in template
+    assert "v='20261123-ozon-review-auto-cleanup-r76'" in template
+    assert template.count('class="our-cleanup-note"') >= 4
+    noscript = template.split("<noscript>", 1)[1].split("</noscript>", 1)[0]
+    assert "row.automatic_attribute_cleanup.attribute_name" in noscript
+    assert "row.automatic_attribute_cleanup.before_count" in noscript
+    assert "категория {{ row.external_category_id }}" not in template
+    assert "товар № {{ row.imported_product_id }}" not in template
     from flask import Flask
     app = Flask(__name__, template_folder=str(Path(__file__).parents[1] / "templates"))
     assert app.jinja_env.get_template("ozon_upload_review.html") is not None

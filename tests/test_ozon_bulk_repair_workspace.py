@@ -256,6 +256,96 @@ def source_prepare_case(case, *, active=False):
     }
 
 
+def test_schema_cleanup_maps_exact_value_paths_to_simple_and_complex_owners(monkeypatch):
+    effective = {
+        "attributes": [{
+            "attribute_id": "4543",
+            "complex_id": "0",
+            "values": [{"value": "one"}],
+        }],
+        "complex_attributes": [{
+            "attributes": [{
+                "attribute_id": "7001",
+                "complex_id": "17",
+                "values": [{"value": "two"}],
+            }],
+        }],
+    }
+
+    class Draft:
+        published_listing_id = 91
+        product_type_id = 5
+        attribute_removals_json = "[]"
+        attributes_json = json.dumps(effective["attributes"])
+        complex_attributes_json = json.dumps(effective["complex_attributes"])
+        content_json = "{}"
+        media_json = "{}"
+        dimensions_json = "{}"
+        barcodes_json = "[]"
+        commercial_json = "{}"
+
+    monkeypatch.setattr(
+        Repair,
+        "_baseline_documents",
+        classmethod(lambda _cls, _draft: effective),
+    )
+    monkeypatch.setattr(
+        MarketplaceDraftService,
+        "publication_documents",
+        classmethod(lambda _cls, _draft: (effective, None)),
+    )
+
+    result = Repair._schema_cleanup_candidates(
+        draft=Draft(),
+        definitions={},
+        validation_result={
+            "errors": [
+                {
+                    "code": "attribute_max_value_count",
+                    "field": "attributes[0].values",
+                    "message": "Five values exceed the limit of four.",
+                },
+                {
+                    "code": "attribute_max_value_count",
+                    "field": "complex_attributes[0].attributes[0].values",
+                    "message": "Five values exceed the limit of four.",
+                },
+                {
+                    "code": "attribute_max_value_count",
+                    "field": "attributes[0].values[0]",
+                    "message": "Malformed indexed values path.",
+                },
+                {
+                    "code": "attribute_max_value_count",
+                    "field": "attributes[0].values.extra",
+                    "message": "Malformed suffix.",
+                },
+                {
+                    "code": "attribute_max_value_count",
+                    "field": "complex_attributes[0].attributes[0].values[0]",
+                    "message": "Malformed complex indexed values path.",
+                },
+                {
+                    "code": "attribute_max_value_count",
+                    "field": "attributes[9].values",
+                    "message": "No matching owning attribute.",
+                },
+            ],
+        },
+    )
+
+    assert [
+        (candidate["attribute_id"], candidate["complex_id"])
+        for candidate in result
+    ] == [("4543", "0"), ("7001", "17")]
+    assert [candidate["issues"] for candidate in result] == [
+        ["Five values exceed the limit of four."],
+        ["Five values exceed the limit of four."],
+    ]
+    assert all(candidate["in_live_baseline"] for candidate in result)
+    assert all(not candidate["already_confirmed"] for candidate in result)
+
+
 def test_json_get_is_private_and_photo_is_owned_cache_identity(case):
     case.source.photo_urls=json.dumps(['https://source.example.test/photo.jpg'])
     db.session.commit()

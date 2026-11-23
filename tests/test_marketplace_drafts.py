@@ -423,6 +423,87 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         }
         return product, listing, expected
 
+    def _automatic_cleanup_fixture(
+        self,
+        *,
+        external_id="automatic-cleanup",
+        required=False,
+        values=None,
+    ):
+        values = values or [
+            (str(45_430 + index), f"Choice {index}")
+            for index in range(1, 6)
+        ]
+        product, listing, expected = self._existing_listing_precondition(
+            external_id=external_id,
+        )
+        definition = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id,
+            product_type_id=self.product_type.id,
+            external_attribute_id="4543",
+            name="Назначение",
+            data_type="String",
+            is_required=required,
+            dictionary_id="dictionary-4543",
+            max_value_count=4,
+            is_collection=True,
+            is_available=True,
+            is_enabled=True,
+            last_seen_at=self.now,
+            values_synced_at=self.now,
+            values_sync_status="success",
+            values_snapshot_hash="values-4543",
+            values_version=1,
+            values_count=len(values),
+        )
+        db.session.add(definition)
+        db.session.flush()
+        for value_id, label in values:
+            db.session.add(MarketplaceAttributeValue(
+                marketplace_id=self.marketplace.id,
+                product_type_id=self.product_type.id,
+                attribute_id=definition.id,
+                external_value_id=value_id,
+                value=label,
+                value_normalized=OzonReferenceService.normalize_value(label),
+                is_available=True,
+                last_seen_at=self.now,
+            ))
+        provider_attribute = {
+            "id": "4543",
+            "complex_id": None,
+            "values": [
+                {"dictionary_value_id": value_id, "value": label}
+                for value_id, label in values
+            ],
+        }
+        listing.attributes_json = json.dumps(
+            [provider_attribute],
+            ensure_ascii=False,
+        )
+        db.session.commit()
+        state, _freshness = MarketplaceDraftService._listing_projection_state(
+            listing,
+            now=self.now,
+        )
+        expected["baseline_fingerprint"] = state["fingerprint"]
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            expected_existing_listing=expected,
+        )
+        draft.attributes_json = json.dumps([{
+            "attribute_id": "4543",
+            "complex_id": "0",
+            "values": [
+                {"dictionary_value_id": value_id, "value": label}
+                for value_id, label in values
+            ],
+        }], ensure_ascii=False)
+        db.session.commit()
+        return product, listing, definition, draft, values
+
     def test_atomic_existing_linked_create_preserves_exact_link_tuple(self):
         product, listing, expected = self._existing_listing_precondition()
         before = (
@@ -5861,6 +5942,451 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             ),
             [],
         )
+
+    def test_auto_mapper_deduplicates_resolved_dictionary_ids_in_source_order(self):
+        self._dictionary_attribute(
+            "4543",
+            "Назначение",
+            ["Choice A", "Choice B"],
+            is_collection=True,
+            max_value_count=4,
+        )
+        db.session.commit()
+        with patch.object(
+            MarketplaceDraftService,
+            "_attribute_candidate_values",
+            return_value={"назначение": ["Choice A", " choice a ", "Choice B"]},
+        ):
+            attributes, _report = MarketplaceDraftService._auto_map_attributes(
+                product_type=self.product_type,
+                facts_document={"facts": {}},
+            )
+
+        row = next(item for item in attributes if item["attribute_id"] == "4543")
+        self.assertEqual(
+            row["values"],
+            [
+                {"dictionary_value_id": "4543-1", "value": "Choice A"},
+                {"dictionary_value_id": "4543-2", "value": "Choice B"},
+            ],
+        )
+
+    def test_automatic_cleanup_is_versioned_and_preserves_provider_baseline(self):
+        _product, listing, _definition, draft, values = (
+            self._automatic_cleanup_fixture()
+        )
+        before_version = draft.version
+        before_state, _freshness = MarketplaceDraftService._listing_projection_state(
+            listing,
+            now=self.now,
+        )
+
+        validated = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=before_version,
+            stage_automatic_cleanup=True,
+        )
+
+        staged_attributes = json.loads(validated.attributes_json)
+        self.assertNotIn("4543", {
+            item["attribute_id"] for item in staged_attributes
+        })
+        self.assertEqual(
+            json.loads(validated.attribute_removals_json),
+            [{"attribute_id": "4543", "complex_id": "0"}],
+        )
+        evidence = json.loads(validated.provenance_json)[
+            MarketplaceDraftService.AUTOMATIC_CLEANUP_PROVENANCE_KEY
+        ]
+        self.assertEqual(evidence["source_values"], [
+            {"dictionary_value_id": value_id, "value": label}
+            for value_id, label in values
+        ])
+        validation = json.loads(validated.validation_result_json)
+        summary = validation["automatic_attribute_cleanup"]
+        self.assertEqual(summary, {
+            "attribute_id": "4543",
+            "complex_id": "0",
+            "attribute_name": "Назначение",
+            "reason": "unchanged_optional_attribute_exceeds_schema_max",
+            "before_count": 5,
+            "max_value_count": 4,
+            "action": "omit_entire_attribute",
+        })
+        self.assertNotIn("source_values", summary)
+        self.assertGreater(validated.version, before_version)
+        self.assertFalse(any(
+            item.get("code") == "attribute_max_value_count"
+            and item.get("attribute_id") == "4543"
+            for item in validation["errors"]
+        ))
+
+        restaged = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=validated.id,
+            expected_version=validated.version,
+            stage_automatic_cleanup=True,
+        )
+        self.assertEqual(
+            json.loads(restaged.attribute_removals_json),
+            [{"attribute_id": "4543", "complex_id": "0"}],
+        )
+        self.assertEqual(
+            json.loads(restaged.validation_result_json)[
+                "automatic_attribute_cleanup"
+            ],
+            summary,
+        )
+        validated = restaged
+
+        documents, after_baseline = MarketplaceDraftService.publication_documents(
+            validated,
+            now=self.now,
+        )
+        self.assertNotIn("4543", {
+            item["attribute_id"] for item in documents["attributes"]
+        })
+        self.assertEqual(after_baseline["fingerprint"], before_state["fingerprint"])
+        db.session.refresh(listing)
+        self.assertEqual(
+            json.loads(listing.attributes_json)[0]["values"],
+            [
+                {"dictionary_value_id": value_id, "value": label}
+                for value_id, label in values
+            ],
+        )
+
+    def test_automatic_cleanup_rejects_divergent_manual_override(self):
+        _product, _listing, _definition, draft, _values = (
+            self._automatic_cleanup_fixture(external_id="manual-override")
+        )
+        attributes = json.loads(draft.attributes_json)
+        attributes[0]["values"][0]["value"] = "Seller override"
+        draft.attributes_json = json.dumps(attributes, ensure_ascii=False)
+        db.session.commit()
+        before_attributes = draft.attributes_json
+
+        validated = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            stage_automatic_cleanup=True,
+        )
+
+        self.assertEqual(validated.attributes_json, before_attributes)
+        self.assertEqual(json.loads(validated.attribute_removals_json), [])
+        self.assertNotIn(
+            "automatic_attribute_cleanup",
+            json.loads(validated.validation_result_json),
+        )
+
+    def test_automatic_cleanup_rejects_required_attribute(self):
+        _product, _listing, _definition, draft, _values = (
+            self._automatic_cleanup_fixture(
+                external_id="required-field",
+                required=True,
+            )
+        )
+        before_attributes = draft.attributes_json
+
+        validated = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            stage_automatic_cleanup=True,
+        )
+
+        self.assertEqual(validated.attributes_json, before_attributes)
+        self.assertEqual(json.loads(validated.attribute_removals_json), [])
+        self.assertNotIn(
+            "automatic_attribute_cleanup",
+            json.loads(validated.validation_result_json),
+        )
+
+    def test_automatic_cleanup_requires_an_exact_positive_collection_maximum(self):
+        _product, _listing, definition, draft, _values = (
+            self._automatic_cleanup_fixture(external_id="cleanup-schema-max")
+        )
+        definition.max_value_count = 0
+        db.session.commit()
+        unbounded = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            stage_automatic_cleanup=True,
+        )
+        self.assertEqual(json.loads(unbounded.attribute_removals_json), [])
+
+        definition.max_value_count = 4
+        definition.is_collection = False
+        db.session.commit()
+        non_collection = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=unbounded.id,
+            expected_version=unbounded.version,
+            stage_automatic_cleanup=True,
+        )
+        self.assertEqual(json.loads(non_collection.attribute_removals_json), [])
+        self.assertNotIn(
+            "automatic_attribute_cleanup",
+            json.loads(non_collection.validation_result_json),
+        )
+
+    def test_automatic_cleanup_rejects_stale_listing_projection(self):
+        _product, listing, _definition, draft, _values = (
+            self._automatic_cleanup_fixture(external_id="stale-listing")
+        )
+        old = self.now - timedelta(days=3)
+        listing.last_seen_at = old
+        listing.attributes_synced_at = old
+        listing.prices_synced_at = old
+        db.session.commit()
+        before_attributes = draft.attributes_json
+
+        validated = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            stage_automatic_cleanup=True,
+        )
+
+        self.assertEqual(validated.attributes_json, before_attributes)
+        self.assertEqual(json.loads(validated.attribute_removals_json), [])
+        self.assertNotIn(
+            "automatic_attribute_cleanup",
+            json.loads(validated.validation_result_json),
+        )
+
+    def test_automatic_cleanup_is_opt_in_and_validation_conflicts_do_not_stage(self):
+        _product, _listing, _definition, draft, _values = (
+            self._automatic_cleanup_fixture(external_id="cleanup-opt-in")
+        )
+        before_attributes = draft.attributes_json
+        before_version = draft.version
+
+        projected, _baseline = MarketplaceDraftService.publication_documents(
+            draft,
+            now=self.now,
+        )
+        self.assertIn("4543", {
+            item["attribute_id"] for item in projected["attributes"]
+        })
+        validated = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=before_version,
+        )
+        self.assertEqual(validated.attributes_json, before_attributes)
+        self.assertEqual(json.loads(validated.attribute_removals_json), [])
+        self.assertNotIn(
+            "automatic_attribute_cleanup",
+            json.loads(validated.validation_result_json),
+        )
+
+        before_conflict = validated.attributes_json
+        with self.assertRaises(MarketplaceDraftConflict):
+            MarketplaceDraftService.validate_draft(
+                seller_id=self.seller1_id,
+                draft_id=draft.id,
+                expected_version=before_version,
+                stage_automatic_cleanup=True,
+            )
+        db.session.refresh(validated)
+        self.assertEqual(validated.attributes_json, before_conflict)
+        self.assertEqual(json.loads(validated.attribute_removals_json), [])
+
+    def test_automatic_cleanup_survives_unrelated_rebase_and_reference_defaults(self):
+        product, _listing, _definition, draft, values = (
+            self._automatic_cleanup_fixture(external_id="cleanup-rebase")
+        )
+        staged = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            stage_automatic_cleanup=True,
+        )
+        staged_values = [
+            {"dictionary_value_id": value_id, "value": label}
+            for value_id, label in values
+        ]
+        generated = [{
+            "attribute_id": "4543",
+            "complex_id": "0",
+            "values": staged_values,
+        }]
+        original = json.loads(product.original_data)
+        original["description"] = "Updated source description for rebase"
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.description = original["description"]
+        db.session.commit()
+
+        with patch.object(
+            MarketplaceDraftService,
+            "_auto_map_attributes",
+            side_effect=[(generated, {}), (generated, {})],
+        ):
+            rebased = MarketplaceDraftService.rebase_source_defaults(
+                seller_id=self.seller1_id,
+                draft_id=staged.id,
+                expected_version=staged.version,
+            )
+        self.assertNotIn("4543", {
+            item["attribute_id"]
+            for item in json.loads(rebased.attributes_json)
+        })
+        self.assertEqual(
+            json.loads(rebased.attribute_removals_json),
+            [{"attribute_id": "4543", "complex_id": "0"}],
+        )
+        self.assertIn(
+            MarketplaceDraftService.AUTOMATIC_CLEANUP_PROVENANCE_KEY,
+            json.loads(rebased.provenance_json),
+        )
+
+        with patch.object(
+            MarketplaceDraftService,
+            "_auto_map_attributes",
+            return_value=(generated, {}),
+        ):
+            defaults = MarketplaceDraftService.apply_reference_defaults(
+                seller_id=self.seller1_id,
+                draft_id=rebased.id,
+                expected_version=rebased.version,
+            )
+        self.assertNotIn("4543", {
+            item["attribute_id"]
+            for item in json.loads(defaults.attributes_json)
+        })
+        self.assertEqual(
+            json.loads(defaults.attribute_removals_json),
+            [{"attribute_id": "4543", "complex_id": "0"}],
+        )
+
+    def test_automatic_cleanup_blocks_cached_baseline_or_schema_drift(self):
+        _product, listing, definition, draft, values = (
+            self._automatic_cleanup_fixture(external_id="cleanup-drift")
+        )
+        staged = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            stage_automatic_cleanup=True,
+        )
+        original_listing_attributes = listing.attributes_json
+
+        changed_listing = json.loads(listing.attributes_json)
+        changed_listing[0]["values"].reverse()
+        listing.attributes_json = json.dumps(
+            changed_listing,
+            ensure_ascii=False,
+        )
+        db.session.commit()
+        with self.assertRaises(MarketplaceDraftConflict) as error:
+            MarketplaceDraftService.publication_documents(staged)
+        self.assertEqual(
+            getattr(error.exception, "code", None),
+            "ozon_automatic_attribute_cleanup_changed",
+        )
+
+        listing.attributes_json = original_listing_attributes
+        definition.is_required = True
+        db.session.commit()
+        with self.assertRaises(MarketplaceDraftConflict) as error:
+            MarketplaceDraftService.publication_documents(staged)
+        self.assertEqual(
+            getattr(error.exception, "code", None),
+            "ozon_automatic_attribute_cleanup_changed",
+        )
+
+        definition.is_required = False
+        definition.max_value_count = 5
+        db.session.commit()
+        with self.assertRaises(MarketplaceDraftConflict) as error:
+            MarketplaceDraftService.publication_documents(staged)
+        self.assertEqual(
+            getattr(error.exception, "code", None),
+            "ozon_automatic_attribute_cleanup_changed",
+        )
+        self.assertEqual(
+            json.loads(staged.attribute_removals_json),
+            [{"attribute_id": "4543", "complex_id": "0"}],
+        )
+        self.assertNotIn("4543", {
+            item["attribute_id"]
+            for item in json.loads(staged.attributes_json)
+        })
+
+    def test_automatic_cleanup_bails_on_malformed_historical_complex_groups(self):
+        _product, _listing, _definition, draft, _values = (
+            self._automatic_cleanup_fixture(external_id="cleanup-malformed-complex")
+        )
+        draft.complex_attributes_json = json.dumps([{"attributes": None}])
+        db.session.commit()
+
+        validated = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            stage_automatic_cleanup=True,
+        )
+
+        self.assertEqual(json.loads(validated.attribute_removals_json), [])
+        self.assertEqual(len(json.loads(validated.attributes_json)), 1)
+        self.assertNotIn(
+            "automatic_attribute_cleanup",
+            json.loads(validated.validation_result_json),
+        )
+        self.assertIn(
+            "malformed_complex_group",
+            {
+                item["code"]
+                for item in json.loads(validated.validation_result_json)["errors"]
+            },
+        )
+
+    def test_seller_attribute_override_clears_staged_automatic_removal(self):
+        _product, _listing, _definition, draft, values = (
+            self._automatic_cleanup_fixture(external_id="cleanup-override-after")
+        )
+        staged = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            stage_automatic_cleanup=True,
+        )
+        override_values = [
+            {"dictionary_value_id": value_id, "value": label}
+            for value_id, label in values[:4]
+        ]
+        edited = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=staged.id,
+            expected_version=staged.version,
+            patch={"attributes": [{
+                "attribute_id": "4543",
+                "complex_id": "0",
+                "values": override_values,
+            }]},
+        )
+
+        self.assertEqual(
+            json.loads(edited.attribute_removals_json),
+            [],
+        )
+        self.assertNotIn(
+            MarketplaceDraftService.AUTOMATIC_CLEANUP_PROVENANCE_KEY,
+            json.loads(edited.provenance_json),
+        )
+        documents, _baseline = MarketplaceDraftService.publication_documents(
+            edited,
+            now=self.now,
+        )
+        row = next(
+            item for item in documents["attributes"]
+            if item["attribute_id"] == "4543"
+        )
+        self.assertEqual(row["values"], override_values)
 
 
 if __name__ == "__main__":

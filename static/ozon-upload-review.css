@@ -57,6 +57,8 @@ body:has(#our-noscript-title) #our-boot-fallback { display:none; }
 .our-meta { margin:3px 0; color:var(--our-muted); font-size:11px; line-height:1.45; overflow-wrap:anywhere; }
 .our-facts { display:flex; flex-wrap:wrap; gap:4px 13px; margin:10px 0 4px; color:var(--our-muted); font-size:11px; line-height:1.45; }
 .our-facts strong { color:var(--our-ink); font-weight:600; }
+.our-cleanup-note { display:block; margin:7px 0; padding:7px 9px; border-left:2px solid var(--accent); border-radius:4px; background:var(--bg-hover); color:var(--our-muted); font-size:11px; line-height:1.45; overflow-wrap:anywhere; }
+.our-dialog-row-copy .our-cleanup-note { font-size:10px; }
 .our-issues { margin:9px 0; padding-left:18px; color:var(--danger); font-size:12px; line-height:1.5; overflow-wrap:anywhere; }
 .our-issues li + li { margin-top:3px; }
 .our-issues [data-review-issue-link] { color:inherit; text-decoration:underline; text-decoration-color:currentColor; text-underline-offset:2px; }

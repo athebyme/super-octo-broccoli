@@ -8,13 +8,15 @@ observed end of pagination, in the same transaction as job completion.
 from datetime import datetime, timedelta
 import hashlib
 import json
+import logging
 import math
 import time
 import uuid
 from types import SimpleNamespace
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, case, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from models import (
     Marketplace, MarketplaceListing, MarketplaceWarehouse,
@@ -52,6 +54,9 @@ MAX_STAGING_JOBS = 8  # 8 x per-job 8 MiB / 10k rows => 64 MiB / 80k rows
 MAX_FAILURES = 8
 MAX_AGE = timedelta(hours=24)
 MAX_BACKOFF_SECONDS = 6 * 3600
+WAREHOUSE_CATALOG_TTL = timedelta(hours=6)
+WAREHOUSE_ACCESS_RECHECK = timedelta(hours=24)
+logger = logging.getLogger(__name__)
 
 MESSAGES = {
     'queued': 'Обновление поставлено в очередь. Последние полные данные остаются доступны.',
@@ -263,6 +268,126 @@ def _cooldown(account_id, now):
         MarketplaceWarehouseReadJob.account_id == account_id,
         MarketplaceWarehouseReadJob.cooldown_until > now,
     ).scalar()
+
+
+def enqueue_due_warehouse_catalogs(*, now=None):
+    """Enqueue at most one stale account warehouse catalog read.
+
+    Discovery is database-only and uses the same exact-scope durable job as a
+    manual refresh. A successful catalog is refreshed every six hours. Failed
+    or cancelled terminal jobs also get at least one cadence before a new job;
+    provider due times/cooldowns can defer them longer. Access denials are
+    retried no more than daily so corrected permissions can recover without a
+    seller POST, while malformed Retry-After remains stopped for manual review.
+    """
+    now = _now(now)
+    latest_job_id = select(func.max(MarketplaceWarehouseReadJob.id)).where(
+        MarketplaceWarehouseReadJob.seller_id == SellerMarketplaceAccount.seller_id,
+        MarketplaceWarehouseReadJob.marketplace_id == SellerMarketplaceAccount.marketplace_id,
+        MarketplaceWarehouseReadJob.account_id == SellerMarketplaceAccount.id,
+        MarketplaceWarehouseReadJob.kind == 'warehouses',
+    ).correlate(SellerMarketplaceAccount).scalar_subquery()
+    latest_job = aliased(MarketplaceWarehouseReadJob)
+    legacy_completed_at = select(func.max(MarketplaceWarehouseSync.completed_at)).where(
+        MarketplaceWarehouseSync.seller_id == SellerMarketplaceAccount.seller_id,
+        MarketplaceWarehouseSync.marketplace_id == SellerMarketplaceAccount.marketplace_id,
+        MarketplaceWarehouseSync.account_id == SellerMarketplaceAccount.id,
+        MarketplaceWarehouseSync.status == 'completed',
+    ).correlate(SellerMarketplaceAccount).scalar_subquery()
+    last_good_at = func.coalesce(latest_job.last_completed_at, legacy_completed_at)
+    has_active_warehouse_read = select(literal(1)).where(
+        MarketplaceWarehouseReadJob.seller_id == SellerMarketplaceAccount.seller_id,
+        MarketplaceWarehouseReadJob.marketplace_id == SellerMarketplaceAccount.marketplace_id,
+        MarketplaceWarehouseReadJob.account_id == SellerMarketplaceAccount.id,
+        MarketplaceWarehouseReadJob.status.in_(ACTIVE),
+    ).exists()
+    has_provider_cooldown = select(literal(1)).where(
+        MarketplaceWarehouseReadJob.account_id == SellerMarketplaceAccount.id,
+        MarketplaceWarehouseReadJob.cooldown_until > now,
+    ).exists()
+    provider_due_is_known = or_(
+        latest_job.id.is_(None),
+        latest_job.status != 'failed',
+        latest_job.error_code.is_(None),
+        latest_job.error_code != 'retry_delay_out_of_range',
+    )
+    terminal_matured = or_(
+        latest_job.id.is_(None),
+        and_(latest_job.status == 'completed', latest_job.next_due_at <= now),
+        and_(
+            latest_job.status == 'waiting_access',
+            latest_job.completed_at <= now - WAREHOUSE_ACCESS_RECHECK,
+            latest_job.next_due_at <= now,
+        ),
+        and_(
+            latest_job.status.in_(('failed', 'cancelled')),
+            latest_job.completed_at <= now - WAREHOUSE_CATALOG_TTL,
+            latest_job.next_due_at <= now,
+        ),
+    )
+    account = SellerMarketplaceAccount
+    due_accounts = account.query.join(Marketplace).outerjoin(
+        latest_job, latest_job.id == latest_job_id,
+    ).filter(
+        Marketplace.code == 'ozon',
+        Marketplace.is_active.is_(True),
+        account.is_active.is_(True),
+        account.connection_status == 'connected',
+        account._credentials_encrypted.isnot(None),
+        account._credentials_encrypted != '',
+        or_(account.credential_expires_at.is_(None), account.credential_expires_at > now),
+        or_(last_good_at.is_(None), last_good_at <= now - WAREHOUSE_CATALOG_TTL),
+        terminal_matured,
+        ~has_active_warehouse_read,
+        ~has_provider_cooldown,
+        provider_due_is_known,
+    )
+    candidate = due_accounts.order_by(
+        case((last_good_at.is_(None), 0), else_=1),
+        last_good_at.asc(),
+        account.id.asc(),
+    ).with_entities(account.id, account.seller_id).first()
+
+    if candidate is None:
+        return {'selected': 0, 'enqueued': 0, 'refresh': None}
+    account_claim = try_account_operation_lock(candidate.id)
+    if account_claim is None:
+        return {'selected': 1, 'enqueued': 0, 'refresh': None}
+    try:
+        # The account may have completed a manual refresh after the initial
+        # scan. Recheck freshness under the same process-shared account lock
+        # used by provider reads before creating the next periodic intent.
+        still_due = due_accounts.filter(account.id == candidate.id).with_entities(account.id).first()
+        if still_due is None:
+            return {'selected': 0, 'enqueued': 0, 'refresh': None}
+        try:
+            refresh = enqueue_refresh(
+                seller_id=candidate.seller_id,
+                kind='warehouses',
+                account_id=candidate.id,
+                now=now,
+            )
+        except WarehouseReadCooldown:
+            # A concurrent attempt may have persisted a provider Retry-After
+            # after discovery selected this account. Leave it for a later scan.
+            return {'selected': 1, 'enqueued': 0, 'refresh': None}
+    finally:
+        account_claim.close()
+    return {'selected': 1, 'enqueued': 1, 'refresh': refresh}
+
+
+def run_warehouse_catalog_discovery_tick(flask_app):
+    if not flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
+        return 0
+    with flask_app.app_context():
+        try:
+            return enqueue_due_warehouse_catalogs()['enqueued']
+        except Exception:
+            db.session.rollback()
+            logger.warning('Ozon warehouse catalog discovery failed safely')
+            return 0
+        finally:
+            db.session.remove()
 
 
 def enqueue_refresh(*, seller_id, kind, account_id=None, listing_id=None, now=None):

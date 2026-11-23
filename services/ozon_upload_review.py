@@ -23,6 +23,44 @@ class OzonUploadReviewService:
     MAX_ITEMS = 200
     PAGE_SIZE = 20
 
+    @staticmethod
+    def _automatic_attribute_cleanup(draft):
+        """Expose only the version-current, bounded cleanup note."""
+        if draft.validation_status not in {"valid", "invalid"} or draft.validated_at is None:
+            return None
+        stored = MarketplaceDraftService._stored_json(
+            draft.validation_result_json, dict,
+        )
+        note = stored.get("automatic_attribute_cleanup")
+        if not isinstance(note, dict):
+            return None
+        attribute_name = note.get("attribute_name")
+        before_count = note.get("before_count")
+        max_value_count = note.get("max_value_count")
+        if (
+            note.get("attribute_id") != "4543"
+            or note.get("complex_id") != "0"
+            or note.get("reason") != "unchanged_optional_attribute_exceeds_schema_max"
+            or note.get("action") != "omit_entire_attribute"
+            or not isinstance(attribute_name, str)
+            or not attribute_name.strip()
+            or len(attribute_name) > 500
+            or type(before_count) is not int
+            or type(max_value_count) is not int
+            or max_value_count < 1
+            or before_count <= max_value_count
+        ):
+            return None
+        return {
+            "attribute_id": "4543",
+            "complex_id": "0",
+            "attribute_name": attribute_name.strip(),
+            "reason": "unchanged_optional_attribute_exceeds_schema_max",
+            "before_count": before_count,
+            "max_value_count": max_value_count,
+            "action": "omit_entire_attribute",
+        }
+
     @classmethod
     def document(cls, *, seller_id, account_id, draft_ids, page=1,
                  parent_prepare_job_uid=None, result_job_uid=None):
@@ -142,6 +180,7 @@ class OzonUploadReviewService:
                 "type_name": draft.product_type.name if draft.product_type else None,
                 "external_category_id": draft.external_category_id,
                 "external_type_id": draft.external_type_id,
+                "automatic_attribute_cleanup": cls._automatic_attribute_cleanup(draft),
                 "selectable": not blocked,
                 "errors": blocked, "warnings": validation.get("warnings", []),
                 "checked_at": validation["validated_at"],
