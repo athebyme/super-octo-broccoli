@@ -50,6 +50,7 @@ ASSETS = ROOT / "tests/ozon_release/assets"
 COMMON_CONTENT_MOBILE_WIDTHS = (320, 360, 390)
 COMMON_CONTENT_MOBILE_THEMES = ("light", "dark")
 COMMON_CONTENT_NAVIGATOR_CHECK = "common_mobile_product_navigator_bounded_accessible_keyboard"
+COMMON_PREVIEW_PROVENANCE_CHECK = "common_preview_api_dom_source_saved_proposed_provenance"
 COMMON_PHOTO_RETRY_CHECK = "common_selected_photo_pending_preview_recovers_after_bounded_retry_without_content_write"
 COMMON_PHOTO_RETRY_TOUCH_CHECK = "common_photo_retry_touch_target_focus_hit_320_360_390_light_dark"
 
@@ -66,6 +67,7 @@ REPORT = {
     "screenshots": [],
     "mobile_touch_target_observations": [],
     "mobile_product_navigator_observations": [],
+    "common_preview_provenance_observations": [],
     "common_photo_retry_observations": None,
     "common_photo_retry_touch_observations": [],
     "browser_api_reads": [],
@@ -1612,6 +1614,199 @@ def record_keyboard_focus(page, check: str, selector: str, *, photo_url: str | N
     REPORT["focus_observations"].append(row)
 
 
+def _readable_preview_characteristic(value, depth: int = 0) -> str:
+    if value is None or value == "":
+        return "пусто"
+    if isinstance(value, list):
+        return ", ".join(_readable_preview_characteristic(item, depth + 1) for item in value[:20])
+    if isinstance(value, dict):
+        if depth > 1:
+            return "составное значение"
+        return ", ".join(
+            str(key) + ": " + _readable_preview_characteristic(item, depth + 1)
+            for key, item in list(value.items())[:8]
+        ) or "составное значение"
+    return str(value)
+
+
+def _expected_preview_layer_value(field_name: str, value, photo_options: list[dict]) -> str:
+    if field_name == "description":
+        return value if isinstance(value, str) and value else "Описание пустое."
+    if field_name == "photos":
+        if not isinstance(value, list) or not value:
+            return "Фотографии не выбраны"
+        return " → ".join(
+            "Фото " + str(next((index + 1 for index, option in enumerate(photo_options)
+                                if option.get("url") == photo), None))
+            if any(option.get("url") == photo for option in photo_options)
+            else "Выбранное фото"
+            for photo in value
+        )
+    if field_name == "characteristics":
+        if not isinstance(value, list) or not value:
+            return "Характеристики не заполнены"
+        return " · ".join(
+            (row.get("name") if isinstance(row.get("name"), str) else "Свойство")
+            + ": " + _readable_preview_characteristic(row.get("value"))
+            for row in value
+        )
+    if value is None or value == "":
+        return "Пусто"
+    return str(value)
+
+
+def _common_preview_layer_value(page, field_name: str, layer_name: str) -> str:
+    layer = page.locator(
+        '#common-content-preview [data-review-field="' + field_name
+        + '"] [data-review-layer="' + layer_name + '"]'
+    )
+    if field_name == "description":
+        return layer.locator(".cpc-description-full").text_content() or ""
+    return layer.locator("span").last.inner_text()
+
+
+def _assert_common_preview_provenance_matches_api(page, payload: dict, product_id: int) -> dict:
+    assert payload.get("success") is True and payload.get("save_effect") == "common_only", payload
+    preview = payload.get("preview")
+    assert isinstance(preview, dict), payload
+    items = preview.get("items")
+    assert isinstance(items, list), payload
+    item = next((row for row in items if row.get("product_id") == product_id), None)
+    assert isinstance(item, dict), {"product_id": product_id, "item_count": len(items)}
+    source_origins = item.get("source", {}).get("field_origins", {})
+    photo_options = page.locator("#common-content-bootstrap").evaluate(
+        "text => JSON.parse(text).products.find(product => product.product_id === " + str(product_id)
+        + ").photo_options"
+    )
+    labels = {
+        "source": "из источника товара",
+        "supplier_enrichment": "из дополнения поставщика",
+        "ai_suggestion": "из предложения AI",
+        "seller_override": "введено продавцом",
+        "unknown": "источник не указан",
+    }
+    layers = (
+        ("inherited", "inherited", "Наследуемое значение · "),
+        ("saved", "before", "Сохранено сейчас · "),
+        ("proposed", "after", "Будет сохранено · "),
+    )
+    fields = item.get("fields")
+    assert isinstance(fields, list) and fields, item
+    observations = []
+    for api_field in fields:
+        field_name = api_field.get("field")
+        assert isinstance(field_name, str) and source_origins.get(field_name) in labels, api_field
+        field_observation = {
+            "field": field_name,
+            "source_origin": source_origins[field_name],
+            "layer_matches_api": {},
+        }
+        for layer_name, api_key, origin_prefix in layers:
+            expected_origin = source_origins[field_name] if layer_name == "inherited" else api_field.get(
+                "before_origin" if layer_name == "saved" else "after_origin", "unknown"
+            )
+            expected_label = origin_prefix + labels.get(expected_origin, labels["unknown"])
+            actual_label = page.locator(
+                '#common-content-preview [data-review-field="' + field_name
+                + '"] [data-review-layer="' + layer_name + '"] small'
+            ).inner_text()
+            assert actual_label == expected_label, {
+                "field": field_name, "layer": layer_name,
+                "expected_origin_label": expected_label, "actual_origin_label": actual_label,
+            }
+            expected_value = _expected_preview_layer_value(field_name, api_field.get(api_key), photo_options)
+            actual_value = _common_preview_layer_value(page, field_name, layer_name)
+            assert actual_value == expected_value, {
+                "field": field_name, "layer": layer_name,
+                "expected_value_length": len(expected_value),
+                "actual_value_length": len(actual_value),
+                "expected_value_prefix": expected_value[:100],
+                "actual_value_prefix": actual_value[:100],
+            }
+            field_observation["layer_matches_api"][layer_name] = True
+        observations.append(field_observation)
+    assert {row["field"] for row in observations} >= {
+        "title", "description", "photos", "characteristics",
+    }, observations
+    return {
+        "product_id": product_id,
+        "save_effect": "common_only",
+        "fields": observations,
+        "all_layers_match_api": True,
+    }
+
+
+def _measure_common_preview_mobile(page, theme: str) -> dict:
+    page.evaluate("theme => { localStorage.setItem('sh-theme', theme); document.documentElement.dataset.theme = theme; }", theme)
+    observation = page.evaluate("""() => {
+        const preview = document.querySelector('#common-content-preview');
+        const rows = [...preview.querySelectorAll('.cpc-diff-row')];
+        const desc = preview.querySelector('[data-review-field="description"]');
+        const summary = desc?.querySelector('.cpc-diff-value[data-review-layer="inherited"] .cpc-description-summary');
+        const summaryStyle = summary ? getComputedStyle(summary) : null;
+        const summaryHeight = summary?.getBoundingClientRect().height || 0;
+        const summaryLineHeight = summaryStyle
+            ? (parseFloat(summaryStyle.lineHeight) || parseFloat(summaryStyle.fontSize) * 1.2) : 0;
+        const layouts = rows.map(row => {
+            const cells = [...row.querySelectorAll('[data-review-layer]')];
+            const rowRect = row.getBoundingClientRect();
+            const tops = cells.map(cell => cell.getBoundingClientRect().top);
+            const rects = cells.map(cell => {
+                const rect = cell.getBoundingClientRect();
+                return {left: rect.left, right: rect.right, top: rect.top,
+                    clientWidth: cell.clientWidth, scrollWidth: cell.scrollWidth};
+            });
+            return {
+                field: row.dataset.reviewField,
+                columns: getComputedStyle(row).gridTemplateColumns.trim().split(/\\s+/).length,
+                stacked: cells.length === 3 && tops[0] < tops[1] && tops[1] < tops[2],
+                allCellsFit: rects.every(cell => cell.scrollWidth <= cell.clientWidth + 1
+                    && cell.left >= rowRect.left - 1 && cell.right <= rowRect.right + 1
+                    && cell.left >= 0 && cell.right <= innerWidth + 1),
+            };
+        });
+        const checkbox = preview.querySelector('input[data-action="acknowledge-preview"]');
+        const label = checkbox?.closest('.cpc-preview-confirm');
+        const active = document.activeElement;
+        const style = active ? getComputedStyle(active) : null;
+        const rect = active?.getBoundingClientRect();
+        const labelRect = label?.getBoundingClientRect();
+        const outlineAlpha = style?.outlineColor?.startsWith('rgba(')
+            ? Number(style.outlineColor.slice(style.outlineColor.lastIndexOf(',') + 1).replace(')', '').trim())
+            : 1;
+        return {
+            viewport: innerWidth,
+            theme: document.documentElement.dataset.theme,
+            pageScrollWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
+            rows: layouts,
+            descriptionSummaryWraps: summaryHeight > summaryLineHeight + 1,
+            descriptionSummaryClientWidth: summary?.clientWidth || 0,
+            descriptionSummaryScrollWidth: summary?.scrollWidth || 0,
+            checkboxFocused: !!checkbox && active === checkbox,
+            focusVisible: !!active && active.matches(':focus-visible'),
+            outlineVisible: !!style && style.outlineStyle !== 'none'
+                && parseFloat(style.outlineWidth) >= 2
+                && style.outlineColor !== 'transparent' && outlineAlpha > 0,
+            focusRect: rect ? {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom} : null,
+            labelRect: labelRect ? {left: labelRect.left, top: labelRect.top, right: labelRect.right, bottom: labelRect.bottom,
+                clientWidth: label.clientWidth, scrollWidth: label.scrollWidth} : null,
+        };
+    }""")
+    assert observation["viewport"] == 320 and observation["theme"] == theme, observation
+    assert observation["pageScrollWidth"] <= 321, observation
+    assert observation["rows"] and all(
+        row["columns"] == 1 and row["stacked"] and row["allCellsFit"]
+        for row in observation["rows"]
+    ), observation
+    assert observation["descriptionSummaryWraps"]
+    assert observation["descriptionSummaryScrollWidth"] <= observation["descriptionSummaryClientWidth"] + 1
+    assert observation["checkboxFocused"] and observation["focusVisible"] and observation["outlineVisible"], observation
+    assert observation["focusRect"]["left"] >= 0 and observation["focusRect"]["right"] <= 321, observation
+    assert observation["labelRect"]["left"] >= 0 and observation["labelRect"]["right"] <= 321
+    assert observation["labelRect"]["scrollWidth"] <= observation["labelRect"]["clientWidth"] + 1
+    return observation
+
+
 def _run_bulk_50_case(page) -> None:
     """Exercise the real editor's 50-item limit, CAS recovery, and local audit."""
     global WORKSPACE_RETURN_FEED_GATE
@@ -3066,8 +3261,19 @@ def run():
 
         recipient = page.locator('.cpc-recipient input[type="checkbox"]').first
         recipient.check()
-        page.get_by_role("button", name="Проверить изменения").click()
+        review_trigger = page.get_by_role("button", name="Проверить изменения")
+        review_trigger.focus()
+        with page.expect_response(lambda response: (
+            urlsplit(response.url).path == "/api/my-products/common-content/preview"
+            and response.request.method == "POST"
+        )) as common_preview_response:
+            review_trigger.press("Enter")
         page.get_by_role("heading", name="Проверьте изменения товара").wait_for()
+        source_preview = _assert_common_preview_provenance_matches_api(
+            page, common_preview_response.value.json(), product_ids[0],
+        )
+        REPORT["common_preview_provenance_observations"].append(source_preview)
+        REPORT["checks"].append(COMMON_PREVIEW_PROVENANCE_CHECK)
         page.get_by_text("Карточки WB и Ozon останутся без изменений", exact=False).wait_for()
         preview_card_link = page.locator("#common-content-preview .cpc-preview").get_by_role(
             "link", name="Открыть карточку отдельно", exact=True,
@@ -3076,6 +3282,44 @@ def run():
         preview_card_link.wait_for()
         assert not page.get_by_role("button", name="Сохранить данные товара").is_enabled()
         REPORT["checks"].append("review_diff_is_explicit_and_apply_requires_acknowledgement")
+
+        acknowledgement = page.locator('input[data-action="acknowledge-preview"]')
+        immediate_focus = page.evaluate("""() => {
+            const input = document.querySelector('input[data-action="acknowledge-preview"]');
+            const style = input ? getComputedStyle(input) : null;
+            return {
+                focused: !!input && document.activeElement === input,
+                focusVisible: !!input && input.matches(':focus-visible'),
+                outlineStyle: style?.outlineStyle || 'none',
+                outlineWidth: style ? parseFloat(style.outlineWidth) : 0,
+                outlineColor: style?.outlineColor || 'transparent',
+            };
+        }""")
+        assert immediate_focus["focused"] and immediate_focus["focusVisible"]
+        assert immediate_focus["outlineStyle"] not in {"none", "hidden"}
+        assert immediate_focus["outlineWidth"] >= 2 and immediate_focus["outlineColor"] != "transparent"
+        page.keyboard.press("Shift+Tab")
+        page.keyboard.press("Tab")
+        keyboard_focus = page.evaluate("""() => {
+            const input = document.querySelector('input[data-action="acknowledge-preview"]');
+            const style = input ? getComputedStyle(input) : null;
+            return !!input && document.activeElement === input
+                && input.matches(':focus-visible')
+                && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 2
+                && style.outlineColor !== 'transparent';
+        }""")
+        assert keyboard_focus
+        page.set_viewport_size({"width": 320, "height": 900})
+        mobile_preview = [
+            _measure_common_preview_mobile(page, theme)
+            for theme in COMMON_CONTENT_MOBILE_THEMES
+        ]
+        REPORT["common_preview_provenance_observations"][-1]["immediate_checkbox_focus"] = immediate_focus
+        REPORT["common_preview_provenance_observations"][-1]["keyboard_checkbox_focus"] = keyboard_focus
+        REPORT["common_preview_provenance_observations"][-1]["mobile_320_light_dark"] = mobile_preview
+        REPORT["checks"].append("common_preview_wraps_without_overflow_320_light_dark_with_keyboard_focus")
+        page.evaluate("theme => { localStorage.setItem('sh-theme', theme); document.documentElement.dataset.theme = theme; }", "light")
+        page.set_viewport_size({"width": 1440, "height": 1050})
 
         cancel_preview = page.get_by_role("button", name="Вернуться к полям")
         cancel_preview.focus()
@@ -3111,9 +3355,12 @@ def run():
         page.get_by_role("heading", name="Проверьте изменения товара").wait_for()
         assert page.locator('#common-content-product-list button[aria-current="true"]').get_attribute("data-product-id") == str(product_ids[0])
         photo_diff = page.locator('.cpc-diff-row').filter(has_text="Фотографии")
-        before_order = photo_diff.locator('.cpc-diff-value').nth(0).locator('span').last.inner_text()
-        after_order = photo_diff.locator('.cpc-diff-value').nth(1).locator('span').last.inner_text()
-        assert before_order == "Фото 1 → Фото 2" and after_order == "Фото 2 → Фото 1", (before_order, after_order)
+        inherited_order = photo_diff.locator('.cpc-diff-value').nth(0).locator('span').last.inner_text()
+        before_order = photo_diff.locator('.cpc-diff-value').nth(1).locator('span').last.inner_text()
+        after_order = photo_diff.locator('.cpc-diff-value').nth(2).locator('span').last.inner_text()
+        assert inherited_order == before_order == "Фото 1 → Фото 2" and after_order == "Фото 2 → Фото 1", (
+            inherited_order, before_order, after_order,
+        )
         REPORT["checks"].append("delayed_preview_blocks_edit_and_product_switch")
         REPORT["checks"].append("photo_diff_preserves_identity_when_order_changes_at_same_count")
         page.locator('input[data-action="acknowledge-preview"]').check()
