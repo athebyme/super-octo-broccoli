@@ -58,6 +58,18 @@ def forbid_provider(*_args, **_kwargs):
     raise AssertionError("Provider I/O is forbidden in this browser fixture")
 
 
+def open_catalog_extra_filters(page):
+    disclosure = page.locator("details[data-catalog-extra-filters]")
+    assert disclosure.count() == 1
+    assert disclosure.evaluate("element => element instanceof HTMLDetailsElement")
+    sort = disclosure.locator("[data-catalog-sort]")
+    assert sort.count() == 1
+    if disclosure.get_attribute("open") is None:
+        disclosure.locator(":scope > summary").click()
+    assert disclosure.get_attribute("open") is not None
+    assert sort.is_visible()
+
+
 requests.sessions.Session.request = forbid_provider
 socket.create_connection = forbid_provider
 
@@ -699,6 +711,7 @@ try:
         with page.expect_response(lambda response: beta_feed_matches(response, {
                 "search": source_title, "sort": "title",
         })) as source_sort:
+            open_catalog_extra_filters(page)
             page.get_by_label("Сортировка").select_option("title")
         assert source_sort.value.status == 200
         source_row = page.locator(".mp-row").filter(has_text="Тестовый товар для подготовки")
@@ -940,6 +953,7 @@ try:
         with page.expect_response(lambda response: beta_feed_matches(response, {
                 "search": source_title, "sort": "title",
         })) as saved_source_sort:
+            open_catalog_extra_filters(page)
             page.get_by_label("Сортировка").select_option("title")
         assert saved_source_sort.value.status == 200
         saved_source_row = page.locator(".mp-row").filter(has_text=source_title)
@@ -1094,6 +1108,7 @@ try:
         with page.expect_response(lambda response: beta_feed_matches(response, {
                 "search": multi_source_title, "sort": "title",
         })) as multi_source_sort:
+            open_catalog_extra_filters(page)
             page.get_by_label("Сортировка").select_option("title")
         assert multi_source_sort.value.status == 200
         multi_rows = page.locator(".mp-row")

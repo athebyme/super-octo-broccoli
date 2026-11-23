@@ -48,6 +48,18 @@ def forbid_network(*_args, **_kwargs):
     raise AssertionError("Provider I/O is forbidden in this fixture")
 
 
+def open_catalog_extra_filters(page):
+    disclosure = page.locator("details[data-catalog-extra-filters]")
+    assert disclosure.count() == 1
+    assert disclosure.evaluate("element => element instanceof HTMLDetailsElement")
+    sort = disclosure.locator("[data-catalog-sort]")
+    assert sort.count() == 1
+    if disclosure.get_attribute("open") is None:
+        disclosure.locator(":scope > summary").click()
+    assert disclosure.get_attribute("open") is not None
+    assert sort.is_visible()
+
+
 requests.sessions.Session.request = forbid_network
 socket.create_connection = forbid_network
 
@@ -842,6 +854,7 @@ def exercise_workspace_update(page):
         and parse_qs(urlsplit(response.url).query).get("sort") == ["title"]
     )) as filtered_feed_info:
         search.fill("R56 workspace item")
+        open_catalog_extra_filters(page)
         page.get_by_label("Сортировка").select_option("title")
     filtered_feed = filtered_feed_info.value
     assert filtered_feed.status == 200
