@@ -279,7 +279,7 @@ def _state(fixture_ids):
         }
 
 
-def _browser_bridge(route, *, path, counts, posts):
+def _browser_bridge(route, *, page_path, schedule_post_path, counts, posts):
     request = route.request
     parsed = urlsplit(request.url)
     local_origin = urlsplit(fixture.BASE).netloc
@@ -287,9 +287,9 @@ def _browser_bridge(route, *, path, counts, posts):
         route_key = f"{request.method} {parsed.path}"
         local_routes = counts.setdefault("local_routes", {})
         local_routes[route_key] = local_routes.get(route_key, 0) + 1
-        if parsed.path == path and request.method == "GET":
+        if parsed.path == page_path and request.method == "GET":
             counts["admin_products_get"] += 1
-        if parsed.path == path and request.method == "POST":
+        if parsed.path == schedule_post_path and request.method == "POST":
             counts["schedule_post"] += 1
             fields = parse_qs(request.post_data or "", keep_blank_values=True)
             assert set(fields) == {
@@ -401,6 +401,7 @@ def run():
     _ensure_storage()
     fixture_ids = _seed_supplier_and_admin()
     page_path = f"/admin/suppliers/{fixture_ids['supplier_id']}/products"
+    schedule_post_path = f"/admin/suppliers/{fixture_ids['supplier_id']}/catalog-schedule"
     post_log = []
     counts = {
         "admin_products_get": 0,
@@ -429,7 +430,8 @@ def run():
                 "**/*",
                 lambda route: _browser_bridge(
                     route,
-                    path=page_path,
+                    page_path=page_path,
+                    schedule_post_path=schedule_post_path,
                     counts=counts,
                     posts=post_log,
                 ),
@@ -465,7 +467,7 @@ def run():
             page.locator('input[name="catalog_schedule_interval_hours"]').fill("24")
             page.locator('input[name="catalog_schedule_enabled"][value="1"]').check()
             with page.expect_response(
-                lambda item: urlsplit(item.url).path == page_path and item.request.method == "POST",
+                lambda item: urlsplit(item.url).path == schedule_post_path and item.request.method == "POST",
             ) as posted:
                 page.get_by_test_id("catalog-schedule-submit").click()
             assert posted.value.status == 303
@@ -602,7 +604,7 @@ def run():
             page.get_by_test_id("catalog-schedule").locator("summary").click()
             page.locator('input[name="catalog_schedule_enabled"][value="0"]').check()
             with page.expect_response(
-                lambda item: urlsplit(item.url).path == page_path and item.request.method == "POST",
+                lambda item: urlsplit(item.url).path == schedule_post_path and item.request.method == "POST",
             ) as disabled_post:
                 page.get_by_test_id("catalog-schedule-submit").click()
             assert disabled_post.value.status == 303
@@ -678,7 +680,7 @@ def run():
         assert counts["schedule_post"] == 2, counts
         assert counts["unexpected_local_writes"] == 0, counts
         assert counts["local_routes"].get(f"GET {page_path}") == 4, counts
-        assert counts["local_routes"].get(f"POST {page_path}") == 2, counts
+        assert counts["local_routes"].get(f"POST {schedule_post_path}") == 2, counts
         assert len(post_log) == 2
         assert not price_calls
 
