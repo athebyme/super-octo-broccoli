@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-23T21:00:01.627248+00:00",
+  "generated_at": "2026-11-23T21:40:38.494862+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "af8f7437437c011832b9b7e9e098f16885930ab20f80d6a3330a825f6d11088c"
+      "sha256": "5b557dda0cbe1f19b9d03b4fb9bcb71b71f984858716080c67c346c0177d1ca0"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -381,7 +381,7 @@
     },
     {
       "path": "docs/design/marketplace-decisions-preparation.md",
-      "sha256": "00ce503bdae674de4c6ee6d7e95e32322658d0beb844fb425f2154593f7adbb1"
+      "sha256": "27e8c6e9cc6688fa57fdb49286a5dfc6085d572a3b800b0cab52e9baaa8b1146"
     },
     {
       "path": "docs/design/ozon-account-health.md",
@@ -2081,7 +2081,7 @@
     },
     {
       "path": "services/marketplace_drafts.py",
-      "sha256": "c071012df1ce663feca87d9ed81aa60e213bee1aa735e40643fe2bed23b08583"
+      "sha256": "386a4076ca0ce5ab902227f0c9ddf15390d0d268635d958699366ddbe802619d"
     },
     {
       "path": "services/marketplace_fact_pack.py",
@@ -4389,7 +4389,7 @@
     },
     {
       "path": "tests/test_marketplace_drafts.py",
-      "sha256": "2a379be68f27b5f24e6738d212b78857cda23b35859b89cd613bc92b8277b870"
+      "sha256": "6864c6dfc0966b64af9b32bb027430f085d184b60eba7e299404d6a04123ed11"
     },
     {
       "path": "tests/test_marketplace_drafts_migration.py",
@@ -5456,5 +5456,5 @@
       "sha256": "260973076a516b81bba3cae3adcd6b652fdee5585e27fbd0b7401062b78aefb1"
     }
   ],
-  "aggregate_sha256": "728469d8037ff6e3bec05a672f680217973e62d505a52d43028170732c9120aa"
+  "aggregate_sha256": "769f98b6f39e605be359de101b50d4a0365c2aed152356364461375ea173d7b6"
 }
