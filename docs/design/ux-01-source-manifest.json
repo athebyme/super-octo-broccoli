@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-23T23:14:18.878095+00:00",
+  "generated_at": "2026-11-23T23:39:44.775873+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "401f3d66c4105987d06656cf1e1013c131f01c5d1e55f3bb36b71d86aed7d6dd"
+      "sha256": "a2cb6622ff8e6d5b5e2c5d7ef509685a85b40f2164c8b92f70ce6892387637df"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -473,7 +473,7 @@
     },
     {
       "path": "docs/design/ozon-upload-v3-api.md",
-      "sha256": "4f55a4e4b246343d88063378c803b90c07ba171510512b4a93a7b6bf0d6d87c7"
+      "sha256": "fbe8c6710a73e52f13f4f0b0cf11975cee80c13da78d963919168f9a0421004e"
     },
     {
       "path": "docs/design/ozon-ux-completion-plan-2026-10-01.md",
@@ -2253,7 +2253,7 @@
     },
     {
       "path": "services/ozon_brand_search.py",
-      "sha256": "d8510dbd07be0b24a182c3bd80c08035e3dceb8596decd4c615b4baeb8d36038"
+      "sha256": "304d430a29a3f91758193c3f0aab9077778ef0732e2ae8b5259705ebac8daf75"
     },
     {
       "path": "services/ozon_brand_search_models.py",
@@ -2261,7 +2261,7 @@
     },
     {
       "path": "services/ozon_bulk_repair.py",
-      "sha256": "9459f4791af65ad8560ecb6c611b9ce4ca7da842e631eac7ce3b1c1db46b0dd3"
+      "sha256": "b6ea3cd8eef28bc45f47d8e43baa32928791a460e0a6782f718db7b578140e46"
     },
     {
       "path": "services/ozon_bulk_upload.py",
@@ -4673,7 +4673,7 @@
     },
     {
       "path": "tests/test_ozon_brand_search.py",
-      "sha256": "3f3421e9ba037e3887de1fbcd08b9ea2cc919beab3241464a26813cb9e935948"
+      "sha256": "5aad90b347407dcfe56a8f3d47c3169c63affbb697e024d31eaeb64c029398f1"
     },
     {
       "path": "tests/test_ozon_brand_search_evidence_migration.py",
@@ -4693,7 +4693,7 @@
     },
     {
       "path": "tests/test_ozon_bulk_repair_workspace.py",
-      "sha256": "df3d9d0df39bc3c35d11b30fe5dd82f828e0c1d60908b8a534cebee71fcb42c4"
+      "sha256": "f51b582a9d57f760c9532e64f9836f2bed6598f1810e6284282de3a7829a0ea2"
     },
     {
       "path": "tests/test_ozon_bulk_supplier_source_comparison.py",
@@ -5476,5 +5476,5 @@
       "sha256": "260973076a516b81bba3cae3adcd6b652fdee5585e27fbd0b7401062b78aefb1"
     }
   ],
-  "aggregate_sha256": "16a784156c45c3a00a72838457389c6e00a9dff4765a78cc8691338c4c439eb5"
+  "aggregate_sha256": "1c80a258845cb4d4d4eb13eeb11388c847d11a78ad270c7c90f495f5ca9fed65"
 }
