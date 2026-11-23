@@ -19,11 +19,12 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 let component;
-const account = {id: 55, label: 'Shop East'};
+const account = {id: 55, label: 'Shop East', connection_status: 'connected'};
 const boot = {
   wbConnected: true,
   ozonEnabled: true,
   ozonAccounts: [account],
+  workspaceOwner: 'workspace-owner-test',
   importBatch: null,
   supplierRefreshBatch: null,
   supplierRefreshBatchInvalid: false,
@@ -36,6 +37,8 @@ const boot = {
     supplierRefreshResult: '/api/my-products/supplier-refresh-result',
     commonContent: '/my-products/common-content',
     enrichBulk: '/products/enrich-bulk',
+    ozonUploads: '/marketplaces/ozon/uploads/',
+    ozonByRequest: '/marketplaces/ozon/uploads/by-request',
   },
 };
 const fakeWindow = {
@@ -47,6 +50,7 @@ const fakeWindow = {
   location: {search: '', hash: '', origin: 'https://seller.example'},
 };
 const stored = new Map();
+let storageFailureKey = '';
 const submittedForms = [];
 const fetchCalls = [];
 let fetchHandler = () => Promise.reject(new Error('unexpected fetch'));
@@ -56,10 +60,13 @@ const fakeFetch = (url, options) => {
 };
 const fakeDocument = {
   activeElement: null,
+  focusTargets: new Map(),
   querySelector(selector) {
-    assert.equal(selector, 'meta[name="csrf-token"]');
-    return {content: 'csrf-test-token'};
+    if (selector === 'meta[name="csrf-token"]') return {content: 'csrf-test-token'};
+    return this.focusTargets.get(selector) || null;
   },
+  addEventListener() {},
+  removeEventListener() {},
   createElement(tagName) {
     return {
       tagName,
@@ -75,7 +82,10 @@ const context = {
   document: fakeDocument,
   sessionStorage: {
     getItem(key) { return stored.has(key) ? stored.get(key) : null; },
-    setItem(key, value) { stored.set(key, value); },
+    setItem(key, value) {
+      if (storageFailureKey === key) throw new Error('storage unavailable');
+      stored.set(key, value);
+    },
     removeItem(key) { stored.delete(key); },
   },
   fetch: fakeFetch,
@@ -141,7 +151,7 @@ function makeApp() {
       focused: false,
       focusOptions: null,
       scrollOptions: null,
-      focus(options) { this.focused = true; this.focusOptions = options || null; },
+      focus(options) { this.focused = true; this.focusOptions = options || null; fakeDocument.activeElement = this; },
       scrollIntoView(options) { this.scrollOptions = options; },
     },
     resume: {
@@ -150,6 +160,10 @@ function makeApp() {
       scrollOptions: null,
       focus(options) { this.focused = true; this.focusOptions = options || null; },
       scrollIntoView(options) { this.scrollOptions = options; },
+    },
+    ozonInlineReceipt: {
+      focused: false,
+      focus(options) { this.focused = true; this.focusOptions = options || null; fakeDocument.activeElement = this; },
     },
     dialog: {
       open: false,
@@ -170,6 +184,7 @@ function makeApp() {
     ozonError: refs.error,
     supplierRefreshResult: refs.result,
     supplierRefreshResume: refs.resume,
+    ozonInlineReceipt: refs.ozonInlineReceipt,
     supplierRefreshDialog: refs.supplierRefreshDialog,
     supplierRefreshCancel: refs.supplierRefreshCancel,
     supplierRefreshReviewRetry: refs.supplierRefreshRetry,
@@ -1301,6 +1316,219 @@ async function finishSupplierRefresh(data, ids) {
     'invalid handoff never falls back to an unrestricted feed');
   sameJson(invalidSupplierBatch.app.items, []);
   sameJson(invalidSupplierBatch.app.selected, []);
+  remount(null, '');
+
+  const refreshReceiptKey = 'supplier-refresh-resume-v1';
+  const ozonPendingKey = 'ozon-source-prepare-v1';
+  const ozonReceiptKey = 'seller-hub-ozon-import-prepare-receipt-v1';
+  const combinedIds = [711, 722, 733];
+  const combinedOutcome = {
+    success: true,
+    status: 'completed_with_errors',
+    requested: 3,
+    updated: 2,
+    skipped: 0,
+    errors: 1,
+    items: [
+      {product_id: 711, status: 'updated', reason: null},
+      {product_id: 722, status: 'error', reason: 'update_failed'},
+      {product_id: 733, status: 'updated', reason: null},
+    ],
+    resume_receipt: 'signed-refresh-receipt-711',
+  };
+  function setCombinedReview(app, ids, changedIds, accountId = '55') {
+    setSupplierOutcome(app, combinedOutcome, ids);
+    const review = app.supplierRefreshReview;
+    const changed = new Set(changedIds);
+    review.items = ids.map(productId => ({
+      productId,
+      state: changed.has(productId) ? 'changed' : 'unchanged',
+      changes: changed.has(productId) ? [{field: 'title'}] : [],
+    }));
+    review.changed = changedIds.length;
+    review.prepareOzon = true;
+    review.prepareOzonAccountId = accountId;
+    return review;
+  }
+  function sourcePrepareResponse(accountId, total) {
+    const jobUid = 'ozon-upload-' + 'b'.repeat(32);
+    return jsonResponse(200, {
+      success: true,
+      run: {
+        mode: 'source_prepare', account_id: accountId, job_uid: jobUid,
+        status: 'completed',
+        summary: {version: 3, mode: 'source_prepare', job_uid: jobUid,
+          account_id: accountId, total, processed: total, active: 0,
+          prepared: total, needs_input: 0, failed: 0, outcome: 'success'},
+      },
+    });
+  }
+  const defaultConsent = makeApp();
+  defaultConsent.app.selected = [701];
+  defaultConsent.app.items = [{id: 701, title: 'Product 701'}];
+  defaultConsent.app.$api.post = () => Promise.resolve(supplierPreview([701]));
+  defaultConsent.app.openSupplierRefreshReview([701], [701], [{productId: 701, label: 'Product 701'}]);
+  assert.equal(defaultConsent.app.supplierRefreshReview.prepareOzon, false,
+    'the combined preparation choice is opt-in');
+  assert.equal(defaultConsent.app.supplierRefreshReview.prepareOzonAccountId, '55',
+    'one connected account is selected as the account choice without opting in');
+  defaultConsent.app.cancelSupplierRefreshReview({restoreFocus: false});
+  const explicitAccount = makeApp();
+  explicitAccount.app.ozonAccounts = [
+    account,
+    {id: 56, label: 'Shop West', connection_status: 'connected'},
+  ];
+  explicitAccount.app.selected = [702];
+  explicitAccount.app.items = [{id: 702, title: 'Product 702'}];
+  explicitAccount.app.$api.post = () => Promise.resolve(supplierPreview([702]));
+  explicitAccount.app.openSupplierRefreshReview([702], [702], [{productId: 702, label: 'Product 702'}]);
+  assert.equal(explicitAccount.app.supplierRefreshReview.prepareOzon, false);
+  assert.equal(explicitAccount.app.supplierRefreshReview.prepareOzonAccountId, '',
+    'multiple connected accounts require an explicit account choice');
+  explicitAccount.app.cancelSupplierRefreshReview({restoreFocus: false});
+  await new Promise(resolve => setImmediate(resolve));
+  for (const key of [refreshReceiptKey, ozonPendingKey, ozonReceiptKey]) stored.delete(key);
+  let combinedOzonPosts = [];
+  fetchHandler = (url, options) => {
+    if (url === '/marketplaces/ozon/uploads/' && options.method === 'POST') {
+      const payload = JSON.parse(options.body);
+      combinedOzonPosts.push(payload);
+      return Promise.resolve(sourcePrepareResponse(payload.account_id, payload.imported_product_ids.length));
+    }
+    if (url.includes('/marketplaces/ozon/uploads/api/')) {
+      const jobUid = 'ozon-upload-' + 'b'.repeat(32);
+      return Promise.resolve(jsonResponse(200, {
+        success: true,
+        run: {
+          mode: 'source_prepare', account_id: 55, job_uid: jobUid,
+          status: 'completed',
+          summary: {version: 3, mode: 'source_prepare', job_uid: jobUid,
+            account_id: 55, total: 1, processed: 1, active: 0,
+            prepared: 1, needs_input: 0, failed: 0, outcome: 'success'},
+        },
+      }));
+    }
+    return Promise.reject(new Error('unexpected fetch: ' + url));
+  };
+  const combined = makeApp();
+  const combinedReview = setCombinedReview(combined.app, combinedIds, [711, 722]);
+  assert.equal(combined.app.supplierRefreshOzonAccounts.length, 1);
+  assert.equal(combined.app.supplierRefreshOzonOptionAvailable, true);
+  assert.equal(combined.app.supplierRefreshOzonChoiceValid, true);
+  let combinedSupplierPosts = 0;
+  combined.app.$api.post = function (url, body) {
+    assert.equal(url, '/my-products/refresh-from-supplier');
+    sameJson(body.product_ids, combinedIds);
+    combinedSupplierPosts += 1;
+    return Promise.resolve(combinedOutcome);
+  };
+  const combinedPromise = combined.app.confirmSupplierRefreshReview();
+  assert.equal(combined.app.confirmSupplierRefreshReview(), false,
+    'repeated explicit confirmation cannot replay supplier or Ozon preparation');
+  await combinedPromise;
+  assert.equal(combinedSupplierPosts, 1);
+  assert.equal(combinedOzonPosts.length, 1,
+    'the opt-in performs one existing local preparation request');
+  sameJson(combinedOzonPosts[0].imported_product_ids, [711],
+    'only the ordered intersection of preview-changed and receipt-updated IDs is prepared');
+  assert.equal(combinedOzonPosts[0].account_id, 55);
+  assert.match(combinedOzonPosts[0].request_key, /^[A-Za-z0-9_-]{24,128}$/);
+  assert.equal(combinedOzonPosts[0].confirm_prepare, true);
+  assert.equal(Object.hasOwn(combinedOzonPosts[0], 'supplier_refresh_context'), false,
+    'signed browser context remains local and is not added to the server request');
+  assert.equal(combinedReview.prepareOzon, true);
+  assert.equal(combined.app.supplierRefreshResult.saved, true);
+  assert.equal(combined.app.supplierRefreshResult.receiptToken, combinedOutcome.resume_receipt);
+  sameJson(combined.app.supplierRefreshOzonIds, [711, 733]);
+  assert.equal(combined.app.ozonInlineReceipt.version, 2);
+  assert.equal(combined.app.ozonInlineReceiptVisible, true,
+    'the inline run is bound to the exact saved refresh receipt and its ordered subset');
+  sameJson(combined.app.ozonInlineReceipt.supplier_refresh.product_ids, [711]);
+  assert.equal(stored.has(ozonPendingKey), false, 'accepted local preparation consumes its pending key');
+
+  const savedRefreshData = Object.assign({}, combinedOutcome, {
+    labels: combinedIds.map(productId => ({productId, label: 'Product ' + productId})),
+  });
+  const restoredDefinition = remount(null, '');
+  const restoredCombined = makeApp();
+  fetchHandler = (url, options) => {
+    if (url === '/api/my-products/supplier-refresh-result') {
+      assert.equal(options.headers['X-Supplier-Refresh-Receipt'], combinedOutcome.resume_receipt);
+      return Promise.resolve(jsonResponse(200, savedRefreshData));
+    }
+    return Promise.reject(new Error('unexpected restore fetch: ' + url));
+  };
+  const ozonPostsBeforeRestore = combinedOzonPosts.length;
+  const restoredOutcome = await restoredCombined.app.restoreSupplierRefreshResult();
+  assert.equal(restoredOutcome.saved, true);
+  assert.equal(restoredOutcome.receiptToken, combinedOutcome.resume_receipt);
+  assert.equal(restoredCombined.app.ozonInlineReceiptVisible, true,
+    'the exact saved receipt restores v2 inline visibility after a read-only resume');
+  assert.equal(combinedOzonPosts.length, ozonPostsBeforeRestore,
+    'restoring a supplier receipt never repeats local Ozon preparation');
+  const refreshFollowup = {disabled: false, focused: false, focus() { this.focused = true; }};
+  fakeDocument.focusTargets.set('[data-supplier-refresh-ozon-followup]', refreshFollowup);
+  restoredCombined.app.dismissOzonInlineReceipt();
+  assert.equal(refreshFollowup.focused, true,
+    'dismissing a refresh-bound receipt returns focus to its follow-up action');
+  fakeDocument.focusTargets.clear();
+  assert.equal(restoredDefinition.data().supplierRefreshBatchMode, false);
+
+  for (const blockedReason of [
+    'empty_intersection', 'unavailable_receipt', 'existing_pending',
+    'selection_changed', 'scope_changed',
+  ]) {
+    for (const key of [refreshReceiptKey, ozonPendingKey, ozonReceiptKey]) stored.delete(key);
+    const blocked = makeApp();
+    const ids = [811, 822];
+    const outcome = blockedReason === 'empty_intersection'
+      ? {
+          success: true, status: 'completed', requested: 2, updated: 1, skipped: 1, errors: 0,
+          items: [
+            {product_id: 811, status: 'updated', reason: null},
+            {product_id: 822, status: 'skipped', reason: 'no_supplier_link'},
+          ], resume_receipt: 'signed-refresh-receipt-empty',
+        }
+      : Object.assign({}, combinedOutcome, {
+          status: 'completed', requested: 2, updated: 2, skipped: 0, errors: 0,
+          items: ids.map(product_id => ({product_id, status: 'updated', reason: null})),
+          resume_receipt: 'signed-refresh-receipt-blocked',
+        });
+    setCombinedReview(blocked.app, ids,
+      blockedReason === 'empty_intersection' ? [822] : ids);
+    let resolveApply;
+    let liveScope = 'current';
+    if (blockedReason === 'scope_changed') blocked.app.feedScopeKey = () => liveScope;
+    const deferApply = ['unavailable_receipt', 'selection_changed', 'scope_changed'].includes(blockedReason);
+    blocked.app.$api.post = function () {
+      return deferApply
+        ? new Promise(resolve => { resolveApply = resolve; })
+        : Promise.resolve(outcome);
+    };
+    if (blockedReason === 'unavailable_receipt') {
+      storageFailureKey = refreshReceiptKey;
+    }
+    if (blockedReason === 'existing_pending') {
+      stored.set(ozonPendingKey, '{}');
+    }
+    let applyPromise = blocked.app.confirmSupplierRefreshReview();
+    if (deferApply) {
+      if (blockedReason === 'unavailable_receipt') storageFailureKey = refreshReceiptKey;
+      if (blockedReason === 'selection_changed') blocked.app.selected = [999];
+      if (blockedReason === 'scope_changed') liveScope = 'changed';
+      resolveApply(outcome);
+    }
+    await applyPromise;
+    storageFailureKey = '';
+    assert.equal(combinedOzonPosts.length, ozonPostsBeforeRestore,
+      blockedReason + ' must not submit local preparation');
+    assert.ok(blocked.app.supplierRefreshResult,
+      blockedReason + ' keeps the confirmed supplier result visible');
+  }
+
+  for (const key of [refreshReceiptKey, ozonPendingKey, ozonReceiptKey]) stored.delete(key);
+  storageFailureKey = '';
+  fetchHandler = () => Promise.reject(new Error('unexpected fetch'));
 
   console.log(JSON.stringify({status: 'passed', checks: [
     'only_exactly_verified_updated_ids_are_handed_to_the_existing_ozon_dialog',
@@ -1326,6 +1554,9 @@ async function finishSupplierRefresh(data, ids) {
     'invalid_or_stale_import_receipts_clear_rows_and_never_fall_back_to_global_feed',
     'classic_supplier_refresh_handoff_preselects_exact_order_without_preview_until_click',
     'invalid_supplier_refresh_handoff_never_falls_back_to_global_feed',
+    'combined_refresh_opt_in_prepares_only_exact_changed_and_updated_intersection_once',
+    'signed_refresh_receipt_restores_inline_ozon_receipt_without_replaying_preparation',
+    'empty_intersection_receipt_storage_failure_and_existing_pending_key_never_submit_ozon',
     'clearing_signed_import_batch_uses_one_watched_feed_read_and_one_facet_read',
     'ordinary_workspace_keeps_its_existing_feed_and_facets',
   ]}));

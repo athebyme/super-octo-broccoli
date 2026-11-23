@@ -107,14 +107,36 @@
                 row.label.length > 0 && row.label.length <= 180;
         });
     }
-    function validOzonInlineReceipt(value) {
-        if (!value || typeof value !== 'object' || Array.isArray(value) || value.version !== 1 ||
+    function validSupplierRefreshOzonContext(value, productIds) {
+        if (!value || typeof value !== 'object' || Array.isArray(value) ||
             value.owner !== boot.workspaceOwner ||
-            typeof value.import_batch !== 'string' || !SIGNED_IMPORT_BATCH.test(value.import_batch) ||
-            !Array.isArray(value.latest && value.latest.product_ids) || !value.latest.product_ids.length ||
-            value.latest.product_ids.length > MAX_BULK_SELECTION ||
-            value.latest.product_ids.some(function (id) { return !Number.isSafeInteger(id) || id <= 0; }) ||
-            new Set(value.latest.product_ids).size !== value.latest.product_ids.length) return false;
+            !validSupplierRefreshReceipt(value.receipt_token) ||
+            !Array.isArray(value.product_ids) || !sameOrderedIds(value.product_ids, productIds) ||
+            !Array.isArray(value.product_labels) || value.product_labels.length !== productIds.length) return false;
+        return value.product_labels.every(function (row, index) {
+            return row && typeof row === 'object' && !Array.isArray(row) &&
+                row.id === productIds[index] && typeof row.label === 'string' &&
+                row.label.length > 0 && row.label.length <= 180;
+        });
+    }
+    function validOzonInlineProductIds(ids) {
+        return Array.isArray(ids) && ids.length > 0 && ids.length <= MAX_BULK_SELECTION &&
+            ids.every(function (id) { return Number.isSafeInteger(id) && id > 0; }) &&
+            new Set(ids).size === ids.length;
+    }
+    function validOzonInlineReceipt(value) {
+        if (!value || typeof value !== 'object' || Array.isArray(value) ||
+            ![1, 2].includes(value.version) || value.owner !== boot.workspaceOwner ||
+            !validOzonInlineProductIds(value.latest && value.latest.product_ids)) return false;
+        if (value.version === 1) {
+            if (typeof value.import_batch !== 'string' || !SIGNED_IMPORT_BATCH.test(value.import_batch)) return false;
+        } else {
+            var source = value.supplier_refresh;
+            if (!source || typeof source !== 'object' || Array.isArray(source) ||
+                !validSupplierRefreshReceipt(source.receipt_token) ||
+                !validOzonInlineProductIds(source.product_ids) ||
+                !sameOrderedIds(value.latest.product_ids, source.product_ids)) return false;
+        }
         var latest = value.latest;
         return !!latest && Number.isSafeInteger(latest.account_id) && latest.account_id > 0 &&
             typeof latest.account_label === 'string' && latest.account_label.length <= 120 &&
@@ -234,7 +256,9 @@
         catch (_) { return false; }
     }
     function validOzonPending(value, accounts) {
-        return !!value && Number.isSafeInteger(value.account_id) &&
+        var hasImportContext = !!value && value.inline_import_context !== undefined;
+        var hasSupplierRefreshContext = !!value && value.supplier_refresh_context !== undefined;
+        return !!value && !(hasImportContext && hasSupplierRefreshContext) && Number.isSafeInteger(value.account_id) &&
             accounts.some(function (row) { return row.id === value.account_id; }) &&
             typeof value.request_key === 'string' &&
             /^[A-Za-z0-9_-]{24,128}$/.test(value.request_key) &&
@@ -242,8 +266,10 @@
             value.imported_product_ids.length > 0 && value.imported_product_ids.length <= 200 &&
             value.imported_product_ids.every(function (id) { return Number.isSafeInteger(id) && id > 0; }) &&
             new Set(value.imported_product_ids).size === value.imported_product_ids.length &&
-            (value.inline_import_context === undefined ||
-                validInlineOzonContext(value.inline_import_context, value.imported_product_ids));
+            (!hasImportContext || validInlineOzonContext(value.inline_import_context, value.imported_product_ids)) &&
+            (!hasSupplierRefreshContext || validSupplierRefreshOzonContext(
+                value.supplier_refresh_context, value.imported_product_ids,
+            ));
     }
     function saveOzonPending(value) {
         try { sessionStorage.setItem(ozonPendingKey, JSON.stringify(value)); return true; }
@@ -476,6 +502,17 @@
     function sameOrderedIds(left, right) {
         return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
             left.every(function (id, index) { return id === right[index]; });
+    }
+
+    function orderedSubsetIds(subset, full) {
+        if (!validOzonInlineProductIds(subset) || !validOzonInlineProductIds(full)) return false;
+        var fullIndex = 0;
+        return subset.every(function (id) {
+            while (fullIndex < full.length && full[fullIndex] !== id) fullIndex += 1;
+            if (fullIndex >= full.length) return false;
+            fullIndex += 1;
+            return true;
+        });
     }
 
     var SELECTION_REVIEW_RETURN_KEY = 'my-products-selection-review-return-v1';
@@ -1062,12 +1099,13 @@
         return { ids: ids, labels: labels };
     }
 
-    function restoredSupplierRefreshOutcome(data, commonContentUrl) {
+    function restoredSupplierRefreshOutcome(data, commonContentUrl, receiptToken) {
         var submitted = exactSupplierRefreshResumeLabels(data);
-        if (!submitted) return null;
+        if (!submitted || !validSupplierRefreshReceipt(receiptToken)) return null;
         var outcome = supplierRefreshOutcome(data, submitted.ids, submitted.labels, commonContentUrl);
         if (!outcome) return null;
         outcome.saved = true;
+        outcome.receiptToken = receiptToken;
         outcome.title = 'Сохранённый итог обновления от поставщика';
         return outcome;
     }
@@ -1178,6 +1216,20 @@
             items: items,
             reviewToken: data.review_token,
         };
+    }
+
+    function exactSupplierRefreshChangedIds(review) {
+        if (!review || !Array.isArray(review.productIds) || !review.productIds.length ||
+            !Array.isArray(review.items) || review.items.length !== review.productIds.length ||
+            !nonnegativeCount(review.changed)) return null;
+        var changed = [];
+        for (var i = 0; i < review.productIds.length; i += 1) {
+            var row = review.items[i];
+            if (!row || row.productId !== review.productIds[i] ||
+                !['changed', 'unchanged', 'unlinked'].includes(row.state)) return null;
+            if (row.state === 'changed') changed.push(row.productId);
+        }
+        return changed.length === review.changed && validOzonInlineProductIds(changed) ? changed : null;
     }
 
     function supplierRefreshPreviewValue(value) {
@@ -1456,6 +1508,7 @@
                 ozonIds: [],
                 ozonAccountId: '',
                 ozonInlineContextAtOpen: null,
+                ozonSupplierRefreshContextAtOpen: null,
                 ozonSelectionAtOpen: null,
                 ozonSelectionScopeAtOpen: '',
                 ozonBusy: '',
@@ -1670,6 +1723,37 @@
                     .filter(function (entry) { return entry && entry.status === 'updated'; })
                     .map(function (entry) { return entry.productId; });
                 return updatedIds.length === result.updated ? updatedIds : [];
+            },
+            supplierRefreshOzonAccounts: function () {
+                var counts = new Map();
+                (this.ozonAccounts || []).forEach(function (row) {
+                    if (row && Number.isSafeInteger(row.id) && row.id > 0 &&
+                        row.connection_status === 'connected') {
+                        counts.set(row.id, (counts.get(row.id) || 0) + 1);
+                    }
+                });
+                return (this.ozonAccounts || []).filter(function (row) {
+                    return row && Number.isSafeInteger(row.id) && row.id > 0 &&
+                        row.connection_status === 'connected' && counts.get(row.id) === 1;
+                });
+            },
+            supplierRefreshOzonOptionAvailable: function () {
+                var review = this.supplierRefreshReview;
+                return !!(this.ozonEnabled && this.supplierRefreshOzonAccounts.length &&
+                    !this.ozonPreparationDisabled && review && review.phase === 'ready' &&
+                    Number.isSafeInteger(review.changed) && review.changed > 0 &&
+                    !this.importBatchMode && !this.supplierRefreshBatchMode &&
+                    !this.supplierRefreshResultBatchMode &&
+                    this.supplierRefreshReviewIsCurrent(review));
+            },
+            supplierRefreshOzonChoiceValid: function () {
+                var review = this.supplierRefreshReview;
+                if (!review || review.prepareOzon !== true) return true;
+                if (!this.supplierRefreshOzonOptionAvailable ||
+                    typeof review.prepareOzonAccountId !== 'string') return false;
+                var accountId = Number(review.prepareOzonAccountId);
+                return Number.isSafeInteger(accountId) && String(accountId) === review.prepareOzonAccountId &&
+                    this.supplierRefreshOzonAccounts.some(function (row) { return row.id === accountId; });
             },
             supplierRefreshCanSelectUpdated: function () {
                 var result = this.supplierRefreshResult;
@@ -1966,8 +2050,18 @@
             },
             ozonInlineReceiptVisible: function () {
                 var receipt = this.ozonInlineReceipt;
-                return !!receipt && receipt.owner === this.workspaceOwner &&
-                    !!this.inlineSupplierImportToken && receipt.import_batch === this.inlineSupplierImportToken;
+                if (!receipt || receipt.owner !== this.workspaceOwner) return false;
+                if (receipt.version === 1) {
+                    return !!this.inlineSupplierImportToken && receipt.import_batch === this.inlineSupplierImportToken;
+                }
+                var refresh = receipt.supplier_refresh;
+                var result = this.supplierRefreshResult;
+                return receipt.version === 2 && !this.importBatchMode && !this.supplierRefreshBatchMode &&
+                    !this.supplierRefreshResultBatchMode &&
+                    !!refresh && !!result && result.saved === true &&
+                    result.receiptToken === refresh.receipt_token &&
+                    orderedSubsetIds(refresh.product_ids, this.supplierRefreshOzonIds) &&
+                    sameOrderedIds(receipt.latest.product_ids, refresh.product_ids);
             },
             ozonInlineReceiptUrl: function () {
                 return this.ozonInlineReceiptVisible
@@ -4964,6 +5058,7 @@
                 this._supplierRefreshTrigger = trigger && trigger !== document.body ? trigger : null;
                 var generation = (this._supplierRefreshDialogGeneration || 0) + 1;
                 this._supplierRefreshDialogGeneration = generation;
+                var ozonAccounts = this.ozonEnabled ? this.supplierRefreshOzonAccounts : [];
                 this.supplierRefreshReview = {
                     generation: generation,
                     phase: 'loading',
@@ -4980,6 +5075,8 @@
                         return { productId: entry.productId, label: entry.label };
                     }) : [],
                     scope: this.feedScopeKey(),
+                    prepareOzon: false,
+                    prepareOzonAccountId: ozonAccounts.length === 1 ? String(ozonAccounts[0].id) : '',
                 };
                 this.$nextTick(function () {
                     var dialog = this.$refs.supplierRefreshDialog;
@@ -5121,7 +5218,8 @@
                 var self = this;
                 var review = this.supplierRefreshReview;
                 if (!review || review.phase !== 'ready' || review.eligible < 1 ||
-                    !review.reviewToken || !this.supplierRefreshReviewIsCurrent(review)) {
+                    !review.reviewToken || !this.supplierRefreshReviewIsCurrent(review) ||
+                    (review.prepareOzon === true && !this.supplierRefreshOzonChoiceValid)) {
                     if (review && review.phase !== 'applying') {
                         review.phase = 'stale';
                         review.error = 'Список или выбор изменился. Проверьте обновление снова.';
@@ -5135,7 +5233,13 @@
                 var labelsAtReview = review.labels.map(function (entry) {
                     return Object.assign({}, entry);
                 });
+                var autoPrepareOzon = review.prepareOzon === true;
+                var autoPrepareAccountId = autoPrepareOzon ? Number(review.prepareOzonAccountId) : null;
+                var autoPrepareIds = autoPrepareOzon ? exactSupplierRefreshChangedIds(review) : null;
+                if (autoPrepareOzon && (!autoPrepareIds || !autoPrepareIds.length ||
+                    !this.supplierRefreshOzonChoiceValid)) return false;
                 var reviewToken = review.reviewToken;
+                var scopeAtReview = review.scope;
                 review.phase = 'applying';
                 review.error = '';
                 this.clearSupplierRefreshResult();
@@ -5149,7 +5253,7 @@
                 } catch (err) {
                     request = Promise.reject(err);
                 }
-                return Promise.resolve(request).then(function (data) {
+                return Promise.resolve(request).then(async function (data) {
                     var currentReview = self.supplierRefreshReview;
                     if (!currentReview || currentReview.generation !== review.generation) {
                         if (self._supplierRefreshUnmounted) {
@@ -5162,16 +5266,49 @@
                         }
                         return null;
                     }
+                    var autoSelectionUnchanged = sameOrderedIds(self.selected, selectionAtReview) &&
+                        self.feedScopeKey() === scopeAtReview && self.itemsScope === scopeAtReview;
                     if (sameOrderedIds(self.selected, selectionAtReview)) self.selected = [];
                     var outcome = supplierRefreshOutcome(
                         data, ids, labelsAtReview, self.urls.commonContent || '',
                     );
                     self.cancelSupplierRefreshReview({ restoreFocus: false, force: true });
                     if (outcome) {
-                        if (!saveSupplierRefreshReceipt(data.resume_receipt)) {
+                        var receiptSaved = validSupplierRefreshReceipt(data.resume_receipt) &&
+                            saveSupplierRefreshReceipt(data.resume_receipt) &&
+                            readSupplierRefreshReceipt().receipt === data.resume_receipt;
+                        if (receiptSaved) {
+                            outcome.saved = true;
+                            outcome.receiptToken = data.resume_receipt;
+                        } else {
                             outcome.resumeWarning = outcome.resumeWarning || 'Этот итог нельзя будет восстановить после перехода.';
                         }
                         self.supplierRefreshResult = outcome;
+                        if (autoPrepareOzon) self.$nextTick(function () {
+                            self.$refs.supplierRefreshResult?.focus();
+                        });
+                        if (autoPrepareOzon && autoSelectionUnchanged && receiptSaved &&
+                            self.ozonEnabled && !self.ozonPreparationDisabled &&
+                            self.supplierRefreshOzonAccounts.some(function (row) {
+                                return row.id === autoPrepareAccountId;
+                            })) {
+                            var updatedIds = self.supplierRefreshOzonIds;
+                            var updatedSet = new Set(updatedIds);
+                            var prepareIds = autoPrepareIds.filter(function (id) { return updatedSet.has(id); });
+                            var supplierContext = self.buildSupplierRefreshOzonContext(prepareIds);
+                            if (prepareIds.length && supplierContext &&
+                                sameOrderedIds(self.selected, []) && self.feedScopeKey() === scopeAtReview &&
+                                self.itemsScope === scopeAtReview) {
+                                try {
+                                    await self.queueSupplierRefreshOzonPreparation(
+                                        autoPrepareAccountId, prepareIds, supplierContext, scopeAtReview,
+                                    );
+                                } catch (_) {
+                                    self.ozonError = self.ozonError ||
+                                        'Локальную подготовку не удалось подтвердить. Итог обновления сохранён.';
+                                }
+                            }
+                        }
                         self.load();
                         self.loadFacets();
                         if (outcome.updated > 0) self.refreshCatalogCategories();
@@ -5180,9 +5317,22 @@
                             'unknown', labelsAtReview.length,
                             'Ответ не подтвердил итог. Обновите список перед следующим запуском.',
                         );
+                        if (autoPrepareOzon) self.$nextTick(function () {
+                            self.$refs.supplierRefreshResult?.focus();
+                        });
                     }
                     self.$nextTick(function () {
-                        self.$refs.supplierRefreshResult?.focus();
+                        if (!autoPrepareOzon) self.$refs.supplierRefreshResult?.focus();
+                        else self.$nextTick(function () {
+                            if (self.ozonInlineReceiptVisible &&
+                                document.activeElement === self.$refs.supplierRefreshResult) {
+                                self.ozonInlineReceiptFocusPending = false;
+                                self.$refs.ozonInlineReceipt?.focus({ preventScroll: true });
+                            } else if (!self.ozonInlineReceiptVisible ||
+                                document.activeElement !== self.$refs.ozonInlineReceipt) {
+                                self.ozonInlineReceiptFocusPending = false;
+                            }
+                        });
                     });
                     return outcome;
                 }).catch(function (err) {
@@ -5341,7 +5491,7 @@
                     return response.json().then(function (data) {
                         if (!isCurrent()) return null;
                         var outcome = restoredSupplierRefreshOutcome(
-                            data, self.urls.commonContent || '',
+                            data, self.urls.commonContent || '', receipt,
                         );
                         if (!outcome) {
                             self.setSupplierRefreshResumeNote(transientMessage, true, true);
@@ -5890,11 +6040,56 @@
             prepareRefreshedForOzon: function (event) {
                 var productIds = this.supplierRefreshOzonIds;
                 if (!productIds.length) return;
-
-                return this.openOzonPreparation(
+                var context = this.buildSupplierRefreshOzonContext(productIds);
+                var opened = this.openOzonPreparation(
                     productIds,
                     event && event.currentTarget,
                 );
+                if (opened) this.ozonSupplierRefreshContextAtOpen = context;
+                return opened;
+            },
+            buildSupplierRefreshOzonContext: function (productIds) {
+                var result = this.supplierRefreshResult;
+                if (this.importBatchMode || this.supplierRefreshBatchMode || this.supplierRefreshResultBatchMode ||
+                    !result || result.saved !== true || !validSupplierRefreshReceipt(result.receiptToken) ||
+                    readSupplierRefreshReceipt().receipt !== result.receiptToken ||
+                    !orderedSubsetIds(productIds, this.supplierRefreshOzonIds) ||
+                    !Array.isArray(result.entries)) return null;
+                var byId = new Map(result.entries.map(function (entry) {
+                    return [entry && entry.productId, entry];
+                }));
+                var labels = productIds.map(function (id) {
+                    var entry = byId.get(id);
+                    if (!entry || entry.status !== 'updated') return null;
+                    var label = typeof entry.label === 'string'
+                        ? entry.label.replace(/\s+/g, ' ').trim().slice(0, 180) : '';
+                    return { id: id, label: label || ('Товар #' + id) };
+                });
+                var context = {
+                    owner: this.workspaceOwner,
+                    receipt_token: result.receiptToken,
+                    product_ids: productIds.slice(),
+                    product_labels: labels,
+                };
+                return validSupplierRefreshOzonContext(context, productIds) ? context : null;
+            },
+            queueSupplierRefreshOzonPreparation: async function (accountId, productIds, context, expectedScope) {
+                var accountIsCurrent = this.supplierRefreshOzonAccounts.some(function (row) {
+                    return row.id === accountId;
+                });
+                if (!this.ozonEnabled || this.ozonPreparationDisabled ||
+                    this.importBatchMode || this.supplierRefreshBatchMode || this.supplierRefreshResultBatchMode ||
+                    !Number.isSafeInteger(accountId) || !accountIsCurrent ||
+                    !sameOrderedIds(context && context.product_ids, productIds) ||
+                    !validSupplierRefreshOzonContext(context, productIds) ||
+                    this.feedScopeKey() !== expectedScope || this.itemsScope !== expectedScope) return false;
+                var pending = {
+                    account_id: accountId,
+                    imported_product_ids: productIds.slice(),
+                    request_key: ozonRequestKey(),
+                    supplier_refresh_context: context,
+                };
+                return this.persistAndSubmitOzonPending(pending);
             },
             checkRefreshedWbCharacteristics: function () {
                 var productIds = this.supplierRefreshWbProductIds;
@@ -5923,6 +6118,7 @@
                 }
                 this.ozonIds = productIds.slice();
                 this.ozonInlineContextAtOpen = this.buildInlineOzonContext(productIds);
+                this.ozonSupplierRefreshContextAtOpen = null;
                 this.ozonAccountId = this.ozonAccounts.length === 1
                     ? String(this.ozonAccounts[0].id) : '';
                 this.ozonSelectionAtOpen = Array.isArray(this.selected)
@@ -5956,6 +6152,7 @@
                 }
                 this.ozonInlineReceiptFocusPending = false;
                 this.ozonInlineContextAtOpen = null;
+                this.ozonSupplierRefreshContextAtOpen = null;
                 this.ozonReturnFocus = null;
             },
             clearOzonStorageProblem: function () {
@@ -6130,7 +6327,15 @@
                 this.ozonInlineReceipt = null;
                 this.ozonInlineReceiptStorageProblem = false;
                 this.$nextTick(function () {
-                    var returnFocus = document.querySelector('[data-supplier-import-next-action="ozon"]');
+                    var returnFocus = receipt && receipt.version === 2
+                        ? document.querySelector('[data-supplier-refresh-ozon-followup]') : null;
+                    if (!returnFocus) {
+                        returnFocus = document.querySelector('[data-supplier-import-next-action="ozon"]');
+                    }
+                    if (!returnFocus || returnFocus.disabled) {
+                        returnFocus = document.querySelector('[data-supplier-refresh-ozon-followup]') ||
+                            document.querySelector('[data-supplier-refresh-prepare-ozon]');
+                    }
                     if (returnFocus && !returnFocus.disabled) {
                         returnFocus.focus();
                         return;
@@ -6164,8 +6369,14 @@
                 return validInlineOzonContext(context, productIds) ? context : null;
             },
             saveInlineOzonPreparation: function (pending, run) {
-                var context = pending && pending.inline_import_context;
-                if (!validInlineOzonContext(context, pending && pending.imported_product_ids) ||
+                var importContext = pending && pending.inline_import_context;
+                var supplierContext = pending && pending.supplier_refresh_context;
+                var contextValid = !!importContext !== !!supplierContext &&
+                    (importContext
+                        ? validInlineOzonContext(importContext, pending && pending.imported_product_ids)
+                        : validSupplierRefreshOzonContext(supplierContext, pending && pending.imported_product_ids));
+                var context = importContext || supplierContext;
+                if (!contextValid ||
                     !run || run.mode !== 'source_prepare' ||
                     run.account_id !== pending.account_id ||
                     !Number.isSafeInteger(run.summary && run.summary.total) ||
@@ -6175,19 +6386,26 @@
                 var accountLabel = account && typeof account.label === 'string'
                     ? account.label.trim().slice(0, 120) : '';
                 var receipt = {
-                    version: 1,
+                    version: importContext ? 1 : 2,
                     owner: context.owner,
-                    import_batch: context.import_batch,
                     latest: {
                         account_id: pending.account_id,
                         account_label: accountLabel || ('Магазин Ozon №' + pending.account_id),
-                        product_ids: context.selection_ids.slice(),
+                        product_ids: pending.imported_product_ids.slice(),
                         product_labels: context.product_labels.map(function (row) {
                             return { id: row.id, label: row.label };
                         }),
                         job_uid: run.job_uid,
                     },
                 };
+                if (importContext) {
+                    receipt.import_batch = importContext.import_batch;
+                } else {
+                    receipt.supplier_refresh = {
+                        receipt_token: supplierContext.receipt_token,
+                        product_ids: supplierContext.product_ids.slice(),
+                    };
+                }
                 if (!validOzonInlineReceipt(receipt)) return false;
                 this.ozonInlineReceipt = receipt;
                 this.ozonInlineReceiptStorageProblem = !saveOzonInlineReceipt(receipt);
@@ -6198,7 +6416,7 @@
             completeOzonPreparation: function (pending, run) {
                 if (!run || run.mode !== 'source_prepare' || run.account_id !== pending.account_id ||
                     !/^ozon-upload-[0-9a-f]{32}$/.test(run.job_uid) ||
-                    (pending.inline_import_context &&
+                    ((pending.inline_import_context || pending.supplier_refresh_context) &&
                         (!Number.isSafeInteger(run.summary && run.summary.total) ||
                             run.summary.total !== pending.imported_product_ids.length))) {
                     throw Error('Ответ подготовки не совпал с точным набором. Проверьте результат по ключу.');
@@ -6206,7 +6424,7 @@
                 var location = ozonRunLocation(this.urls.ozonUploads, run.job_uid);
                 if (!location) throw Error('Ссылка на принятый запуск не прошла проверку. Проверьте историю запусков.');
                 bindOzonPreparationWorkspaceReturn(pending, run.job_uid);
-                if (pending.inline_import_context) {
+                if (pending.inline_import_context || pending.supplier_refresh_context) {
                     if (!this.saveInlineOzonPreparation(pending, run)) {
                         throw Error('Запуск принят, но его точный состав не прошёл проверку. Проверьте историю запусков.');
                     }
@@ -6244,13 +6462,30 @@
                     validInlineOzonContext(this.ozonInlineContextAtOpen, pending.imported_product_ids)) {
                     pending.inline_import_context = this.ozonInlineContextAtOpen;
                 }
+                if (this.ozonSupplierRefreshContextAtOpen &&
+                    validSupplierRefreshOzonContext(
+                        this.ozonSupplierRefreshContextAtOpen, pending.imported_product_ids,
+                    )) {
+                    pending.supplier_refresh_context = this.ozonSupplierRefreshContextAtOpen;
+                }
+                await this.persistAndSubmitOzonPending(pending);
+            },
+            persistAndSubmitOzonPending: async function (pending) {
+                if (!this.ozonEnabled || this.ozonBusy || this.ozonPending ||
+                    this.ozonStorageProblem || this.ozonSessionEnded ||
+                    hasOzonPending() || !validOzonPending(pending, this.ozonAccounts)) return false;
+                var csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+                if (!csrf) {
+                    this.ozonError = 'Защита формы недоступна. Обновите страницу перед подготовкой.';
+                    return false;
+                }
                 var selectionIds = Array.isArray(this.selected) ? this.selected.slice() : [];
                 var returnScope = null;
                 var returnNonce = null;
                 try {
                     returnScope = this.buildWorkspaceReturnScope();
                     returnNonce = storeOzonPreparationWorkspaceReturn(
-                        this, accountId, pending.imported_product_ids, selectionIds, returnScope,
+                        this, pending.account_id, pending.imported_product_ids, selectionIds, returnScope,
                     );
                 } catch (_) {
                     returnNonce = null;
@@ -6262,7 +6497,13 @@
                     return;
                 }
                 this.ozonPending = pending;
-                await this.submitOzonPending(pending);
+                try {
+                    await this.submitOzonPending(pending);
+                } catch (_) {
+                    this.ozonError = this.ozonError ||
+                        'Локальную подготовку не удалось подтвердить. Проверьте состояние по сохранённому ключу.';
+                }
+                return true;
             },
             retryOzonPending: async function () {
                 if (!this.ozonPending || !this.ozonRetrySameKey || this.ozonBusy ||
