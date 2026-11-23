@@ -35,3 +35,157 @@ const response=(value,status=200)=>({status,ok:status===200,headers:{get:()=> 'a
 '''
     result = subprocess.run([node, '-e', script], text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_source_prepare_terminal_region_swap_is_scoped_and_defers_for_focus():
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node required for status behavior check')
+    script = r'''
+const assert=require('node:assert/strict');global.window=global;
+const timers=new Map();let timerId=0;
+global.setTimeout=(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id};
+global.clearTimeout=id=>timers.delete(id);
+function matchesCompound(node, selector){
+ if(!node||!node.tagName)return false;
+ const tag=selector.match(/^[a-zA-Z][\w-]*/)?.[0];
+ if(tag&&node.tagName.toLowerCase()!==tag.toLowerCase())return false;
+ for(const match of selector.matchAll(/\[([^\]=]+)(?:="([^"]*)")?\]/g)){
+  if(!node.hasAttribute(match[1]))return false;
+  if(match[2]!==undefined&&node.getAttribute(match[1])!==match[2])return false;
+ }
+ for(const match of selector.matchAll(/\.([a-zA-Z0-9_-]+)/g)){
+  if(!(node.getAttribute('class')||'').split(/\s+/).includes(match[1]))return false;
+ }
+ return selector==='*'||!!tag||selector.includes('[')||selector.includes('.');
+}
+function matchesSelector(node, selector){
+ return selector.split(',').some(group=>{
+  const parts=group.trim().split(/\s+/);let current=node;
+  if(!matchesCompound(current,parts.pop()))return false;
+  while(parts.length){const wanted=parts.pop();current=current.parentNode;
+   while(current&&!matchesCompound(current,wanted))current=current.parentNode;
+   if(!current)return false;
+  }
+  return true;
+ });
+}
+class Element{
+ constructor(tag,attrs={},children=[]){this.tagName=tag.toUpperCase();this.map=new Map(Object.entries(attrs));this.children=[];this.parentNode=null;this.open=false;children.forEach(child=>this.appendChild(child));}
+ get attributes(){return Array.from(this.map,([name,value])=>({name,value}));}
+ getAttribute(name){return this.map.has(name)?this.map.get(name):null;}
+ setAttribute(name,value){this.map.set(name,String(value));}
+ hasAttribute(name){return this.map.has(name);}
+ appendChild(child){if(child.parentNode)child.remove();this.children.push(child);child.parentNode=this;return child;}
+ remove(){if(!this.parentNode)return;const index=this.parentNode.children.indexOf(this);if(index>=0)this.parentNode.children.splice(index,1);this.parentNode=null;}
+ replaceWith(node){const parent=this.parentNode;if(!parent)throw Error('missing parent');if(node.parentNode)node.remove();const index=parent.children.indexOf(this);parent.children[index]=node;node.parentNode=parent;this.parentNode=null;}
+ contains(node){return node===this||this.children.some(child=>child.contains(node));}
+ matches(selector){return matchesSelector(this,selector);}
+ querySelectorAll(selector){const found=[];const visit=node=>node.children.forEach(child=>{if(matchesSelector(child,selector))found.push(child);visit(child);});visit(this);return found;}
+ querySelector(selector){return this.querySelectorAll(selector)[0]||null;}
+ closest(selector){let node=this;while(node){if(matchesSelector(node,selector))return node;node=node.parentNode;}return null;}
+}
+const jobUid='ozon-upload-'+'a'.repeat(32),accountId=17;
+function makeRegions(complete,productHref,journeyOpen){
+ const header=new Element('div',{'data-source-prepare-region':'header','data-source-prepare-job':jobUid,'data-source-prepare-account':String(accountId),'data-source-prepare-complete':complete});
+ const slot=new Element('span',{'data-source-prepare-products-slot':''});
+ const product=new Element('a',{'data-source-prepare-products':'','href':productHref});slot.appendChild(product);header.appendChild(slot);
+ const body=new Element('div',{'data-source-prepare-region':'body','data-source-prepare-job':jobUid,'data-source-prepare-account':String(accountId),'data-source-prepare-complete':complete});
+ const journey=new Element('details',{'class':'preparation-journey-path'});journey.open=journeyOpen;
+ const action=new Element('a',{'data-action':'existing-result-action'});body.appendChild(journey);body.appendChild(action);
+ return {header,body,product,journey,action};
+}
+function makeDocument(complete='0'){
+ const root=new Element('main');const regions=makeRegions(complete,'/my-products/beta#workspace-return='+'b'.repeat(32),true);
+ root.appendChild(regions.header);root.appendChild(regions.body);
+ const status=new Element('div');const fallback=new Element('a',{'data-source-prepare-refresh-fallback':''});status.appendChild(fallback);root.appendChild(status);
+ const listeners={};const doc={hidden:false,activeElement:null,root,listeners,
+  querySelectorAll:selector=>root.querySelectorAll(selector),querySelector:selector=>root.querySelector(selector),
+  getElementById:()=>null,addEventListener:(name,fn)=>listeners[name]=fn,removeEventListener:name=>delete listeners[name],
+  createElement(tag){assert.equal(tag,'template');const template={content:new Element('template-content'),set innerHTML(value){assert.equal(value,'terminal-page');const fresh=makeRegions('1','/my-products/beta',false);this.content.appendChild(fresh.header);this.content.appendChild(fresh.body);}};return template;}};
+ return {doc,regions};
+}
+let state=makeDocument('0');global.document=state.doc;
+global.location={href:'https://seller.test/marketplaces/ozon/uploads/ozon-upload-'+'a'.repeat(32),origin:'https://seller.test',
+ pathname:'/marketplaces/ozon/uploads/ozon-upload-'+'a'.repeat(32),search:'',reload:()=>assert.fail('no document reload'),assign:()=>assert.fail('no navigation')};
+require('./static/ozon-result-status.js');
+const initial={job_uid:jobUid,account_id:accountId,mode:'source_prepare',status:'running',source_prepare_complete:false,
+ summary:{version:3,mode:'source_prepare',job_uid:jobUid,account_id:accountId,total:2,processed:1,active:1,outcome:'running'}};
+function optionsFor(){
+ const options=ozonResultStatus.createOptions({kind:'run',initial,url:'/marketplaces/ozon/uploads/api/'+jobUid,terminal_html_url:'/marketplaces/ozon/uploads/'+jobUid});
+ const page=options.data();for(const [key,fn]of Object.entries(options.methods))page[key]=fn.bind(page);
+ for(const [key,fn]of Object.entries(options.computed))Object.defineProperty(page,key,{get:fn.bind(page)});
+ return {page,options};
+}
+function response(body,{type='application/json',url='',text=''}={}){
+ return {status:200,ok:true,redirected:false,url,headers:{get:name=>name==='content-type'?type:null},
+  json:async()=>body,text:async()=>text};
+}
+(async()=>{
+ const {page,options}=optionsFor();options.mounted.call(page);
+ let statusReads=0,htmlReads=0;
+ assert.equal(state.doc.querySelectorAll('[data-source-prepare-region]').length,2,'test document starts with exact two regions');
+ global.fetch=async(url,request)=>{
+  assert.equal(request.credentials,'same-origin');
+  if(url==='/marketplaces/ozon/uploads/api/'+jobUid || url==='https://seller.test/marketplaces/ozon/uploads/api/'+jobUid){statusReads++;
+   if(statusReads===1){const awaiting={...initial,status:'completed',source_prepare_complete:false,summary:{...initial.summary,processed:2,active:0,outcome:'success'}};
+    return response({success:true,run:awaiting},{url:'https://seller.test'+url});}
+   const terminal={...initial,status:'completed',source_prepare_complete:true,summary:{...initial.summary,processed:2,active:0,outcome:'partial'}};
+   return response({success:true,run:terminal},{url:'https://seller.test'+url});
+  }
+  htmlReads++;assert.equal(url,'https://seller.test/marketplaces/ozon/uploads/'+jobUid);
+  assert.equal(request.cache,'no-store');assert.equal(request.redirect,'error');
+  assert.equal(request.headers.Accept,'text/html');
+  return response(null,{type:'text/html; charset=utf-8',url,text:'terminal-page'});
+ };
+
+ await page.refresh();
+ assert.equal(page.sourcePrepareAwaitingTerminal,true,'completed status without durable true must keep polling');
+ assert.equal(page.active,true);assert.equal(htmlReads,0);
+
+ const preservedLink=state.regions.product;state.doc.activeElement=state.regions.action;
+ await page.refresh();
+ assert.equal(statusReads,2);assert.equal(htmlReads,1);assert.equal(page.sourcePrepareSwapDeferred,true);
+ assert.equal(page.sourcePrepareUpdated,false);assert.equal(state.doc.querySelectorAll('[data-source-prepare-complete="0"]').length,2);
+ assert.equal(preservedLink.getAttribute('href'),'/my-products/beta#workspace-return='+'b'.repeat(32));
+
+ state.doc.activeElement=new Element('button');state.doc.listeners.focusout();
+ const deferred=Array.from(timers.entries()).find(([,timer])=>timer.delay===0);
+ assert.ok(deferred,'focusout schedules the pending safe swap');timers.delete(deferred[0]);deferred[1].fn();
+ const current=state.doc.querySelectorAll('[data-source-prepare-region]');
+ assert.equal(current.length,2);assert.equal(current[0].getAttribute('data-source-prepare-complete'),'1');
+ assert.equal(current[1].getAttribute('data-source-prepare-complete'),'1');
+ assert.equal(current[0].querySelector('a[data-source-prepare-products]'),preservedLink,'preserve the session-bound workspace link node');
+ assert.equal(current[1].querySelector('details.preparation-journey-path').open,true,'preserve expanded journey state');
+ assert.equal(page.sourcePrepareUpdated,true);assert.equal(page.changed,false);
+ assert.equal(htmlReads,1,'one terminal HTML GET');options.beforeUnmount.call(page);
+ assert.equal(state.doc.listeners.focusout,undefined);
+
+ const mismatch=makeDocument('0');global.document=mismatch.doc;let mismatchReads=0;
+ const second=optionsFor();second.options.mounted.call(second.page);
+ global.fetch=async(url)=>{mismatchReads++;const wrong={...initial,status:'completed',account_id:18,source_prepare_complete:true,
+  summary:{...initial.summary,account_id:18,processed:2,active:0,outcome:'success'}};
+  return response({success:true,run:wrong},{url:'https://seller.test'+url});};
+ await second.page.refresh();
+ assert.equal(mismatchReads,1,'scope mismatch stops the poll before HTML');
+ assert.equal(second.page.changed,true);assert.match(second.page.error,/область подготовки/);
+ assert.ok(mismatch.doc.querySelector('[data-source-prepare-refresh-fallback]'));
+ assert.equal(timers.size,0,'mismatch does not schedule another poll');
+ second.options.beforeUnmount.call(second.page);
+
+ const missingBit=makeDocument('0');global.document=missingBit.doc;let missingBitReads=0;
+ const third=optionsFor();third.options.mounted.call(third.page);
+ global.fetch=async(url)=>{missingBitReads++;const unsupported={...initial,status:'completed',source_prepare_complete:undefined,
+  summary:{...initial.summary,processed:2,active:0,outcome:'success'}};
+  return response({success:true,run:unsupported},{url:'https://seller.test'+url});};
+ await third.page.refresh();
+ assert.equal(missingBitReads,1,'missing explicit completion bit stops automatic polling');
+ assert.equal(third.page.changed,true);assert.match(third.page.error,/область подготовки/);
+ assert.equal(missingBit.doc.querySelectorAll('[data-source-prepare-complete="0"]').length,2);
+ assert.equal(missingBit.doc.querySelector('[data-source-prepare-refresh-fallback]')!==null,true);
+ assert.equal(timers.size,0,'missing completion bit does not schedule another poll');
+ third.options.beforeUnmount.call(third.page);
+})().catch(error=>{console.error(error);process.exitCode=1});
+'''
+    result = subprocess.run([node, '-e', script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stdout + result.stderr
