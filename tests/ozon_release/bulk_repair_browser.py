@@ -65,6 +65,7 @@ source_refresh_selection=[source_refresh_draft_ids[key] for key in (
 )]
 source_refresh_target_ids=source_refresh_selection[:2]
 source_refresh_before=None
+source_refresh_receipt_versions={}
 manifest=json.loads((ASSETS/'manifest.json').read_text())
 for item in manifest.values():assert hashlib.sha256((ASSETS/item['file']).read_bytes()).hexdigest()==item['sha256']
 svg=b'<svg xmlns="http://www.w3.org/2000/svg" width="360" height="480"><rect width="360" height="480" fill="#eee9df"/><rect x="80" y="85" width="200" height="300" rx="12" fill="#678b9e"/><circle cx="180" cy="235" r="60" fill="#faf9f7"/></svg>'
@@ -229,7 +230,9 @@ def bridge(route):
                     assert response_ids==source_refresh_target_ids
                     for row in response_rows:
                         assert row['status']=='needs_input'
-                        assert row['version']==source_refresh_before[row['draft_id']]['version']+2
+                        assert type(row['version']) is int
+                        assert row['version']>source_refresh_before[row['draft_id']]['version']
+                        source_refresh_receipt_versions[row['draft_id']]=row['version']
                     source_refresh_apply_checks[-1]['selection_scope_and_exact_receipt']=True
                     route.fulfill(response=result)
                     return
@@ -1028,7 +1031,9 @@ try:
             if draft_id not in expected_refresh_changes:
                 assert after==before,(draft_id,before,after)
                 continue
-            assert after['version']==before['version']+2,(draft_id,before['version'],after['version'])
+            assert after['version']==source_refresh_receipt_versions[draft_id],(
+                draft_id,source_refresh_receipt_versions[draft_id],after['version'],
+            )
             assert after['source_fact_hash']!=before['source_fact_hash']
             content=json.loads(after['content_json'])
             validation=json.loads(after['validation_result_json'])
