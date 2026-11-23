@@ -15,9 +15,11 @@ from pathlib import Path
 import re
 import sys
 from datetime import datetime, timedelta
+import threading
 from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
+from flask import request as flask_request
 from playwright.sync_api import expect, sync_playwright
 
 
@@ -279,18 +281,12 @@ def _state(fixture_ids):
         }
 
 
-def _browser_bridge(route, *, page_path, schedule_post_path, counts, posts):
+def _browser_bridge(route, *, schedule_post_path, counts, posts):
     request = route.request
     parsed = urlsplit(request.url)
     local_origin = urlsplit(fixture.BASE).netloc
     if parsed.netloc == local_origin:
-        route_key = f"{request.method} {parsed.path}"
-        local_routes = counts.setdefault("local_routes", {})
-        local_routes[route_key] = local_routes.get(route_key, 0) + 1
-        if parsed.path == page_path and request.method == "GET":
-            counts["admin_products_get"] += 1
         if parsed.path == schedule_post_path and request.method == "POST":
-            counts["schedule_post"] += 1
             fields = parse_qs(request.post_data or "", keep_blank_values=True)
             assert set(fields) == {
                 "csrf_token",
@@ -333,6 +329,27 @@ def _browser_bridge(route, *, page_path, schedule_post_path, counts, posts):
             counts["unexpected_local_writes"] += 1
             raise AssertionError(("unexpected local browser write", request.method, parsed.path))
     fixture.bridge(route)
+
+
+def _install_flask_route_counters(page_path, schedule_post_path, counts):
+    """Count server-dispatched routes so PRG follow-up GETs are included."""
+    guard = threading.Lock()
+
+    @fixture.app.before_request
+    def record_supplier_schedule_route():
+        if flask_request.path == page_path and flask_request.method == "GET":
+            key = f"GET {page_path}"
+        elif flask_request.path == schedule_post_path and flask_request.method == "POST":
+            key = f"POST {schedule_post_path}"
+        else:
+            return None
+        with guard:
+            counts["local_routes"][key] = counts["local_routes"].get(key, 0) + 1
+            if key == f"GET {page_path}":
+                counts["admin_products_get"] += 1
+            else:
+                counts["schedule_post"] += 1
+        return None
 
 
 def _assert_geometry(page, width, label):
@@ -409,6 +426,7 @@ def run():
         "unexpected_local_writes": 0,
         "local_routes": {},
     }
+    _install_flask_route_counters(page_path, schedule_post_path, counts)
     before = _state(fixture_ids)
     assert before["price_state"] == fixture_ids["price_state"]
     report_result = None
@@ -430,7 +448,6 @@ def run():
                 "**/*",
                 lambda route: _browser_bridge(
                     route,
-                    page_path=page_path,
                     schedule_post_path=schedule_post_path,
                     counts=counts,
                     posts=post_log,
