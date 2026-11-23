@@ -1584,7 +1584,6 @@ def run():
             "workspace_update": ["1"],
         }
         wb_page.locator("[data-workspace-update]").wait_for()
-        wb_page.locator("[data-workspace-return]").wait_for()
         wb_page.wait_for_function("""expected => {
             const proxy = document.querySelector('#marketplace-catalog-app')?._vnode?.component?.proxy;
             return proxy && proxy.workspaceUpdate &&
@@ -1594,11 +1593,26 @@ def run():
         assert ozon_workspace_handoff_receipts[-1]["source_ids"] == expected_workspace_ids
         assert ozon_workspace_handoff_receipts[-1]["listing_ids"] == expected_ozon_listing_ids
         assert ozon_workspace_preview_reads[-1]["preview_row_ids"] == expected_ozon_listing_ids
+        dialog_return = wb_page.locator(
+            'dialog[open] [data-workspace-return-dialog]',
+        )
+        dialog_return.wait_for(state="visible")
+        dialog_return_href = dialog_return.get_attribute("href")
+        toolbar_return_href = wb_page.locator(
+            '[data-workspace-update] [data-workspace-return]',
+        ).get_attribute("href")
+        assert dialog_return_href and dialog_return_href == toolbar_return_href, (
+            "The visible Ozon review dialog return link must match the workspace return target"
+        )
+        dialog_return_parts = urlsplit(dialog_return_href)
+        assert dialog_return_parts.path == "/my-products/beta"
+        assert dialog_return_parts.query == ""
+        assert re.fullmatch(r"workspace-return=[A-Za-z0-9_-]+", dialog_return_parts.fragment)
         with wb_page.expect_response(lambda response: feed_matches(response, {
                 "search": "Сравнение цен WB", "sort": "title", "per_page": "50",
         })) as ozon_returned:
             with wb_page.expect_navigation(wait_until="domcontentloaded"):
-                wb_page.locator("[data-workspace-return]").first.click()
+                dialog_return.click()
         assert ozon_returned.value.status == 200
         wb_page.wait_for_url(lambda value: urlsplit(str(value)).path == "/my-products/beta")
         wb_page.wait_for_function("""({ids, search}) => {
