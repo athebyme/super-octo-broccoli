@@ -146,7 +146,7 @@ class SupplierCatalogScheduleRoutesTest(unittest.TestCase):
         self.assertIn('data-schedule-enabled="false"', page)
         self.assertIn('Расписание полного каталога', page)
         self.assertIn('По умолчанию расписание выключено', page)
-        self.assertIn('Интервал: 24 ч', page)
+        self.assertIn('Выключено · каждые 24 ч', page)
         self.assertIn(
             'data-refresh-trigger-kind="scheduled">По расписанию</span>',
             page,
@@ -308,7 +308,8 @@ class SupplierCatalogScheduleRoutesTest(unittest.TestCase):
             )
         self.assertEqual(page.status_code, 200)
         body = page.get_data(as_text=True)
-        self.assertIn('Статус: <strong data-testid="catalog-schedule-status">Выключено', body)
+        self.assertIn('data-testid="catalog-schedule-status"', body)
+        self.assertIn('Выключено · каждые 12 ч', body)
         self.assertIn('Расписание выключено; автоматическая попытка не запланирована.', body)
         self.assertIn('data-testid="catalog-schedule-form"', body)
 
@@ -345,6 +346,51 @@ class SupplierCatalogScheduleRoutesTest(unittest.TestCase):
         self.assertIn('Не удалось прочитать настройки расписания', page)
         self.assertNotIn('data-testid="catalog-schedule-form"', page)
         self.assertNotIn('private database detail', page)
+
+    def test_enabled_schedule_is_paused_for_invalid_source_and_revoked_admin(self):
+        due_at = datetime(2026, 11, 27, 9, 0)
+        db.session.add(SupplierCatalogSchedule(
+            supplier_id=self.supplier_id,
+            enabled=True,
+            interval_hours=24,
+            next_due_at=due_at,
+            authorized_by_user_id=self.admin_id,
+            revision=3,
+            updated_at=due_at,
+        ))
+        admin = db.session.get(User, self.admin_id)
+        admin.is_admin = False
+        supplier = db.session.get(Supplier, self.supplier_id)
+        supplier.csv_source_url = 'file:///private/catalog.csv'
+        db.session.commit()
+
+        auth_patch, login_patch = self._auth(admin=True)
+        with auth_patch, login_patch, patch.object(
+            db.session, 'commit', wraps=db.session.commit,
+        ) as commit:
+            response = self.client.get(
+                f'/admin/suppliers/{self.supplier_id}/products',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        commit.assert_not_called()
+        page = response.get_data(as_text=True)
+        self.assertIn('data-schedule-enabled="true"', page)
+        self.assertRegex(
+            page,
+            r'data-testid="catalog-schedule-status"[^>]*>\s*Приостановлено',
+        )
+        self.assertIn('Адрес CSV не проходит проверку.', page)
+        self.assertIn(
+            'Администратор, подтвердивший расписание, больше не активен или утратил права.',
+            page,
+        )
+        self.assertIn(
+            'Следующая попытка не запланирована, пока не устранена причина паузы.',
+            page,
+        )
+        self.assertNotIn('27.11.2026 09:00 UTC', page)
+        self.assertIn('data-testid="catalog-schedule-form"', page)
 
 
 if __name__ == '__main__':

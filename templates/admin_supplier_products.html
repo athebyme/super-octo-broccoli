@@ -103,7 +103,8 @@
                          class="w-full min-w-0 rounded-lg border border-gray-200 bg-white shadow-sm">
                     <summary class="flex min-h-11 cursor-pointer select-none flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50">
                         <span>Расписание полного каталога</span>
-                        <span class="text-xs font-normal text-gray-600">
+                        <span data-testid="catalog-schedule-status"
+                              class="text-xs font-normal text-gray-600">
                             {% if catalog_schedule_view.available %}
                             {{ catalog_schedule_view.status_label }} · каждые {{ catalog_schedule_view.interval_hours }} ч
                             {% else %}
@@ -118,16 +119,13 @@
                             Не удалось прочитать настройки расписания. Автоматический запуск не подтверждён. Обновите страницу или попробуйте позже.
                         </p>
                         {% else %}
-                        <p class="text-sm text-gray-700">
-                            Статус: <strong data-testid="catalog-schedule-status">{{ catalog_schedule_view.status_label }}</strong>
-                            <span class="text-gray-500">· Интервал: {{ catalog_schedule_view.interval_hours }} ч</span>
-                        </p>
                         <p data-testid="catalog-schedule-next-due" class="mt-1 text-xs text-gray-600">
                             {{ catalog_schedule_view.next_due_label }}
                         </p>
-                        {% if catalog_schedule_view.enabled %}
-                        <p class="mt-1 text-xs text-gray-600">
-                            Для планового чтения поставщик должен быть активен и иметь настроенный CSV.
+                        {% if catalog_schedule_view.pause_reason %}
+                        <p role="status" data-testid="catalog-schedule-paused-reason"
+                           class="mt-1 text-xs text-amber-800">
+                            {{ catalog_schedule_view.pause_reason }}
                         </p>
                         {% elif not catalog_schedule_view.configured %}
                         <p class="mt-1 text-xs text-gray-600">

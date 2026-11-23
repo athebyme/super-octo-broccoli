@@ -21,7 +21,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
-    ImportedProduct, Seller, AIHistory, log_admin_action, Product,
+    ImportedProduct, Seller, User, AIHistory, log_admin_action, Product,
     BackgroundJob, Notification, AgentChangeSnapshot, Marketplace,
     SellerMarketplaceAccount, MarketplaceListing, MarketplaceProductDraft,
 )
@@ -176,6 +176,7 @@ def _supplier_catalog_schedule_view(payload, *, lookup_failed=False):
         'status_label': 'Статус недоступен',
         'next_due_at': None,
         'next_due_label': None,
+        'pause_reason': None,
     }
     if lookup_failed:
         return unavailable
@@ -228,7 +229,78 @@ def _supplier_catalog_schedule_view(payload, *, lookup_failed=False):
         'status_label': 'Включено' if enabled else 'Выключено',
         'next_due_at': next_due_at.isoformat() if next_due_at else None,
         'next_due_label': next_due_label,
+        'authorized_by_user_id': payload.get('authorized_by_user_id'),
+        'pause_reason': None,
     }
+
+
+def _supplier_catalog_schedule_readiness_view(schedule_view, supplier):
+    """Show whether an enabled schedule currently passes worker admission."""
+    if not schedule_view.get('available') or not schedule_view.get('enabled'):
+        return schedule_view
+
+    reasons = []
+    check_unavailable = False
+    supplier_active = bool(getattr(supplier, 'is_active', False))
+    if not supplier_active:
+        reasons.append('Поставщик неактивен.')
+    csv_url = getattr(supplier, 'csv_source_url', None)
+    if not isinstance(csv_url, str) or not csv_url.strip():
+        reasons.append('CSV-источник не настроен.')
+    elif supplier_active:
+        try:
+            # The existing helper only validates stored source state and URL
+            # policy; it does not resolve hosts or contact the provider.
+            from services.supplier_catalog_refresh import (
+                _valid_supplier_catalog_source,
+            )
+
+            if not _valid_supplier_catalog_source(supplier):
+                reasons.append('Адрес CSV не проходит проверку.')
+        except Exception:
+            logger.warning(
+                'Supplier catalog source eligibility read failed (%s)',
+                'static_validation',
+            )
+            check_unavailable = True
+
+    try:
+        authorized_by = schedule_view.get('authorized_by_user_id')
+        with db.session.no_autoflush:
+            author = db.session.get(User, authorized_by)
+        if not (
+            author
+            and bool(author.is_active)
+            and bool(author.is_admin)
+            and not author.is_blocked()
+        ):
+            reasons.append(
+                'Администратор, подтвердивший расписание, больше не активен или утратил права.'
+            )
+    except Exception as exc:
+        logger.warning(
+            'Supplier catalog schedule author status read failed (%s)',
+            type(exc).__name__,
+        )
+        db.session.rollback()
+        check_unavailable = True
+
+    result = dict(schedule_view)
+    if check_unavailable:
+        result['status_label'] = 'Проверка недоступна'
+        result['pause_reason'] = (
+            'Не удалось подтвердить условия автоматического запуска.'
+        )
+        result['next_due_at'] = None
+        result['next_due_label'] = 'Дата следующей попытки не подтверждена.'
+    elif reasons:
+        result['status_label'] = 'Приостановлено'
+        result['pause_reason'] = ' '.join(reasons)
+        result['next_due_at'] = None
+        result['next_due_label'] = (
+            'Следующая попытка не запланирована, пока не устранена причина паузы.'
+        )
+    return result
 
 
 def _supplier_catalog_refresh_view(payload, *, lookup_failed=False):
@@ -3044,6 +3116,10 @@ def register_supplier_routes(app):
         catalog_schedule_view = _supplier_catalog_schedule_view(
             catalog_schedule,
             lookup_failed=catalog_schedule_lookup_failed,
+        )
+        catalog_schedule_view = _supplier_catalog_schedule_readiness_view(
+            catalog_schedule_view,
+            supplier,
         )
         catalog_refresh_latest_id = (
             catalog_refresh_latest.get('id')
