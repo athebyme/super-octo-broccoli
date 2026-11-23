@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-23T13:52:19.877939+00:00",
+  "generated_at": "2026-11-23T14:19:52.700197+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "347277e5e839b064769d082f8e03fd8ac5b3e7ffa13e9f6df97aba8c1d83b1a9"
+      "sha256": "f7f8a7541fa5bc8c6eee07800d16c12e221c0463f198140a7af79cb0eb335be5"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -381,7 +381,7 @@
     },
     {
       "path": "docs/design/marketplace-decisions-preparation.md",
-      "sha256": "3f96c8140d088a24b64bb72c1c22adb884c6b86297bda22798e2cb35deac0c86"
+      "sha256": "218d994f83c71fe135d0aeec8da4fa0617a7046979693b4c44378f42df7230eb"
     },
     {
       "path": "docs/design/ozon-account-health.md",
@@ -2249,7 +2249,7 @@
     },
     {
       "path": "services/ozon_bulk_repair.py",
-      "sha256": "29ed29396e3969f9ed4929bfec67d3f56f93d409e8c58d652dd90775bc7676f3"
+      "sha256": "9a01e0dd0047fc1fbdef885bea3042c974fc378f571df95374b6208c11e3c1af"
     },
     {
       "path": "services/ozon_bulk_upload.py",
@@ -2417,7 +2417,7 @@
     },
     {
       "path": "services/product_sync_scheduler.py",
-      "sha256": "a96fc2c1ee53cac920dc05347f5dda9b47c7bb96c192b6c7aa55852354b4c6ee"
+      "sha256": "e77d761ba63fa4b9dabd5ef1b9c2f433631a2d72881c36cf3e71bd3d710dfec8"
     },
     {
       "path": "services/prohibited_brands_service.py",
@@ -2472,12 +2472,24 @@
       "sha256": "e108820464391741ca97028a903e802d2ae1c8e4b1fa9b33e6292b1808cfa1ab"
     },
     {
+      "path": "services/supplier_color_observation_feed.py",
+      "sha256": "23558547b25749e7c09d831f85d43f4e2884f9030f37887afd3a4d19971c6b6c"
+    },
+    {
+      "path": "services/supplier_color_observation_scheduler.py",
+      "sha256": "f75392d7f5f2e235dbdf50bd39452e30d625899035648e2bc10b17864dd1e9b2"
+    },
+    {
+      "path": "services/supplier_color_observation_store.py",
+      "sha256": "e48867e9ba13b422c4aae4918969e3273855f8c537a07561b7eca8e1a34794a0"
+    },
+    {
       "path": "services/supplier_enrichment.py",
       "sha256": "97fcf4c3dd3f24a2bb3a5df04b75cb213b82678cf6f22b80e3833f08c7063fb4"
     },
     {
       "path": "services/supplier_field_observations.py",
-      "sha256": "1a81567d3e4c6471d4efc95cc7fd9d13bbd1ff82f3c3db358fe15892682e3d8e"
+      "sha256": "9aaee28e65d1b71240f672d3a618f2b0d6f8b3cd4d389f5e045d77f5837ace18"
     },
     {
       "path": "services/supplier_luna_enrichment.py",
@@ -2493,7 +2505,7 @@
     },
     {
       "path": "services/supplier_service.py",
-      "sha256": "6bb706049e2403f88b9309d7ff4de0176d8befbde2901a5a8149187014b13dc8"
+      "sha256": "550e8e013e47af947cdc76e48658dd5f0d2894eb203f0b81d881168cf86e073e"
     },
     {
       "path": "services/supplier_update_hub.py",
@@ -4661,7 +4673,7 @@
     },
     {
       "path": "tests/test_ozon_bulk_supplier_source_comparison.py",
-      "sha256": "ebd8aac055195c4e5b7491eee0d3f113f94e8662ce3eb567726cc6268c5dd647"
+      "sha256": "7129423d1c34de9617507c1e2d743dc93e3a213b4b167cebad7d570559a09248"
     },
     {
       "path": "tests/test_ozon_catalog_checkpoints.py",
@@ -4821,7 +4833,7 @@
     },
     {
       "path": "tests/test_ozon_prepare_decisions.py",
-      "sha256": "c8918c65fbbd077e09cf9a0e47de4415439f6b57bbfb47a8fe8e9b18c88a9b8b"
+      "sha256": "da76ef3889e0c9f3ce1a9c334d55a8c512a95c99ccd7107e036e83682c4e8a0f"
     },
     {
       "path": "tests/test_ozon_product_type_visibility_migration.py",
@@ -5086,6 +5098,18 @@
     {
       "path": "tests/test_supplier_catalog_update_all.py",
       "sha256": "86d496e7d3931c65bfebf6ab354c25c60a1b9948216c8a5cdbe7b2d437c1acc0"
+    },
+    {
+      "path": "tests/test_supplier_color_observation_feed.py",
+      "sha256": "00d873929d1d13fb50b5b40d47b2c6cd19502ddab1d886f80f66b2a472db75d6"
+    },
+    {
+      "path": "tests/test_supplier_color_observation_scheduler.py",
+      "sha256": "a48f054bdbddf9db9a91e3f750060022cb1672c80fdd451207345cbd710238d9"
+    },
+    {
+      "path": "tests/test_supplier_color_observation_store.py",
+      "sha256": "95c6a533978453183da139ca2f14fcee4cac046195e32d6f317cf83da8acf115"
     },
     {
       "path": "tests/test_supplier_csv_refresh_routes.py",
@@ -5416,5 +5440,5 @@
       "sha256": "260973076a516b81bba3cae3adcd6b652fdee5585e27fbd0b7401062b78aefb1"
     }
   ],
-  "aggregate_sha256": "b688d44bc2394dd77f8214fcaba81bb24ce71e1ff17408a80fd6ae36ae551c0a"
+  "aggregate_sha256": "7cfb5ff828dc8f4b3984e893efe0c18de21d13050ea4a22a92176e874cb36a8b"
 }

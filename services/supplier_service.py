@@ -534,6 +534,23 @@ class SupplierCSVParser:
             return None
         return list(value)
 
+    @staticmethod
+    def _has_explicit_observed_color_list_role(supplier) -> bool:
+        """Whether the configured parser declares a direct list color cell."""
+        mapping = getattr(supplier, 'csv_column_mapping', None)
+        colors_config = mapping.get('colors') if isinstance(mapping, dict) else None
+        return isinstance(colors_config, dict) and (
+            colors_config.get('type') == 'list'
+            and (
+                type(colors_config.get('column')) in (int, str)
+                or isinstance(colors_config.get('columns'), list)
+                or (
+                    isinstance(colors_config.get('columns_prefix'), str)
+                    and bool(colors_config.get('columns_prefix'))
+                )
+            )
+        )
+
     @classmethod
     def _observed_source_fields(cls, product: dict, supplier) -> dict:
         """Project exact parsed cells only for explicit semantic parser roles."""
@@ -551,19 +568,7 @@ class SupplierCSVParser:
                 if country is not None:
                     observed['country'] = country
 
-            colors_config = mapping.get('colors')
-            has_explicit_list_cells = isinstance(colors_config, dict) and (
-                colors_config.get('type') == 'list'
-                and (
-                    type(colors_config.get('column')) in (int, str)
-                    or isinstance(colors_config.get('columns'), list)
-                    or (
-                        isinstance(colors_config.get('columns_prefix'), str)
-                        and bool(colors_config.get('columns_prefix'))
-                    )
-                )
-            )
-            if has_explicit_list_cells:
+            if cls._has_explicit_observed_color_list_role(supplier):
                 colors = cls._valid_observed_colors(product.get('colors'))
                 if colors is not None:
                     observed['colors'] = colors

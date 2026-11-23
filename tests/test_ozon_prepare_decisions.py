@@ -1,6 +1,7 @@
 """Fully local coverage for source-backed Ozon color preparation."""
 
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -36,6 +37,8 @@ from services.ozon_upload_queue import OzonUploadQueueService
 from services.openai_decisions import DecisionAnswer, DecisionChoice, DecisionOutcome
 from services.openai_decisions_cache import OpenAIDecisionsCache
 from services.openai_decisions_pipeline import OpenAIDecisionsPipeline
+from services.supplier_color_observation_store import SupplierColorObservationStore
+from services.supplier_service import supplier_catalog_config_digest
 from tests.test_marketplace_publications import OzonPublicationFixture
 
 
@@ -494,6 +497,68 @@ class OzonPrepareDecisionsQueueTest(OzonPublicationFixture, unittest.TestCase):
              if row.get("attribute_id") == "10096"),
             [],
         )
+
+    def _prepare_using_catalog_color(self, *, withdraw_during_decision):
+        db.session.delete(self.draft)
+        product = self._source_product(external_id="catalog-proven-color", color="light pink")
+        raw = json.dumps({"colors": ["light pink"]})
+        product.original_data = raw
+        source = product.supplier_product
+        source.original_data_json = raw
+        db.session.commit()
+        supplier_id = source.supplier_id
+        product_id = source.id
+        scope = supplier_catalog_config_digest(source.supplier)
+        observed_at = datetime.utcnow() - timedelta(hours=25)
+        with TemporaryDirectory() as folder:
+            store = SupplierColorObservationStore(Path(folder) / "catalog-colors.sqlite3")
+            claim = store.reserve(supplier_id, scope, now=observed_at)
+            self.assertTrue(claim)
+            self.assertTrue(store.finish(supplier_id, claim, scope, {
+                product_id: (
+                    source.content_revision,
+                    sha256(source.external_id.encode()).hexdigest(),
+                    ("light pink",),
+                ),
+            }, observed_at=observed_at))
+            run, token = self._accept_and_claim([product])
+            pipeline = _FakeDecisionsPipeline()
+            run_plan = pipeline.run_plan
+
+            def decide(plan):
+                result = run_plan(plan)
+                if withdraw_during_decision:
+                    now = datetime.utcnow()
+                    replacement = store.reserve(supplier_id, scope, now=now)
+                    self.assertTrue(replacement)
+                    self.assertTrue(store.finish(supplier_id, replacement, scope, {}, observed_at=now))
+                return result
+
+            with patch(
+                "services.supplier_color_observation_store.configured_supplier_color_observation_store",
+                return_value=store,
+            ), patch(
+                "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+                return_value=pipeline,
+            ), patch.object(pipeline, "run_plan", side_effect=decide):
+                item, result = self._advance(run, token, product)
+        draft = MarketplaceDraftService.get_draft(
+            seller_id=self.seller.id, draft_id=item.draft_id,
+        )
+        self.assertEqual(result.outcome, "prepared")
+        self.assertEqual(pipeline.physical_batches, 1)
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+        self.assertEqual(product.original_data, raw)
+        self.assertEqual(source.original_data_json, raw)
+        return self._color(draft)
+
+    def test_normal_queue_uses_a_fresh_catalog_color_for_a_legacy_copy(self):
+        self.assertEqual(self._prepare_using_catalog_color(withdraw_during_decision=False), [
+            {"value": "Pink", "dictionary_value_id": "101"},
+        ])
+
+    def test_normal_queue_ignores_a_choice_if_catalog_proof_was_withdrawn(self):
+        self.assertEqual(self._prepare_using_catalog_color(withdraw_during_decision=True), [])
 
     def test_queue_shortlists_hue_without_modifier_or_complexion_only_calls(self):
         db.session.delete(self.draft)

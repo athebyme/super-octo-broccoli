@@ -138,6 +138,17 @@ def source_values(value: Any, field_name: str) -> list[str] | None:
     return result
 
 
+def same_color_literals(left: Any, right: Any) -> bool:
+    """Compare valid typed color lists without deriving or translating hues."""
+    left_values = source_values(left, "colors")
+    right_values = source_values(right, "colors")
+    return bool(
+        left_values and right_values
+        and {value.casefold() for value in left_values}
+        == {value.casefold() for value in right_values}
+    )
+
+
 def normalized_snapshot_values(
     value: Any,
     field_name: str,

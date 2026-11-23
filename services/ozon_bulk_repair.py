@@ -77,6 +77,7 @@ from services.supplier_field_observations import (
     load_source_snapshot as _load_supplier_source_snapshot,
     normalized_snapshot_values as _normalized_supplier_snapshot_values,
     observed_supplier_fields as _observed_supplier_fields,
+    same_color_literals,
     supplier_copy_identity_rejection,
 )
 
@@ -1026,7 +1027,7 @@ class OzonBulkRepairService:
 
     @classmethod
     def _source_supplier_evidence(cls, draft: MarketplaceProductDraft) -> dict:
-        """Validate one exact seller-copied, parser-stamped supplier snapshot.
+        """Validate direct supplier evidence against the exact seller copy.
 
         The low-level marker parser and snapshot parity normalizer are shared
         with the WB supplier evidence contract. WB product/nm/subject checks
@@ -1068,14 +1069,14 @@ class OzonBulkRepairService:
         current_present, current_valid, current_fields = (
             _observed_supplier_fields(current)
         )
-        if not current_present:
-            return {**unknown, "reason": "source_marker_unavailable"}
-        if not current_valid:
+        if current_present and not current_valid:
             return {**unknown, "reason": "source_marker_invalid"}
 
         copied_present, copied_valid, copied_fields = (
             _observed_supplier_fields(copied)
         )
+        if copied_present and not current_present:
+            return {**unknown, "reason": "source_marker_unavailable"}
         if copied_present and (
             not copied_valid or copied_fields != current_fields
         ):
@@ -1108,6 +1109,15 @@ class OzonBulkRepairService:
                     "reason": "source_snapshot_values_disagree",
                 }
 
+        if "colors" not in current_fields:
+            observed_colors = cls._catalog_observed_supplier_colors(
+                supplier_product, current, copied,
+            )
+            if observed_colors:
+                current_fields = {**current_fields, "colors": observed_colors}
+        if not current_present and not current_fields:
+            return {**unknown, "reason": "source_marker_unavailable"}
+
         source_identity = {
             "imported_product_id": imported.id,
             "supplier_product_id": supplier_product.id,
@@ -1139,6 +1149,39 @@ class OzonBulkRepairService:
             "source_sha256": cls._source_sha256(source_basis),
             "identity": source_identity,
         }
+
+    @staticmethod
+    def _catalog_observed_supplier_colors(
+        supplier_product: SupplierProduct,
+        current: dict,
+        copied: dict,
+    ) -> list[str] | None:
+        """Read only the fresh direct CSV proof for these exact stored colors."""
+        if not same_color_literals(current.get("colors"), copied.get("colors")):
+            return None
+
+        from services.supplier_color_observation_store import (
+            configured_supplier_color_observation_store,
+        )
+        from services.supplier_service import supplier_catalog_config_digest
+
+        supplier = supplier_product.supplier
+        if not supplier.is_active:
+            return None
+        store = configured_supplier_color_observation_store()
+        if store is None:
+            return None
+        observed = store.get(
+            supplier.id,
+            supplier_product.id,
+            supplier_product.content_revision,
+            hashlib.sha256(supplier_product.external_id.encode("utf-8")).hexdigest(),
+            supplier_catalog_config_digest(supplier),
+            now=datetime.utcnow(),
+        )
+        if same_color_literals(observed, current.get("colors")):
+            return observed
+        return None
 
     @classmethod
     def _source_attribute_definition(

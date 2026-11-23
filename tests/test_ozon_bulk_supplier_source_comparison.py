@@ -1,6 +1,7 @@
 """Synthetic exact Ozon source comparisons and save receipts."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
+from hashlib import sha256
 import json
 
 import pytest
@@ -18,7 +19,11 @@ from models import (
 from services.marketplace_drafts import MarketplaceDraftConflict
 from services.ozon_bulk_repair import OzonBulkRepairService as Repair
 from services.ozon_reference_service import OzonReferenceService
-from services.supplier_service import hydrate_missing_imported_observed_snapshot
+from services.supplier_color_observation_store import SupplierColorObservationStore
+from services.supplier_service import (
+    hydrate_missing_imported_observed_snapshot,
+    supplier_catalog_config_digest,
+)
 
 
 @pytest.fixture
@@ -208,6 +213,88 @@ def test_legacy_copied_snapshot_requires_exact_live_literal_parity(source_case):
     evidence = Repair._source_supplier_evidence(case.draft)
     assert evidence["status"] == "unknown"
     assert evidence["reason"] == "source_snapshot_values_disagree"
+
+
+def test_catalog_observation_supplies_missing_color_and_withdraws_changed_feed(
+    source_case, tmp_path, monkeypatch,
+):
+    case, _definitions, supplier_product = source_case
+    raw = json.dumps({"colors": ["pink", "white"], "country": "Russia"})
+    case.source.original_data = raw
+    supplier_product.original_data_json = raw
+    db.session.commit()
+    store = SupplierColorObservationStore(tmp_path / "color-proof.sqlite3")
+    monkeypatch.setattr(
+        "services.supplier_color_observation_store.configured_supplier_color_observation_store",
+        lambda: store,
+    )
+    scope = supplier_catalog_config_digest(supplier_product.supplier)
+    source_key = sha256(supplier_product.external_id.encode()).hexdigest()
+    now = datetime.utcnow()
+    observed_at = now - timedelta(hours=25)
+    supplier_id = supplier_product.supplier_id
+    claim = store.reserve(supplier_id, scope, now=observed_at)
+    assert claim
+    assert store.finish(supplier_id, claim, scope, {
+        supplier_product.id: (supplier_product.content_revision, source_key, ("pink", "white")),
+    }, observed_at=observed_at)
+
+    evidence = Repair._source_supplier_evidence(case.draft)
+    assert evidence["status"] == "confirmed"
+    assert evidence["fields"] == {"colors": ["pink", "white"]}
+    assert case.source.original_data == supplier_product.original_data_json == raw
+
+    next_claim = store.reserve(supplier_id, scope, now=now)
+    assert next_claim
+    # The new CSV has no matching literal for this item. It replaces that
+    # supplier's proof without writing either application snapshot.
+    assert store.finish(supplier_id, next_claim, scope, {}, observed_at=now)
+    missing = Repair._source_supplier_evidence(case.draft)
+    assert missing["reason"] == "source_marker_unavailable"
+    assert case.source.original_data == supplier_product.original_data_json == raw
+
+
+@pytest.mark.parametrize("mismatch", ["literal", "configuration", "revision", "invalid_marker"])
+def test_catalog_observation_cannot_cross_source_scope(source_case, tmp_path, monkeypatch, mismatch):
+    case, _definitions, supplier_product = source_case
+    raw = json.dumps({"colors": ["pink", "white"]})
+    case.source.original_data = raw
+    supplier_product.original_data_json = raw
+    db.session.commit()
+    store = SupplierColorObservationStore(tmp_path / "catalog-color.sqlite3")
+    monkeypatch.setattr(
+        "services.supplier_color_observation_store.configured_supplier_color_observation_store",
+        lambda: store,
+    )
+    supplier = supplier_product.supplier
+    scope = supplier_catalog_config_digest(supplier)
+    now = datetime.utcnow()
+    claim = store.reserve(supplier.id, scope, now=now)
+    assert claim
+    assert store.finish(supplier.id, claim, scope, {
+        supplier_product.id: (
+            supplier_product.content_revision,
+            sha256(supplier_product.external_id.encode()).hexdigest(),
+            ("pink", "white"),
+        ),
+    }, observed_at=now)
+    if mismatch == "literal":
+        case.source.original_data = json.dumps({"colors": ["black"]})
+    elif mismatch == "configuration":
+        supplier.csv_source_url = "https://different-source.invalid/catalog.csv"
+    elif mismatch == "revision":
+        supplier_product.content_revision += 1
+        case.source.supplier_content_revision += 1
+    else:
+        supplier_product.original_data_json = json.dumps({
+            "colors": ["pink", "white"],
+            "observed_supplier_fields_version": 2,
+        })
+    db.session.commit()
+
+    evidence = Repair._source_supplier_evidence(case.draft)
+    assert evidence["status"] == "unknown"
+    assert evidence["fields"] == {}
 
 
 def test_unknown_source_does_not_block_ordinary_dictionary_edit(source_case):

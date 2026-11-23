@@ -324,6 +324,23 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         coalesce=True,
     )
 
+    # Refresh a private, source-backed color observation at most once per
+    # supplier per day. Delay the first run after startup so ordinary scheduler
+    # initialization never causes an immediate supplier-feed read.
+    from services.supplier_color_observation_scheduler import (
+        run_supplier_color_observation_tick,
+    )
+    scheduler.add_job(
+        func=lambda: run_supplier_color_observation_tick(flask_app),
+        trigger=IntervalTrigger(minutes=30),
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=120),
+        id='supplier_color_observation',
+        name='Refresh bounded direct supplier color observations',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # Первый reference refresh не должен ждать сутки после нового deploy.
     scheduler.add_job(
         func=lambda: sync_marketplaces(flask_app),
