@@ -310,32 +310,38 @@ class MyProductsFeed:
 
     @staticmethod
     def _ozon_listing_exists(*, seller_id: int, conditions=()):
-        listing_query = db.session.query(MarketplaceListing.id).join(
+        # Build a seller-owned ID set once for the page/count query. A
+        # correlated EXISTS here makes SQLite repeat the account and listing
+        # lookup for every imported product in a potentially large catalog.
+        listing_ids = db.select(MarketplaceListing.imported_product_id).join(
             Marketplace,
             Marketplace.id == MarketplaceListing.marketplace_id,
         ).join(
             SellerMarketplaceAccount,
             SellerMarketplaceAccount.id == MarketplaceListing.account_id,
-        ).filter(
-            MarketplaceListing.imported_product_id == ImportedProduct.id,
+        ).where(
+            MarketplaceListing.imported_product_id.isnot(None),
             MarketplaceListing.seller_id == seller_id,
             Marketplace.code == 'ozon',
             SellerMarketplaceAccount.seller_id == seller_id,
             SellerMarketplaceAccount.marketplace_id
             == MarketplaceListing.marketplace_id,
         )
-        return listing_query.filter(*conditions).exists()
+        listing_ids = listing_ids.where(*conditions)
+        return ImportedProduct.id.in_(listing_ids)
 
     @staticmethod
     def _ozon_draft_exists(*, seller_id: int, statuses=None):
-        draft_query = db.session.query(MarketplaceProductDraft.id).join(
+        draft_ids = db.select(
+            MarketplaceProductDraft.imported_product_id,
+        ).join(
             Marketplace,
             Marketplace.id == MarketplaceProductDraft.marketplace_id,
         ).join(
             SellerMarketplaceAccount,
             SellerMarketplaceAccount.id == MarketplaceProductDraft.account_id,
-        ).filter(
-            MarketplaceProductDraft.imported_product_id == ImportedProduct.id,
+        ).where(
+            MarketplaceProductDraft.imported_product_id.isnot(None),
             MarketplaceProductDraft.seller_id == seller_id,
             MarketplaceProductDraft.published_listing_id.is_(None),
             Marketplace.code == 'ozon',
@@ -344,10 +350,10 @@ class MyProductsFeed:
             == MarketplaceProductDraft.marketplace_id,
         )
         if statuses is not None:
-            draft_query = draft_query.filter(
+            draft_ids = draft_ids.where(
                 MarketplaceProductDraft.status.in_(statuses),
             )
-        return draft_query.exists()
+        return ImportedProduct.id.in_(draft_ids)
 
     @classmethod
     def _ozon_association(cls, *, seller_id: int):
