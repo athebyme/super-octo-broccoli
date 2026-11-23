@@ -157,6 +157,7 @@ with sync_playwright() as playwright:
             for control in (
                 *filter_buttons.all(),
                 page.locator("[data-catalog-marketplace-status]"),
+                page.locator("[data-catalog-category]"),
                 page.locator("[data-catalog-extra-filters] summary"),
             ):
                 expect(control).to_be_visible()
@@ -203,6 +204,7 @@ with sync_playwright() as playwright:
             set_catalog_extra_filters_open_by_keyboard(page, opened=True)
             assert_catalog_extra_filter_scope(page, opened=True, ozon=False)
             expanded_controls = {
+                "supplier": page.get_by_label("Поставщик", exact=True),
                 "photo": page.get_by_label("Фото", exact=True),
                 "supplier_stock": page.get_by_label("Остаток у поставщика", exact=True),
                 "sort": page.locator("[data-catalog-sort]"),

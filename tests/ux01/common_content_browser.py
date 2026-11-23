@@ -303,6 +303,7 @@ def _gate_workspace_return_feed():
         or query.get("has_photos") != gate.get("has_photos")
         or query.get("stock") != gate.get("stock")
         or query.get("sort") != gate.get("sort")
+        or query.get("catalog_category") != gate.get("catalog_category")
         or query.get("per_page") != gate.get("per_page")
     ):
         return None
@@ -630,6 +631,7 @@ def beta_catalog_state(page) -> dict | None:
             has_photos: proxy.filters.has_photos,
             stock: proxy.filters.stock,
             sort: proxy.filters.sort,
+            catalog_category: proxy.filters.catalog_category,
             selected: proxy.selected.slice(),
             itemIds: proxy.items.map(item => item.id),
             importBatchMode: proxy.importBatchMode,
@@ -731,6 +733,7 @@ def _seed_bulk_fixture() -> list[int]:
                 external_vendor_code=f"COMMON-CONTENT-BULK-{index:02d}",
                 source_type="synthetic_bulk",
                 title=title,
+                category="Одежда для массовой правки",
                 description=description,
                 photo_urls="[]",
                 supplier_quantity=0,
@@ -1941,13 +1944,17 @@ def _run_bulk_50_case(page) -> None:
     page.get_by_label("Фото", exact=True).select_option("no")
     page.get_by_label("Остаток у поставщика", exact=True).select_option("out_of_stock")
     page.get_by_label("Сортировка", exact=True).select_option("title")
+    category = page.locator("[data-catalog-category]")
+    category.select_option("label:Одежда для массовой правки")
     page.get_by_placeholder("Название, бренд или артикул").fill("COMMON-CONTENT-BULK-")
     page.wait_for_function("""() => {
         const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
         return proxy && !proxy.loading && proxy.itemsScope === proxy.feedScopeKey() &&
             proxy.activeTab === 'validated' && proxy.filters.search === 'COMMON-CONTENT-BULK-' &&
             proxy.filters.has_photos === 'no' && proxy.filters.stock === 'out_of_stock' &&
-            proxy.filters.sort === 'title' && (proxy.searchInput || '').trim() === proxy.filters.search;
+            proxy.filters.sort === 'title' &&
+            proxy.filters.catalog_category === 'label:Одежда для массовой правки' &&
+            (proxy.searchInput || '').trim() === proxy.filters.search;
     }""")
     beta_before_handoff = beta_catalog_state(page)
     assert beta_before_handoff and beta_before_handoff["itemIds"] == product_ids, {
@@ -2211,6 +2218,7 @@ def _run_bulk_50_case(page) -> None:
         "has_photos": "no",
         "stock": "out_of_stock",
         "sort": "title",
+        "catalog_category": "label:Одежда для массовой правки",
         "per_page": "50",
         "entered": threading.Event(),
         "release": threading.Event(),
@@ -2250,6 +2258,7 @@ def _run_bulk_50_case(page) -> None:
         "has_photos": "no",
         "stock": "out_of_stock",
         "sort": "title",
+        "catalog_category": "label:Одежда для массовой правки",
         "page": "1",
         "per_page": "50",
     }.items():
@@ -2260,10 +2269,13 @@ def _run_bulk_50_case(page) -> None:
             proxy.activeTab === expected.activeTab && proxy.filters.search === expected.search &&
             proxy.searchInput === expected.search && proxy.filters.supplier === expected.supplier &&
             proxy.filters.has_photos === expected.has_photos && proxy.filters.stock === expected.stock &&
-            proxy.filters.sort === expected.sort && proxy.selected.join(',') === expected.ids.join(',');
+            proxy.filters.sort === expected.sort &&
+            proxy.filters.catalog_category === expected.catalog_category &&
+            proxy.selected.join(',') === expected.ids.join(',');
     }""", arg={
         "activeTab": "validated", "search": "COMMON-CONTENT-BULK-", "supplier": "",
         "has_photos": "no", "stock": "out_of_stock", "sort": "title", "ids": product_ids,
+        "catalog_category": "label:Одежда для массовой правки",
     })
     restored_state = beta_catalog_state(page)
     assert restored_state and restored_state["selected"] == product_ids
@@ -2279,6 +2291,8 @@ def _run_bulk_50_case(page) -> None:
     assert page.get_by_label("Фото", exact=True).input_value() == "no"
     assert page.get_by_label("Остаток у поставщика", exact=True).input_value() == "out_of_stock"
     assert page.locator("[data-catalog-sort]").input_value() == "title"
+    assert page.locator("[data-catalog-category]").input_value() == "label:Одежда для массовой правки"
+    REPORT["checks"].append("common_50_return_restores_catalog_category_and_exact_selection")
     REPORT["checks"].append(
         "common_50_return_remounts_collapsed_disclosure_with_native_filters_restored"
     )
