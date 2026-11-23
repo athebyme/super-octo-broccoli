@@ -1371,6 +1371,21 @@
                 var option = WB_STATUS_FILTERS.find(function (filter) { return filter.key === selected; });
                 return option ? option.label : '';
             },
+            activeAdvancedFilterCount: function () {
+                return (this.filters.has_photos ? 1 : 0) +
+                    (this.filters.stock ? 1 : 0) + (this.selectedWbStatusLabel ? 1 : 0);
+            },
+            extraFiltersDisclosureLabel: function () {
+                var labels = [];
+                if (this.filters.has_photos === 'yes') labels.push('С фото');
+                else if (this.filters.has_photos === 'no') labels.push('Без фото');
+                if (this.filters.stock === 'in_stock') labels.push('В наличии у поставщика');
+                else if (this.filters.stock === 'out_of_stock') labels.push('Нет у поставщика');
+                if (this.selectedWbStatusLabel) labels.push('Статус WB: ' + this.selectedWbStatusLabel);
+                return labels.length
+                    ? 'Дополнительные фильтры. Выбрано: ' + labels.join(', ')
+                    : 'Дополнительные фильтры';
+            },
             supplierUpdatesEntryAriaLabel: function () {
                 if (this.selected.length) {
                     var selectedCount = this.selected.length;

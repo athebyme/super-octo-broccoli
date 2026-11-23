@@ -6,7 +6,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-unified-marketplace-filters-r71') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-compact-catalog-toolbar-r71') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261123-unified-catalog-prices-r63b') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
@@ -337,30 +337,32 @@
             <option value="">Все поставщики</option>
             <option v-for="s in suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
-        <select v-model="filters.has_photos" class="mp-select" aria-label="Фото">
-            <option value="">Фото: любые</option>
-            <option value="yes">С фото</option>
-            <option value="no">Без фото</option>
-        </select>
-        <select v-model="filters.stock" class="mp-select" aria-label="Остаток у поставщика">
-            <option value="">Остаток: любой</option>
-            <option value="in_stock">В наличии</option>
-            <option value="out_of_stock">Нет у поставщика</option>
-        </select>
-        <select v-model="filters.sort" class="mp-select" aria-label="Сортировка">
-            <option value="">Сначала новые</option>
-            <option value="oldest">Сначала старые</option>
-            <option value="price_asc">Дешевле</option>
-            <option value="price_desc">Дороже</option>
-            <option value="title">По названию</option>
-        </select>
-        <details v-if="filters.marketplace !== 'ozon'" class="mp-extra-filters" data-catalog-extra-filters>
-            <summary>
-                <span>Статус WB</span>
-                <span v-if="selectedWbStatusLabel" class="mp-extra-filter-current">{{ selectedWbStatusLabel }}</span>
+        <details class="mp-extra-filters" data-catalog-extra-filters>
+            <summary :aria-label="extraFiltersDisclosureLabel" :title="extraFiltersDisclosureLabel">
+                <span>Дополнительные фильтры</span>
+                <span v-if="activeAdvancedFilterCount" class="mp-extra-filter-count">
+                    Выбрано {{ activeAdvancedFilterCount }} {{ $fmt.plural(activeAdvancedFilterCount, 'фильтр', 'фильтра', 'фильтров') }}
+                </span>
             </summary>
             <div class="mp-extra-filter-body">
-                <select data-catalog-wb-status
+                <select v-model="filters.has_photos" class="mp-select" aria-label="Фото">
+                    <option value="">Фото: любые</option>
+                    <option value="yes">С фото</option>
+                    <option value="no">Без фото</option>
+                </select>
+                <select v-model="filters.stock" class="mp-select" aria-label="Остаток у поставщика">
+                    <option value="">Остаток: любой</option>
+                    <option value="in_stock">В наличии</option>
+                    <option value="out_of_stock">Нет у поставщика</option>
+                </select>
+                <select v-model="filters.sort" class="mp-select" data-catalog-sort aria-label="Сортировка">
+                    <option value="">Сначала новые</option>
+                    <option value="oldest">Сначала старые</option>
+                    <option value="price_asc">Дешевле</option>
+                    <option value="price_desc">Дороже</option>
+                    <option value="title">По названию</option>
+                </select>
+                <select v-if="filters.marketplace !== 'ozon'" data-catalog-wb-status
                         :value="activeTab === 'updates' ? '' : activeTab"
                         aria-label="Статус карточки WB"
                         @change="setWbStatus($event.target.value)">
@@ -802,5 +804,5 @@
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261122-ozon-update-return-r56') }}"></script>
 <script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261123-unified-catalog-prices-r63b') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-unified-marketplace-filters-r71') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-compact-catalog-toolbar-r71') }}"></script>
 {% endblock %}
