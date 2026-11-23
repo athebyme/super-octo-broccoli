@@ -212,6 +212,80 @@ def seed_bulk_selection():
                 "ozon_account_id": fixture.FIXTURE["account_id"]}
 
 
+def seed_ozon_mixed_workspace_scope(seller_id, account_id):
+    """Add late, isolated Ozon/WB rows for the mixed-account browser path."""
+    with fixture.app.app_context():
+        ozon_marketplace = Marketplace.query.filter_by(code="ozon").one()
+        ozon_title = "R94-MIXED-OZON"
+        wb_title = "R94-MIXED-WB"
+        ozon_source = ImportedProduct(
+            seller_id=seller_id,
+            external_id="UX-R94-MIXED-OZON",
+            external_vendor_code=ozon_title,
+            source_type="manual",
+            title=ozon_title,
+            photo_urls="[]",
+            import_status="validated",
+            supplier_quantity=1,
+        )
+        wb_product = Product(
+            seller_id=seller_id,
+            nm_id=9440005,
+            vendor_code=wb_title,
+            title=wb_title,
+            is_active=True,
+            price=1000,
+            wb_price=700,
+        )
+        db.session.add_all([ozon_source, wb_product])
+        db.session.flush()
+        wb_source = ImportedProduct(
+            seller_id=seller_id,
+            external_id="UX-R94-MIXED-WB",
+            external_vendor_code=wb_title,
+            source_type="manual",
+            title=wb_title,
+            photo_urls="[]",
+            product_id=wb_product.id,
+            wb_nm_id=wb_product.nm_id,
+            import_status="imported",
+            supplier_quantity=1,
+        )
+        db.session.add(wb_source)
+        db.session.flush()
+        ozon_listing = MarketplaceListing(
+            seller_id=seller_id,
+            marketplace_id=ozon_marketplace.id,
+            account_id=account_id,
+            imported_product_id=ozon_source.id,
+            offer_id="UX-R94-MIXED-OZON",
+            external_product_id="9440003",
+            primary_sku="9440004",
+            title=ozon_title,
+            normalized_status="active",
+            is_available=True,
+            is_archived=False,
+            link_status="linked",
+            link_source="synthetic-ux01-r94",
+            link_version=1,
+            sync_fingerprint=hashlib.sha256(b"UX-R94-MIXED-OZON").hexdigest(),
+        )
+        db.session.add(ozon_listing)
+        db.session.commit()
+        return {
+            "ozon_source_id": ozon_source.id,
+            "ozon_listing_id": ozon_listing.id,
+            "wb_source_id": wb_source.id,
+            "selected_ids": [ozon_source.id, wb_source.id],
+            "titles_by_id": {
+                ozon_source.id: ozon_title,
+                wb_source.id: wb_title,
+            },
+            "ozon_title": ozon_title,
+            "wb_title": wb_title,
+        }
+
+
 def verify_bounds(page):
     dimensions = page.evaluate("""() => ({scroll: document.documentElement.scrollWidth,
                                      viewport: document.documentElement.clientWidth})""")
@@ -924,6 +998,13 @@ def run():
     wb_bulk_edit_handoff = None
     selection_review_expected = {"ids": None, "titles_by_id": {}}
     selection_review_posts = []
+    mixed_scope_state = {
+        "armed": False,
+        "ids": None,
+        "titles_by_id": {},
+        "selection_posts": [],
+    }
+    ozon_mixed_workspace_scope = None
     ozon_workspace_handoff_receipts = []
     ozon_workspace_preview_reads = []
     automatic_publication_posts = []
@@ -1062,7 +1143,8 @@ def run():
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "POST":
             if parsed.path == LOCAL_SELECTION_REVIEW:
                 body = request.post_data_json
-                expected_ids = selection_review_expected["ids"]
+                review_state = mixed_scope_state if mixed_scope_state["armed"] else selection_review_expected
+                expected_ids = review_state["ids"]
                 assert isinstance(body, dict) and set(body) == {"ids"}
                 assert body["ids"] == expected_ids
                 assert request.headers.get("x-csrftoken") or request.headers.get("X-CSRFToken")
@@ -1080,18 +1162,23 @@ def run():
                 ).lower()
                 assert returned_ids == expected_ids
                 assert [item.get("title") for item in resolved["items"]] == [
-                    selection_review_expected["titles_by_id"][product_id]
+                    review_state["titles_by_id"][product_id]
                     for product_id in expected_ids
                 ]
-                selection_review_posts.append({
+                review_receipt = {
                     "status": response.status,
                     "ids": expected_ids[:],
                     "returned_ids": returned_ids,
                     "csrf_header_present": True,
                     "cache_control_private_no_store": "private" in cache_control
                     and "no-store" in cache_control,
-                })
-                assert selection_review_posts[-1]["cache_control_private_no_store"] is True
+                }
+                target_posts = (
+                    mixed_scope_state["selection_posts"]
+                    if mixed_scope_state["armed"] else selection_review_posts
+                )
+                target_posts.append(review_receipt)
+                assert target_posts[-1]["cache_control_private_no_store"] is True
                 route.fulfill(response=response)
                 return
             if parsed.path == LOCAL_OZON_WORKSPACE_HANDOFF:
@@ -4456,6 +4543,382 @@ def run():
         mobile_context.close()
 
         marketplace_filters = exercise_marketplace_filters(browser, bridge, errors)
+
+        # Late-only rows keep the pre-existing catalog/browser assertions and
+        # their request counts unchanged while exercising a real mixed WB/Ozon
+        # workspace selection through Flask and Playwright.
+        mixed_fixture = seed_ozon_mixed_workspace_scope(
+            fixture.FIXTURE["seller_id"], fixture_ids["ozon_account_id"],
+        )
+        mixed_ids = mixed_fixture["selected_ids"]
+        mixed_scope_state.update({
+            "ids": mixed_ids[:],
+            "titles_by_id": mixed_fixture["titles_by_id"],
+            "selection_posts": [],
+        })
+        wb_bulk_edit_expected.update({
+            "source_ids": [mixed_fixture["ozon_source_id"]],
+            "wb_ids": [],
+            "ozon_listing_ids": [mixed_fixture["ozon_listing_id"]],
+            "photo_urls": [],
+        })
+        mixed_provider_attempts_before = fixture.REPORT["provider_attempts"]
+        mixed_external_before = len(fixture.REPORT["unexpected_external_requests"])
+        mixed_write_watch = begin_domain_write_watch()
+        mixed_context = browser.new_context(viewport={"width": 320, "height": 900})
+        mixed_context.add_cookies([fixture.synthetic_login_cookie()])
+        mixed_context.route("**/*", bridge)
+        mixed_page = mixed_context.new_page()
+        mixed_page.on("pageerror", lambda error: errors.append(str(error)))
+        mixed_browser_post_paths = []
+
+        def record_mixed_local_post(request):
+            if (request.method == "POST" and
+                    urlsplit(request.url).netloc == urlsplit(fixture.BASE).netloc):
+                mixed_browser_post_paths.append(urlsplit(request.url).path)
+
+        mixed_page.on("request", record_mixed_local_post)
+        open_products(mixed_page)
+        assert_marketplace_filter(mixed_page, "all")
+        with mixed_page.expect_response(lambda response: feed_matches(response, {
+                "search": "R94-MIXED-",
+        })) as mixed_feed:
+            mixed_page.get_by_placeholder("Название, бренд или артикул").fill("R94-MIXED-")
+        assert mixed_feed.value.status == 200
+        assert {item["id"] for item in mixed_feed.value.json()["items"]} == set(mixed_ids)
+        mixed_rows = mixed_page.evaluate("""ids => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            if (!proxy) return null;
+            return ids.map(id => {
+                const item = proxy.items.find(row => row.id === id);
+                return item ? {
+                    id: item.id,
+                    title: item.title,
+                    wbLinked: !!item.wb,
+                    ozonListings: (item.ozon && Array.isArray(item.ozon.listings)
+                        ? item.ozon.listings : []).map(row => ({
+                            id: row.id, account_id: row.account_id,
+                            marketplace_code: row.marketplace_code,
+                        })),
+                } : null;
+            });
+        }""", mixed_ids)
+        assert mixed_rows == [
+            {
+                "id": mixed_fixture["ozon_source_id"],
+                "title": mixed_fixture["ozon_title"],
+                "wbLinked": False,
+                "ozonListings": [{
+                    "id": mixed_fixture["ozon_listing_id"],
+                    "account_id": fixture_ids["ozon_account_id"],
+                    "marketplace_code": "ozon",
+                }],
+            },
+            {
+                "id": mixed_fixture["wb_source_id"],
+                "title": mixed_fixture["wb_title"],
+                "wbLinked": True,
+                "ozonListings": [],
+            },
+        ], mixed_rows
+        for title in (mixed_fixture["ozon_title"], mixed_fixture["wb_title"]):
+            mixed_page.get_by_role("checkbox", name=f"Выбрать {title}", exact=True).check()
+        assert selected_browser_state(mixed_page)["selected"] == mixed_ids
+        assert mixed_page.evaluate("""() => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return !!(proxy && proxy.selectionRowsVerified);
+        }""") is True
+
+        mixed_toolbar = mixed_page.locator('button[data-bulk-action-group="cards"]')
+        assert mixed_toolbar.is_visible()
+        mixed_posts_before_card_open = len(mixed_browser_post_paths)
+        pick_action(mixed_page, "Изменить карточки Ozon")
+        scope_dialog = mixed_page.locator("[data-ozon-scope-dialog]")
+        scope_dialog.wait_for(state="visible")
+        scope_select = scope_dialog.locator("#mp-ozon-price-account")
+        scope_options = scope_dialog.locator("[data-ozon-scope-choice]")
+        assert scope_options.count() == 1
+        mixed_account_choice = scope_options.first
+        assert fixture.OZON_ACCOUNT_LABEL in mixed_account_choice.inner_text()
+        assert "1 из 2 выбранных товаров" in mixed_account_choice.inner_text()
+        scope_select.select_option(str(fixture_ids["ozon_account_id"]))
+        scope_summary = scope_dialog.locator("[data-ozon-scope-summary]")
+        scope_summary.wait_for(state="visible")
+        assert "1 из 2 выбранных товаров" in scope_summary.inner_text()
+        assert "1 товар не войдёт" in scope_summary.inner_text()
+        exclusions = scope_dialog.locator("[data-ozon-scope-exclusions]")
+        assert exclusions.count() == 1
+        excluded_rows = scope_dialog.locator("[data-ozon-scope-excluded]")
+        assert excluded_rows.count() == 1
+        assert excluded_rows.first.locator("strong").inner_text() == mixed_fixture["wb_title"]
+        assert excluded_rows.first.locator("span").inner_text() == "Нет связанной карточки в магазине"
+        mixed_card_choice = mixed_page.evaluate("""() => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            const review = proxy && proxy.ozonWorkspaceUpdateReview;
+            const choice = review && review.choices.length === 1 ? review.choices[0] : null;
+            return choice ? {
+                account_id: choice.account_id,
+                account_label: choice.account_label,
+                partial: choice.partial,
+                eligible_count: choice.eligible_count,
+                total_count: choice.total_count,
+                source_ids: choice.source_ids.slice(),
+                listing_ids: choice.listing_ids.slice(),
+                excluded_rows: choice.excluded_rows.map(row => ({
+                    label: row.label, reason: row.reason,
+                })),
+            } : null;
+        }""")
+        assert mixed_card_choice == {
+            "account_id": fixture_ids["ozon_account_id"],
+            "account_label": fixture.OZON_ACCOUNT_LABEL,
+            "partial": True,
+            "eligible_count": 1,
+            "total_count": 2,
+            "source_ids": [mixed_fixture["ozon_source_id"]],
+            "listing_ids": [mixed_fixture["ozon_listing_id"]],
+            "excluded_rows": [{
+                "label": mixed_fixture["wb_title"],
+                "reason": "Нет связанной карточки в магазине",
+            }],
+        }, mixed_card_choice
+        card_scope_submit = scope_dialog.locator("[data-ozon-scope-submit]")
+        assert card_scope_submit.is_enabled()
+        assert card_scope_submit.inner_text() == "Проверить 1 товар"
+        assert selected_browser_state(mixed_page)["selected"] == mixed_ids
+        card_pre_continue_posts = mixed_browser_post_paths[mixed_posts_before_card_open:]
+        assert card_pre_continue_posts == [], card_pre_continue_posts
+        chooser_geometry = mixed_page.evaluate("""() => {
+            const dialog = document.querySelector('[data-ozon-scope-dialog]');
+            const box = dialog.getBoundingClientRect();
+            return {
+                viewport: document.documentElement.clientWidth,
+                scroll: document.documentElement.scrollWidth,
+                left: box.left,
+                right: box.right,
+                width: box.width,
+            };
+        }""")
+        assert chooser_geometry["viewport"] == 320, chooser_geometry
+        assert chooser_geometry["scroll"] <= chooser_geometry["viewport"] + 1, chooser_geometry
+        assert chooser_geometry["left"] >= -1 and chooser_geometry["right"] <= 321, chooser_geometry
+        verify_bounds(mixed_page)
+        mixed_chooser_screenshot = OUTPUT / "ozon-mixed-scope-chooser-320.png"
+        mixed_page.screenshot(path=mixed_chooser_screenshot, animations="disabled")
+
+        mixed_page.keyboard.press("Escape")
+        mixed_page.wait_for_function("""selector => {
+            const dialog = document.querySelector('[data-ozon-scope-dialog]');
+            return dialog && !dialog.open && document.activeElement === document.querySelector(selector);
+        }""", arg='button[data-bulk-action-group="cards"]')
+        assert selected_browser_state(mixed_page)["selected"] == mixed_ids
+        assert mixed_browser_post_paths[mixed_posts_before_card_open:] == []
+
+        # Escape cancels the exact choice; the user must reopen, choose the
+        # same account explicitly, and continue before the local handoff POST.
+        pick_action(mixed_page, "Изменить карточки Ozon")
+        scope_dialog = mixed_page.locator("[data-ozon-scope-dialog]")
+        scope_dialog.wait_for(state="visible")
+        scope_select = scope_dialog.locator("#mp-ozon-price-account")
+        assert scope_dialog.locator("[data-ozon-scope-choice]").count() == 1
+        scope_select.select_option(str(fixture_ids["ozon_account_id"]))
+        assert mixed_browser_post_paths[mixed_posts_before_card_open:] == []
+        assert selected_browser_state(mixed_page)["selected"] == mixed_ids
+        card_handoff_before = len(ozon_workspace_handoff_receipts)
+        card_preview_before = len(ozon_workspace_preview_reads)
+        with mixed_page.expect_response(
+                lambda response: urlsplit(response.url).path == LOCAL_OZON_WORKSPACE_HANDOFF
+                and response.request.method == "POST") as mixed_card_handoff:
+            scope_dialog.locator("[data-ozon-scope-submit]").click()
+        assert mixed_card_handoff.value.status == 200
+        assert mixed_browser_post_paths[mixed_posts_before_card_open:][0] == LOCAL_OZON_WORKSPACE_HANDOFF
+        mixed_page.wait_for_url(lambda value: urlsplit(str(value)).path == "/marketplaces/listings/")
+        mixed_page.locator("[data-workspace-update]").wait_for(state="visible")
+        mixed_page.wait_for_function("""expected => {
+            const proxy = document.querySelector('#marketplace-catalog-app')?._vnode?.component?.proxy;
+            return proxy && proxy.workspaceUpdate &&
+                proxy.workspaceUpdate.listingIds.join(',') === expected.join(',') &&
+                proxy.listingUpdate.phase === 'review';
+        }""", arg=[mixed_fixture["ozon_listing_id"]])
+        assert len(ozon_workspace_handoff_receipts) == card_handoff_before + 1
+        assert len(ozon_workspace_preview_reads) == card_preview_before + 1
+        mixed_card_receipt = ozon_workspace_handoff_receipts[-1]
+        assert mixed_card_receipt["account_id"] == fixture_ids["ozon_account_id"]
+        assert mixed_card_receipt["source_ids"] == [mixed_fixture["ozon_source_id"]]
+        assert mixed_card_receipt["listing_ids"] == [mixed_fixture["ozon_listing_id"]]
+        mixed_card_preview = ozon_workspace_preview_reads[-1]
+        assert mixed_card_preview["account_id"] == fixture_ids["ozon_account_id"]
+        assert mixed_card_preview["source_count"] == 1
+        assert mixed_card_preview["listing_ids"] == [mixed_fixture["ozon_listing_id"]]
+        assert mixed_card_preview["preview_row_ids"] == [mixed_fixture["ozon_listing_id"]]
+
+        return_link = mixed_page.locator('dialog[open] [data-workspace-return-dialog]')
+        return_link.wait_for(state="visible")
+        mixed_scope_state["armed"] = True
+        with mixed_page.expect_response(lambda response: feed_matches(response, {
+                "search": "R94-MIXED-",
+        })) as mixed_return_feed:
+            with mixed_page.expect_response(
+                    lambda response: urlsplit(response.url).path == LOCAL_SELECTION_REVIEW
+                    and response.request.method == "POST") as mixed_return_selection:
+                with mixed_page.expect_navigation(wait_until="domcontentloaded"):
+                    return_link.click()
+        assert mixed_return_feed.value.status == 200
+        assert mixed_return_selection.value.status == 200
+        mixed_page.wait_for_url(lambda value: urlsplit(str(value)).path == "/my-products/beta")
+        mixed_page.wait_for_function("""ids => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy && !proxy.loading && proxy.selectionReviewActive &&
+                proxy.selected.join(',') === ids.join(',') &&
+                proxy.selectionReviewRows.map(item => item.id).join(',') === ids.join(',');
+        }""", arg=mixed_ids)
+        assert mixed_scope_state["selection_posts"] == [{
+            "status": 200,
+            "ids": mixed_ids,
+            "returned_ids": mixed_ids,
+            "csrf_header_present": True,
+            "cache_control_private_no_store": True,
+        }]
+        assert mixed_page.locator("[data-selection-review-row]").evaluate_all(
+            "rows => rows.map(row => Number(row.dataset.selectionReviewRow))",
+        ) == mixed_ids
+        assert mixed_page.locator(
+            f'[data-selection-review-row="{mixed_fixture["ozon_source_id"]}"]',
+        ).get_by_text(mixed_fixture["ozon_title"], exact=False).count() == 1
+        assert mixed_page.locator(
+            f'[data-selection-review-row="{mixed_fixture["wb_source_id"]}"]',
+        ).get_by_text(mixed_fixture["wb_title"], exact=False).count() == 1
+        assert selected_browser_state(mixed_page)["selected"] == mixed_ids
+        mixed_scope_state["armed"] = False
+
+        # Price review stays inline and narrows only its target IDs; the full
+        # mixed workspace selection remains selected until the dialog is closed.
+        price_posts_before = len(mixed_browser_post_paths)
+        price_preview_before = len(price_preview_posts)
+        price_create_before = len(price_create_posts)
+        pick_action(mixed_page, "Изменить цены Ozon")
+        price_scope_dialog = mixed_page.locator("[data-ozon-scope-dialog]")
+        price_scope_dialog.wait_for(state="visible")
+        price_scope_dialog.locator("#mp-ozon-price-account").select_option(
+            str(fixture_ids["ozon_account_id"]),
+        )
+        assert price_scope_dialog.locator("[data-ozon-scope-summary]").count() == 1
+        assert "1 из 2 выбранных товаров" in price_scope_dialog.locator(
+            "[data-ozon-scope-summary]",
+        ).inner_text()
+        assert price_scope_dialog.locator("[data-ozon-scope-excluded]").count() == 1
+        assert mixed_browser_post_paths[price_posts_before:] == []
+        price_scope_dialog.locator("[data-ozon-scope-submit]").click()
+        price_dialog = mixed_page.locator('dialog[data-workspace-price-dialog]')
+        price_dialog.wait_for(state="visible")
+        assert price_dialog.get_attribute("data-price-marketplace") == "ozon"
+        mixed_price_launch = mixed_page.evaluate("""() => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            if (!proxy) return null;
+            const launch = proxy.priceWorkspaceLaunch;
+            const scope = proxy.priceWorkspaceScope;
+            return launch && scope ? {
+                selected: proxy.selected.slice(),
+                selectionIds: launch.selectionIds.slice(),
+                localSelectionIds: launch.localSelectionIds.slice(),
+                actionSelectionIds: launch.actionSelectionIds.slice(),
+                productIds: launch.productIds.slice(),
+                accountId: launch.accountId,
+                scopeProductIds: scope.productIds.slice(),
+                scopeMarketplace: scope.marketplace,
+            } : null;
+        }""")
+        assert mixed_price_launch == {
+            "selected": mixed_ids,
+            "selectionIds": mixed_ids,
+            "localSelectionIds": [mixed_fixture["ozon_source_id"]],
+            "actionSelectionIds": [mixed_fixture["ozon_source_id"]],
+            "productIds": [mixed_fixture["ozon_listing_id"]],
+            "accountId": fixture_ids["ozon_account_id"],
+            "scopeProductIds": [mixed_fixture["ozon_listing_id"]],
+            "scopeMarketplace": "ozon",
+        }, mixed_price_launch
+        verify_bounds(mixed_page)
+        mixed_price_screenshot = OUTPUT / "ozon-mixed-scope-inline-price-320.png"
+        mixed_page.screenshot(path=mixed_price_screenshot, animations="disabled")
+        price_dialog.get_by_role("button", name="Закрыть", exact=True).click()
+        mixed_page.wait_for_function("""ids => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy && !proxy.priceWorkspaceDialogOpen &&
+                proxy.selected.join(',') === ids.join(',');
+        }""", arg=mixed_ids)
+        assert mixed_browser_post_paths[price_posts_before:] == []
+        assert len(price_preview_posts) == price_preview_before
+        assert len(price_create_posts) == price_create_before
+        mixed_write_statements = end_domain_write_watch(mixed_write_watch)
+        assert mixed_write_statements == [], mixed_write_statements
+        assert fixture.REPORT["provider_attempts"] == mixed_provider_attempts_before
+        assert len(fixture.REPORT["unexpected_external_requests"]) == mixed_external_before
+        verify_bounds(mixed_page)
+        ozon_mixed_workspace_scope = {
+            "status": "passed",
+            "selected_source_ids": mixed_ids,
+            "selected_count": len(mixed_ids),
+            "account_id": fixture_ids["ozon_account_id"],
+            "account_choice_count": 1,
+            "account_label": fixture.OZON_ACCOUNT_LABEL,
+            "partial_account_choice": mixed_card_choice,
+            "included_source_ids": [mixed_fixture["ozon_source_id"]],
+            "included_names": [mixed_fixture["ozon_title"]],
+            "included_count": 1,
+            "included_listing_ids": [mixed_fixture["ozon_listing_id"]],
+            "excluded_source_ids": [mixed_fixture["wb_source_id"]],
+            "excluded_names": [mixed_fixture["wb_title"]],
+            "excluded_reason": "Нет связанной карточки в магазине",
+            "excluded_count": 1,
+            "card_posts_before_continue": len(card_pre_continue_posts),
+            "card_handoff_posts": len(ozon_workspace_handoff_receipts) - card_handoff_before,
+            "card_handoff_account_id": mixed_card_receipt["account_id"],
+            "card_handoff_source_ids": mixed_card_receipt["source_ids"],
+            "card_handoff_listing_ids": mixed_card_receipt["listing_ids"],
+            "card_preview_listing_ids": mixed_card_preview["preview_row_ids"],
+            "restored_selection_ids": mixed_ids,
+            "restored_review_ids": mixed_scope_state["selection_posts"][-1]["returned_ids"],
+            "escape_restored_toolbar_focus": True,
+            "chooser_geometry_320": chooser_geometry,
+            "price_selection_ids": mixed_price_launch["selectionIds"],
+            "price_action_source_ids": mixed_price_launch["actionSelectionIds"],
+            "price_target_listing_ids": mixed_price_launch["productIds"],
+            "price_dialog_cancelled": not mixed_page.evaluate(
+                "() => !!document.querySelector('dialog[data-workspace-price-dialog]')?.open",
+            ),
+            "price_preview_posts": len(price_preview_posts) - price_preview_before,
+            "price_create_posts": len(price_create_posts) - price_create_before,
+            "local_db_write_statements": len(mixed_write_statements),
+            "provider_attempts": fixture.REPORT["provider_attempts"] - mixed_provider_attempts_before,
+            "unexpected_external_requests": len(
+                fixture.REPORT["unexpected_external_requests"],
+            ) - mixed_external_before,
+            "browser_post_paths": mixed_browser_post_paths[:],
+            "screenshots": [
+                mixed_chooser_screenshot.name,
+                mixed_price_screenshot.name,
+            ],
+        }
+        assert ozon_mixed_workspace_scope["selected_count"] == 2
+        assert ozon_mixed_workspace_scope["included_count"] == 1
+        assert ozon_mixed_workspace_scope["excluded_count"] == 1
+        assert ozon_mixed_workspace_scope["card_posts_before_continue"] == 0
+        assert ozon_mixed_workspace_scope["card_handoff_posts"] == 1
+        assert ozon_mixed_workspace_scope["restored_selection_ids"] == mixed_ids
+        assert ozon_mixed_workspace_scope["restored_review_ids"] == mixed_ids
+        assert ozon_mixed_workspace_scope["price_selection_ids"] == mixed_ids
+        assert ozon_mixed_workspace_scope["price_action_source_ids"] == [mixed_fixture["ozon_source_id"]]
+        assert ozon_mixed_workspace_scope["price_target_listing_ids"] == [mixed_fixture["ozon_listing_id"]]
+        assert ozon_mixed_workspace_scope["price_dialog_cancelled"] is True
+        assert ozon_mixed_workspace_scope["price_preview_posts"] == 0
+        assert ozon_mixed_workspace_scope["price_create_posts"] == 0
+        assert ozon_mixed_workspace_scope["local_db_write_statements"] == 0
+        assert ozon_mixed_workspace_scope["provider_attempts"] == 0
+        assert ozon_mixed_workspace_scope["unexpected_external_requests"] == 0
+        checks.append("ozon_mixed_scope_keeps_original_selection_and_exact_target")
+        mixed_context.close()
+
         assert not errors, errors
         assert not fixture.REPORT["unexpected_http"] and not fixture.REPORT["unexpected_external_requests"]
         assert fixture.REPORT["provider_attempts"] == 0
@@ -4511,6 +4974,7 @@ def run():
         "supplier_refresh_zero_update": supplier_refresh_zero_update_report,
         "catalog_selection_review": catalog_selection_review,
         "marketplace_filters": marketplace_filters,
+        "ozon_mixed_workspace_scope": ozon_mixed_workspace_scope,
     }
     (OUTPUT / "report.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(result, ensure_ascii=False))
