@@ -12,6 +12,8 @@ import unittest
 from unittest.mock import patch
 
 from flask import Flask
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from models import (
     ImportedProduct,
@@ -36,6 +38,7 @@ from models import (
     db,
 )
 from services.marketplace_drafts import (
+    DraftCreationReceipt,
     MarketplaceDraftConflict,
     MarketplaceDraftNotFound,
     MarketplaceDraftValidationError,
@@ -53,6 +56,7 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         if self._testMethodName in {
             "test_atomic_existing_linked_create_reloads_external_link_change",
             "test_atomic_existing_linked_create_stops_on_competing_sqlite_writer",
+            "test_creation_receipt_integrity_error_returns_existing_winner_without_receipt",
         }:
             descriptor, self.sqlite_path = tempfile.mkstemp(
                 prefix="marketplace-draft-race-",
@@ -311,6 +315,82 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         )
         return product, draft
 
+    def test_create_draft_receipt_distinguishes_insert_from_existing_return(self):
+        product = self._product(external_id="creation-receipt")
+        receipt = DraftCreationReceipt(created_draft_id=999)
+        created = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            creation_receipt=receipt,
+        )
+
+        self.assertEqual(receipt.created_draft_id, created.id)
+
+        receipt.created_draft_id = 999
+        existing = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            creation_receipt=receipt,
+        )
+
+        self.assertEqual(existing.id, created.id)
+        self.assertIsNone(receipt.created_draft_id)
+
+    def test_creation_receipt_integrity_error_returns_existing_winner_without_receipt(self):
+        product = self._product(external_id="creation-receipt-race")
+        receipt = DraftCreationReceipt(created_draft_id=999)
+        did_race = False
+        winner_id = None
+
+        def competing_insert_then_integrity_error():
+            nonlocal did_race, winner_id
+            if did_race:
+                raise AssertionError("unexpected second commit")
+            did_race = True
+            pending = next(
+                row for row in db.session.new
+                if type(row) is MarketplaceProductDraft
+            )
+            values = {
+                column.name: getattr(pending, column.name)
+                for column in MarketplaceProductDraft.__table__.columns
+                if column.name != "id"
+                and getattr(pending, column.name) is not None
+            }
+            db.session.rollback()
+            winner_session = Session(bind=db.engine)
+            try:
+                winner = MarketplaceProductDraft(**values)
+                winner_session.add(winner)
+                winner_session.commit()
+                winner_id = winner.id
+            finally:
+                winner_session.close()
+            raise IntegrityError(
+                "INSERT marketplace_product_drafts",
+                {},
+                RuntimeError("simulated concurrent unique winner"),
+            )
+
+        with patch.object(
+            db.session,
+            "commit",
+            side_effect=competing_insert_then_integrity_error,
+        ):
+            returned = MarketplaceDraftService.create_draft(
+                seller_id=self.seller1_id,
+                account_id=self.account1.id,
+                imported_product_id=product.id,
+                creation_receipt=receipt,
+            )
+
+        self.assertTrue(did_race)
+        self.assertIsNotNone(winner_id)
+        self.assertEqual(returned.id, winner_id)
+        self.assertIsNone(receipt.created_draft_id)
+
     def _linked_listing(
         self,
         product,
@@ -514,13 +594,16 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             listing.linked_at,
             listing.link_evidence_json,
         )
+        receipt = DraftCreationReceipt()
         draft = MarketplaceDraftService.create_draft(
             seller_id=self.seller1_id,
             account_id=self.account1.id,
             imported_product_id=product.id,
             expected_existing_listing=expected,
+            creation_receipt=receipt,
         )
 
+        self.assertEqual(receipt.created_draft_id, draft.id)
         self.assertEqual(draft.imported_product_id, product.id)
         self.assertEqual(draft.account_id, self.account1.id)
         self.assertEqual(draft.published_listing_id, listing.id)
@@ -1122,6 +1205,102 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
                 last_seen_at=self.now,
             ))
         return attribute
+
+    def test_observed_colors_require_complete_forms_and_preserve_exact_compounds(self):
+        parser = MarketplaceDraftService._observed_colors
+        uncertain = MarketplaceDraftService._color_observation_is_uncertain
+        supported = {
+            "разноцветный": "Разноцветный",
+            "серебристый": "Серебристый",
+            "золотой": "Золотой",
+            "прозрачный": "Прозрачный",
+            "чёрный": "Черный",
+            "белый": "Белый",
+            "красный": "Красный",
+            "розовый": "Розовый",
+            "оранжевый": "Оранжевый",
+            "жёлтый": "Желтый",
+            "зелёный": "Зеленый",
+            "голубой": "Голубой",
+            "синий": "Синий",
+            "фиолетовый": "Фиолетовый",
+            "серый": "Серый",
+            "коричневый": "Коричневый",
+            "бежевый": "Бежевый",
+        }
+        for literal, expected in supported.items():
+            with self.subTest(literal=literal):
+                self.assertEqual(parser(literal), [expected])
+                self.assertFalse(uncertain(literal))
+
+        self.assertEqual(parser("угольно-чёрный"), ["Черный"])
+        self.assertFalse(uncertain("угольно-чёрный"))
+        self.assertEqual(parser("нежно-розовый"), ["Розовый"])
+        self.assertFalse(uncertain("нежно-розовый"))
+        self.assertEqual(parser("чёрный с розовым"), ["Черный", "Розовый"])
+        self.assertTrue(uncertain("чёрный с розовым"))
+        self.assertEqual(parser("серо-голубой"), ["Серый", "Голубой"])
+        self.assertTrue(uncertain("серо-голубой"))
+
+        for literal in (
+            "не чёрный",
+            "возможно чёрный",
+            "чёрный или розовый",
+            "чёрный?",
+            "серия",
+            "синтетический",
+        ):
+            with self.subTest(literal=literal):
+                self.assertEqual(parser(literal), [])
+                self.assertTrue(uncertain(literal))
+
+    def test_auto_mapper_does_not_fill_negative_or_false_prefix_color_literals(self):
+        self._dictionary_attribute(
+            "10096",
+            "Цвет товара",
+            ["Черный", "Серый", "Синий", "Розовый"],
+            is_collection=True,
+            max_value_count=4,
+        )
+        db.session.commit()
+
+        def mapped_colors(literal):
+            values, _report = MarketplaceDraftService._auto_map_attributes(
+                product_type=self.product_type,
+                facts_document={"facts": {
+                    "identity": {},
+                    "identifiers": {},
+                    "attributes": {"colors": [literal]},
+                }},
+            )
+            return next((row for row in values if row["attribute_id"] == "10096"), None)
+
+        for literal in (
+            "не чёрный",
+            "возможно чёрный",
+            "чёрный или розовый",
+            "чёрный?",
+            "серия",
+            "синтетический",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIsNone(mapped_colors(literal))
+
+        self.assertEqual(
+            mapped_colors("угольно-чёрный")["values"],
+            [{"dictionary_value_id": "10096-1", "value": "Черный"}],
+        )
+        self.assertEqual(
+            mapped_colors("нежно-розовый")["values"],
+            [{"dictionary_value_id": "10096-4", "value": "Розовый"}],
+        )
+        self.assertEqual(
+            mapped_colors("чёрный с розовым")["values"],
+            [
+                {"dictionary_value_id": "10096-1", "value": "Черный"},
+                {"dictionary_value_id": "10096-4", "value": "Розовый"},
+            ],
+        )
 
     def _official_type(self, name, path):
         marker = MarketplaceTaxonomyCategory.query.count() + 1

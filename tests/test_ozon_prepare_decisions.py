@@ -1,0 +1,745 @@
+"""Fully local coverage for source-backed Ozon color preparation."""
+
+from datetime import datetime, timedelta
+import json
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import time
+from types import SimpleNamespace
+from unittest.mock import patch
+import unittest
+
+from models import (
+    ImportedProduct,
+    MarketplaceAttributeDefinition,
+    MarketplaceAttributeValue,
+    MarketplaceCategoryMapping,
+    MarketplaceProductType,
+    MarketplaceOperation,
+    MarketplaceProductDraft,
+    OzonBulkUploadItem,
+    OzonBulkUploadRun,
+    Supplier,
+    SupplierProduct,
+    db,
+)
+from services.marketplace_decisions_preparation import decode_decision_plan
+from services.marketplace_decisions_preparation import plan_category_phase
+from services.marketplace_decisions_preparation import plan_characteristic_phase
+from services.marketplace_drafts import MarketplaceDraftService
+from services.ozon_bulk_upload import OzonBulkUploadService
+from services.ozon_reference_service import OzonReferenceService
+from services.ozon_prepare_decisions import OzonPrepareDecisionsService
+from services.ozon_upload_queue import OzonUploadQueueService
+from services.openai_decisions import DecisionAnswer, DecisionChoice, DecisionOutcome
+from services.openai_decisions_cache import OpenAIDecisionsCache
+from services.openai_decisions_pipeline import OpenAIDecisionsPipeline
+from tests.test_marketplace_publications import OzonPublicationFixture
+
+
+class _FakeDecisionsPipeline:
+    def __init__(self, *, confidence=0.99):
+        self.cache = {}
+        self.plans = []
+        self.physical_batches = 0
+        self.confidence = confidence
+
+    def run_plan(self, plan):
+        self.plans.append(plan)
+        products = plan.input_json["products"]
+        assert all(
+            set(product["observed_source_fields"]) == {"color"}
+            for product in products
+        )
+        assert all(
+            "name" not in product and "description" not in product
+            for product in products
+        )
+        missing = [
+            fingerprint for fingerprint in plan.question_fingerprints
+            if fingerprint not in self.cache
+        ]
+        if missing:
+            self.physical_batches += 1
+            answers = []
+            for question in plan.questions:
+                choice = next(
+                    item for item in question.choices
+                    if isinstance(item, DecisionChoice)
+                    and item.description == "Pink"
+                )
+                answers.append(DecisionAnswer(
+                    name=question.name,
+                    status="answered",
+                    choice=choice.value,
+                    confidence=self.confidence,
+                ))
+            decoded = decode_decision_plan(
+                plan,
+                DecisionOutcome("success", answers=tuple(answers)),
+            )
+            self.cache.update({row.signature: row for row in decoded})
+        return SimpleNamespace(
+            phase="characteristic",
+            results=tuple(self.cache[key] for key in plan.question_fingerprints),
+        )
+
+
+class _FakeCategoryPipeline:
+    def __init__(self):
+        self.calls = 0
+
+    def run_category_phase(self, contexts):
+        self.calls += 1
+        plan = plan_category_phase(contexts)
+        answers = []
+        for question in plan.questions:
+            selected = next(
+                choice for choice in question.choices
+                if isinstance(choice, DecisionChoice)
+                and choice.description.endswith("тип товара: Тип")
+            )
+            answers.append(DecisionAnswer(
+                name=question.name,
+                status="answered",
+                choice=selected.value,
+                confidence=0.99,
+            ))
+        results = decode_decision_plan(
+            plan,
+            DecisionOutcome("success", answers=tuple(answers)),
+        )
+        return SimpleNamespace(
+            results=results,
+            physical_request_started=True,
+            reservation_state="ready",
+            finish_state="success",
+        )
+
+
+class _FakeCategoryClient:
+    def __init__(self):
+        self.calls = []
+
+    def decide(self, *, input_json, questions):
+        questions = tuple(questions)
+        self.calls.append({
+            "input_json": input_json,
+            "questions": questions,
+        })
+        answers = []
+        for question in questions:
+            selected = next(
+                choice for choice in question.choices
+                if isinstance(choice, DecisionChoice)
+                and choice.description.endswith("тип товара: Тип")
+            )
+            answers.append(DecisionAnswer(
+                name=question.name,
+                status="answered",
+                choice=selected.value,
+                confidence=0.99,
+            ))
+        return DecisionOutcome("success", answers=tuple(answers))
+
+
+class _FakeColorClient:
+    def __init__(self):
+        self.calls = []
+
+    def decide(self, *, input_json, questions):
+        questions = tuple(questions)
+        self.calls.append((input_json, questions))
+        answers = []
+        for question in questions:
+            choice = next(
+                option for option in question.choices
+                if isinstance(option, DecisionChoice)
+                and option.description != "Недостаточно точных сведений для выбора"
+            )
+            answers.append(DecisionAnswer(
+                name=question.name,
+                status="answered",
+                choice=choice.value,
+                confidence=0.99,
+            ))
+        return DecisionOutcome("success", answers=tuple(answers))
+
+
+class OzonPrepareDecisionsQueueTest(OzonPublicationFixture, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.app.config.update(
+            MARKETPLACE_OZON_ENABLED=True,
+            MARKETPLACE_OZON_PUBLICATION_ENABLED=False,
+        )
+        self.account.settings_json = '{"default_vat":"0.22"}'
+        self.product_type.is_seller_selectable = True
+        self._add_color_dictionary([
+            ("101", "Pink"),
+            ("102", "Deep pink"),
+            ("103", "Черный"),
+            ("104", "Красный"),
+            ("105", "Серый"),
+            ("106", "Розовый"),
+        ])
+        db.session.commit()
+
+    def _add_color_dictionary(self, values):
+        now = datetime.utcnow()
+        definition = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id,
+            product_type_id=self.product_type.id,
+            external_attribute_id="10096",
+            name="Цвет товара",
+            data_type="String",
+            is_required=False,
+            dictionary_id="1494",
+            max_value_count=1,
+            is_collection=False,
+            is_available=True,
+            is_enabled=True,
+            last_seen_at=now,
+            values_synced_at=now,
+            values_sync_status="success",
+            values_snapshot_hash="color-values-v1",
+            values_version=1,
+            values_count=len(values),
+        )
+        db.session.add(definition)
+        db.session.flush()
+        for external_id, value in values:
+            db.session.add(MarketplaceAttributeValue(
+                marketplace_id=self.marketplace.id,
+                product_type_id=self.product_type.id,
+                attribute_id=definition.id,
+                external_value_id=external_id,
+                value=value,
+                value_normalized=OzonReferenceService.normalize_value(value),
+                is_available=True,
+                last_seen_at=now,
+            ))
+        self.color_definition = definition
+
+    def _source_product(
+        self, *, external_id, color, category_evidence=False,
+        create_mapping=True,
+    ):
+        product = ImportedProduct.query.filter_by(id=self.source.id).first()
+        if product is None or external_id != product.external_id:
+            product = ImportedProduct(
+                seller_id=self.seller.id,
+                external_id=external_id,
+                external_vendor_code=f"offer-{external_id}",
+                source_type="synthetic",
+                title="Тестовый источник цвета",
+                description="Описание не передаётся модели",
+                category="Категория",
+            )
+            db.session.add(product)
+            db.session.flush()
+        supplier = Supplier.query.filter_by(code="synthetic").first()
+        if supplier is None:
+            supplier = Supplier(name="Synthetic supplier", code="synthetic")
+            db.session.add(supplier)
+            db.session.flush()
+        marker = {
+            "observed_supplier_fields_version": 1,
+            "observed_supplier_fields": {"colors": [color]},
+            "colors": [color],
+        }
+        if category_evidence:
+            marker.update({"title": product.title, "category": product.category})
+        source_product = SupplierProduct(
+            supplier_id=supplier.id,
+            external_id=product.external_id,
+            content_revision=7,
+            title="Тестовый источник цвета",
+            category="Категория",
+            vendor_code=product.external_vendor_code,
+            colors_json=json.dumps([color], ensure_ascii=False),
+            original_data_json=json.dumps(marker, ensure_ascii=False),
+        )
+        db.session.add(source_product)
+        db.session.flush()
+        product.supplier_product_id = source_product.id
+        product.supplier_id = supplier.id
+        product.source_type = supplier.code
+        product.supplier_content_revision = 7
+        product.original_data = json.dumps(marker, ensure_ascii=False)
+        product.colors = json.dumps([color], ensure_ascii=False)
+        db.session.flush()
+        if create_mapping:
+            self._ensure_mapping(product)
+        return product
+
+    def _ensure_mapping(self, product):
+        identity = MarketplaceDraftService._mapping_identities(product)[-1]
+        existing = MarketplaceCategoryMapping.query.filter_by(
+            seller_id=self.seller.id,
+            marketplace_id=self.marketplace.id,
+            scope_key=identity["scope_key"],
+            source_category_normalized=identity["source_category_normalized"],
+        ).first()
+        if existing is not None:
+            return existing
+        mapping = MarketplaceCategoryMapping(
+            seller_id=self.seller.id,
+            marketplace_id=self.marketplace.id,
+            supplier_id=identity["supplier_id"],
+            product_type_id=self.product_type.id,
+            scope_key=identity["scope_key"],
+            source_type=identity["source_type"],
+            source_category=identity["source_category"],
+            source_category_normalized=identity["source_category_normalized"],
+            external_category_id="10",
+            external_type_id="777",
+            mapping_source="manual",
+            mapping_status="active",
+            confidence=1.0,
+            evidence_json="{}",
+        )
+        db.session.add(mapping)
+        db.session.flush()
+        return mapping
+
+    def _accept_and_claim(self, products):
+        accepted = OzonBulkUploadService.accept_source_prepare(
+            seller_id=self.seller.id,
+            account_id=self.account.id,
+            imported_product_ids=[product.id for product in products],
+            request_key="local-color-queue-test-0001",
+            created_by_user_id=self.user.id,
+        )
+        run = OzonBulkUploadRun.query.filter_by(job_id=accepted.job.id).one()
+        token = OzonUploadQueueService.claim_due_run(
+            now=datetime.utcnow(), exclude_run_ids=set(),
+        )[1]
+        return run, token
+
+    def _advance(self, run, token, product):
+        item = OzonBulkUploadItem.query.filter_by(
+            run_id=run.id, imported_product_id=product.id,
+        ).one()
+
+        def ready_validation(*, seller_id, draft_id, expected_version,
+                             stage_automatic_cleanup=False):
+            draft = MarketplaceDraftService.get_draft(
+                seller_id=seller_id, draft_id=draft_id,
+            )
+            draft.status = "ready"
+            draft.validation_status = "valid"
+            db.session.commit()
+            return MarketplaceDraftService.get_draft(
+                seller_id=seller_id, draft_id=draft_id,
+            )
+
+        with patch.object(
+            MarketplaceDraftService,
+            "validate_draft",
+            side_effect=ready_validation,
+        ):
+            result = OzonUploadQueueService.advance_item(
+                run_id=run.id,
+                item_id=item.id,
+                lease_token=token,
+                now=datetime.utcnow(),
+                deadline_monotonic=time.monotonic() + 35,
+            )
+        db.session.refresh(item)
+        return item, result
+
+    @staticmethod
+    def _color(draft):
+        rows = json.loads(draft.attributes_json or "[]")
+        return next(
+            (row["values"] for row in rows
+             if row.get("attribute_id") == "10096"),
+            [],
+        )
+
+    def test_one_queue_batch_warms_virtual_sibling_and_later_reuses_cache(self):
+        # The fixture draft belongs to an older/manual path and is removed so
+        # the first queue item is an eligible newly-created local draft.
+        db.session.delete(self.draft)
+        first = self._source_product(external_id="source-first", color="light pink")
+        second = self._source_product(external_id="source-second", color="soft pink")
+        db.session.commit()
+        run, token = self._accept_and_claim([first, second])
+        pipeline = _FakeDecisionsPipeline()
+
+        with patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            return_value=pipeline,
+        ):
+            first_item, first_result = self._advance(run, token, first)
+            self.assertEqual(first_result.outcome, "prepared")
+            first_draft = MarketplaceDraftService.get_draft(
+                seller_id=self.seller.id,
+                draft_id=first_item.draft_id,
+            )
+            self.assertEqual(
+                self._color(first_draft),
+                [{"value": "Pink", "dictionary_value_id": "101"}],
+            )
+            self.assertIsNone(MarketplaceProductDraft.query.filter_by(
+                seller_id=self.seller.id,
+                account_id=self.account.id,
+                imported_product_id=second.id,
+            ).first())
+
+            second_item, second_result = self._advance(run, token, second)
+            self.assertEqual(second_result.outcome, "prepared")
+            second_draft = MarketplaceDraftService.get_draft(
+                seller_id=self.seller.id,
+                draft_id=second_item.draft_id,
+            )
+            self.assertEqual(
+                self._color(second_draft),
+                [{"value": "Pink", "dictionary_value_id": "101"}],
+            )
+
+        self.assertEqual(len(pipeline.plans), 2)
+        self.assertEqual(len(pipeline.plans[0].input_json["products"]), 2)
+        self.assertEqual(pipeline.physical_batches, 1)
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+
+    def test_known_compound_color_resolves_locally_without_decisions(self):
+        db.session.delete(self.draft)
+        products = [
+            self._source_product(
+                external_id="source-black", color="угольно-чёрный",
+            ),
+            self._source_product(
+                external_id="source-pink", color="нежно-розовый",
+            ),
+        ]
+        db.session.commit()
+        run, token = self._accept_and_claim(products)
+        pipeline = _FakeDecisionsPipeline()
+        original_auto_map = MarketplaceDraftService._auto_map_attributes
+
+        def no_default_color(**kwargs):
+            attributes, report = original_auto_map(**kwargs)
+            return [
+                row for row in attributes
+                if row.get("attribute_id") != "10096"
+            ], report
+
+        with patch.object(
+            MarketplaceDraftService,
+            "_auto_map_attributes",
+            side_effect=no_default_color,
+        ), patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            return_value=pipeline,
+        ) as runtime_factory:
+            results = [self._advance(run, token, product) for product in products]
+        self.assertTrue(all(result.outcome == "prepared" for _, result in results))
+        expected = (
+            [{"value": "Черный", "dictionary_value_id": "103"}],
+            [{"value": "Розовый", "dictionary_value_id": "106"}],
+        )
+        for (item, _result), expected_color in zip(results, expected):
+            draft = MarketplaceDraftService.get_draft(
+                seller_id=self.seller.id, draft_id=item.draft_id,
+            )
+            self.assertEqual(self._color(draft), expected_color)
+        self.assertEqual(pipeline.physical_batches, 0)
+        runtime_factory.assert_not_called()
+
+    def test_uncertain_color_observations_never_fill_or_reach_decisions(self):
+        db.session.delete(self.draft)
+        products = [
+            self._source_product(
+                external_id=f"source-uncertain-{index}",
+                color=color,
+            )
+            for index, color in enumerate((
+                "серия", "не чёрный", "чёрный с розовым",
+            ))
+        ]
+        db.session.commit()
+        run, token = self._accept_and_claim(products)
+        pipeline = _FakeDecisionsPipeline()
+        original_auto_map = MarketplaceDraftService._auto_map_attributes
+        original_observed_colors = MarketplaceDraftService._observed_colors
+
+        def without_default_color(**kwargs):
+            attributes, report = original_auto_map(**kwargs)
+            return [
+                row for row in attributes
+                if row.get("attribute_id") != "10096"
+            ], report
+
+        def unsafe_legacy_colors(value):
+            literal = value[0] if isinstance(value, list) and value else value
+            if literal == "серия":
+                return ["Серый"]
+            if literal == "не чёрный":
+                return ["Черный"]
+            if literal == "чёрный с розовым":
+                return ["Черный", "Розовый"]
+            return original_observed_colors(value)
+
+        with patch.object(
+            MarketplaceDraftService,
+            "_auto_map_attributes",
+            side_effect=without_default_color,
+        ), patch.object(
+            MarketplaceDraftService,
+            "_observed_colors",
+            side_effect=unsafe_legacy_colors,
+        ), patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            return_value=pipeline,
+        ) as runtime_factory:
+            results = [self._advance(run, token, product) for product in products]
+
+        self.assertTrue(all(result.outcome == "prepared" for _, result in results))
+        self.assertEqual(pipeline.plans, [])
+        runtime_factory.assert_not_called()
+        for item, _result in results:
+            draft = MarketplaceDraftService.get_draft(
+                seller_id=self.seller.id, draft_id=item.draft_id,
+            )
+            self.assertEqual(self._color(draft), [])
+
+    def test_color_timestamp_refresh_reuses_cache_but_dictionary_change_does_not(self):
+        product = self._source_product(
+            external_id=self.source.external_id,
+            color="light pink",
+            create_mapping=False,
+        )
+        run, _token = self._accept_and_claim([product])
+        item = OzonBulkUploadItem.query.filter_by(
+            run_id=run.id, imported_product_id=product.id,
+        ).one()
+
+        def current_plan():
+            candidate = OzonPrepareDecisionsService._candidate(
+                run=run,
+                item=item,
+                product=product,
+                draft=self.draft,
+                product_type=self.product_type,
+            )
+            self.assertIsNotNone(candidate)
+            return plan_characteristic_phase([candidate.context])
+
+        initial_time = datetime.utcnow() - timedelta(seconds=30)
+        self.marketplace.categories_synced_at = initial_time
+        self.product_type.attributes_synced_at = initial_time
+        self.color_definition.values_synced_at = initial_time
+        db.session.commit()
+        first_plan = current_plan()
+        self.assertEqual(len(first_plan.question_fingerprints), 1)
+        client = _FakeColorClient()
+
+        with TemporaryDirectory() as private_dir:
+            os.chmod(private_dir, 0o700)
+            pipeline = OpenAIDecisionsPipeline(
+                OpenAIDecisionsCache(
+                    str(Path(private_dir) / "decisions.sqlite3"),
+                    max_calls_per_day=10,
+                ),
+                client,
+            )
+            first = pipeline.run_plan(first_plan, now=initial_time)
+            self.assertEqual(first.results[0].status, "selected")
+            self.assertEqual(len(client.calls), 1)
+
+            refreshed_time = datetime.utcnow()
+            self.marketplace.categories_synced_at = refreshed_time
+            self.marketplace.categories_snapshot_hash = "tree-refreshed-only"
+            self.product_type.attributes_synced_at = refreshed_time
+            self.color_definition.values_synced_at = refreshed_time
+            db.session.commit()
+            timestamp_refreshed_plan = current_plan()
+            self.assertEqual(
+                timestamp_refreshed_plan.question_fingerprints,
+                first_plan.question_fingerprints,
+            )
+            timestamp_refreshed = pipeline.run_plan(
+                timestamp_refreshed_plan,
+                now=refreshed_time,
+            )
+            self.assertEqual(timestamp_refreshed.results[0].status, "selected")
+            self.assertEqual(timestamp_refreshed.reservation_state, "cached")
+            self.assertEqual(len(client.calls), 1)
+
+            changed_value = MarketplaceAttributeValue.query.filter_by(
+                attribute_id=self.color_definition.id,
+                external_value_id="102",
+            ).one()
+            changed_value.value = "Soft pink"
+            changed_value.value_normalized = OzonReferenceService.normalize_value(
+                changed_value.value,
+            )
+            self.color_definition.values_version += 1
+            self.color_definition.values_snapshot_hash = "color-values-v2"
+            self.color_definition.values_synced_at = datetime.utcnow()
+            db.session.commit()
+            changed_dictionary_plan = current_plan()
+            self.assertNotEqual(
+                changed_dictionary_plan.question_fingerprints,
+                first_plan.question_fingerprints,
+            )
+            changed_dictionary = pipeline.run_plan(
+                changed_dictionary_plan,
+                now=datetime.utcnow(),
+            )
+            self.assertEqual(changed_dictionary.results[0].status, "selected")
+            self.assertEqual(len(client.calls), 2)
+
+    def test_low_confidence_selection_is_never_applied(self):
+        db.session.delete(self.draft)
+        product = self._source_product(
+            external_id="source-low-confidence", color="light pink",
+        )
+        db.session.commit()
+        run, token = self._accept_and_claim([product])
+        pipeline = _FakeDecisionsPipeline(confidence=0.94)
+        with patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            return_value=pipeline,
+        ):
+            item, result = self._advance(run, token, product)
+        draft = MarketplaceDraftService.get_draft(
+            seller_id=self.seller.id, draft_id=item.draft_id,
+        )
+        self.assertEqual(result.outcome, "prepared")
+        self.assertEqual(self._color(draft), [])
+        self.assertEqual(pipeline.physical_batches, 1)
+
+    def test_source_queue_selects_exact_category_type_without_mapping_write(self):
+        db.session.delete(self.draft)
+        product = self._source_product(
+            external_id="source-category",
+            color="pink",
+            category_evidence=True,
+            create_mapping=False,
+        )
+        db.session.add(MarketplaceProductType(
+            marketplace_id=self.marketplace.id,
+            category_id=self.product_type.category_id,
+            external_type_id="778",
+            name="Тип 2",
+            is_available=True,
+            is_disabled_upstream=False,
+            is_seller_selectable=True,
+        ))
+        db.session.commit()
+        run, token = self._accept_and_claim([product])
+        pipeline = _FakeCategoryPipeline()
+        with patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            return_value=pipeline,
+        ):
+            item, result = self._advance(run, token, product)
+        draft = MarketplaceDraftService.get_draft(
+            seller_id=self.seller.id, draft_id=item.draft_id,
+        )
+        self.assertEqual(result.outcome, "prepared")
+        self.assertEqual(draft.product_type_id, self.product_type.id)
+        self.assertEqual(MarketplaceCategoryMapping.query.count(), 0)
+        self.assertEqual(pipeline.calls, 1)
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+
+    def test_source_queue_batches_and_caches_two_exact_category_questions(self):
+        db.session.delete(self.draft)
+        first = self._source_product(
+            external_id="source-category-first",
+            color="pink",
+            category_evidence=True,
+            create_mapping=False,
+        )
+        second = self._source_product(
+            external_id="source-category-second",
+            color="pink",
+            category_evidence=True,
+            create_mapping=False,
+        )
+        db.session.add(MarketplaceProductType(
+            marketplace_id=self.marketplace.id,
+            category_id=self.product_type.category_id,
+            external_type_id="778",
+            name="Тип 2",
+            is_available=True,
+            is_disabled_upstream=False,
+            is_seller_selectable=True,
+        ))
+        db.session.commit()
+        run, token = self._accept_and_claim([first, second])
+        client = _FakeCategoryClient()
+
+        with TemporaryDirectory() as private_dir:
+            os.chmod(private_dir, 0o700)
+            pipeline = OpenAIDecisionsPipeline(
+                OpenAIDecisionsCache(
+                    str(Path(private_dir) / "decisions.sqlite3"),
+                    max_calls_per_day=10,
+                ),
+                client,
+            )
+            with patch(
+                "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+                return_value=pipeline,
+            ):
+                first_item, first_result = self._advance(run, token, first)
+                self.assertEqual(first_result.outcome, "prepared")
+                self.assertEqual(len(client.calls), 1)
+                self.assertEqual(len(client.calls[0]["questions"]), 2)
+                self.assertEqual(
+                    len(client.calls[0]["input_json"]["products"]), 2,
+                )
+                first_draft = MarketplaceDraftService.get_draft(
+                    seller_id=self.seller.id,
+                    draft_id=first_item.draft_id,
+                )
+                self.assertEqual(first_draft.product_type_id, self.product_type.id)
+
+                second_item, second_result = self._advance(run, token, second)
+                self.assertEqual(second_result.outcome, "prepared")
+                second_draft = MarketplaceDraftService.get_draft(
+                    seller_id=self.seller.id,
+                    draft_id=second_item.draft_id,
+                )
+                self.assertEqual(second_draft.product_type_id, self.product_type.id)
+                self.assertEqual(len(client.calls), 1)
+
+        self.assertEqual(MarketplaceCategoryMapping.query.count(), 0)
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+
+    def test_existing_manual_empty_draft_never_enters_decisions_or_gets_filled(self):
+        product = self._source_product(
+            external_id=self.source.external_id,
+            color="light pink",
+        )
+        # Existing product is deliberately tied to an old editor draft with an
+        # empty 10096 row; that empty value is seller intent, not a suggestion.
+        self.draft.attributes_json = json.dumps([
+            {"attribute_id": "10096", "complex_id": "0", "values": []},
+        ])
+        self.draft.product_type_id = self.product_type.id
+        self.draft.external_category_id = "10"
+        self.draft.external_type_id = "777"
+        db.session.commit()
+        run, token = self._accept_and_claim([product])
+        pipeline = _FakeDecisionsPipeline()
+        with patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            return_value=pipeline,
+        ):
+            item, _result = self._advance(run, token, product)
+        draft = MarketplaceDraftService.get_draft(
+            seller_id=self.seller.id, draft_id=item.draft_id,
+        )
+        self.assertEqual(self._color(draft), [])
+        self.assertEqual(pipeline.plans, [])
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

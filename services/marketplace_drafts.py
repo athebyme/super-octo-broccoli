@@ -8,6 +8,7 @@ separate durable P5 operation that revalidates this state.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import hashlib
@@ -87,6 +88,13 @@ class MarketplaceDraftConflict(MarketplaceDraftError):
 
 class MarketplaceCategoryImpactTooLarge(MarketplaceDraftConflict):
     code = "category_impact_too_large"
+
+
+@dataclass
+class DraftCreationReceipt:
+    """Identifies a draft row inserted and committed by one create call."""
+
+    created_draft_id: Optional[int] = None
 
 
 class MarketplaceDraftService:
@@ -3687,45 +3695,137 @@ class MarketplaceDraftService:
         return any(marker in joined for marker in markers)
 
     @classmethod
-    def _observed_colors(cls, value: Any) -> list:
-        """Map explicit Russian color morphology to Ozon base colors."""
+    def _color_observation_tokens(cls, value: Any) -> Tuple[List[str], List[str]]:
         values = value if isinstance(value, list) else [value]
+        texts = []
         tokens = []
         for item in values[: cls.MAX_ATTRIBUTE_VALUES]:
             if not isinstance(item, str):
                 continue
-            tokens.extend(re.findall(
-                r"[a-zа-яё]+",
-                unicodedata.normalize("NFKC", item)
-                .casefold()
-                .replace("ё", "е"),
-            ))
-        mappings = (
-            ("разноцвет", "Разноцветный"),
-            ("серебр", "Серебристый"),
-            ("золот", "Золотой"),
-            ("прозрач", "Прозрачный"),
-            ("черн", "Черный"),
-            ("бел", "Белый"),
-            ("красн", "Красный"),
-            ("розов", "Розовый"),
-            ("оранж", "Оранжевый"),
-            ("желт", "Желтый"),
-            ("зелен", "Зеленый"),
-            ("голуб", "Голубой"),
-            ("син", "Синий"),
-            ("фиолет", "Фиолетовый"),
-            ("сер", "Серый"),
-            ("коричнев", "Коричневый"),
-            ("беж", "Бежевый"),
+            normalized = unicodedata.normalize("NFKC", item).casefold().replace("ё", "е")
+            texts.append(normalized)
+            tokens.extend(re.findall(r"[a-zа-яё]+", normalized))
+        return texts, tokens
+
+    @classmethod
+    def _observed_color_token(cls, token: str) -> Optional[str]:
+        hard = r"(?:ый|ая|ое|ые|ого|ой|ому|ым|ом|ую|ых|ыми)"
+        soft = r"(?:ий|яя|ее|ие|его|ей|ему|им|ем|юю|их|ими)"
+        rules = (
+            (rf"разноцветн{hard}", "Разноцветный"),
+            (rf"серебр(?:о|ян{hard}|ист{hard})", "Серебристый"),
+            (rf"золот(?:о|{hard}|ист{hard})", "Золотой"),
+            (rf"прозрачн{hard}", "Прозрачный"),
+            (rf"черн(?:{hard}|еньк{hard})", "Черный"),
+            (rf"бел(?:{hard}|еньк{hard})", "Белый"),
+            (rf"красн(?:{hard}|еньк{hard})", "Красный"),
+            (rf"розов(?:{hard}|ат{hard}|еньк{hard})", "Розовый"),
+            (rf"оранжев{hard}", "Оранжевый"),
+            (rf"желт(?:{hard}|еньк{hard})", "Желтый"),
+            (rf"зелен(?:{hard}|еньк{hard})", "Зеленый"),
+            (rf"голуб(?:{hard}|еньк{hard})", "Голубой"),
+            (rf"син(?:{soft}|еньк{hard})", "Синий"),
+            (rf"фиолетов{hard}", "Фиолетовый"),
+            (rf"сер(?:{hard}|еньк{hard})", "Серый"),
+            (rf"коричнев{hard}", "Коричневый"),
+            (rf"бежев{hard}", "Бежевый"),
         )
+        return next((canonical for pattern, canonical in rules
+                     if re.fullmatch(pattern, token)), None)
+
+    @classmethod
+    def _observed_color_mentions(cls, text: str) -> Tuple[List[str], List[str]]:
+        """Return exact color mentions and unresolved color-like tokens."""
+        linkers = {
+            "черно": "Черный",
+            "бело": "Белый",
+            "красно": "Красный",
+            "розово": "Розовый",
+            "оранжево": "Оранжевый",
+            "желто": "Желтый",
+            "зелено": "Зеленый",
+            "голубо": "Голубой",
+            "сине": "Синий",
+            "фиолетово": "Фиолетовый",
+            "серо": "Серый",
+            "коричнево": "Коричневый",
+            "бежево": "Бежевый",
+            "золотисто": "Золотой",
+            "серебристо": "Серебристый",
+        }
+        stems = (
+            "разноцвет", "серебр", "золот", "прозрач", "черн", "бел",
+            "красн", "розов", "оранж", "желт", "зелен", "голуб", "син",
+            "фиолет", "сер", "коричнев", "беж",
+        )
+        mentions = []
+        unresolved = []
+        for match in re.finditer(r"[a-zа-яё]+", text):
+            token = match.group(0)
+            canonical = cls._observed_color_token(token)
+            if (
+                canonical is None
+                and text[match.end():match.end() + 1] == "-"
+            ):
+                canonical = linkers.get(token)
+            if canonical is not None:
+                mentions.append(canonical)
+            elif any(token.startswith(stem) for stem in stems):
+                unresolved.append(token)
+        return mentions, unresolved
+
+    @classmethod
+    def _color_observation_has_uncertain_language(cls, value: Any) -> bool:
+        texts, tokens = cls._color_observation_tokens(value)
+        if not tokens:
+            return False
+        uncertainty_markers = {
+            "не", "без", "или", "либо", "возможно", "вероятно",
+            "примерно", "наверное", "кажется", "скорее", "неизвестно",
+            "неизвестный", "неопределенный", "неопределенная", "сомнительно",
+        }
+        if any(marker in tokens for marker in uncertainty_markers):
+            return True
+        if any("?" in text for text in texts):
+            return True
+        if any(
+            token.startswith("не")
+            and cls._observed_color_token(token[2:]) is not None
+            for token in tokens
+        ):
+            return True
+        return False
+
+    @classmethod
+    def _color_observation_is_uncertain(cls, value: Any) -> bool:
+        """Return true for negated, uncertain, mixed, or color-like invalid text."""
+        if cls._color_observation_has_uncertain_language(value):
+            return True
+        texts, _tokens = cls._color_observation_tokens(value)
+
+        mentions = []
+        unresolved = []
+        for text in texts:
+            text_mentions, text_unresolved = cls._observed_color_mentions(text)
+            mentions.extend(text_mentions)
+            unresolved.extend(text_unresolved)
+        matched = set(mentions)
+        if len(matched) > 1:
+            return True
+        return bool(unresolved)
+
+    @classmethod
+    def _observed_colors(cls, value: Any) -> list:
+        """Map only complete, positive Russian color forms to base colors."""
+        _texts, tokens = cls._color_observation_tokens(value)
+        if cls._color_observation_has_uncertain_language(value):
+            return []
         result = []
-        for token in tokens:
-            for stem, canonical in mappings:
-                if token.startswith(stem):
-                    if canonical not in result:
-                        result.append(canonical)
-                    break
+        for text in _texts:
+            mentions, _unresolved = cls._observed_color_mentions(text)
+            for canonical in mentions:
+                if canonical not in result:
+                    result.append(canonical)
         return result
 
     @classmethod
@@ -3913,6 +4013,14 @@ class MarketplaceDraftService:
         for source_key, names in aliases.items():
             value = source_values.get(source_key)
             if value in (None, "", [], {}):
+                continue
+            if (
+                source_key == "colors"
+                and cls._color_observation_is_uncertain(value)
+            ):
+                # Mixed literals are handled below from their separate exact
+                # canonical colors; uncertainty and color-like false prefixes
+                # must not enter the exact dictionary matcher as raw text.
                 continue
             if source_key == "brand":
                 brand_keys = [cls._normalized_text(name) for name in names]
@@ -6579,6 +6687,7 @@ class MarketplaceDraftService:
         account_id: int,
         imported_product_id: int,
         expected: dict,
+        creation_receipt: Optional[DraftCreationReceipt] = None,
     ) -> MarketplaceProductDraft:
         from services.marketplace_operation_locks import (
             release_account_operation_lock,
@@ -6741,6 +6850,8 @@ class MarketplaceDraftService:
             db.session.commit()
             committed = True
             created_id = draft.id
+            if creation_receipt is not None:
+                creation_receipt.created_draft_id = created_id
         except (IntegrityError, StaleDataError, OperationalError):
             db.session.rollback()
             raise MarketplaceDraftConflict(
@@ -6853,7 +6964,14 @@ class MarketplaceDraftService:
         source_link_preflight: bool = True,
         observed_mapping_preflight: bool = True,
         expected_existing_listing: Optional[dict] = None,
+        creation_receipt: Optional[DraftCreationReceipt] = None,
     ) -> MarketplaceProductDraft:
+        if creation_receipt is not None:
+            if type(creation_receipt) is not DraftCreationReceipt:
+                raise MarketplaceDraftValidationError(
+                    "creation_receipt должен быть DraftCreationReceipt"
+                )
+            creation_receipt.created_draft_id = None
         if expected_existing_listing is not None:
             if (
                 product_type_id is not None
@@ -6873,6 +6991,7 @@ class MarketplaceDraftService:
                 account_id=account_id,
                 imported_product_id=imported_product_id,
                 expected=expected,
+                creation_receipt=creation_receipt,
             )
         if not isinstance(save_mapping, bool):
             raise MarketplaceDraftValidationError("save_mapping должен быть boolean")
@@ -7069,6 +7188,8 @@ class MarketplaceDraftService:
         )
         try:
             db.session.commit()
+            if creation_receipt is not None:
+                creation_receipt.created_draft_id = draft.id
         except IntegrityError:
             db.session.rollback()
             existing = MarketplaceProductDraft.query.filter_by(

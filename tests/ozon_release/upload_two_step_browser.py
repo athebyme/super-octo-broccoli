@@ -81,7 +81,7 @@ def document(*, seller_id, account_id: int, draft_ids: list[int], page=1,
     items = []
     for pk in draft_ids[(page-1)*20:page*20]:
         invalid = pk in blocked
-        items.append({
+        item = {
             'draft_id':pk, 'version':versions[pk], 'imported_product_id':pk,
             'title':categories[(pk-101)%6]+' · проверочный товар '+str(pk),
             'primary_image':None, 'offer_id':'CI-REVIEW-'+str(pk),
@@ -99,7 +99,12 @@ def document(*, seller_id, account_id: int, draft_ids: list[int], page=1,
             'dimensions':{'width':'200','height':'30','depth':'300',
                           'dimension_unit':'MILLIMETERS','weight':'250','weight_unit':'GRAMS'},
             'photos_count':2 if pk%2 else 1,
-        })
+        }
+        if pk == 101:
+            item['color'] = 'Черный'
+        elif pk == 102:
+            item['color'] = 'Розовый'
+        items.append(item)
     return {'account_id':account_id, 'account_label':'Ozon CI 0', 'draft_ids':draft_ids,
             'parent_prepare_job_uid':None, 'items':items, 'publication_enabled':True,
             'checked_at':'2026-09-27T00:00:00',
@@ -241,6 +246,12 @@ try:
             assert 'ТН ВЭД код' in page.locator('.our-card--blocked').first.inner_text()
             assert page.locator('#our-select-105').is_disabled()
             assert 'Цена продавца' in page.locator('.our-facts').first.inner_text()
+            black_card = page.locator('.our-card').filter(has_text='CI-REVIEW-101')
+            pink_card = page.locator('.our-card').filter(has_text='CI-REVIEW-102')
+            assert black_card.get_by_text('Цвет: Черный', exact=True).count() == 1
+            assert pink_card.get_by_text('Цвет: Розовый', exact=True).count() == 1
+            assert black_card.get_by_text('Цвет: Розовый', exact=True).count() == 0
+            assert pink_card.get_by_text('Цвет: Черный', exact=True).count() == 0
             layout(page,'first-page')
             passed('fresh_first_page_shows_real_facts_and_blocks_partial_rows')
 
@@ -285,7 +296,13 @@ try:
             dialog.wait_for()
             assert dialog.get_by_text('Цена продавца:',exact=False).count() == 1
             assert dialog.get_by_text('200 × 30 × 300 мм',exact=False).count() == 1
+            confirmation_row = dialog.locator('.our-dialog-row-copy').filter(
+                has_text='CI-REVIEW-101',
+            )
+            assert confirmation_row.get_by_text('Цвет: Черный', exact=True).count() == 1
+            assert confirmation_row.get_by_text('Цвет: Розовый', exact=True).count() == 0
             assert dialog.get_by_role('checkbox').evaluate('(node)=>document.activeElement===node')
+            passed('prepared_colors_stay_row_scoped_in_card_and_confirmation')
             layout(page,'confirmation')
             page.keyboard.press('Escape')
             assert dialog.count() == 0

@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import logging
 import secrets
 import time
+from types import SimpleNamespace
 from typing import Optional
 
 from flask import current_app
@@ -22,6 +23,7 @@ from models import (
     BackgroundJob,
     ImportedProduct,
     MarketplaceOperation,
+    MarketplaceProductDraft,
     OzonBulkUploadItem,
     OzonBulkUploadRun,
     SellerMarketplaceAccount,
@@ -228,6 +230,7 @@ class OzonUploadQueueService:
     def _source_item(
         cls, *, run: OzonBulkUploadRun, item: OzonBulkUploadItem,
         lease_token: str, now: datetime,
+        deadline_monotonic: Optional[float] = None,
     ) -> ItemAdvanceResult:
         from services.supplier_service import hydrate_missing_imported_observed_snapshot
         from services.ozon_bulk_upload import OzonBulkUploadService
@@ -279,12 +282,30 @@ class OzonUploadQueueService:
                 )
                 return ItemAdvanceResult(True, "needs_input", "needs_input")
             hydrate_missing_imported_observed_snapshot(product)
+            prior_draft = MarketplaceProductDraft.query.filter_by(
+                seller_id=run.seller_id,
+                account_id=run.account_id,
+                imported_product_id=product.id,
+            ).first()
+            prior_draft_id_before_create = (
+                prior_draft.id if prior_draft is not None else None
+            )
+            item_draft_id_before_create = item.draft_id
+            item_prepared_version_before_create = item.prepared_version
+            from services.marketplace_drafts import DraftCreationReceipt
+            creation_receipt = DraftCreationReceipt()
             draft = MarketplaceDraftService.create_draft(
                 seller_id=run.seller_id, account_id=run.account_id,
                 imported_product_id=product.id,
                 corrected_by_user_id=run.created_by_user_id,
                 source_link_preflight=False,
                 observed_mapping_preflight=False,
+                creation_receipt=creation_receipt,
+            )
+            current_draft_created_this_attempt = bool(
+                creation_receipt.created_draft_id == draft.id
+                and prior_draft_id_before_create is None
+                and item_draft_id_before_create is None
             )
             cls.transition_item(
                 run_id=run.id, item_id=item.id, lease_token=lease_token,
@@ -308,6 +329,23 @@ class OzonUploadQueueService:
                     error_message="По черновику уже выполняется операция Ozon",
                 )
                 return ItemAdvanceResult(True, "needs_input", "needs_input")
+            draft = cls._prepare_source_category(
+                run=run,
+                item=item,
+                account=account,
+                product=product,
+                draft=draft,
+                prior_draft_id_before_create=prior_draft_id_before_create,
+                item_draft_id_before_create=item_draft_id_before_create,
+                item_prepared_version_before_create=(
+                    item_prepared_version_before_create
+                ),
+                current_draft_created_this_attempt=(
+                    current_draft_created_this_attempt
+                ),
+                lease_token=lease_token,
+                deadline_monotonic=deadline_monotonic,
+            )
             draft = MarketplaceDraftService.rebase_source_defaults(
                 seller_id=run.seller_id, draft_id=draft.id,
                 expected_version=draft.version,
@@ -319,6 +357,23 @@ class OzonUploadQueueService:
             draft = MarketplaceDraftService.apply_account_defaults(
                 seller_id=run.seller_id, draft_id=draft.id,
                 expected_version=draft.version,
+            )
+            from services.ozon_prepare_decisions import (
+                OzonPrepareDecisionsService,
+            )
+            OzonPrepareDecisionsService.prepare_source_window(
+                run=run,
+                current_item=item,
+                current_draft=draft,
+                lease_token=lease_token,
+                now=datetime.utcnow(),
+                current_draft_created_this_attempt=(
+                    current_draft_created_this_attempt
+                ),
+                deadline_monotonic=deadline_monotonic,
+            )
+            draft = MarketplaceDraftService.get_draft(
+                seller_id=run.seller_id, draft_id=draft.id,
             )
             draft = MarketplaceDraftService.validate_draft(
                 seller_id=run.seller_id, draft_id=draft.id,
@@ -389,6 +444,242 @@ class OzonUploadQueueService:
                 run_id=run.id, item_id=item.id,
                 lease_token=lease_token, now=datetime.utcnow(), exc=exc,
             )
+
+    @classmethod
+    def _prepare_source_category(
+        cls,
+        *,
+        run: OzonBulkUploadRun,
+        item: OzonBulkUploadItem,
+        account: SellerMarketplaceAccount,
+        product: ImportedProduct,
+        draft,
+        prior_draft_id_before_create: Optional[int],
+        item_draft_id_before_create: Optional[int],
+        item_prepared_version_before_create: Optional[int],
+        current_draft_created_this_attempt: bool,
+        lease_token: str,
+        deadline_monotonic: Optional[float],
+    ):
+        """Apply one confidence-gated exact type choice inside the run fence."""
+        if (
+            deadline_monotonic is not None
+            and deadline_monotonic - time.monotonic() < 22
+        ):
+            return draft
+        fresh_create = current_draft_created_this_attempt is True and (
+            prior_draft_id_before_create is None
+            and item_draft_id_before_create is None
+            and item_prepared_version_before_create is None
+        )
+        exact_retry = (
+            type(prior_draft_id_before_create) is int
+            and prior_draft_id_before_create == draft.id
+            and item_draft_id_before_create == draft.id
+            and item_prepared_version_before_create == draft.version
+        )
+        if not (fresh_create or exact_retry) or not (
+            draft.status == "needs_category"
+            and draft.product_type_id is None
+            and draft.category_mapping_id is None
+            and draft.external_category_id is None
+            and draft.external_type_id is None
+            and draft.published_listing_id is None
+        ):
+            return draft
+        try:
+            from services.ozon_prepare_category_decisions import (
+                build_ozon_category_tree_index,
+                build_ozon_prepare_category_candidate,
+                prepare_ozon_category_window,
+                same_ozon_prepare_category_scope,
+                selected_product_type_id,
+            )
+            from models import MarketplaceListing
+            if MarketplaceListing.query.filter_by(
+                seller_id=run.seller_id,
+                marketplace_id=account.marketplace_id,
+                account_id=account.id,
+                imported_product_id=product.id,
+            ).first() is not None:
+                return draft
+            from services.openai_decisions_runtime import (
+                create_openai_decisions_pipeline,
+            )
+            pipeline = create_openai_decisions_pipeline()
+            if pipeline is None:
+                return draft
+
+            now = datetime.utcnow()
+            sibling_rows = db.session.query(
+                OzonBulkUploadItem, ImportedProduct,
+            ).join(
+                ImportedProduct,
+                ImportedProduct.id == OzonBulkUploadItem.imported_product_id,
+            ).filter(
+                OzonBulkUploadItem.run_id == run.id,
+                OzonBulkUploadItem.id != item.id,
+                OzonBulkUploadItem.phase.in_(("pending", "preparing")),
+                OzonBulkUploadItem.next_due_at.isnot(None),
+                OzonBulkUploadItem.next_due_at <= now,
+                OzonBulkUploadItem.draft_id.is_(None),
+                OzonBulkUploadItem.prepared_version.is_(None),
+                OzonBulkUploadItem.reviewed_draft_id.is_(None),
+                OzonBulkUploadItem.operation_id.is_(None),
+                ImportedProduct.seller_id == run.seller_id,
+            ).order_by(
+                OzonBulkUploadItem.ordinal.asc(),
+                OzonBulkUploadItem.id.asc(),
+            ).limit(40).all()
+            sibling_pairs = [
+                (sibling_item, sibling_product)
+                for sibling_item, sibling_product in sibling_rows
+            ]
+
+            class DeadlinePipeline:
+                def run_category_phase(self, contexts):
+                    if (
+                        deadline_monotonic is not None
+                        and deadline_monotonic - time.monotonic() < 22
+                    ):
+                        return SimpleNamespace(
+                            results=(),
+                            physical_request_started=False,
+                            reservation_state="deadline",
+                            finish_state=None,
+                        )
+                    return pipeline.run_category_phase(contexts)
+
+            window = prepare_ozon_category_window(
+                run=run,
+                account=account,
+                current_item=item,
+                current_product=product,
+                current_draft=draft,
+                prior_draft_id_before_create=prior_draft_id_before_create,
+                item_draft_id_before_create=item_draft_id_before_create,
+                item_prepared_version_before_create=(
+                    item_prepared_version_before_create
+                ),
+                sibling_pairs=sibling_pairs,
+                pipeline=DeadlinePipeline(),
+                now=now,
+            )
+        except OzonUploadLeaseLost:
+            raise
+        except Exception:
+            # This optional local suggestion must not block normal preparation.
+            db.session.rollback()
+            return draft
+        selected_type_id = (
+            window.current_product_type_id if window is not None else None
+        )
+        if type(selected_type_id) is not int or selected_type_id <= 0:
+            return draft
+        if db.session.new or db.session.dirty or db.session.deleted:
+            db.session.rollback()
+            return draft
+        db.session.expire_all()
+        current_time = datetime.utcnow()
+        try:
+            cls._fence_lease(
+                run_id=run.id,
+                lease_token=lease_token,
+                now=current_time,
+            )
+            fresh_run = OzonBulkUploadRun.query.filter_by(
+                id=run.id,
+                seller_id=run.seller_id,
+                account_id=run.account_id,
+                mode="source_prepare",
+                state="active",
+            ).first()
+            fresh_item = OzonBulkUploadItem.query.filter_by(
+                id=item.id, run_id=run.id,
+            ).first()
+            fresh_account = SellerMarketplaceAccount.query.filter_by(
+                id=run.account_id, seller_id=run.seller_id,
+            ).first()
+            fresh_product = ImportedProduct.query.filter_by(
+                id=product.id, seller_id=run.seller_id,
+            ).first()
+            fresh_draft = MarketplaceDraftService.get_draft(
+                seller_id=run.seller_id, draft_id=draft.id,
+            )
+            if (
+                fresh_run is None
+                or fresh_item is None
+                or fresh_account is None
+                or fresh_product is None
+                or fresh_draft is None
+                or fresh_item.operation_id is not None
+                or fresh_item.phase != "preparing"
+                or fresh_item.draft_id != fresh_draft.id
+                or fresh_item.prepared_version != fresh_draft.version
+                or not cls.lease_current(
+                    run_id=fresh_run.id,
+                    lease_token=lease_token,
+                    now=current_time,
+                )
+            ):
+                db.session.rollback()
+                return draft
+            source_category = window.current_candidate.context.source_fields.get(
+                "category",
+            )
+            if not isinstance(source_category, str) or not source_category:
+                db.session.rollback()
+                return draft
+            tree_index = build_ozon_category_tree_index(
+                fresh_account.marketplace,
+                [source_category],
+                now=current_time,
+            )
+            after = build_ozon_prepare_category_candidate(
+                run=fresh_run,
+                item=fresh_item,
+                account=fresh_account,
+                product=fresh_product,
+                draft=fresh_draft,
+                tree_index=tree_index,
+                prior_draft_id_before_create=prior_draft_id_before_create,
+                item_draft_id_before_create=item_draft_id_before_create,
+                item_prepared_version_before_create=(
+                    item_prepared_version_before_create
+                ),
+                now=current_time,
+            ) if tree_index is not None else None
+            verified_type_id = (
+                selected_product_type_id(after, window.current_result)
+                if after is not None
+                and same_ozon_prepare_category_scope(
+                    window.current_candidate, after,
+                ) else None
+            )
+            if (
+                type(verified_type_id) is not int
+                or verified_type_id <= 0
+                or verified_type_id != selected_type_id
+            ):
+                db.session.rollback()
+                return draft
+            MarketplaceDraftService._update_draft_core(
+                seller_id=fresh_run.seller_id,
+                draft_id=fresh_draft.id,
+                expected_version=fresh_draft.version,
+                patch={"product_type_id": verified_type_id},
+                category_review_required=False,
+                commit=False,
+            )
+            db.session.commit()
+            return MarketplaceDraftService.get_draft(
+                seller_id=fresh_run.seller_id, draft_id=fresh_draft.id,
+            )
+        except Exception as exc:
+            db.session.rollback()
+            if isinstance(exc, OzonUploadLeaseLost):
+                raise
+            return draft
 
     @classmethod
     def _reviewed_item(
@@ -462,6 +753,7 @@ class OzonUploadQueueService:
     def advance_item(
         cls, *, run_id: int, item_id: int, lease_token: str,
         now: Optional[datetime] = None,
+        deadline_monotonic: Optional[float] = None,
     ) -> ItemAdvanceResult:
         current_time = now or datetime.utcnow()
         if not cls.lease_current(
@@ -481,6 +773,7 @@ class OzonUploadQueueService:
         if run.mode == "source_prepare":
             return cls._source_item(
                 run=run, item=item, lease_token=lease_token, now=current_time,
+                deadline_monotonic=deadline_monotonic,
             )
         return cls._reviewed_item(
             run=run, item=item, lease_token=lease_token, now=current_time,
@@ -744,6 +1037,7 @@ class OzonUploadQueueService:
                 return
             advanced = cls.advance_item(
                 run_id=run_id, item_id=item.id, lease_token=lease_token,
+                deadline_monotonic=deadline,
             )
             if advanced.processed:
                 counts[run_id] += 1

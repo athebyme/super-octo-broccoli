@@ -90,6 +90,7 @@ def main():
             selected = set((ROOT / 'tests').glob('test_ozon_*.py')) | set((ROOT / 'tests').glob('test_marketplace_*.py'))
             selected.update(ROOT / 'tests' / name for name in EXTRA_TESTS)
             for pattern in (
+                'test_openai_decisions*.py',
                 'test_wb_edit_*.py',
                 'test_products_selection_*.py',
                 'test_common_product_content*.py',

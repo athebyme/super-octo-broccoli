@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 import json
+import time
 from unittest.mock import patch
 import unittest
 
@@ -520,7 +521,12 @@ class OzonUploadV3ServiceTest(OzonPublicationFixture, unittest.TestCase):
             runs.append(run.id)
         db.session.commit()
 
-        def wait_one(*, run_id, item_id, lease_token, now=None):
+        def wait_one(
+            *, run_id, item_id, lease_token, now=None,
+            deadline_monotonic=None,
+        ):
+            self.assertIs(type(deadline_monotonic), float)
+            self.assertGreater(deadline_monotonic, time.monotonic())
             due = datetime.utcnow() + timedelta(minutes=5)
             OzonUploadQueueService.transition_item(
                 run_id=run_id, item_id=item_id, lease_token=lease_token,
@@ -564,7 +570,12 @@ class OzonUploadV3ServiceTest(OzonPublicationFixture, unittest.TestCase):
             runs.append(run.id)
         db.session.commit()
 
-        def finish_one(*, run_id, item_id, lease_token, now=None):
+        def finish_one(
+            *, run_id, item_id, lease_token, now=None,
+            deadline_monotonic=None,
+        ):
+            self.assertIs(type(deadline_monotonic), float)
+            self.assertGreater(deadline_monotonic, time.monotonic())
             OzonUploadQueueService.transition_item(
                 run_id=run_id, item_id=item_id, lease_token=lease_token,
                 now=datetime.utcnow(), phase="needs_input",

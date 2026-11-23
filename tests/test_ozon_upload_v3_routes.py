@@ -15,7 +15,11 @@ from jinja2 import ChoiceLoader, DictLoader, FileSystemLoader
 from sqlalchemy import event
 from werkzeug.datastructures import MultiDict
 
-from models import BackgroundJob, ImportedProduct, MarketplaceOperation, OzonBulkUploadItem, OzonBulkUploadRun, db
+from models import (
+    BackgroundJob, ImportedProduct, MarketplaceAttributeDefinition,
+    MarketplaceAttributeValue, MarketplaceOperation, MarketplaceProductDraft,
+    OzonBulkUploadItem, OzonBulkUploadRun, db,
+)
 from routes.marketplace_drafts import register_marketplace_draft_routes
 from routes.ozon_bulk_uploads import register_ozon_bulk_upload_routes
 from services.ozon_bulk_repair import OzonBulkRepairService
@@ -977,6 +981,196 @@ assert.equal(malformed.link.href,'/my-products/beta');assert.equal(malformed.cal
             draft_ids=[self.draft.id],
         )
         self.assertIsNone(stale["items"][0]["automatic_attribute_cleanup"])
+
+    def test_review_shows_only_validated_exact_flat_color_for_each_draft(self):
+        now = datetime.utcnow()
+        color_definition = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id,
+            product_type_id=self.product_type.id,
+            external_attribute_id="10096",
+            name="Цвет товара",
+            data_type="String",
+            dictionary_id="1494",
+            is_required=False,
+            max_value_count=1,
+            is_collection=False,
+            is_available=True,
+            is_enabled=True,
+            last_seen_at=now,
+            values_synced_at=now,
+            values_sync_status="success",
+            values_snapshot_hash="color-dictionary-snapshot",
+            values_count=2,
+        )
+        db.session.add(color_definition)
+        db.session.flush()
+        db.session.add_all([
+            MarketplaceAttributeValue(
+                marketplace_id=self.marketplace.id,
+                product_type_id=self.product_type.id,
+                attribute_id=color_definition.id,
+                external_value_id="black-current-id",
+                value="Черный",
+                value_normalized="черный",
+                is_available=True,
+                last_seen_at=now,
+            ),
+            MarketplaceAttributeValue(
+                marketplace_id=self.marketplace.id,
+                product_type_id=self.product_type.id,
+                attribute_id=color_definition.id,
+                external_value_id="pink-current-id",
+                value="Розовый",
+                value_normalized="розовый",
+                is_available=True,
+                last_seen_at=now,
+            ),
+        ])
+
+        def color_attribute(value, value_id):
+            return {
+                "attribute_id": "10096",
+                "complex_id": "0",
+                "values": [{
+                    "dictionary_value_id": value_id,
+                    "value": value,
+                }],
+            }
+
+        self.draft.attributes_json = json.dumps(
+            [color_attribute("Черный", "black-current-id")],
+            ensure_ascii=False,
+        )
+        second_source = ImportedProduct(
+            seller_id=self.seller.id,
+            external_id="source-pink",
+            external_vendor_code="pink-offer",
+            source_type="synthetic",
+            title="Розовый товар",
+            description="Подтверждённое описание",
+            category="Категория",
+        )
+        bad_source = ImportedProduct(
+            seller_id=self.seller.id,
+            external_id="source-ambiguous-color",
+            external_vendor_code="ambiguous-offer",
+            source_type="synthetic",
+            title="Товар с неоднозначным цветом",
+            description="Подтверждённое описание",
+            category="Категория",
+        )
+        db.session.add_all([second_source, bad_source])
+        db.session.flush()
+
+        def review_draft(source, offer_id, attributes):
+            return MarketplaceProductDraft(
+                seller_id=self.seller.id,
+                marketplace_id=self.marketplace.id,
+                account_id=self.account.id,
+                imported_product_id=source.id,
+                product_type_id=self.product_type.id,
+                offer_id=offer_id,
+                external_category_id="10",
+                external_type_id="777",
+                status="ready",
+                source_fact_hash="b" * 64,
+                source_facts_json="{}",
+                provenance_json="{}",
+                content_json=json.dumps({
+                    "name": source.title,
+                    "description": source.description,
+                }, ensure_ascii=False),
+                attributes_json=json.dumps(attributes, ensure_ascii=False),
+                complex_attributes_json="[]",
+                media_json="{}",
+                dimensions_json=json.dumps({
+                    "width": "200", "height": "30", "depth": "300",
+                    "dimension_unit": "MILLIMETERS", "weight": "250",
+                    "weight_unit": "GRAMS",
+                }),
+                barcodes_json="[]",
+                commercial_json=json.dumps({
+                    "price": "1000", "old_price": "1200", "vat": "0.22",
+                    "currency_code": "RUB",
+                }),
+                schema_version=3,
+                schema_hash="schema-hash",
+                validation_status="valid",
+                validation_result_json=json.dumps({"publishable": True}),
+                validated_at=now,
+            )
+
+        second_draft = review_draft(
+            second_source,
+            "pink-offer",
+            [color_attribute("Розовый", "pink-current-id")],
+        )
+        ambiguous_draft = review_draft(
+            bad_source,
+            "ambiguous-offer",
+            [
+                color_attribute("Черный", "black-current-id"),
+                color_attribute("Розовый", "pink-current-id"),
+            ],
+        )
+        db.session.add_all([second_draft, ambiguous_draft])
+        db.session.commit()
+
+        writes = []
+
+        def capture(_conn, _cursor, statement, _params, _context, _many):
+            if statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")):
+                writes.append(statement)
+
+        event.listen(db.engine, "before_cursor_execute", capture)
+        try:
+            document = OzonUploadReviewService.document(
+                seller_id=self.seller.id,
+                account_id=self.account.id,
+                draft_ids=[self.draft.id, second_draft.id, ambiguous_draft.id],
+            )
+        finally:
+            event.remove(db.engine, "before_cursor_execute", capture)
+
+        rows = document["items"]
+        self.assertEqual(rows[0].get("color"), "Черный")
+        self.assertEqual(rows[1].get("color"), "Розовый")
+        self.assertNotIn("color", rows[2])
+        self.assertEqual(writes, [])
+
+        from flask import render_template
+        template_root = Path(__file__).resolve().parents[1] / "templates"
+        self.app.jinja_env.loader = ChoiceLoader([
+            DictLoader({
+                "base.html": "{% block title %}{% endblock %}{% block content %}{% endblock %}",
+                "partials/preparation_workspace_journey.html": (
+                    "{% macro journey(stage, account_label, selection, instruction, "
+                    "internal_url, draft_url, result_url, listing_url, channel, compact) %}"
+                    "{% endmacro %}"
+                ),
+            }),
+            FileSystemLoader(str(template_root)),
+        ])
+        self.app.jinja_env.globals["url_for"] = lambda *_args, **_kwargs: "/test-route"
+        self.app.jinja_env.globals["csrf_token"] = lambda: "test-csrf"
+        review = {
+            **document,
+            "request_key": "synthetic-review-key",
+            "expected_versions": {
+                str(row["draft_id"]): row["version"] for row in rows
+            },
+        }
+        with self.app.test_request_context("/"):
+            html = render_template(
+                "ozon_upload_review.html",
+                review=review,
+                review_checked_at_label="23.11.2026, 00:00 UTC",
+                review_checked_at_datetime="2026-11-23T00:00:00Z",
+            )
+        self.assertIn('<p v-if="row.color" class="our-meta"><strong>Цвет:</strong> {{ row.color }}</p>', html)
+        self.assertIn('<small v-if="row.color">Цвет: {{ row.color }}</small>', html)
+        self.assertIn("<strong>Цвет:</strong> Черный", html)
+        self.assertIn("<strong>Цвет:</strong> Розовый", html)
 
     def test_review_rejects_mixed_foreign_selection_and_repeated_query(self):
         result = self.client.get(f"/marketplaces/ozon/uploads/api/review?account_id={self.account.id}"

@@ -66,6 +66,10 @@ services:
       # Прокси для AI и image generation (OpenRouter, OpenAI, Claude, Gemini)
       # Формат: socks5://172.17.0.1:10808  (xray SOCKS5 на хосте)
       - AI_PROXY=${AI_PROXY:-}
+      # Typed Decisions uses its own opt-in flag/key and this same explicit proxy.
+      - OPENAI_DECISIONS_ENABLED=${OPENAI_DECISIONS_ENABLED:-0}
+      - OPENAI_DECISIONS_API_KEY=${OPENAI_DECISIONS_API_KEY:-}
+      - OPENAI_DECISIONS_MAX_CALLS_PER_DAY=${OPENAI_DECISIONS_MAX_CALLS_PER_DAY:-100}
       - IMAGE_GEN_PROXY=${IMAGE_GEN_PROXY:-}
       # Фотостудия: ключи остаются только на backend
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}

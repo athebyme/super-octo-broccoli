@@ -22,6 +22,78 @@ from services.ozon_catalog_operation_fence import (
 class OzonUploadReviewService:
     MAX_ITEMS = 200
     PAGE_SIZE = 20
+    COLOR_ATTRIBUTE_ID = "10096"
+
+    @classmethod
+    def _prepared_color(cls, documents, validation, *, product_type_id):
+        """Return one validator-backed color label from this draft's exact docs."""
+        if type(documents) is not dict or type(validation) is not dict:
+            return None
+        schema = validation.get("schema")
+        if (type(schema) is not dict
+                or schema.get("product_type_id") != product_type_id
+                or schema.get("fresh") is not True):
+            return None
+        errors = validation.get("errors")
+        attributes = documents.get("attributes")
+        complex_groups = documents.get("complex_attributes")
+        if type(errors) is not list or type(attributes) is not list or type(complex_groups) is not list:
+            return None
+        if any(type(item) is not dict for item in attributes):
+            return None
+
+        # The same attribute ID in a complex group or a malformed group makes
+        # its flat publication scope ambiguous, so do not surface a label.
+        for group in complex_groups:
+            if type(group) is not dict or type(group.get("attributes")) is not list:
+                return None
+            if any(type(item) is not dict for item in group["attributes"]):
+                return None
+            if any(item.get("attribute_id") == cls.COLOR_ATTRIBUTE_ID
+                   for item in group["attributes"]):
+                return None
+
+        matches = [
+            (index, item) for index, item in enumerate(attributes)
+            if item.get("attribute_id") == cls.COLOR_ATTRIBUTE_ID
+        ]
+        if len(matches) != 1:
+            return None
+        index, color = matches[0]
+        if color.get("complex_id", "0") != "0":
+            return None
+
+        # The normal validator checks these exact output values against the
+        # current type schema and dictionary. Suppress the label for any
+        # validator error scoped to this attribute.
+        color_path = f"attributes[{index}]"
+        for error in errors:
+            if type(error) is not dict:
+                return None
+            field = error.get("field")
+            if (field == color_path or field == f"attributes.{cls.COLOR_ATTRIBUTE_ID}"
+                    or (type(field) is str and field.startswith(color_path + "."))):
+                return None
+
+        values = color.get("values")
+        if type(values) is not list or not 1 <= len(values) <= 8:
+            return None
+        labels = []
+        total_chars = 0
+        for value in values:
+            if type(value) is not dict:
+                return None
+            label = value.get("value")
+            dictionary_value_id = value.get("dictionary_value_id")
+            if (type(label) is not str or not label or label != label.strip()
+                    or len(label) > 120 or type(dictionary_value_id) is not str
+                    or not dictionary_value_id or len(dictionary_value_id) > 100):
+                return None
+            total_chars += len(label)
+            if total_chars > 240:
+                return None
+            labels.append(label)
+        return ", ".join(labels)
 
     @staticmethod
     def _automatic_attribute_cleanup(draft):
@@ -170,7 +242,7 @@ class OzonUploadReviewService:
             account_label = draft.account.label
             media = documents.get("media") or {}
             photos = [media.get("primary_image"), *(media.get("images") or [])]
-            items.append({
+            item = {
                 "draft_id": pk, "version": draft.version,
                 "imported_product_id": draft.imported_product_id,
                 "title": card["title"], "primary_image": card["primary_image"],
@@ -191,7 +263,15 @@ class OzonUploadReviewService:
                 "dimensions": {key: (documents.get("dimensions") or {}).get(key)
                                for key in ("width", "height", "depth", "dimension_unit", "weight", "weight_unit")},
                 "photos_count": len({value for value in photos if isinstance(value, str) and value}),
-            })
+            }
+            prepared_color = cls._prepared_color(
+                documents,
+                validation,
+                product_type_id=draft.product_type_id,
+            )
+            if prepared_color is not None:
+                item["color"] = prepared_color
+            items.append(item)
         document = {
             "account_id": account_id, "account_label": account_label,
             "draft_ids": draft_ids, "parent_prepare_job_uid": parent_prepare_job_uid,
