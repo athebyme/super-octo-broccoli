@@ -1130,6 +1130,41 @@
             !Object.prototype.hasOwnProperty.call(scope, 'marketplace_state');
     }
 
+    function workspaceReturnScopeSnapshot(app, visibleCount) {
+        var filters = app.filters || {};
+        var scope = {
+            activeTab: app.activeTab,
+            search: filters.search,
+            supplier: filters.supplier,
+            has_photos: filters.has_photos,
+            stock: filters.stock,
+            sort: filters.sort,
+            visibleCount: visibleCount,
+        };
+        if (filters.marketplace) scope.marketplace = filters.marketplace;
+        if (filters.marketplace_state) scope.marketplace_state = filters.marketplace_state;
+        return scope;
+    }
+
+    function workspaceReturnScopeMatchesCurrent(app, scope) {
+        var filters = app && app.filters || {};
+        if (!app || !scope || app.loading || app.loadingMore || app.selectAllLoading ||
+            typeof app.feedScopeKey !== 'function' || app.itemsScope !== app.feedScopeKey() ||
+            (app.searchInput || '').trim().slice(0, 200) !== filters.search ||
+            !Array.isArray(app.items) ||
+            !validWorkspaceReturnScope(scope)) return false;
+        var visibleCount = Math.min(app.items.length, MAX_BULK_SELECTION);
+        if (!visibleCount || !orderedProductIds(app.items.slice(0, visibleCount))) return false;
+        var current = workspaceReturnScopeSnapshot(app, visibleCount);
+        var currentKeys = Object.keys(current).sort();
+        var expectedKeys = Object.keys(scope).sort();
+        var sameScope = currentKeys.length === expectedKeys.length &&
+            currentKeys.every(function (key, index) {
+                return key === expectedKeys[index] && current[key] === scope[key];
+            });
+        return sameScope && (!app.importBatchMode || defaultWorkspaceReturnScope(scope));
+    }
+
     function commonContentSelectionUrl(base, productIds, helpers) {
         if (helpers && typeof helpers.selectionUrl === 'function') {
             return helpers.selectionUrl(base, productIds);
@@ -2280,7 +2315,7 @@
                     this.itemsScope !== launch.scopeKey ||
                     (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) return false;
                 if (launch.source === 'bulk' && (!sameOrderedIds(this.selected, launch.localSelectionIds) ||
-                    JSON.stringify(this.buildWorkspaceReturnScope()) !== JSON.stringify(launch.returnScope))) return false;
+                    !workspaceReturnScopeMatchesCurrent(this, launch.returnScope))) return false;
                 if (launch.source === 'row' && launch.localSelectionIds.length !== 1) return false;
                 var sourceItems = this.priceWorkspaceItemsBySelection(launch.localSelectionIds);
                 if (!sourceItems) return false;
@@ -2727,19 +2762,7 @@
                         (this.searchInput || '').trim().slice(0, 200) === scope.search;
             },
             workspaceReturnScopeIsCurrent: function (scope) {
-                if (!scope || this.loading || this.loadingMore || this.selectAllLoading ||
-                    this.itemsScope !== this.feedScopeKey() ||
-                    (this.searchInput || '').trim().slice(0, 200) !== this.filters.search ||
-                    !validWorkspaceReturnScope(scope)) return false;
-                var current = this.buildWorkspaceReturnScope();
-                var currentKeys = current ? Object.keys(current).sort() : [];
-                var expectedKeys = Object.keys(scope).sort();
-                var sameScope = !!current && currentKeys.length === expectedKeys.length &&
-                    currentKeys.every(function (key, index) {
-                        return key === expectedKeys[index] && current[key] === scope[key];
-                    });
-                return sameScope &&
-                    (!this.importBatchMode || defaultWorkspaceReturnScope(scope));
+                return workspaceReturnScopeMatchesCurrent(this, scope);
             },
             workspaceReturnWbEditMatches: function (items, selectionIds) {
                 var capsule = workspaceReturnCapsule;
@@ -2782,19 +2805,7 @@
                     (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) return null;
                 var visibleCount = Math.min(this.items.length, MAX_BULK_SELECTION);
                 if (!visibleCount || !orderedProductIds(this.items.slice(0, visibleCount))) return null;
-                var scope = {
-                    activeTab: this.activeTab,
-                    search: this.filters.search,
-                    supplier: this.filters.supplier,
-                    has_photos: this.filters.has_photos,
-                    stock: this.filters.stock,
-                    sort: this.filters.sort,
-                    visibleCount: visibleCount,
-                };
-                if (this.filters.marketplace) scope.marketplace = this.filters.marketplace;
-                if (this.filters.marketplace_state) {
-                    scope.marketplace_state = this.filters.marketplace_state;
-                }
+                var scope = workspaceReturnScopeSnapshot(this, visibleCount);
                 return validWorkspaceReturnScope(scope) &&
                     (!this.importBatchMode || defaultWorkspaceReturnScope(scope)) ? scope : null;
             },
@@ -2808,8 +2819,7 @@
                     !sameOrderedIds(this.selected, handoff.selectionIds) ||
                     (this.searchInput || '').trim().slice(0, 200) !== this.filters.search ||
                     !this.wbAccountKnown || this.wbAccountId !== handoff.accountId ||
-                    JSON.stringify(this.buildWorkspaceReturnScope()) !==
-                        JSON.stringify(handoff.returnScope)) return false;
+                    !workspaceReturnScopeMatchesCurrent(this, handoff.returnScope)) return false;
                 return sameOrderedIds(
                     orderedWbProductIds(this.selectionItemsForIds(handoff.selectionIds), handoff.selectionIds),
                     handoff.productIds,
@@ -3594,7 +3604,7 @@
                     this.feedScopeKey() !== review.scopeKey || this.itemsScope !== review.scopeKey ||
                     !sameOrderedIds(this.selected, review.sourceIds) ||
                     (this.searchInput || '').trim().slice(0, 200) !== this.filters.search ||
-                    JSON.stringify(this.buildWorkspaceReturnScope()) !== JSON.stringify(review.returnScope)) {
+                    !workspaceReturnScopeMatchesCurrent(this, review.returnScope)) {
                     return false;
                 }
                 var result = this.resolveOzonWorkspaceUpdateAccountChoices(

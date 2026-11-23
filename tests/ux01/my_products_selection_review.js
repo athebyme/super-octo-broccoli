@@ -163,6 +163,65 @@ async function main() {
   assert.equal(Object.hasOwn(defaultScope, 'marketplace_state'), false,
     'the legacy default scope shape omits the default common status');
 
+  const capturedScopeApp = makeApp();
+  capturedScopeApp.activeTab = 'pending';
+  capturedScopeApp.searchInput = 'R71';
+  capturedScopeApp.filters.search = 'R71';
+  capturedScopeApp.filters.has_photos = 'yes';
+  capturedScopeApp.filters.stock = 'in_stock';
+  capturedScopeApp.filters.sort = 'title';
+  capturedScopeApp.filters.marketplace = 'wb';
+  capturedScopeApp.filters.marketplace_state = 'active';
+  capturedScopeApp.items = [row(41), row(42)];
+  capturedScopeApp.itemsScope = capturedScopeApp.feedScopeKey();
+  let returnScopeCaptures = 0;
+  const originalBuildReturnScope = capturedScopeApp.buildWorkspaceReturnScope;
+  capturedScopeApp.buildWorkspaceReturnScope = function () {
+    returnScopeCaptures += 1;
+    return originalBuildReturnScope.call(this);
+  };
+  const capturedScope = capturedScopeApp.buildWorkspaceReturnScope();
+  assert.ok(capturedScope);
+  assert.equal(capturedScopeApp.workspaceReturnScopeIsCurrent(capturedScope), true,
+    'current-scope checks compare status, source, marketplace, state, and visible count');
+  assert.equal(returnScopeCaptures, 1,
+    'checking a captured scope does not capture the filters again');
+  capturedScopeApp.activeTab = 'validated';
+  capturedScopeApp.itemsScope = capturedScopeApp.feedScopeKey();
+  assert.equal(capturedScopeApp.workspaceReturnScopeIsCurrent(capturedScope), false,
+    'a changed legacy WB status invalidates the captured scope');
+  capturedScopeApp.activeTab = 'pending';
+  capturedScopeApp.filters.marketplace_state = 'preparation';
+  capturedScopeApp.itemsScope = capturedScopeApp.feedScopeKey();
+  assert.equal(capturedScopeApp.workspaceReturnScopeIsCurrent(capturedScope), false,
+    'a changed optional marketplace state invalidates the captured scope');
+  capturedScopeApp.filters.marketplace_state = 'active';
+  capturedScopeApp.itemsScope = capturedScopeApp.feedScopeKey();
+  capturedScopeApp.items.push(row(43));
+  assert.equal(capturedScopeApp.workspaceReturnScopeIsCurrent(capturedScope), false,
+    'a changed visible row count invalidates the captured scope');
+
+  const signedBatchDefault = makeApp();
+  signedBatchDefault.items = [row(51)];
+  signedBatchDefault.itemsScope = signedBatchDefault.feedScopeKey();
+  const signedBatchDefaultScope = signedBatchDefault.buildWorkspaceReturnScope();
+  signedBatchDefault.importBatchMode = true;
+  signedBatchDefault.importBatch = 'signed-import-batch';
+  signedBatchDefault.itemsScope = signedBatchDefault.feedScopeKey();
+  assert.equal(signedBatchDefault.workspaceReturnScopeIsCurrent(signedBatchDefaultScope), true,
+    'signed batch handoffs still accept only their default scope');
+
+  const signedBatchFiltered = makeApp();
+  signedBatchFiltered.items = [row(52)];
+  signedBatchFiltered.filters.marketplace_state = 'active';
+  signedBatchFiltered.itemsScope = signedBatchFiltered.feedScopeKey();
+  const signedBatchFilteredScope = signedBatchFiltered.buildWorkspaceReturnScope();
+  signedBatchFiltered.importBatchMode = true;
+  signedBatchFiltered.importBatch = 'signed-import-batch';
+  signedBatchFiltered.itemsScope = signedBatchFiltered.feedScopeKey();
+  assert.equal(signedBatchFiltered.workspaceReturnScopeIsCurrent(signedBatchFilteredScope), false,
+    'signed batch handoffs reject filtered scopes');
+
   const stateOnly = makeApp();
   stateOnly.filters.marketplace_state = 'attention';
   const stateOnlyParams = stateOnly.queryParams(1, 50);
