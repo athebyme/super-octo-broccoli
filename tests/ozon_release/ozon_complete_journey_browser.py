@@ -1618,7 +1618,39 @@ try:
             assert page.locator(
                 "#ozon-result-status a.sh-btn--primary",
             ).count() == 1
-            page.locator("#ozon-result-status a.sh-btn--primary").focus()
+            fallback_link = page.locator(
+                "#ozon-result-status a[data-source-prepare-refresh-fallback]",
+            )
+            assert fallback_link.count() == 1
+            fallback_link.focus()
+            page.wait_for_timeout(50)
+            fallback_focus_state = page.evaluate("""() => ({
+                focused_fallback:document.activeElement === document.querySelector(
+                    '[data-source-prepare-refresh-fallback]'
+                ),
+                header_complete:document.querySelector(
+                    '[data-source-prepare-region="header"]'
+                )?.getAttribute('data-source-prepare-complete') || null,
+                body_complete:document.querySelector(
+                    '[data-source-prepare-region="body"]'
+                )?.getAttribute('data-source-prepare-complete') || null,
+                retry_count:document.querySelectorAll('[data-source-prepare-retry]').length,
+            })""")
+            assert fallback_focus_state["focused_fallback"], fallback_focus_state
+            assert fallback_focus_state["header_complete"] == "0", fallback_focus_state
+            assert fallback_focus_state["body_complete"] == "0", fallback_focus_state
+            assert fallback_focus_state["retry_count"] == 0, fallback_focus_state
+            search_button = page.get_by_role(
+                "button", name="Поиск по разделам", exact=True,
+            )
+            assert search_button.count() == 1
+            search_button.focus()
+            assert page.evaluate("""() => {
+                window.__r90GlobalSearchButton = document.activeElement;
+                return window.__r90GlobalSearchButton === document.querySelector(
+                    'button[aria-label="Поиск по разделам"]'
+                );
+            }""")
             page.wait_for_function("""() => {
                 const regions = Array.from(document.querySelectorAll(
                     '[data-source-prepare-region]'
@@ -1675,6 +1707,9 @@ try:
                     return_verified:link?.dataset.workspaceReturn || '',
                     return_in_slot:!!slot && slot.contains(link),
                     same_document:window.__r90PrepareDocument !== undefined,
+                    same_global_search_focus:document.activeElement ===
+                        window.__r90GlobalSearchButton &&
+                        window.__r90GlobalSearchButton.isConnected,
                     focus_outside_regions:!regions.some(region =>
                         region.contains(document.activeElement)
                     ),
@@ -1714,6 +1749,7 @@ try:
             assert terminal_state["return_verified"] == "verified", terminal_state
             assert terminal_state["return_in_slot"], terminal_state
             assert terminal_state["same_document"], terminal_state
+            assert terminal_state["same_global_search_focus"], terminal_state
             assert terminal_state["focus_outside_regions"], terminal_state
             assert terminal_state["pathname"] == parent_result_path, terminal_state
             assert source_prepare_navigations == [], source_prepare_navigations
@@ -1732,6 +1768,8 @@ try:
             report["source_prepare_inline"] = {
                 "terminal_html_gets": len(deferred_state["fetches"]),
                 "focused_region_deferred_swap": True,
+                "focused_fallback_deferred_swap": True,
+                "focus_preserved_on_global_search": True,
                 "same_document_and_return_node": True,
                 "mixed_prepared_needs_input_counts": {
                     "prepared": terminal_state["counts"]["Подготовлено локально"],
