@@ -581,6 +581,28 @@ try:
             supplier_card(index).wait_for()
             supplier_card(index).get_by_role('button',name='Изменить',exact=True).click()
 
+        bulk_action_posts=report['posts']
+        page.get_by_role('button',name='Заполнить поле',exact=True).click()
+        bulk_dialog=page.get_by_role('dialog')
+        bulk_dialog.get_by_label('Поле',exact=True).select_option('attribute:10096')
+        bulk_dialog.get_by_role('button',name='Выбрать из справочника',exact=True).click()
+        bulk_dialog.get_by_role('searchbox',name='Поиск значения',exact=True).fill('Черный')
+        bulk_option=bulk_dialog.locator('.orb-inline-picker .orb-picker-results button').filter(has_text='Черный').first
+        bulk_option.wait_for()
+        bulk_option.click()
+        bulk_dialog.get_by_role('button',name='Посмотреть изменения',exact=True).click()
+        assert 'Будет заполнено: 3. Пропущено: 0' in bulk_dialog.locator('[data-bulk-preview-summary]').inner_text()
+        assert bulk_dialog.locator('.orb-review-list > li').count()==3
+        assert report['posts']==bulk_action_posts
+        bulk_dialog.get_by_role('button',name='Заполнить в форме',exact=True).click()
+        assert page.locator('dialog[open]').count()==0
+        assert report['posts']==bulk_action_posts
+        bulk_action_post_delta=report['posts']-bulk_action_posts
+        assert bulk_action_post_delta==0
+        for index in (196,197,198):
+            staged_color=supplier_card(index).locator('.ode-attribute[data-attribute="10096"] .ode-value-chip-label')
+            assert staged_color.all_text_contents()==['Черный']
+
         clear_supplier_dictionary_values(196,'10096')
         choose_supplier_dictionary_value(196,'10096','Белый')
         choose_supplier_dictionary_value(196,'10096','Розовый')
@@ -769,6 +791,10 @@ try:
         report['supplier_source']={
             'selected_rows':3,
             'distinct_categories':3,
+            'bulk_color_normal_action_seen':True,
+            'bulk_preview_items':3,
+            'bulk_preview_skipped':0,
+            'bulk_action_posts':bulk_action_post_delta,
             'comparisons':5,
             'confirmed_comparisons':4,
             'confirmed_conflicts':2,
