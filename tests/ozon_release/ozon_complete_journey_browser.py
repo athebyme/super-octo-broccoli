@@ -233,8 +233,56 @@ def configure_fixture():
             }, ensure_ascii=False),
             photo_urls=json.dumps([photo_url]),
         )
-        db.session.add_all([new_source, stale_source])
+        retry_prepared_source = ImportedProduct(
+            seller_id=fixture["seller_id"],
+            external_id="journey-retry-prepared-source",
+            external_vendor_code="journey-retry-prepared-offer",
+            source_type="synthetic",
+            title="Полностью заполненная тестовая карточка",
+            description="Сохранённые синтетические сведения для проверки повтора.",
+            category="Посуда",
+            original_data=json.dumps({
+                "title": "Полностью заполненная тестовая карточка",
+                "description": "Сохранённые синтетические сведения для проверки повтора.",
+            }, ensure_ascii=False),
+            photo_urls=json.dumps([photo_url]),
+        )
+        db.session.add_all([new_source, stale_source, retry_prepared_source])
         db.session.flush()
+        retry_prepared_draft = MarketplaceDraftService.create_draft(
+            seller_id=fixture["seller_id"],
+            account_id=account_id,
+            imported_product_id=retry_prepared_source.id,
+            product_type_id=product_type.id,
+        )
+        retry_prepared_draft.content_json = json.dumps({
+            "name": retry_prepared_source.title,
+            "description": retry_prepared_source.description,
+        }, ensure_ascii=False)
+        retry_prepared_draft.media_json = json.dumps({
+            "primary_image": photo_url,
+            "images": [],
+        })
+        retry_prepared_draft.dimensions_json = json.dumps({
+            "width": "200", "height": "30", "depth": "300",
+            "dimension_unit": "MILLIMETERS", "weight": "250",
+            "weight_unit": "GRAMS",
+        })
+        retry_prepared_draft.barcodes_json = json.dumps(["4600000000002"])
+        retry_prepared_draft.commercial_json = json.dumps({
+            "price": "1000", "old_price": "1200", "vat": "0.22",
+            "currency_code": "RUB",
+        })
+        db.session.commit()
+        retry_prepared_draft = MarketplaceDraftService.validate_draft(
+            seller_id=fixture["seller_id"],
+            draft_id=retry_prepared_draft.id,
+            expected_version=retry_prepared_draft.version,
+        )
+        assert retry_prepared_draft.status == "ready"
+        assert MarketplaceDraftService._build_validation_result(
+            retry_prepared_draft,
+        )["publishable"] is True
         stale_draft = MarketplaceDraftService.create_draft(
             seller_id=fixture["seller_id"],
             account_id=account_id,
@@ -277,10 +325,16 @@ def configure_fixture():
             "commercial.vat",
         }, current
         assert current_codes >= {"physical_fact_required", "vat_required"}, current
-        return foreign_draft.id, new_source.id, product_type.id, stale_draft.id
+        return (
+            foreign_draft.id, new_source.id, product_type.id, stale_draft.id,
+            retry_prepared_source.id,
+        )
 
 
-foreign_draft_id, source_id, product_type_id, stale_ready_draft_id = configure_fixture()
+(
+    foreign_draft_id, source_id, product_type_id, stale_ready_draft_id,
+    retry_prepared_source_id,
+) = configure_fixture()
 
 
 class SyntheticRegistry:
@@ -1434,20 +1488,63 @@ try:
             csrf = list_config["csrf"]
             prepared = post_json(page, "/marketplaces/ozon/uploads/", {
                 "account_id": account_id,
-                "imported_product_ids": [source_id],
+                "imported_product_ids": [source_id, retry_prepared_source_id],
                 "confirm_prepare": True,
                 "request_key": "complete-browser-prepare-000001",
             }, csrf)
             assert prepared["status"] == 202, prepared
             prepare_uid = prepared["document"]["run"]["job_uid"]
+            parent_result_path = f"/marketplaces/ozon/uploads/{prepare_uid}"
+            page.goto(base + parent_result_path)
+            assert page.locator("[data-source-prepare-retry]").count() == 0
             with app.app_context():
                 prepare_stats = OzonBulkUploadService.run_due_preparation()
             assert prepare_stats["needs_input"] == 1, prepare_stats
+            assert prepare_stats["prepared"] == 1, prepare_stats
             source_read = api_call_from_page(
                 page, "/marketplaces/ozon/uploads/api/" + prepare_uid,
             )
             assert source_read["status"] == 200
-            assert source_read["document"]["run"]["items"][0]["status"] == "needs_input"
+            original_items = source_read["document"]["run"]["items"]
+            assert [item["status"] for item in original_items] == [
+                "needs_input", "prepared",
+            ], original_items
+            page.reload()
+            retry_form = page.locator("[data-source-prepare-retry]")
+            assert retry_form.count() == 1
+            assert page.locator("[data-source-prepare-parent]").count() == 0
+            assert retry_form.locator(
+                "[data-source-prepare-retry-count]",
+            ).inner_text().strip() == "1"
+            retry_help = retry_form.inner_text()
+            assert "Ozon CI 0" in retry_help
+            assert "Подготовка перечитает сохранённые данные." in retry_help
+            retry_action = urlsplit(retry_form.get_attribute("action")).path
+            assert retry_action == parent_result_path + "/retry", retry_action
+            retry_csrf = retry_form.locator(
+                'input[name="csrf_token"]',
+            ).input_value()
+            assert retry_csrf
+            assert retry_form.locator(
+                'input[name="confirm_prepare"]',
+            ).input_value() == "1"
+            retry_request_key = retry_form.locator(
+                'input[name="request_key"]',
+            ).input_value()
+            assert retry_request_key
+            assert retry_form.get_by_role(
+                "button", name="Подготовить повторно", exact=True,
+            ).count() == 1
+            retry_button = retry_form.get_by_role(
+                "button", name="Подготовить повторно", exact=True,
+            )
+            retry_target = retry_button.bounding_box()
+            assert retry_target is not None
+            assert retry_target["width"] >= 44 and retry_target["height"] >= 44, retry_target
+            page.screenshot(
+                path=str(OUT / "ozon-source-prepare-retry-result.png"),
+                full_page=True,
+            )
             with app.app_context():
                 created_draft = MarketplaceProductDraft.query.filter_by(
                     seller_id=fixture["seller_id"],
@@ -1456,7 +1553,11 @@ try:
                 ).one()
                 draft_id = created_draft.id
                 assert created_draft.id != fixture["draft_id"]
-            page.reload()
+                from models import MarketplaceOperation
+                operation_count_before_retry = MarketplaceOperation.query.count()
+                from models import AIParsingAttempt
+                ai_attempt_count_before_retry = AIParsingAttempt.query.count()
+            page.goto(base + "/marketplaces/drafts/?account_id=" + str(account_id))
             page.locator("#ozon-drafts-list:not([v-cloak])").wait_for()
             passed("csrf_new_source_to_incomplete_draft_durable_prepare_and_readback")
 
@@ -1472,6 +1573,230 @@ try:
             page.get_by_text("Категория выбрана. Проверьте сохранённые характеристики перед отправкой.", exact=True).wait_for()
             layout(page, "category-impact")
             passed("fresh_category_impact_review_and_explicit_type_selection")
+
+            with app.app_context():
+                editable_draft = MarketplaceDraftService.get_draft(
+                    seller_id=fixture["seller_id"], draft_id=draft_id,
+                )
+                expected_version = editable_draft.version
+            saved_local_fields = api_call_from_page(
+                page,
+                f"/marketplaces/drafts/{draft_id}",
+                method="PATCH",
+                body={
+                    "expected_version": expected_version,
+                    "patch": {
+                        "dimensions": {
+                            "width": "231", "height": "30", "depth": "300",
+                            "dimension_unit": "MILLIMETERS", "weight": "250",
+                            "weight_unit": "GRAMS",
+                        },
+                        "barcodes": ["4600000000003"],
+                        "commercial": {
+                            "price": "1000", "old_price": "1200",
+                            "vat": "0.22", "currency_code": "RUB",
+                        },
+                    },
+                },
+                csrf=csrf,
+            )
+            assert saved_local_fields["status"] == 200, saved_local_fields
+            expected_version = saved_local_fields["document"]["draft"]["version"]
+            fresh_validation = api_call_from_page(
+                page,
+                f"/marketplaces/drafts/{draft_id}/validate",
+                method="POST",
+                body={"expected_version": expected_version},
+                csrf=csrf,
+            )
+            assert fresh_validation["status"] == 200, fresh_validation
+            assert fresh_validation["document"]["draft"]["validation"][
+                "publishable"
+            ] is True, fresh_validation["document"]["draft"]["validation"]
+
+            refreshed_description = (
+                "Обновлённое локальное описание источника. "
+                "Цвет: янтарный. Поверхность: гладкая."
+            )
+            with app.app_context():
+                changed_source = db.session.get(ImportedProduct, source_id)
+                changed_source.description = refreshed_description
+                changed_source.original_data = json.dumps({
+                    "title": changed_source.title,
+                    "description": refreshed_description,
+                }, ensure_ascii=False)
+                db.session.commit()
+
+            page.goto(base + parent_result_path)
+            retry_form = page.locator("[data-source-prepare-retry]")
+            assert retry_form.count() == 1
+            assert retry_form.locator(
+                'input[name="request_key"]',
+            ).input_value() == retry_request_key
+            with app.app_context():
+                from models import (
+                    BackgroundJob, MarketplaceOperation, OzonBulkUploadItem,
+                    OzonBulkUploadRun,
+                )
+                parent_job = BackgroundJob.query.filter_by(
+                    seller_id=fixture["seller_id"], job_uid=prepare_uid,
+                ).one()
+                parent_run = OzonBulkUploadRun.query.filter_by(
+                    seller_id=fixture["seller_id"], account_id=account_id,
+                    job_id=parent_job.id,
+                ).one()
+                parent_run_id = parent_run.id
+                parent_rows_before_retry = [
+                    (row.imported_product_id, row.phase, row.draft_id,
+                     row.prepared_version)
+                    for row in OzonBulkUploadItem.query.filter_by(
+                        run_id=parent_run.id,
+                    ).order_by(OzonBulkUploadItem.ordinal).all()
+                ]
+                source_prepare_runs_before_retry = OzonBulkUploadRun.query.filter_by(
+                    seller_id=fixture["seller_id"], account_id=account_id,
+                    mode="source_prepare",
+                ).count()
+                operations_before_retry = MarketplaceOperation.query.count()
+                assert operations_before_retry == operation_count_before_retry
+
+            dialog_events = []
+
+            def dismiss_unexpected_retry_dialog(dialog):
+                dialog_events.append(dialog.type)
+                dialog.dismiss()
+
+            page.on("dialog", dismiss_unexpected_retry_dialog)
+            with page.expect_response(
+                lambda response: response.request.method == "POST"
+                and urlsplit(response.url).path == retry_action,
+            ) as retry_response_info:
+                retry_form.get_by_role(
+                    "button", name="Подготовить повторно", exact=True,
+                ).click()
+            first_retry_response = retry_response_info.value
+            assert first_retry_response.status == 303, first_retry_response.status
+            assert dialog_events == [], dialog_events
+            child_result_path = urlsplit(
+                first_retry_response.headers["location"],
+            ).path
+            assert child_result_path != parent_result_path
+            page.wait_for_url(base + child_result_path)
+            assert urlsplit(page.url).path == child_result_path
+            child_uid = child_result_path.rsplit("/", 1)[-1]
+            child_before_run = api_call_from_page(
+                page, "/marketplaces/ozon/uploads/api/" + child_uid,
+            )
+            assert child_before_run["status"] == 200, child_before_run
+            child_initial_run = child_before_run["document"]["run"]
+            assert child_initial_run["account_id"] == account_id
+            assert [item["imported_product_id"] for item in
+                    child_initial_run["items"]] == [source_id]
+            assert child_initial_run["items"][0]["status"] == "pending"
+
+            parent_link = page.locator("[data-source-prepare-parent]")
+            assert parent_link.count() == 1
+            assert urlsplit(parent_link.get_attribute("href")).path == parent_result_path
+            with app.app_context():
+                child_job = BackgroundJob.query.filter_by(
+                    seller_id=fixture["seller_id"], job_uid=child_uid,
+                ).one()
+                child_run = OzonBulkUploadRun.query.filter_by(
+                    seller_id=fixture["seller_id"], account_id=account_id,
+                    job_id=child_job.id,
+                ).one()
+                assert child_run.mode == "source_prepare"
+                assert child_run.parent_prepare_run_id == parent_run_id
+                assert child_job.seller_id == fixture["seller_id"]
+                assert child_run.seller_id == fixture["seller_id"]
+                assert OzonBulkUploadItem.query.filter_by(
+                    run_id=child_run.id,
+                ).count() == 1
+
+                retry_stats = OzonBulkUploadService.run_due_preparation()
+                assert retry_stats["prepared"] == 1, retry_stats
+                child_item = OzonBulkUploadItem.query.filter_by(
+                    run_id=child_run.id,
+                ).one()
+                assert child_item.imported_product_id == source_id
+                assert child_item.phase == "prepared"
+                assert child_item.draft_id == draft_id
+                rebased_draft = MarketplaceDraftService.get_draft(
+                    seller_id=fixture["seller_id"], draft_id=draft_id,
+                )
+                rebased_content = json.loads(rebased_draft.content_json or "{}")
+                rebased_dimensions = json.loads(
+                    rebased_draft.dimensions_json or "{}",
+                )
+                assert rebased_content.get("description") == refreshed_description
+                assert rebased_dimensions.get("width") == "231"
+                assert MarketplaceDraftService._build_validation_result(
+                    rebased_draft,
+                )["publishable"] is True
+                parent_rows_after_retry = [
+                    (row.imported_product_id, row.phase, row.draft_id,
+                     row.prepared_version)
+                    for row in OzonBulkUploadItem.query.filter_by(
+                        run_id=parent_run_id,
+                    ).order_by(OzonBulkUploadItem.ordinal).all()
+                ]
+                assert parent_rows_after_retry == parent_rows_before_retry
+                assert OzonBulkUploadRun.query.filter_by(
+                    seller_id=fixture["seller_id"], account_id=account_id,
+                    mode="source_prepare",
+                ).count() == source_prepare_runs_before_retry + 1
+                assert MarketplaceOperation.query.count() == operations_before_retry
+                assert AIParsingAttempt.query.count() == ai_attempt_count_before_retry
+                operations_after_retry = MarketplaceOperation.query.count()
+
+            page.reload()
+            child_result = api_call_from_page(
+                page, "/marketplaces/ozon/uploads/api/" + child_uid,
+            )
+            assert child_result["document"]["run"]["account_id"] == account_id
+            child_items = child_result["document"]["run"]["items"]
+            assert len(child_items) == 1
+            assert child_items[0]["imported_product_id"] == source_id
+            assert child_items[0]["status"] == "prepared"
+            assert page.locator("[data-source-prepare-retry]").count() == 0
+            parent_link = page.locator("[data-source-prepare-parent]")
+            assert parent_link.count() == 1
+            assert urlsplit(parent_link.get_attribute("href")).path == parent_result_path
+            parent_link.click()
+            page.wait_for_url("**" + parent_result_path)
+            parent_retry_form = page.locator("[data-source-prepare-retry]")
+            assert parent_retry_form.count() == 1
+            assert parent_retry_form.locator(
+                'input[name="request_key"]',
+            ).input_value() == retry_request_key
+            with page.expect_response(
+                lambda response: response.request.method == "POST"
+                and urlsplit(response.url).path == retry_action,
+            ) as replay_response_info:
+                parent_retry_form.get_by_role(
+                    "button", name="Подготовить повторно", exact=True,
+                ).click()
+            replay_response = replay_response_info.value
+            assert replay_response.status == 303, replay_response.status
+            assert dialog_events == [], dialog_events
+            assert urlsplit(replay_response.headers["location"]).path == child_result_path
+            page.wait_for_url(base + child_result_path)
+            assert urlsplit(page.url).path == child_result_path
+            page.remove_listener("dialog", dismiss_unexpected_retry_dialog)
+            with app.app_context():
+                assert OzonBulkUploadRun.query.filter_by(
+                    seller_id=fixture["seller_id"], account_id=account_id,
+                    mode="source_prepare",
+                ).count() == source_prepare_runs_before_retry + 1
+                assert OzonBulkUploadItem.query.filter_by(
+                    run_id=child_run.id,
+                ).count() == 1
+                assert MarketplaceOperation.query.count() == operations_after_retry
+                assert AIParsingAttempt.query.count() == ai_attempt_count_before_retry
+            assert report["provider_attempts"] == 0
+            assert provider.physical_writes == 0 and not provider.full_read_calls
+            passed("completed_local_retry_exact_scope_csrf_replay_parent_return_and_source_rebase")
+
             page.goto(base + "/marketplaces/drafts/?account_id=" + str(account_id))
             page.locator("#ozon-drafts-list:not([v-cloak])").wait_for()
 
