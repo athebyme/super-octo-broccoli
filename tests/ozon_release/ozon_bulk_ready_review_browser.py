@@ -16,6 +16,7 @@ import socket
 import tempfile
 import threading
 import traceback
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import requests
@@ -44,6 +45,7 @@ report = {
     "js_errors": [],
     "post_counts": {},
     "source_prepare": {},
+    "brand_search": {},
     "review": {},
     "reviewed_queue": {},
     "reviewed_result_recovery": {},
@@ -84,6 +86,7 @@ from models import (
     BackgroundJob,
     ImportedProduct,
     Marketplace,
+    MarketplaceAttributeValue,
     MarketplaceAttributeDefinition,
     MarketplaceCategoryMapping,
     MarketplaceListing,
@@ -93,12 +96,17 @@ from models import (
     MarketplaceTaxonomyCategory,
     OzonBulkUploadItem,
     OzonBulkUploadRun,
+    SellerSupplier,
     SellerMarketplaceAccount,
+    Supplier,
+    SupplierProduct,
     db,
 )
 from services.marketplace_drafts import MarketplaceDraftService
 from services.marketplace_publications import MarketplacePublicationService
 from services.marketplace_adapters import MarketplaceCredentials
+from services.ozon_api_client import OzonSellerAPIClient
+from services.ozon_brand_search_models import OzonBrandSearchEvidence
 from services.ozon_bulk_upload import OzonBulkUploadService
 from routes.suppliers import _issue_supplier_import_batch_token
 from tests.ozon_release.seed import PASSWORD, PHOTO, USERNAME, seed
@@ -834,6 +842,13 @@ def bridge(route):
                     ids, state["review_editor_navigation_draft_ids"],
                 )
                 state["review_editor_navigation_api_pages"].append(page)
+            elif query.get("parent_prepare_job_uid") == [
+                state.get("brand_search_job_uid")
+            ]:
+                assert ids == state["brand_search_draft_ids"], (
+                    ids, state["brand_search_draft_ids"],
+                )
+                state.setdefault("brand_search_review_api_pages", []).append(page)
             elif state.get("selection_draft_ids") and not query.get("parent_prepare_job_uid"):
                 assert set(ids) == set(state["selection_draft_ids"]), query
                 assert len(ids) == len(state["selection_draft_ids"]), query
@@ -872,10 +887,21 @@ def bridge(route):
             }, set(body)
             assert body["account_id"] == account_id
             assert body["confirm_prepare"] is True
-            assert set(body["imported_product_ids"]) == set(state["source_prepare_expected_ids"])
-            assert len(body["imported_product_ids"]) == 4
+            if state.get("brand_search_case_active"):
+                expected_ids = state["brand_search_expected_ids"]
+                assert set(body["imported_product_ids"]) == set(expected_ids)
+                assert len(body["imported_product_ids"]) == 3
+            else:
+                expected_ids = state["source_prepare_expected_ids"]
+                assert set(body["imported_product_ids"]) == set(expected_ids)
+                assert len(body["imported_product_ids"]) == 4
             assert re.fullmatch(r"[A-Za-z0-9_-]{24,128}", body["request_key"])
-            state["source_prepare_post"] = {
+            receipt_key = (
+                "brand_search_prepare_post"
+                if state.get("brand_search_case_active")
+                else "source_prepare_post"
+            )
+            state[receipt_key] = {
                 "account_id": body["account_id"],
                 "source_ids": body["imported_product_ids"],
                 "confirm_prepare": body["confirm_prepare"],
@@ -886,7 +912,12 @@ def bridge(route):
             form = parse_qs(request.post_data or "", keep_blank_values=True)
             selected_ids = [int(value) for value in form.get("selected_draft_id", [])]
             selection_mode = path == "/marketplaces/ozon/uploads/selection/repair/apply"
-            expected = state["selection_draft_ids"] if selection_mode else state["repair_row_ids"]
+            expected = (
+                state["selection_draft_ids"] if selection_mode
+                else state["brand_search_ambiguous_draft_ids"]
+                if state.get("brand_search_case_active")
+                else state["repair_row_ids"]
+            )
             if selection_mode:
                 assert sorted(selected_ids) == sorted(expected), selected_ids
                 assert form.get("confirm_local") == ["1"]
@@ -895,7 +926,12 @@ def bridge(route):
                 assert query["draft_ids"] == [",".join(map(str, expected))], query
             else:
                 assert selected_ids == expected, selected_ids
-            receipt_key = "selection_repair_post" if selection_mode else "source_prepare_repair_post"
+            receipt_key = (
+                "selection_repair_post" if selection_mode
+                else "brand_search_repair_post"
+                if state.get("brand_search_case_active")
+                else "source_prepare_repair_post"
+            )
             state[receipt_key] = {
                 "draft_ids": selected_ids,
                 "csrf": bool(request.headers.get("x-csrftoken")),
@@ -982,10 +1018,16 @@ def bridge(route):
             assert accepted["success"] is True
             assert accepted["run"]["mode"] == "source_prepare"
             assert accepted["run"]["account_id"] == account_id
-            state["source_job_uid"] = accepted["run"]["job_uid"]
-            # The real durable v3 worker runs only after the ordinary local
-            # prepare POST has committed and before its normal response lands.
-            _run_real_source_worker(state["source_job_uid"])
+            if state.get("brand_search_case_active"):
+                state["brand_search_job_uid"] = accepted["run"]["job_uid"]
+                # Exercise the real preparation worker with only its Ozon read
+                # boundary replaced by the synthetic exact response above.
+                _run_brand_search_source_worker(state["brand_search_job_uid"])
+            else:
+                state["source_job_uid"] = accepted["run"]["job_uid"]
+                # The real durable v3 worker runs only after the ordinary local
+                # prepare POST has committed and before its normal response lands.
+                _run_real_source_worker(state["source_job_uid"])
 
         elif request.method == "POST" and path == (
             f"/marketplaces/drafts/{state.get('review_editor_navigation_draft_id')}"
@@ -1061,6 +1103,642 @@ def _business_counts():
                 seller_id=fixture["seller_id"], account_id=account_id,
             ).count(),
         }
+
+
+def _seed_brand_search_sources():
+    """Add three exact-linked source rows with one fresh but incomplete dictionary."""
+    now = datetime.utcnow()
+    category_name = "R101 Brand Search"
+    category_external_id = "99101"
+    product_type_external_id = "99102"
+    attribute_external_id = "31"
+    ambiguous_brand = "R101 ambiguous brand"
+    unique_brand = "R101 unique brand"
+    titles = [
+        "R101 brand · первая неоднозначная",
+        "R101 brand · вторая неоднозначная",
+        "R101 brand · единственный точный вариант",
+    ]
+    with app.app_context():
+        category = MarketplaceTaxonomyCategory(
+            marketplace_id=marketplace_id,
+            external_category_id=category_external_id,
+            name=category_name,
+            full_path=category_name,
+            is_available=True,
+            last_seen_at=now,
+        )
+        db.session.add(category)
+        db.session.flush()
+        product_type = MarketplaceProductType(
+            marketplace_id=marketplace_id,
+            category_id=category.id,
+            external_type_id=product_type_external_id,
+            name=category_name,
+            is_available=True,
+            is_enabled=True,
+            is_seller_selectable=True,
+            attributes_synced_at=now,
+            attributes_sync_status="success",
+            attributes_schema_hash=hashlib.sha256(
+                b"r101-brand-search-schema"
+            ).hexdigest(),
+            attributes_version=1,
+            attributes_count=2,
+            required_attributes_count=1,
+        )
+        db.session.add(product_type)
+        db.session.flush()
+        brand = MarketplaceAttributeDefinition(
+            marketplace_id=marketplace_id,
+            product_type_id=product_type.id,
+            external_attribute_id=attribute_external_id,
+            name="Бренд",
+            data_type="String",
+            is_required=True,
+            dictionary_id="930001",
+            max_value_count=1,
+            is_available=True,
+            is_enabled=True,
+            last_seen_at=now,
+            values_synced_at=now,
+            values_sync_status="success",
+            values_snapshot_hash=hashlib.sha256(
+                b"r101-unrelated-complete-dictionary-sentinel"
+            ).hexdigest(),
+            values_version=1,
+            values_count=1,
+        )
+        annotation = MarketplaceAttributeDefinition(
+            marketplace_id=marketplace_id,
+            product_type_id=product_type.id,
+            external_attribute_id="4191",
+            name="Аннотация",
+            data_type="String",
+            is_required=False,
+            max_value_count=1,
+            is_available=True,
+            is_enabled=True,
+            last_seen_at=now,
+        )
+        db.session.add_all([brand, annotation])
+        db.session.flush()
+        db.session.add(MarketplaceAttributeValue(
+            marketplace_id=marketplace_id,
+            product_type_id=product_type.id,
+            attribute_id=brand.id,
+            external_value_id="51001",
+            value="R101 unrelated local dictionary value",
+            value_normalized="r101 unrelated local dictionary value",
+            is_available=True,
+            last_seen_at=now,
+        ))
+
+        supplier = Supplier(
+            name="R101 synthetic brand supplier",
+            code="r101brandsearch",
+            description="Synthetic source for the offline brand-search browser gate.",
+        )
+        db.session.add(supplier)
+        db.session.flush()
+        db.session.add(SellerSupplier(
+            seller_id=fixture["seller_id"],
+            supplier_id=supplier.id,
+            is_active=True,
+        ))
+
+        sources = []
+        source_brands = [ambiguous_brand, ambiguous_brand, unique_brand]
+        for index, (title, source_brand) in enumerate(
+            zip(titles, source_brands), 1,
+        ):
+            vendor_code = f"R101-BRAND-{index:02d}"
+            external_id = f"r101-brand-search-{index:02d}"
+            barcode = f"460000011{index:04d}"
+            characteristics = [{"name": "Бренд", "value": source_brand}]
+            source = _make_source(
+                seller_id=fixture["seller_id"], external_id=external_id,
+                vendor_code=vendor_code, title=title,
+                description=f"Observed source description for {title}.",
+                category=category_name, barcode=barcode,
+            )
+            raw = json.loads(source.original_data)
+            raw.update(brand=source_brand, characteristics=characteristics)
+            raw_json = json.dumps(raw, ensure_ascii=False)
+            supplier_product = SupplierProduct(
+                supplier_id=supplier.id,
+                external_id=external_id,
+                vendor_code=vendor_code,
+                barcode=barcode,
+                barcodes_json=json.dumps([barcode]),
+                title=title,
+                description=source.description,
+                brand=source_brand,
+                category=category_name,
+                supplier_price=500.0,
+                supplier_quantity=10,
+                supplier_status="in_stock",
+                characteristics_json=json.dumps(characteristics, ensure_ascii=False),
+                dimensions_json=json.dumps(raw["dimensions"], ensure_ascii=False),
+                photo_urls_json=json.dumps([PHOTO]),
+                original_data_json=raw_json,
+                content_revision=1,
+            )
+            source.source_type = supplier.code
+            source.supplier_id = supplier.id
+            source.supplier_product = supplier_product
+            source.supplier_content_revision = supplier_product.content_revision
+            source.brand = source_brand
+            source.characteristics = json.dumps(characteristics, ensure_ascii=False)
+            source.original_data = raw_json
+            db.session.add_all([supplier_product, source])
+            sources.append(source)
+        db.session.flush()
+
+        identity = MarketplaceDraftService._mapping_identities(sources[0])[-1]
+        db.session.add(MarketplaceCategoryMapping(
+            seller_id=fixture["seller_id"],
+            marketplace_id=marketplace_id,
+            supplier_id=supplier.id,
+            product_type_id=product_type.id,
+            scope_key=identity["scope_key"],
+            source_type=identity["source_type"],
+            source_category=identity["source_category"],
+            source_category_normalized=identity["source_category_normalized"],
+            external_category_id=category.external_category_id,
+            external_type_id=product_type.external_type_id,
+            mapping_source="manual",
+            mapping_status="active",
+            confidence=1.0,
+            evidence_json='{"fixture":"r101_brand_search_exact_mapping"}',
+            corrected_by_user_id=fixture.get("user_id"),
+        ))
+        db.session.commit()
+        assert all(
+            source.supplier_product_id
+            and source.supplier_content_revision == source.supplier_product.content_revision
+            and source.supplier_id == supplier.id
+            and source.source_type == supplier.code
+            and source.external_id == source.supplier_product.external_id
+            for source in sources
+        )
+        assert MarketplaceDraftService._mapping_identities(sources[0])[-1][
+            "source_category_normalized"
+        ] == MarketplaceDraftService._mapping_identities(sources[2])[-1][
+            "source_category_normalized"
+        ]
+        return {
+            "source_ids": [source.id for source in sources],
+            "ambiguous_source_ids": [source.id for source in sources[:2]],
+            "unique_source_id": sources[2].id,
+            "titles": titles,
+            "ambiguous_brand": ambiguous_brand,
+            "unique_brand": unique_brand,
+        }
+
+
+def _run_brand_search_source_worker(job_uid):
+    """Run the production preparation worker against the synthetic search adapter."""
+    with app.app_context():
+        OzonBulkUploadService.run_due_preparation()
+        job = BackgroundJob.query.filter_by(job_uid=job_uid).one()
+        run = OzonBulkUploadRun.query.filter_by(job_id=job.id).one()
+        items = OzonBulkUploadItem.query.filter_by(run_id=run.id).order_by(
+            OzonBulkUploadItem.ordinal.asc()
+        ).all()
+        expected_ids = state["brand_search_expected_ids"]
+        assert run.mode == "source_prepare"
+        assert run.account_id == account_id and run.seller_id == fixture["seller_id"]
+        assert [item.imported_product_id for item in items] == expected_ids
+        expected_phases = [
+            (
+                source_id,
+                "needs_input" if source_id in state["brand_search_ambiguous_source_ids"]
+                else "prepared",
+                "required_attribute_missing"
+                if source_id in state["brand_search_ambiguous_source_ids"] else None,
+            )
+            for source_id in expected_ids
+        ]
+        actual_phases = [
+            (item.imported_product_id, item.phase, item.error_code)
+            for item in items
+        ]
+        assert actual_phases == expected_phases, (actual_phases, expected_phases)
+        assert all(item.draft_id for item in items)
+        drafts = [db.session.get(MarketplaceProductDraft, item.draft_id) for item in items]
+        assert len(drafts) == 3
+        assert MarketplaceOperation.query.filter_by(
+            seller_id=fixture["seller_id"], account_id=account_id,
+        ).count() == state["brand_search_operations_before"]
+        by_source = {draft.imported_product_id: draft for draft in drafts}
+        ambiguous_source_ids = state["brand_search_ambiguous_source_ids"]
+        unique_source_id = state["brand_search_unique_source_id"]
+        ambiguous_drafts = [by_source[source_id] for source_id in ambiguous_source_ids]
+        unique_draft = by_source[unique_source_id]
+
+        def brand_cell(draft):
+            attributes = json.loads(draft.attributes_json or "[]")
+            return next((item for item in attributes if item.get("attribute_id") == "31"), None)
+
+        assert all(brand_cell(draft) is None for draft in ambiguous_drafts)
+        staged_unique = brand_cell(unique_draft)
+        assert staged_unique and staged_unique["values"] == [{
+            "dictionary_value_id": "11003",
+            "value": "R101 unique brand",
+        }]
+        assert unique_draft.status == "ready"
+        current = MarketplaceDraftService._build_validation_result(unique_draft)
+        assert current["publishable"] is True, current
+
+        evidence = OzonBrandSearchEvidence.query.filter_by(
+            seller_id=fixture["seller_id"], account_id=account_id,
+        ).order_by(OzonBrandSearchEvidence.scope_hash.asc()).all()
+        assert len(evidence) == 2
+        by_choices = {
+            tuple((row["dictionary_value_id"], row["value"]) for row in json.loads(item.choices_json)):
+            item
+            for item in evidence
+        }
+        ambiguous_choices = (
+            ("11001", "R101 ambiguous brand"),
+            ("11002", "R101 Ambiguous Brand"),
+        )
+        unique_choices = (("11003", "R101 unique brand"),)
+        assert set(by_choices) == {ambiguous_choices, unique_choices}, set(by_choices)
+        assert all(
+            item.status == "completed" and item.complete_result and item.finished_at
+            for item in evidence
+        )
+        assert not MarketplaceAttributeValue.query.filter(
+            MarketplaceAttributeValue.product_type_id == unique_draft.product_type_id,
+            MarketplaceAttributeValue.external_value_id.in_(
+                ["11001", "11002", "11003"]
+            ),
+        ).count()
+        state["brand_search_job_uid"] = job_uid
+        state["brand_search_draft_ids"] = [item.draft_id for item in items]
+        state["brand_search_ambiguous_draft_ids"] = [draft.id for draft in ambiguous_drafts]
+        state["brand_search_unique_draft_id"] = unique_draft.id
+
+
+def run_brand_search_picker_journey(context):
+    """Use only existing beta preparation, native picker, local save, and review UI."""
+    fixture_data = _seed_brand_search_sources()
+    state["brand_search_expected_ids"] = fixture_data["source_ids"]
+    state["brand_search_ambiguous_source_ids"] = fixture_data["ambiguous_source_ids"]
+    state["brand_search_unique_source_id"] = fixture_data["unique_source_id"]
+    state["brand_search_case_active"] = True
+    state["brand_search_review_api_pages"] = []
+    state["brand_search_operations_before"] = _business_counts()["operations"]
+    dispatch_marker = report["provider_dispatch_calls"]
+    publication_post_marker = report["post_counts"].get(
+        "/marketplaces/ozon/uploads/from-drafts", 0,
+    )
+    search_payloads = []
+    unique_page = None
+
+    with app.app_context():
+        owner_account = db.session.get(SellerMarketplaceAccount, account_id)
+        import_batch = _issue_supplier_import_batch_token(
+            user_id=owner_account.seller.user.id,
+            seller_id=fixture["seller_id"],
+            imported_product_ids=fixture_data["source_ids"],
+        )
+    assert import_batch
+
+    def fake_brand_search(_client, payload):
+        assert set(payload) == {
+            "attribute_id", "description_category_id", "type_id", "limit", "value",
+        }, payload
+        assert {key: payload[key] for key in (
+            "attribute_id", "description_category_id", "type_id", "limit",
+        )} == {
+            "attribute_id": 31,
+            "description_category_id": 99101,
+            "type_id": 99102,
+            "limit": 100,
+        }, payload
+        assert payload["value"] in {
+            fixture_data["ambiguous_brand"], fixture_data["unique_brand"],
+        }, payload
+        search_payloads.append(dict(payload))
+        if payload["value"] == fixture_data["ambiguous_brand"]:
+            return {"result": [
+                {"id": 11001, "value": fixture_data["ambiguous_brand"]},
+                {"id": 11002, "value": "R101 Ambiguous Brand"},
+            ]}
+        if payload["value"] == fixture_data["unique_brand"]:
+            return {"result": [{
+                "id": 11003,
+                "value": fixture_data["unique_brand"],
+            }]}
+        raise AssertionError(f"Unexpected brand search value: {payload['value']!r}")
+
+    page = context.new_page()
+    page.set_default_timeout(20000)
+    page.set_viewport_size({"width": 1440, "height": 980})
+    page.on("pageerror", lambda error: report["js_errors"].append(str(error)))
+    try:
+        page.goto(base + "/my-products/beta?" + urlencode({"import_batch": import_batch}))
+        workspace = page.locator("#my-products-app:not([v-cloak])")
+        workspace.wait_for()
+        assert workspace.locator(".mp-list article.mp-row").count() == 3
+        for title in fixture_data["titles"]:
+            page.get_by_role("checkbox", name=f"Выбрать {title}", exact=True).check()
+        selected = workspace.locator(
+            ".mp-list article.mp-row input[type=checkbox]:checked"
+        ).evaluate_all("nodes => nodes.map(node => Number(node.value))")
+        assert set(selected) == set(fixture_data["source_ids"])
+        state["brand_search_expected_ids"] = selected
+
+        invoke_workspace_action(page, "ozon")
+        dialog = page.get_by_role("dialog")
+        account_select = dialog.locator("#mp-ozon-account")
+        account_select.wait_for()
+        account_select.select_option(str(account_id))
+        prepare_button = dialog.get_by_role(
+            "button", name="Подготовить черновики", exact=True,
+        )
+        assert prepare_button.is_enabled()
+        with patch.object(
+            OzonSellerAPIClient,
+            "search_description_category_attribute_values",
+            new=fake_brand_search,
+        ):
+            with page.expect_response(lambda response: (
+                response.request.method == "POST"
+                and urlsplit(response.url).path == "/marketplaces/ozon/uploads/"
+            )) as prepare_response_info:
+                prepare_button.click()
+        prepare_response = prepare_response_info.value
+        assert prepare_response.status == 202
+        page.wait_for_url(f"**/marketplaces/ozon/uploads/{state['brand_search_job_uid']}")
+        assert state["brand_search_prepare_post"]["source_ids"] == selected
+        assert sorted(payload["value"] for payload in search_payloads) == sorted([
+            fixture_data["ambiguous_brand"], fixture_data["unique_brand"],
+        ])
+        report["brand_search"]["synthetic_provider_read_calls"] = len(search_payloads)
+
+        repair_link = page.locator("a[data-source-prepare-repair]")
+        repair_link.wait_for()
+        repair_link.click()
+        page.wait_for_url(
+            f"**/marketplaces/ozon/uploads/{state['brand_search_job_uid']}/repair"
+        )
+        editor = page.locator(
+            '#ozon-bulk-repair[data-editor-mode="source_prepare"]:not([v-cloak])'
+        )
+        editor.wait_for()
+        editor_data = page.evaluate(
+            "() => JSON.parse(document.querySelector('#orb-bootstrap').textContent).editor"
+        )
+        assert editor_data["mode"] == "source_prepare"
+        assert editor_data["review_draft_ids"] == state["brand_search_draft_ids"]
+        rows = {
+            row["imported_product_id"]: row
+            for group in editor_data["groups"]
+            for row in group["rows"]
+        }
+        ambiguous_rows = [
+            rows[source_id] for source_id in fixture_data["ambiguous_source_ids"]
+        ]
+        unique_row = rows[fixture_data["unique_source_id"]]
+        def field(row, external_id):
+            return next(
+                item for item in row["attributes"]
+                if item["external_id"] == external_id
+            )
+        assert all(not field(row, "31")["value"] for row in ambiguous_rows)
+        assert not any(
+            attribute["external_id"] == "31"
+            for attribute in unique_row["attributes"]
+        )
+
+        unique_page = context.new_page()
+        unique_page.set_default_timeout(20000)
+        unique_page.on("pageerror", lambda error: report["js_errors"].append(str(error)))
+        unique_path = f"/marketplaces/drafts/{state['brand_search_unique_draft_id']}"
+        with unique_page.expect_response(lambda response: (
+            response.request.method == "GET"
+            and urlsplit(response.url).path == unique_path + "/editor"
+        )) as unique_editor_response_info:
+            unique_page.goto(base + unique_path)
+        unique_editor_response = unique_editor_response_info.value
+        assert unique_editor_response.status == 200
+        unique_editor_data = unique_editor_response.json()
+        assert unique_editor_data["draft"]["id"] == state["brand_search_unique_draft_id"]
+        unique_brand_document = next(
+            row for row in unique_editor_data["documents"]["attributes"]
+            if row.get("attribute_id") == "31"
+        )
+        assert unique_brand_document["values"] == [{
+            "dictionary_value_id": "11003",
+            "value": fixture_data["unique_brand"],
+        }]
+        normal_editor = unique_page.locator("#ozon-draft-editor:not([v-cloak])")
+        normal_editor.wait_for()
+        normal_editor.locator(".ode-tabs").get_by_role(
+            "button", name="Характеристики", exact=True,
+        ).click()
+        unique_brand_field = normal_editor.locator(
+            '.ode-attribute[data-attribute="31"]'
+        )
+        unique_brand_field.wait_for()
+        assert unique_brand_field.locator(
+            ".ode-value-chip-label"
+        ).inner_text() == fixture_data["unique_brand"]
+        unique_page.close()
+        unique_page = None
+
+        ambiguous_ids = state["brand_search_ambiguous_draft_ids"]
+        for draft_id in ambiguous_ids:
+            editor.locator(f'.orb-row[data-draft="{draft_id}"] input[type="checkbox"]').check()
+        page.get_by_role("button", name="Заполнить поле", exact=True).click()
+        bulk_dialog = page.get_by_role("dialog")
+        bulk_dialog.wait_for(state="visible")
+        bulk_dialog.locator("#orb-bulk-field").select_option("attribute:31")
+        brand_field = bulk_dialog.locator('[data-attribute="31"]')
+        brand_field.get_by_role(
+            "button", name="Выбрать из справочника", exact=True,
+        ).click()
+        search = bulk_dialog.locator(
+            ".orb-inline-picker input[type=search]"
+        )
+        with page.expect_response(lambda response: (
+            response.request.method == "GET"
+            and f"/repair/dictionaries/{ambiguous_ids[0]}/31" in urlsplit(response.url).path
+        )) as brand_search_response_info:
+            search.fill(fixture_data["ambiguous_brand"])
+        brand_search_response = brand_search_response_info.value
+        assert brand_search_response.status == 200
+        brand_items = brand_search_response.json()["items"]
+        assert {
+            (item["id"], item["value"]) for item in brand_items
+        } == {
+            ("11001", fixture_data["ambiguous_brand"]),
+            ("11002", "R101 Ambiguous Brand"),
+        }, brand_items
+        assert len(search_payloads) == 2
+        picker_buttons = bulk_dialog.locator(".orb-picker-results button")
+        assert picker_buttons.count() == 2
+        picker_labels = bulk_dialog.locator(
+            ".orb-picker-results button strong"
+        ).all_text_contents()
+        exact_label = bulk_dialog.get_by_text(
+            fixture_data["ambiguous_brand"], exact=True,
+        )
+        exact_label.wait_for()
+        assert exact_label.count() == 1, picker_labels
+        exact_choice = exact_label.locator("xpath=ancestor::button[1]")
+        assert exact_choice.count() == 1, picker_labels
+        exact_choice.click()
+
+        bulk_dialog.get_by_role(
+            "button", name="Посмотреть изменения", exact=True,
+        ).click()
+        preview = bulk_dialog.locator("[data-bulk-preview-summary]")
+        preview.wait_for()
+        assert "Будет заполнено: 2" in preview.inner_text()
+        assert bulk_dialog.locator(".orb-review-list li").count() == 2
+        assert all(title in bulk_dialog.inner_text() for title in fixture_data["titles"][:2])
+        assert fixture_data["ambiguous_brand"] in bulk_dialog.inner_text()
+        bulk_dialog.get_by_role("button", name="Заполнить в форме", exact=True).click()
+
+        for draft_id in ambiguous_ids:
+            row = editor.locator(f'.orb-row[data-draft="{draft_id}"]')
+            if not row.locator('[data-attribute="31"]').count():
+                row.get_by_role("button", name="Изменить", exact=True).click()
+            assert row.locator(
+                '[data-attribute="31"] .ode-value-chip-label'
+            ).inner_text() == fixture_data["ambiguous_brand"]
+
+        editor.locator(".orb-toolbar").get_by_role(
+            "button", name="Сохранить черновики", exact=True,
+        ).click()
+        save_dialog = page.get_by_role("dialog")
+        save_dialog.wait_for(state="visible")
+        assert "Будут сохранены в Seller Hub 2 черновиков" in save_dialog.inner_text()
+        assert "Отправка в Ozon потребует отдельной проверки версий" in save_dialog.inner_text()
+        assert save_dialog.locator(".orb-review-list li").count() == 2
+        with page.expect_response(lambda response: (
+            response.request.method == "POST"
+            and urlsplit(response.url).path.endswith("/repair/apply")
+        )) as save_response_info:
+            save_dialog.get_by_role(
+                "button", name="Сохранить черновики", exact=True,
+            ).click()
+        save_response = save_response_info.value
+        assert save_response.status == 200
+        assert state["brand_search_repair_post"]["draft_ids"] == ambiguous_ids
+        receipt = editor.locator(".orb-receipt[data-source-prepare-receipt]")
+        receipt.wait_for()
+        assert "Сохранено в Seller Hub. Перед отправкой проверьте актуальные версии." in (
+            receipt.inner_text()
+        )
+
+        with app.app_context():
+            for draft_id in ambiguous_ids:
+                draft = db.session.get(MarketplaceProductDraft, draft_id)
+                brand_attr = next(
+                    item for item in json.loads(draft.attributes_json or "[]")
+                    if item.get("attribute_id") == "31"
+                )
+                assert brand_attr["values"] == [{
+                    "dictionary_value_id": "11001",
+                    "value": fixture_data["ambiguous_brand"],
+                }]
+            unique_draft = db.session.get(
+                MarketplaceProductDraft, state["brand_search_unique_draft_id"],
+            )
+            unique_brand_attr = next(
+                item for item in json.loads(unique_draft.attributes_json or "[]")
+                if item.get("attribute_id") == "31"
+            )
+            assert unique_brand_attr["values"] == [{
+                "dictionary_value_id": "11003",
+                "value": fixture_data["unique_brand"],
+            }]
+
+        review_link = receipt.locator("a[data-source-prepare-review]")
+        review_link.wait_for()
+        review_parts = urlsplit(review_link.get_attribute("href"))
+        review_query = parse_qs(review_parts.query)
+        assert review_parts.path == "/marketplaces/ozon/uploads/review"
+        assert review_query.get("account_id") == [str(account_id)]
+        assert review_query.get("parent_prepare_job_uid") == [state["brand_search_job_uid"]]
+        assert [
+            int(value) for value in review_query["draft_ids"][0].split(",")
+        ] == state["brand_search_draft_ids"]
+        review_link.click()
+        page.wait_for_url("**/marketplaces/ozon/uploads/review?*")
+        review_page = page.locator("#ozon-upload-review:not([v-cloak])")
+        review_page.wait_for()
+        with page.expect_response(lambda response: (
+            response.request.method == "GET"
+            and urlsplit(response.url).path == "/marketplaces/ozon/uploads/api/review"
+            and parse_qs(urlsplit(response.url).query).get("parent_prepare_job_uid")
+            == [state["brand_search_job_uid"]]
+        )) as safe_review_info:
+            review_page.get_by_role(
+                "button", name="Проверить все готовые", exact=True,
+            ).click()
+        safe_review = safe_review_info.value
+        assert safe_review.status == 200
+        reviewed = safe_review.json()["review"]
+        assert reviewed["draft_ids"] == state["brand_search_draft_ids"]
+        assert all(item["selectable"] for item in reviewed["items"])
+        send_dialog = page.get_by_role("dialog")
+        send_dialog.wait_for(state="visible")
+        assert send_dialog.locator(".our-dialog-list li").count() == 3
+        assert not send_dialog.locator(".our-confirm input").is_checked()
+        assert send_dialog.get_by_role(
+            "button", name="Отправить проверенные карточки", exact=True,
+        ).is_disabled()
+        send_dialog.get_by_role("button", name="Вернуться", exact=True).click()
+        assert state["brand_search_review_api_pages"] == [1]
+        assert _business_counts()["operations"] == state["brand_search_operations_before"]
+        assert report["provider_dispatch_calls"] == dispatch_marker
+        assert report["post_counts"].get(
+            "/marketplaces/ozon/uploads/from-drafts", 0,
+        ) == publication_post_marker
+        report["brand_search"].update({
+            "source_ids": fixture_data["source_ids"],
+            "draft_ids": state["brand_search_draft_ids"],
+            "ambiguous_draft_ids": ambiguous_ids,
+            "unique_brand_auto_staged": True,
+            "ambiguous_provider_choices": [
+                {"id": value_id, "value": value}
+                for value_id, value in sorted({
+                    (item["id"], item["value"]) for item in brand_items
+                })
+            ],
+            "same_scope_search_calls": 1,
+            "unique_scope_search_calls": 1,
+            "bulk_preview_applied_rows": 2,
+            "locally_saved_rows": state["brand_search_repair_post"]["draft_ids"],
+            "review_draft_ids": reviewed["draft_ids"],
+            "review_api_pages": state["brand_search_review_api_pages"],
+            "publication_confirmation_left_unchecked": True,
+            "publication_post_unchanged": True,
+            "operation_count_unchanged": True,
+            "provider_dispatch_unchanged": True,
+        })
+        passed("source_prepare_brand_search_bulk_choices_saved_locally_and_reviewed_without_publication")
+    except BaseException:
+        state["brand_search_case_active"] = False
+        for open_page in (unique_page, page):
+            if open_page is None:
+                continue
+            try:
+                open_page.close()
+            except BaseException:
+                pass
+        raise
+    state["brand_search_case_active"] = False
+    if unique_page is not None:
+        unique_page.close()
+    page.close()
 
 
 def passed(name):
@@ -3259,6 +3937,7 @@ def run_browser_journey():
         run_selected_draft_journey(page)
         run_mixed_type_selection_journey(page)
         run_review_editor_navigation_journey(page)
+        run_brand_search_picker_journey(context)
         browser.close()
 
 
