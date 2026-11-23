@@ -15,9 +15,12 @@ import hashlib
 from io import BytesIO
 import json
 import re
+import unicodedata
 import zipfile
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from flask import current_app
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from openpyxl import Workbook, load_workbook
 from openpyxl.comments import Comment
 from openpyxl.formatting.rule import FormulaRule
@@ -25,7 +28,8 @@ from openpyxl.styles import Alignment, Font, PatternFill, Protection
 from openpyxl.utils import get_column_letter, quote_sheetname
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
-from sqlalchemy import or_
+from sqlalchemy import or_, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import joinedload
 
 from models import (
@@ -38,9 +42,11 @@ from models import (
     MarketplaceProductType,
     OzonBulkUploadItem,
     OzonBulkUploadRun,
+    SupplierProduct,
     db,
 )
 from services.marketplace_drafts import (
+    MarketplaceDraftConflict,
     MarketplaceDraftError,
     MarketplaceDraftService,
     MarketplaceDraftValidationError,
@@ -66,6 +72,11 @@ from services.ozon_reference_service import OzonReferenceService
 from services.ozon_product_state import (
     OzonProductStateContract,
     OzonProductStateError,
+)
+from services.supplier_field_observations import (
+    load_source_snapshot as _load_supplier_source_snapshot,
+    normalized_snapshot_values as _normalized_supplier_snapshot_values,
+    observed_supplier_fields as _observed_supplier_fields,
 )
 
 
@@ -142,6 +153,46 @@ class OzonBulkRepairService:
     MAX_ROWS = OzonBulkUploadService.MAX_ITEMS
     MAX_COLUMNS = 100
     MAX_EDITOR_ATTRIBUTE_CELLS = 5_000
+    MAX_SOURCE_REVIEW_ATTRIBUTE_CELLS = MAX_ROWS * 2
+    MAX_SOURCE_REVIEW_FORM_BYTES = 8 * 1024
+    SOURCE_REVIEW_TOKEN_MAX_AGE_SECONDS = 30 * 60
+    SOURCE_REVIEW_SALT = "seller-hub-ozon-bulk-source-review-v1"
+    SOURCE_ATTRIBUTE_SPECS = {
+        "10096": {
+            "field": "colors",
+            "label": "Цвет товара",
+            "dictionary_id": "1494",
+        },
+        "4389": {
+            "field": "country",
+            "label": "Страна-изготовитель",
+            "dictionary_id": "1935",
+        },
+    }
+    SOURCE_REASON_LABELS = {
+        "source_link_missing": "К товару не привязан поставщик",
+        "source_link_invalid": "Связь с поставщиком не подтверждена",
+        "source_sku_unavailable": "Артикул поставщика недоступен",
+        "source_sku_mismatch": "Артикул источника и товара не совпадает",
+        "source_revision_stale": "Снимок товара устарел относительно поставщика",
+        "source_snapshot_missing": "Нет данных поставщика для сверки",
+        "source_marker_unavailable": "У поставщика пока нет подтверждённого значения",
+        "source_marker_invalid": "У поставщика пока нет подтверждённого значения",
+        "source_marker_mismatch": "Снимок товара не совпадает с данными поставщика",
+        "source_snapshot_values_disagree": "Снимок товара не совпадает с данными поставщика",
+        "source_field_not_observed": "Поставщик не передавал это поле",
+        "type_unselected": "Выберите точный тип Ozon",
+        "schema_unavailable": "Схема Ozon пока недоступна",
+        "schema_stale": "Данные схемы Ozon устарели",
+        "field_missing": "Поле отсутствует в выбранном типе Ozon",
+        "field_contract_mismatch": "Поле не совпадает с подтвержденным типом Ozon",
+        "dictionary_stale": "Справочник Ozon устарел",
+        "dictionary_value_unmatched": "Литерал источника отсутствует в справочнике Ozon",
+        "dictionary_value_ambiguous": "Найдено несколько значений справочника Ozon",
+        "dictionary_value_restricted": "Значение недоступно для выбранного типа Ozon",
+        "source_value_cardinality": "Количество значений источника не подходит полю Ozon",
+        "reference_changed": "Справочник или схема Ozon изменились; обновите редактор",
+    }
     MAX_ATTRIBUTE_VALUES = 100
     MAX_EDITOR_VALIDATION_ERRORS = 20
     EXPORTABLE_STATUSES = (
@@ -602,6 +653,8 @@ class OzonBulkRepairService:
             joinedload(MarketplaceProductDraft.account),
             joinedload(MarketplaceProductDraft.imported_product).joinedload(
                 ImportedProduct.supplier_product
+            ).joinedload(
+                SupplierProduct.supplier
             ),
             joinedload(MarketplaceProductDraft.product_type).joinedload(
                 MarketplaceProductType.category
@@ -940,6 +993,886 @@ class OzonBulkRepairService:
                 result[item["attribute_id"]] = rendered
         return result
 
+    @classmethod
+    def _source_reason_label(cls, reason: Optional[str]) -> Optional[str]:
+        return cls.SOURCE_REASON_LABELS.get(reason) if reason else None
+
+    @staticmethod
+    def _source_json(value: Any) -> str:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+
+    @classmethod
+    def _source_sha256(cls, value: Any) -> str:
+        return hashlib.sha256(cls._source_json(value).encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _source_supplier_evidence(cls, draft: MarketplaceProductDraft) -> dict:
+        """Validate one exact seller-copied, parser-stamped supplier snapshot.
+
+        The low-level marker parser and snapshot parity normalizer are shared
+        with the WB supplier evidence contract. WB product/nm/subject checks
+        are intentionally not imported here: an Ozon draft has its own exact
+        account/type scope.
+        """
+        unknown = {
+            "status": "unknown",
+            "reason": "source_link_missing",
+            "fields": {},
+            "source_sha256": None,
+        }
+        imported = draft.imported_product
+        if (
+            imported is None
+            or imported.id != draft.imported_product_id
+            or imported.seller_id != draft.seller_id
+        ):
+            return unknown
+
+        supplier_product = imported.supplier_product
+        supplier = (
+            supplier_product.supplier
+            if supplier_product is not None else None
+        )
+        if supplier_product is None or supplier is None:
+            return unknown
+        if (
+            imported.supplier_product_id != supplier_product.id
+            or imported.supplier_id != supplier_product.supplier_id
+            or supplier.id != supplier_product.supplier_id
+            or imported.source_type != supplier.code
+        ):
+            return {**unknown, "reason": "source_link_invalid"}
+
+        imported_sku = imported.external_id
+        source_sku = supplier_product.external_id
+        if not (
+            isinstance(imported_sku, str)
+            and imported_sku.strip()
+            and isinstance(source_sku, str)
+            and source_sku.strip()
+        ):
+            return {**unknown, "reason": "source_sku_unavailable"}
+        if imported_sku != source_sku:
+            return {**unknown, "reason": "source_sku_mismatch"}
+
+        copied_revision = imported.supplier_content_revision
+        current_revision = supplier_product.content_revision
+        if (
+            type(copied_revision) is not int
+            or copied_revision <= 0
+            or type(current_revision) is not int
+            or current_revision <= 0
+            or copied_revision != current_revision
+        ):
+            return {**unknown, "reason": "source_revision_stale"}
+
+        copied = _load_supplier_source_snapshot(imported.original_data)
+        if not copied:
+            return {**unknown, "reason": "source_snapshot_missing"}
+        try:
+            from services.supplier_service import _supplier_observed_snapshot
+            current = _load_supplier_source_snapshot(
+                _supplier_observed_snapshot(supplier_product)
+            )
+        except Exception:
+            current = None
+        if not current:
+            return {**unknown, "reason": "source_snapshot_missing"}
+
+        current_present, current_valid, current_fields = (
+            _observed_supplier_fields(current)
+        )
+        if not current_present:
+            return {**unknown, "reason": "source_marker_unavailable"}
+        if not current_valid:
+            return {**unknown, "reason": "source_marker_invalid"}
+
+        copied_present, copied_valid, copied_fields = (
+            _observed_supplier_fields(copied)
+        )
+        if copied_present and (
+            not copied_valid or copied_fields != current_fields
+        ):
+            return {**unknown, "reason": "source_marker_mismatch"}
+
+        # A legacy copied snapshot without its marker is usable only when the
+        # exact copied values still match the live literal marker at the exact
+        # supplier revision. This is the same conservative compatibility rule
+        # as the existing WB review evidence path.
+        for field_name, marker_value in current_fields.items():
+            normalized_marker = _normalized_supplier_snapshot_values(
+                marker_value, field_name,
+            )
+            normalized_copy = _normalized_supplier_snapshot_values(
+                copied.get(field_name), field_name,
+            )
+            normalized_current = _normalized_supplier_snapshot_values(
+                current.get(field_name), field_name,
+            )
+            if not (
+                normalized_marker is not None
+                and normalized_copy is not None
+                and normalized_current is not None
+                and {value.casefold() for value in normalized_marker}
+                == {value.casefold() for value in normalized_copy}
+                == {value.casefold() for value in normalized_current}
+            ):
+                return {
+                    **unknown,
+                    "reason": "source_snapshot_values_disagree",
+                }
+
+        source_identity = {
+            "imported_product_id": imported.id,
+            "supplier_product_id": supplier_product.id,
+            "supplier_id": supplier.id,
+            "source_type": imported.source_type,
+            "sku_sha256": hashlib.sha256(
+                imported_sku.encode("utf-8")
+            ).hexdigest(),
+            "copied_revision": copied_revision,
+            "current_revision": current_revision,
+        }
+        source_basis = {
+            "identity": source_identity,
+            "marker_version": current.get(
+                "observed_supplier_fields_version"
+            ),
+            "fields": current_fields,
+            "copied_marker_present": copied_present,
+            "copied_marker_fields": copied_fields if copied_present else None,
+            "copied_snapshot_fields": {
+                field_name: copied.get(field_name)
+                for field_name in current_fields
+            },
+        }
+        return {
+            "status": "confirmed",
+            "reason": None,
+            "fields": current_fields,
+            "source_sha256": cls._source_sha256(source_basis),
+            "identity": source_identity,
+        }
+
+    @classmethod
+    def _source_attribute_definition(
+        cls,
+        *,
+        draft: MarketplaceProductDraft,
+        external_id: str,
+        definitions: Optional[Dict[Tuple[int, str], MarketplaceAttributeDefinition]] = None,
+    ) -> Tuple[Optional[MarketplaceAttributeDefinition], Optional[str]]:
+        """Return an exact allowlisted Ozon definition and reference state."""
+        spec = cls.SOURCE_ATTRIBUTE_SPECS.get(external_id)
+        if spec is None:
+            return None, "field_contract_mismatch"
+        product_type = draft.product_type
+        if product_type is None or draft.product_type_id is None:
+            return None, "type_unselected"
+        if (
+            product_type.id != draft.product_type_id
+            or product_type.marketplace_id != draft.marketplace_id
+            or product_type.category is None
+            or product_type.category.marketplace_id != draft.marketplace_id
+        ):
+            return None, "field_contract_mismatch"
+        if not OzonReferenceService.reference_is_fresh(product_type):
+            if (
+                not product_type.attributes_schema_hash
+                or product_type.attributes_synced_at is None
+                or product_type.category.marketplace.categories_snapshot_hash is None
+            ):
+                return None, "schema_unavailable"
+            return None, "schema_stale"
+
+        definition = (
+            (definitions or {}).get((product_type.id, external_id))
+            if definitions is not None
+            else None
+        )
+        if definitions is None:
+            matches = MarketplaceAttributeDefinition.query.filter_by(
+                product_type_id=product_type.id,
+                external_attribute_id=external_id,
+                marketplace_id=draft.marketplace_id,
+                is_available=True,
+                is_enabled=True,
+            ).limit(2).all()
+            definition = matches[0] if len(matches) == 1 else None
+        if definition is None:
+            return None, "field_missing"
+        if (
+            definition.product_type_id != product_type.id
+            or definition.marketplace_id != draft.marketplace_id
+            or definition.external_attribute_id != external_id
+            or definition.name != spec["label"]
+            or definition.data_type != "String"
+            or definition.dictionary_id != spec["dictionary_id"]
+            or definition.attribute_complex_id not in (None, "")
+            or definition.complex_is_collection
+        ):
+            return None, "field_contract_mismatch"
+        if not OzonReferenceService.dictionary_is_fresh(definition):
+            return None, "dictionary_stale"
+        return definition, None
+
+    @staticmethod
+    def _source_literal_dictionary_text(value: str) -> str:
+        return " ".join(unicodedata.normalize("NFKC", value).split())
+
+    @classmethod
+    def _resolve_source_dictionary_cell(
+        cls,
+        *,
+        definition: MarketplaceAttributeDefinition,
+        literal: str,
+    ) -> Tuple[Optional[dict], Optional[str], dict]:
+        """Resolve one source literal only against its exact Ozon dictionary."""
+        normalized = OzonReferenceService.normalize_value(literal)
+        rows = MarketplaceAttributeValue.query.filter(
+            MarketplaceAttributeValue.attribute_id == definition.id,
+            MarketplaceAttributeValue.product_type_id
+            == definition.product_type_id,
+            MarketplaceAttributeValue.marketplace_id
+            == definition.marketplace_id,
+            MarketplaceAttributeValue.is_available.is_(True),
+            MarketplaceAttributeValue.value_normalized == normalized,
+        ).order_by(
+            MarketplaceAttributeValue.external_value_id.asc(),
+        ).limit(51).all()
+        exact_rows = [
+            row for row in rows
+            if (
+                isinstance(row.value, str)
+                and OzonReferenceService.normalize_value(row.value)
+                == normalized
+            )
+        ]
+        restriction = set(definition.restriction_value_ids)
+        allowed_rows = [
+            row for row in exact_rows
+            if not restriction or row.external_value_id in restriction
+        ]
+        candidate_state = {
+            "normalized": normalized,
+            "literal": cls._source_literal_dictionary_text(literal),
+            "overflow": len(rows) > 50,
+            "candidates": [
+                {
+                    "id": row.external_value_id,
+                    "value": row.value,
+                    "allowed": (
+                        not restriction
+                        or row.external_value_id in restriction
+                    ),
+                }
+                for row in exact_rows
+            ],
+        }
+        if len(rows) > 50:
+            return None, "dictionary_value_ambiguous", candidate_state
+        if not allowed_rows:
+            if exact_rows and restriction:
+                return None, "dictionary_value_restricted", candidate_state
+            return None, "dictionary_value_unmatched", candidate_state
+        if len(allowed_rows) == 1:
+            row = allowed_rows[0]
+        else:
+            literal = cls._source_literal_dictionary_text(literal)
+            literal_matches = [
+                row for row in allowed_rows
+                if cls._source_literal_dictionary_text(row.value) == literal
+            ]
+            if len(literal_matches) != 1:
+                return None, "dictionary_value_ambiguous", candidate_state
+            row = literal_matches[0]
+        return {
+            "value": row.value,
+            "dictionary_value_id": row.external_value_id,
+        }, None, candidate_state
+
+    @classmethod
+    def _source_current_attribute_cells(
+        cls,
+        *,
+        draft: MarketplaceProductDraft,
+        external_id: str,
+    ) -> Tuple[list, bool]:
+        """Return exact saved scalar/collection cells and their shape validity."""
+        matches = [
+            item
+            for item in cls._stored_json(draft.attributes_json, [])
+            if (
+                isinstance(item, dict)
+                and item.get("attribute_id") == external_id
+                and item.get("complex_id", "0") == "0"
+            )
+        ]
+        if not matches:
+            return [], True
+        if len(matches) != 1 or not isinstance(matches[0].get("values"), list):
+            return [], False
+        values = matches[0]["values"]
+        if len(values) > cls.MAX_ATTRIBUTE_VALUES:
+            return [], False
+        cells = []
+        for item in values:
+            if not isinstance(item, dict):
+                return [], False
+            value = item.get("value")
+            dictionary_value_id = item.get("dictionary_value_id")
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or not isinstance(dictionary_value_id, str)
+                or not dictionary_value_id
+            ):
+                return [], False
+            cells.append({
+                "value": value,
+                "dictionary_value_id": dictionary_value_id,
+            })
+        return cells, True
+
+    @classmethod
+    def _source_receipt_payload(
+        cls,
+        *,
+        draft: MarketplaceProductDraft,
+        external_id: str,
+        source_sha256: str,
+        definition: Optional[MarketplaceAttributeDefinition],
+        definition_reason: Optional[str],
+        dictionary_candidates: dict,
+    ) -> dict:
+        product_type = draft.product_type
+        reference_state = {
+            "product_type_id": draft.product_type_id,
+            "external_type_id": (
+                product_type.external_type_id if product_type else None
+            ),
+            "category_id": (
+                product_type.category_id if product_type else None
+            ),
+            "category_external_id": (
+                product_type.category.external_category_id
+                if product_type and product_type.category else None
+            ),
+            "schema_hash": (
+                product_type.attributes_schema_hash
+                if product_type else None
+            ),
+            "schema_version": (
+                product_type.attributes_version if product_type else None
+            ),
+            "schema_synced_at": (
+                product_type.attributes_synced_at.isoformat()
+                if product_type and product_type.attributes_synced_at else None
+            ),
+            "definition": ({
+                "id": definition.id,
+                "name": definition.name,
+                "data_type": definition.data_type,
+                "external_attribute_id": definition.external_attribute_id,
+                "dictionary_id": definition.dictionary_id,
+                "is_collection": bool(definition.is_collection),
+                "max_value_count": definition.max_value_count,
+                "complex_is_collection": bool(
+                    definition.complex_is_collection
+                ),
+                "is_available": bool(definition.is_available),
+                "is_enabled": bool(definition.is_enabled),
+                "values_hash": definition.values_snapshot_hash,
+                "values_version": definition.values_version,
+                "values_synced_at": (
+                    definition.values_synced_at.isoformat()
+                    if definition.values_synced_at else None
+                ),
+                "restriction_ids": sorted(definition.restriction_value_ids),
+            } if definition else None),
+            "definition_reason": definition_reason,
+            # Receipts remain small even when a duplicate-label scan reached
+            # its bounded 50-row ceiling. The digest still binds every exact
+            # candidate ID/display/restriction fact used by the resolver.
+            "dictionary_candidates_sha256": cls._source_sha256(
+                dictionary_candidates
+            ),
+        }
+        current_cells, current_valid = cls._source_current_attribute_cells(
+            draft=draft,
+            external_id=external_id,
+        )
+        current_state = {"cells": current_cells, "valid": current_valid}
+        return {
+            "v": 1,
+            "seller_id": draft.seller_id,
+            "account_id": draft.account_id,
+            "draft_id": draft.id,
+            "draft_version": draft.version,
+            "imported_product_id": draft.imported_product_id,
+            "product_type_id": draft.product_type_id,
+            "attribute_id": external_id,
+            "dictionary_id": cls.SOURCE_ATTRIBUTE_SPECS[external_id][
+                "dictionary_id"
+            ],
+            "source_sha256": source_sha256,
+            "reference_sha256": cls._source_sha256(reference_state),
+            "current_sha256": cls._source_sha256(current_state),
+        }
+
+    @classmethod
+    def _source_review_serializer(cls):
+        secret = current_app.config.get("SECRET_KEY") or current_app.secret_key
+        if not secret:
+            return None
+        return URLSafeTimedSerializer(secret, salt=cls.SOURCE_REVIEW_SALT)
+
+    @classmethod
+    def _source_comparisons_for_draft(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        definitions: Optional[Dict[Tuple[int, str], MarketplaceAttributeDefinition]] = None,
+        dictionary_cache: Optional[dict] = None,
+    ) -> Tuple[dict, dict, set]:
+        """Project bounded literal evidence and exact Ozon dictionary matches."""
+        source = cls._source_supplier_evidence(draft)
+        serializer = cls._source_review_serializer()
+        comparisons = {}
+        proof_payloads = {}
+        editable_ids = set()
+        cache = dictionary_cache if dictionary_cache is not None else {}
+
+        for external_id, spec in cls.SOURCE_ATTRIBUTE_SPECS.items():
+            status = "unknown"
+            reason = source.get("reason") or "source_field_not_observed"
+            literal_labels = []
+            resolved_values = []
+            candidate_evidence = {"normalized": None, "candidates": []}
+            source_value = source.get("fields", {}).get(spec["field"])
+            field_confirmed = (
+                source.get("status") == "confirmed"
+                and source_value not in (None, "", [])
+            )
+            if field_confirmed:
+                status = "confirmed"
+                if isinstance(source_value, list):
+                    literal_labels = list(source_value[:20])
+                elif isinstance(source_value, str):
+                    literal_labels = [source_value]
+                else:
+                    literal_labels = []
+                    status = "unknown"
+                    reason = "source_marker_invalid"
+                reason = None if status == "confirmed" else reason
+
+            definition, definition_reason = cls._source_attribute_definition(
+                draft=draft,
+                external_id=external_id,
+                definitions=definitions,
+            )
+            if definition is not None:
+                editable_ids.add(external_id)
+                if field_confirmed:
+                    max_values = (
+                        definition.max_value_count
+                        if definition.is_collection
+                        and definition.max_value_count > 0
+                        else cls.MAX_ATTRIBUTE_VALUES
+                        if definition.is_collection
+                        else 1
+                    )
+                    if (
+                        not literal_labels
+                        or len(literal_labels) > max_values
+                        or (len(literal_labels) > 1 and not definition.is_collection)
+                    ):
+                        reason = "source_value_cardinality"
+                    else:
+                        candidate_cells = []
+                        resolved_cells = []
+                        first_reason = None
+                        for literal in literal_labels:
+                            normalized = OzonReferenceService.normalize_value(
+                                literal
+                            )
+                            literal_key = cls._source_literal_dictionary_text(
+                                literal
+                            )
+                            cache_key = (
+                                definition.id,
+                                normalized,
+                                literal_key,
+                            )
+                            if cache_key not in cache:
+                                cache[cache_key] = (
+                                    cls._resolve_source_dictionary_cell(
+                                        definition=definition,
+                                        literal=literal,
+                                    )
+                                )
+                            resolved, resolve_reason, candidates = cache[
+                                cache_key
+                            ]
+                            candidate_cells.append(candidates)
+                            if resolved is None:
+                                if first_reason is None:
+                                    first_reason = resolve_reason
+                            else:
+                                resolved_cells.append(resolved)
+                        candidate_evidence = {"cells": candidate_cells}
+                        resolved_ids = [
+                            cell["dictionary_value_id"]
+                            for cell in resolved_cells
+                        ]
+                        if first_reason is not None:
+                            reason = first_reason
+                        elif len(resolved_ids) != len(set(resolved_ids)):
+                            reason = "dictionary_value_ambiguous"
+                        else:
+                            resolved_values = resolved_cells
+                            reason = None
+            elif field_confirmed:
+                reason = definition_reason
+            elif status == "unknown" and source.get("reason") is None:
+                reason = "source_field_not_observed"
+
+            receipt = None
+            if field_confirmed:
+                payload = cls._source_receipt_payload(
+                    draft=draft,
+                    external_id=external_id,
+                    source_sha256=source.get("source_sha256") or "",
+                    definition=definition,
+                    definition_reason=definition_reason,
+                    dictionary_candidates=candidate_evidence,
+                )
+                proof_payloads[external_id] = payload
+                if serializer is not None:
+                    receipt = serializer.dumps(payload)
+                else:
+                    reason = "reference_changed"
+
+            comparisons[external_id] = {
+                "attribute_id": external_id,
+                "complex_id": "0",
+                "source_field": spec["field"],
+                "status": status,
+                "reason": reason,
+                "reason_label": cls._source_reason_label(reason),
+                "literal_labels": literal_labels,
+                "resolved_values": resolved_values,
+                "evidence_receipt": receipt,
+            }
+        return comparisons, proof_payloads, editable_ids
+
+    @classmethod
+    def _source_proposal_sha256(
+        cls,
+        *,
+        raw_value: Any,
+        dictionary_value_id: Any,
+    ) -> str:
+        if raw_value is None:
+            raw_value = ""
+        if dictionary_value_id is None:
+            dictionary_value_id = ""
+        if not isinstance(raw_value, str) or not isinstance(
+            dictionary_value_id, str,
+        ):
+            raise MarketplaceDraftValidationError(
+                "Сравнение значения Ozon повреждено"
+            )
+        raw_lines = raw_value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        normalized_lines = [
+            " ".join(unicodedata.normalize("NFKC", line).split())
+            for line in raw_lines
+        ]
+        normalized_lines = [line for line in normalized_lines if line]
+        if len(normalized_lines) == 1:
+            payload: Any = {
+                "dictionary_value_id": dictionary_value_id,
+                "value": normalized_lines[0],
+            }
+        else:
+            payload = [
+                {"dictionary_value_id": "", "value": line}
+                for line in normalized_lines
+            ]
+        canonical = cls._source_json(payload)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _parse_source_review_json(cls, raw: Any) -> dict:
+        if raw in (None, ""):
+            return {}
+        if not isinstance(raw, str) or len(raw.encode("utf-8")) > cls.MAX_SOURCE_REVIEW_FORM_BYTES:
+            raise MarketplaceDraftValidationError(
+                "Проверка источника больше допустимого размера"
+            )
+
+        def exact_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate JSON key")
+                result[key] = value
+            return result
+
+        try:
+            value = json.loads(
+                raw,
+                object_pairs_hook=exact_object,
+                parse_constant=lambda _value: (_ for _ in ()).throw(
+                    ValueError("invalid JSON constant")
+                ),
+            )
+        except (TypeError, ValueError, RecursionError):
+            raise MarketplaceDraftValidationError(
+                "Проверка источника повреждена; обновите редактор"
+            ) from None
+        if not isinstance(value, dict) or len(value) > len(cls.SOURCE_ATTRIBUTE_SPECS):
+            raise MarketplaceDraftValidationError(
+                "Проверка источника имеет недопустимый формат"
+            )
+        parsed = {}
+        for external_id, item in value.items():
+            if (
+                external_id not in cls.SOURCE_ATTRIBUTE_SPECS
+                or not isinstance(item, dict)
+                or set(item) != {"receipt", "ack", "proposal_sha256"}
+                or type(item.get("ack")) is not bool
+                or not isinstance(item.get("receipt"), str)
+                or not 1 <= len(item["receipt"]) <= 4_096
+                or not isinstance(item.get("proposal_sha256"), str)
+                or re.fullmatch(r"[0-9a-f]{64}", item["proposal_sha256"]) is None
+            ):
+                raise MarketplaceDraftValidationError(
+                    "Подтверждение источника имеет недопустимый формат"
+                )
+            parsed[external_id] = {
+                "receipt": item["receipt"],
+                "ack": item["ack"],
+                "proposal_sha256": item["proposal_sha256"],
+            }
+        return parsed
+
+    @classmethod
+    def _source_current_form_changed(
+        cls,
+        *,
+        draft: MarketplaceProductDraft,
+        external_id: str,
+        proposed_cells: list,
+    ) -> bool:
+        current_cells, current_valid = cls._source_current_attribute_cells(
+            draft=draft,
+            external_id=external_id,
+        )
+        if not current_valid:
+            return True
+        current_ids = {
+            item["dictionary_value_id"]
+            for item in current_cells
+            if isinstance(item.get("dictionary_value_id"), str)
+        }
+        proposed_ids = {
+            item.get("dictionary_value_id")
+            for item in proposed_cells
+            if isinstance(item, dict)
+            and isinstance(item.get("dictionary_value_id"), str)
+        }
+        return current_ids != proposed_ids
+
+    @classmethod
+    def _validate_source_proposals(
+        cls,
+        *,
+        draft: MarketplaceProductDraft,
+        values: dict,
+        source_review_json: Any,
+        comparisons: dict,
+        proof_payloads: dict,
+    ) -> None:
+        """Require a fresh field receipt for changed non-source proposals."""
+        decisions = cls._parse_source_review_json(source_review_json)
+        serializer = cls._source_review_serializer()
+        for external_id, comparison in comparisons.items():
+            key = f"attribute:{external_id}"
+            decision = decisions.get(external_id)
+            source_cells = comparison.get("resolved_values")
+            if (
+                decision is not None
+                and (
+                    comparison.get("status") != "confirmed"
+                    or not isinstance(source_cells, list)
+                    or not source_cells
+                    or proof_payloads.get(external_id) is None
+                )
+            ):
+                raise MarketplaceDraftConflict(
+                    "Подтвержденный источник изменился; обновите редактор"
+                )
+            if key not in values:
+                if decision is not None:
+                    raise MarketplaceDraftConflict(
+                        "Поле изменилось после подтверждения; проверьте его снова"
+                    )
+                continue
+            raw_value = values.get(key)
+            if raw_value in (None, ""):
+                # The native editor treats blank controls as no-ops; deletion
+                # is not part of this comparison workflow.
+                if decision is not None:
+                    raise MarketplaceDraftConflict(
+                        "Поле изменилось после подтверждения; проверьте его снова"
+                    )
+                continue
+            raw_dictionary_value_id = values.get(
+                f"attribute_value_id:{external_id}", "",
+            )
+            definition, definition_reason = cls._source_attribute_definition(
+                draft=draft,
+                external_id=external_id,
+            )
+            if (
+                comparison.get("status") != "confirmed"
+                or not isinstance(source_cells, list)
+                or not source_cells
+                or definition is None
+            ):
+                if decision is not None:
+                    raise MarketplaceDraftConflict(
+                        "Подтвержденный источник или справочник больше недоступен"
+                    )
+                continue
+            try:
+                proposed_cells = cls._resolve_attribute_values(
+                    definition=definition,
+                    raw_value=raw_value,
+                    expected_external_value_id=raw_dictionary_value_id,
+                )
+            except MarketplaceDraftValidationError:
+                # Keep the established native validator's error as the user
+                # sees it; invalid values cannot be committed in either path.
+                raise
+            proposed_ids = [
+                cell.get("dictionary_value_id")
+                for cell in proposed_cells
+                if isinstance(cell, dict)
+                and isinstance(cell.get("dictionary_value_id"), str)
+            ]
+            source_ids = [
+                cell.get("dictionary_value_id")
+                for cell in source_cells
+                if isinstance(cell, dict)
+                and isinstance(cell.get("dictionary_value_id"), str)
+            ]
+            changed = cls._source_current_form_changed(
+                draft=draft,
+                external_id=external_id,
+                proposed_cells=proposed_cells,
+            )
+            if not changed:
+                if decision is not None:
+                    raise MarketplaceDraftConflict(
+                        "Поле изменилось после подтверждения; проверьте его снова"
+                    )
+                continue
+
+            expected_payload = proof_payloads.get(external_id)
+            if (
+                decision is None
+                or serializer is None
+                or expected_payload is None
+                or not comparison.get("evidence_receipt")
+            ):
+                raise MarketplaceDraftConflict(
+                    "Подтвердите выбранное значение для точного поля Ozon"
+                )
+            try:
+                submitted_payload = serializer.loads(
+                    decision["receipt"],
+                    max_age=cls.SOURCE_REVIEW_TOKEN_MAX_AGE_SECONDS,
+                )
+            except (BadSignature, SignatureExpired, TypeError, ValueError):
+                raise MarketplaceDraftConflict(
+                    "Проверка источника устарела; обновите редактор"
+                ) from None
+            if submitted_payload != expected_payload:
+                raise MarketplaceDraftConflict(
+                    "Источник, тип или справочник изменились; обновите редактор"
+                )
+            proposal_sha = cls._source_proposal_sha256(
+                raw_value=raw_value,
+                dictionary_value_id=raw_dictionary_value_id,
+            )
+            if decision["proposal_sha256"] != proposal_sha:
+                raise MarketplaceDraftConflict(
+                    "Предложение изменилось после подтверждения; проверьте поле снова"
+                )
+            source_mismatch = set(proposed_ids) != set(source_ids)
+            if source_mismatch and decision["ack"] is not True:
+                raise MarketplaceDraftConflict(
+                    "Подтвердите конфликт выбранного значения с источником"
+                )
+            if not source_mismatch and decision["ack"] is True:
+                raise MarketplaceDraftConflict(
+                    "Подтверждение больше не относится к выбранному значению"
+                )
+
+    @classmethod
+    def _begin_source_review_row_writer(cls) -> None:
+        """Acquire one short SQLite writer claim before source recheck/save."""
+        if db.engine.dialect.name != "sqlite":
+            raise MarketplaceDraftConflict(
+                "Безопасная массовая сверка требует обновления страницы"
+            )
+        session = db.session()
+        if session.new or session.dirty or session.deleted:
+            raise MarketplaceDraftConflict(
+                "Завершите текущее изменение перед сохранением строки"
+            )
+        if session.in_transaction():
+            session.rollback()
+        raw = None
+        previous_timeout = None
+        try:
+            connection = session.connection()
+            raw = connection.connection.driver_connection
+            if raw.in_transaction:
+                raise OperationalError(
+                    "BEGIN IMMEDIATE",
+                    {},
+                    RuntimeError("connection already has a transaction"),
+                )
+            previous_timeout = raw.execute(
+                "PRAGMA busy_timeout"
+            ).fetchone()[0]
+            raw.execute("PRAGMA busy_timeout = 200")
+            connection.execute(text("BEGIN IMMEDIATE"))
+        except OperationalError:
+            if raw is not None and previous_timeout is not None:
+                raw.execute(f"PRAGMA busy_timeout = {int(previous_timeout)}")
+            session.rollback()
+            raise MarketplaceDraftConflict(
+                "База сейчас меняется; строка не сохранена, повторите позже"
+            ) from None
+        except Exception:
+            if raw is not None and previous_timeout is not None:
+                raw.execute(f"PRAGMA busy_timeout = {int(previous_timeout)}")
+            session.rollback()
+            raise
+        else:
+            raw.execute(f"PRAGMA busy_timeout = {int(previous_timeout)}")
+            session.expire_all()
+
     @staticmethod
     def _set_excel_value(cell, value: Any) -> None:
         """Write text as text without changing the seller value.
@@ -1074,6 +2007,8 @@ class OzonBulkRepairService:
         groups: Dict[Tuple[Any, ...], dict] = {}
         bulk_attribute_labels: Dict[str, set] = {}
         editor_attribute_cells = 0
+        source_review_attribute_cells = 0
+        source_dictionary_cache = {}
         has_schema_cleanup = False
 
         for item in items:
@@ -1099,6 +2034,30 @@ class OzonBulkRepairService:
             has_schema_cleanup = bool(
                 has_schema_cleanup or cleanup_candidates
             )
+            source_comparisons = {}
+            source_editable_ids = set()
+            if source_prepare or draft_selection:
+                source_review_attribute_cells += len(
+                    cls.SOURCE_ATTRIBUTE_SPECS
+                )
+                if (
+                    source_review_attribute_cells
+                    > cls.MAX_SOURCE_REVIEW_ATTRIBUTE_CELLS
+                ):
+                    raise cls._conflict(
+                        "ozon_repair_editor_too_many_fields",
+                        "В массовом редакторе слишком много полей сверки; "
+                        "разделите карточки на меньшие партии",
+                    )
+                (
+                    source_comparisons,
+                    _source_proof_payloads,
+                    source_editable_ids,
+                ) = cls._source_comparisons_for_draft(
+                    draft,
+                    definitions=definitions,
+                    dictionary_cache=source_dictionary_cache,
+                )
             cleanup_replacement_ids = {
                 candidate["attribute_id"]
                 for candidate in cleanup_candidates
@@ -1153,18 +2112,26 @@ class OzonBulkRepairService:
                     cleanup_replacement_ids,
                     key=int,
                 ),
+                *sorted(source_editable_ids, key=int),
             ]))
+            legacy_editable_ids = set(
+                cls._missing_attribute_ids(
+                    draft,
+                    validation_result=validation_result,
+                )
+            ) | cleanup_replacement_ids
             for external_id in editable_ids:
-                editor_attribute_cells += 1
-                if (
-                    editor_attribute_cells
-                    > cls.MAX_EDITOR_ATTRIBUTE_CELLS
-                ):
-                    raise cls._conflict(
-                        "ozon_repair_editor_too_many_fields",
-                        "В запуске слишком много разных полей для одного "
-                        "массового экрана; разделите карточки на меньшие партии",
-                    )
+                if external_id in legacy_editable_ids:
+                    editor_attribute_cells += 1
+                    if (
+                        editor_attribute_cells
+                        > cls.MAX_EDITOR_ATTRIBUTE_CELLS
+                    ):
+                        raise cls._conflict(
+                            "ozon_repair_editor_too_many_fields",
+                            "В запуске слишком много разных полей для одного "
+                            "массового экрана; разделите карточки на меньшие партии",
+                        )
                 definition = definitions.get(
                     (draft.product_type_id, external_id)
                 )
@@ -1176,15 +2143,28 @@ class OzonBulkRepairService:
                     if definition is not None and definition.name
                     else f"Атрибут Ozon {external_id}"
                 )
+                is_source_managed = bool(
+                    (source_prepare or draft_selection)
+                    and external_id in cls.SOURCE_ATTRIBUTE_SPECS
+                )
                 if (
                     definition is not None
                     and not definition.attribute_complex_id
+                    and not is_source_managed
                 ):
                     bulk_attribute_labels.setdefault(
                         external_id,
                         set(),
                     ).add(name)
-                attribute_fields.append({
+                source_current_cells, source_current_valid = (
+                    cls._source_current_attribute_cells(
+                        draft=draft,
+                        external_id=external_id,
+                    )
+                    if is_source_managed
+                    else ([], False)
+                )
+                attribute_field = {
                     "external_id": external_id,
                     "name": name,
                     "value": (
@@ -1220,6 +2200,9 @@ class OzonBulkRepairService:
                         definition.data_type
                         if definition is not None else None
                     ),
+                    "required": bool(
+                        definition is not None and definition.is_required
+                    ),
                     "is_collection": bool(
                         definition is not None
                         and definition.is_collection
@@ -1230,6 +2213,7 @@ class OzonBulkRepairService:
                         cls.MAX_ATTRIBUTE_VALUES,
                     ),
                     "replaces_invalid": replaces_invalid,
+                    "source_managed": is_source_managed,
                     "suggestions": (
                         OzonComplianceSuggestionService.tnved_suggestions(
                             draft=draft,
@@ -1242,7 +2226,16 @@ class OzonBulkRepairService:
                         )
                         else []
                     ),
-                })
+                }
+                if is_source_managed:
+                    attribute_field["dictionary_value_ids"] = (
+                        [
+                            cell["dictionary_value_id"]
+                            for cell in source_current_cells
+                        ]
+                        if source_current_valid else []
+                    )
+                attribute_fields.append(attribute_field)
 
             try:
                 identities = (
@@ -1332,6 +2325,8 @@ class OzonBulkRepairService:
                 "description": content.get("description", ""),
                 **cls._physical_export_values(draft),
                 "attributes": attribute_fields,
+                **({"source_comparisons": source_comparisons}
+                   if source_prepare or draft_selection else {}),
                 "cleanup_candidates": cleanup_candidates,
                 "schema_cleanup": bool(
                     cleanup_candidates
@@ -1540,16 +2535,36 @@ class OzonBulkRepairService:
             )
             if candidate["replacement_required"]
         )
+        source_native = document.get("mode") in {
+            "source_prepare", "draft_selection",
+        }
+        if source_native:
+            definitions_by_type = cls._definition_map([draft])
+            _comparisons, _proof_payloads, source_editable_ids = (
+                cls._source_comparisons_for_draft(
+                    draft,
+                    definitions=definitions_by_type,
+                )
+            )
+            editable_ids.update(source_editable_ids)
         if external_attribute_id not in editable_ids:
             raise OzonBulkUploadValidationError(
                 "Атрибут не относится к недостающим полям этой строки"
             )
-        definitions = MarketplaceAttributeDefinition.query.filter_by(
-            product_type_id=draft.product_type_id,
-            external_attribute_id=external_attribute_id,
-            is_available=True,
-            is_enabled=True,
-        ).all()
+        if source_native and external_attribute_id in cls.SOURCE_ATTRIBUTE_SPECS:
+            definition, reason = cls._source_attribute_definition(
+                draft=draft,
+                external_id=external_attribute_id,
+                definitions=definitions_by_type,
+            )
+            definitions = [definition] if definition is not None else []
+        else:
+            definitions = MarketplaceAttributeDefinition.query.filter_by(
+                product_type_id=draft.product_type_id,
+                external_attribute_id=external_attribute_id,
+                is_available=True,
+                is_enabled=True,
+            ).all()
         if (
             len(definitions) != 1
             or definitions[0].attribute_complex_id
@@ -2762,6 +3777,26 @@ class OzonBulkRepairService:
                     })
                     continue
                 try:
+                    source_review_enabled = source_prepare or draft_selection
+                    protected_attribute_ids = set(
+                        cls.SOURCE_ATTRIBUTE_SPECS
+                    )
+                    has_source_submission = bool(
+                        source_review_enabled
+                        and (
+                            row.get("source_review_json") not in (None, "")
+                            or any(
+                                f"attribute:{external_id}"
+                                in row.get("values", {})
+                                for external_id in protected_attribute_ids
+                            )
+                        )
+                    )
+                    if has_source_submission:
+                        # This short per-row writer transaction serializes the
+                        # exact source/reference recheck with the local draft
+                        # update. No batch-wide writer lock or provider I/O.
+                        cls._begin_source_review_row_writer()
                     draft = MarketplaceDraftService.get_draft(
                         seller_id=seller_id,
                         draft_id=row["draft_id"],
@@ -2777,6 +3812,19 @@ class OzonBulkRepairService:
                     if draft.version != row["expected_version"]:
                         raise MarketplaceDraftValidationError(
                             "Черновик изменился после открытия; обновите страницу"
+                        )
+                    if has_source_submission:
+                        source_comparisons, source_proofs, _source_editable = (
+                            cls._source_comparisons_for_draft(draft)
+                        )
+                        cls._validate_source_proposals(
+                            draft=draft,
+                            values=row["values"],
+                            source_review_json=row.get(
+                                "source_review_json", "",
+                            ),
+                            comparisons=source_comparisons,
+                            proof_payloads=source_proofs,
                         )
                     action = cls._cell_text(
                         row["values"].get("action"),
@@ -3003,8 +4051,11 @@ class OzonBulkRepairService:
         parsed_rows = []
         seen = set()
         fixed_value_keys = set(cls.EDITABLE_FIXED)
+        source_review_enabled = editor.get("mode") in {
+            "source_prepare", "draft_selection",
+        }
         for index, row in enumerate(rows, start=1):
-            if not isinstance(row, dict) or set(row) - {
+            allowed_row_keys = {
                 "draft_id",
                 "expected_version",
                 "imported_product_id",
@@ -3013,7 +4064,10 @@ class OzonBulkRepairService:
                 "save_mapping",
                 "schema_cleanup",
                 "values",
-            }:
+            }
+            if source_review_enabled:
+                allowed_row_keys.add("source_review_json")
+            if not isinstance(row, dict) or set(row) - allowed_row_keys:
                 raise OzonBulkUploadValidationError(
                     f"Строка {index}: неизвестная структура"
                 )
@@ -3096,6 +4150,16 @@ class OzonBulkRepairService:
                 raise OzonBulkUploadValidationError(
                     f"Строка {index}: слишком много полей"
                 )
+            source_review_json = row.get("source_review_json", "")
+            if source_review_json not in (None, "") and (
+                not source_review_enabled
+                or not isinstance(source_review_json, str)
+                or len(source_review_json.encode("utf-8"))
+                > cls.MAX_SOURCE_REVIEW_FORM_BYTES
+            ):
+                raise OzonBulkUploadValidationError(
+                    f"Строка {index}: проверка источника имеет недопустимый размер"
+                )
             attribute_keys = []
             allowed_value_keys = set(fixed_value_keys)
             allowed_value_keys.add("action")
@@ -3112,7 +4176,7 @@ class OzonBulkRepairService:
                 )
             values = dict(values)
             values["action"] = row.get("action")
-            parsed_rows.append({
+            parsed_row = {
                 "row_number": index,
                 "draft_id": draft_id,
                 "expected_version": row["expected_version"],
@@ -3128,7 +4192,10 @@ class OzonBulkRepairService:
                     attribute_keys,
                     key=lambda key: int(key.split(":", 1)[1]),
                 ),
-            })
+            }
+            if source_review_enabled and source_review_json not in (None, ""):
+                parsed_row["source_review_json"] = source_review_json
+            parsed_rows.append(parsed_row)
         return cls._apply_parsed_rows(
             seller_id=seller_id,
             job_uid=job_uid,

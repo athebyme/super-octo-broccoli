@@ -257,6 +257,9 @@ def _parse_editor_rows(editor: dict, *, mode: str = "job") -> list[dict]:
         for group in editor["groups"]
         for row in group["rows"]
     }
+    native_source_review = editor.get("mode") in {
+        "source_prepare", "draft_selection",
+    }
     selected_raw = request.form.getlist("selected_draft_id")
     if (
         not selected_raw
@@ -297,6 +300,8 @@ def _parse_editor_rows(editor: dict, *, mode: str = "job") -> list[dict]:
             prefix + "save_mapping",
             *(prefix + field for field in fixed_fields),
         })
+        if native_source_review:
+            allowed_keys.add(prefix + "source_review_json")
         if row["cleanup_candidates"]:
             allowed_keys.add(prefix + "schema_cleanup")
         for attribute in row["attributes"]:
@@ -362,6 +367,18 @@ def _parse_editor_rows(editor: dict, *, mode: str = "job") -> list[dict]:
             field: _single_form_value(prefix + field)
             for field in fixed_fields
         }
+        source_review_json = (
+            _single_form_value(prefix + "source_review_json")
+            if native_source_review else ""
+        )
+        if (
+            source_review_json
+            and len(source_review_json.encode("utf-8"))
+            > OzonBulkRepairService.MAX_SOURCE_REVIEW_FORM_BYTES
+        ):
+            raise OzonBulkUploadValidationError(
+                "Проверка источника больше допустимого размера"
+            )
         for attribute in expected["attributes"]:
             if not attribute["editable"]:
                 continue
@@ -372,6 +389,17 @@ def _parse_editor_rows(editor: dict, *, mode: str = "job") -> list[dict]:
             raw_value_id = _single_form_value(
                 prefix + f"attribute_value_id_{external_id}"
             )
+            if (
+                native_source_review
+                and attribute.get("source_managed") is True
+                and raw_value == attribute.get("value", "")
+                and raw_value_id == attribute.get(
+                    "dictionary_value_id", "",
+                )
+            ):
+                # A fixed-field save must not round-trip an existing source-
+                # managed collection through the singleton form control.
+                continue
             # Blank native controls are already no-ops in _row_patch. Do not
             # synthesize two empty values per attribute into its bounded
             # per-row values DTO; still read both fields above so duplicate
@@ -380,7 +408,7 @@ def _parse_editor_rows(editor: dict, *, mode: str = "job") -> list[dict]:
                 values[f"attribute:{external_id}"] = raw_value
                 if raw_value_id not in (None, ""):
                     values[f"attribute_value_id:{external_id}"] = raw_value_id
-        result.append({
+        parsed_row = {
             "draft_id": draft_id,
             "expected_version": expected_version,
             "imported_product_id": imported_product_id,
@@ -392,7 +420,10 @@ def _parse_editor_rows(editor: dict, *, mode: str = "job") -> list[dict]:
             "save_mapping": save_mapping_raw == "1",
             "schema_cleanup": schema_cleanup_raw == "1",
             "values": values,
-        })
+        }
+        if native_source_review and source_review_json:
+            parsed_row["source_review_json"] = source_review_json
+        result.append(parsed_row)
     return result
 
 
