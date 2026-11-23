@@ -142,6 +142,49 @@ def test_periodic_catalog_discovery_enqueues_only_one_exact_account_without_prov
     # separate worker tests below and is never constructed here.
 
 
+def test_periodic_catalog_discovery_skips_locked_account_and_enqueues_next_due_account(setup):
+    other = add_account(setup, 'other')
+    claim = try_account_operation_lock(setup['account'])
+    assert claim is not None
+    try:
+        result = reads.enqueue_due_warehouse_catalogs(now=T)
+    finally:
+        claim.close()
+
+    assert result['selected'] == result['enqueued'] == 1
+    assert result['refresh']['account_id'] == other
+    jobs = MarketplaceWarehouseReadJob.query.filter_by(kind='warehouses').all()
+    assert [job.account_id for job in jobs] == [other]
+
+
+def test_periodic_catalog_discovery_skips_new_cooldown_and_releases_both_account_claims(setup, monkeypatch):
+    other = add_account(setup, 'other')
+    original_enqueue = reads.enqueue_refresh
+    attempted = []
+
+    def enqueue_with_new_cooldown(**kwargs):
+        attempted.append(kwargs['account_id'])
+        if kwargs['account_id'] == setup['account']:
+            raise reads.WarehouseReadCooldown(next_attempt_at='synthetic-cooldown')
+        return original_enqueue(**kwargs)
+
+    monkeypatch.setattr(reads, 'enqueue_refresh', enqueue_with_new_cooldown)
+    result = reads.enqueue_due_warehouse_catalogs(now=T)
+
+    assert attempted == [setup['account'], other]
+    assert result['selected'] == result['enqueued'] == 1
+    assert result['refresh']['account_id'] == other
+    jobs = MarketplaceWarehouseReadJob.query.filter_by(kind='warehouses').all()
+    assert [job.account_id for job in jobs] == [other]
+    claims = [try_account_operation_lock(account_id) for account_id in (setup['account'], other)]
+    try:
+        assert all(claim is not None for claim in claims)
+    finally:
+        for claim in claims:
+            if claim is not None:
+                claim.close()
+
+
 def test_periodic_catalog_discovery_waits_for_six_hour_freshness_and_terminal_cooldown(setup):
     job = enqueue(setup)
     assert advance(job['id'], FakeAdapter(), T + timedelta(seconds=1))['outcome'] == 'completed'
@@ -185,6 +228,28 @@ def test_periodic_catalog_discovery_respects_legacy_completed_snapshot(setup):
     assert reads.enqueue_due_warehouse_catalogs(
         now=T + reads.WAREHOUSE_CATALOG_TTL,
     )['enqueued'] == 1
+
+
+def test_periodic_catalog_discovery_uses_newer_success_across_snapshot_sources(setup):
+    job = enqueue(setup)
+    durable_success = T - timedelta(days=2)
+    legacy_success = T - timedelta(hours=1)
+    row = db.session.get(MarketplaceWarehouseReadJob, job['id'])
+    row.status = 'completed'
+    row.completed_at = durable_success
+    row.last_completed_at = durable_success
+    row.next_due_at = durable_success
+    account = db.session.get(SellerMarketplaceAccount, setup['account'])
+    db.session.add(MarketplaceWarehouseSync(
+        seller_id=setup['seller'], marketplace_id=account.marketplace_id,
+        account_id=account.id, status='completed', started_at=legacy_success,
+        completed_at=legacy_success,
+    ))
+    db.session.commit()
+
+    result = reads.enqueue_due_warehouse_catalogs(now=T)
+    assert result == {'selected': 0, 'enqueued': 0, 'refresh': None}
+    assert MarketplaceWarehouseReadJob.query.count() == 1
 
 
 def test_periodic_catalog_discovery_defers_cancelled_and_rechecks_access_denial_daily(setup):

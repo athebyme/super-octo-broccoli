@@ -56,6 +56,7 @@ MAX_AGE = timedelta(hours=24)
 MAX_BACKOFF_SECONDS = 6 * 3600
 WAREHOUSE_CATALOG_TTL = timedelta(hours=6)
 WAREHOUSE_ACCESS_RECHECK = timedelta(hours=24)
+WAREHOUSE_CATALOG_CANDIDATE_LIMIT = 100
 logger = logging.getLogger(__name__)
 
 MESSAGES = {
@@ -294,7 +295,12 @@ def enqueue_due_warehouse_catalogs(*, now=None):
         MarketplaceWarehouseSync.account_id == SellerMarketplaceAccount.id,
         MarketplaceWarehouseSync.status == 'completed',
     ).correlate(SellerMarketplaceAccount).scalar_subquery()
-    last_good_at = func.coalesce(latest_job.last_completed_at, legacy_completed_at)
+    last_good_at = case(
+        (latest_job.last_completed_at.is_(None), legacy_completed_at),
+        (legacy_completed_at.is_(None), latest_job.last_completed_at),
+        (latest_job.last_completed_at >= legacy_completed_at, latest_job.last_completed_at),
+        else_=legacy_completed_at,
+    )
     has_active_warehouse_read = select(literal(1)).where(
         MarketplaceWarehouseReadJob.seller_id == SellerMarketplaceAccount.seller_id,
         MarketplaceWarehouseReadJob.marketplace_id == SellerMarketplaceAccount.marketplace_id,
@@ -342,38 +348,46 @@ def enqueue_due_warehouse_catalogs(*, now=None):
         ~has_provider_cooldown,
         provider_due_is_known,
     )
-    candidate = due_accounts.order_by(
+    candidates = due_accounts.order_by(
         case((last_good_at.is_(None), 0), else_=1),
         last_good_at.asc(),
         account.id.asc(),
-    ).with_entities(account.id, account.seller_id).first()
+    ).with_entities(account.id, account.seller_id).limit(
+        WAREHOUSE_CATALOG_CANDIDATE_LIMIT,
+    ).all()
 
-    if candidate is None:
+    if not candidates:
         return {'selected': 0, 'enqueued': 0, 'refresh': None}
-    account_claim = try_account_operation_lock(candidate.id)
-    if account_claim is None:
-        return {'selected': 1, 'enqueued': 0, 'refresh': None}
-    try:
-        # The account may have completed a manual refresh after the initial
-        # scan. Recheck freshness under the same process-shared account lock
-        # used by provider reads before creating the next periodic intent.
-        still_due = due_accounts.filter(account.id == candidate.id).with_entities(account.id).first()
-        if still_due is None:
-            return {'selected': 0, 'enqueued': 0, 'refresh': None}
+    blocked = False
+    for candidate in candidates:
+        account_claim = try_account_operation_lock(candidate.id)
+        if account_claim is None:
+            blocked = True
+            continue
         try:
-            refresh = enqueue_refresh(
-                seller_id=candidate.seller_id,
-                kind='warehouses',
-                account_id=candidate.id,
-                now=now,
-            )
-        except WarehouseReadCooldown:
-            # A concurrent attempt may have persisted a provider Retry-After
-            # after discovery selected this account. Leave it for a later scan.
-            return {'selected': 1, 'enqueued': 0, 'refresh': None}
-    finally:
-        account_claim.close()
-    return {'selected': 1, 'enqueued': 1, 'refresh': refresh}
+            # The account may have completed a manual refresh after the initial
+            # scan. Recheck freshness under the same process-shared account lock
+            # used by provider reads before creating the next periodic intent.
+            still_due = due_accounts.filter(account.id == candidate.id).with_entities(account.id).first()
+            if still_due is None:
+                continue
+            try:
+                refresh = enqueue_refresh(
+                    seller_id=candidate.seller_id,
+                    kind='warehouses',
+                    account_id=candidate.id,
+                    now=now,
+                )
+            except WarehouseReadCooldown:
+                # A concurrent attempt may have persisted a provider Retry-After
+                # after discovery selected this account. Skip it and keep looking
+                # within the bounded candidate set without shortening its pause.
+                blocked = True
+                continue
+            return {'selected': 1, 'enqueued': 1, 'refresh': refresh}
+        finally:
+            account_claim.close()
+    return {'selected': 1 if blocked else 0, 'enqueued': 0, 'refresh': None}
 
 
 def run_warehouse_catalog_discovery_tick(flask_app):
