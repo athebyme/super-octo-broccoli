@@ -219,14 +219,27 @@ with sync_playwright() as playwright:
                 expanded_control_boxes[name] = {
                     key: box[key] for key in ("x", "y", "width", "height")
                 }
+            wb_default_option = expanded_controls["wb_status"].get_by_role(
+                "option", name="Любой этап WB", exact=True,
+            )
+            expect(wb_default_option).to_have_count(1)
+            expect(wb_default_option).to_have_attribute("value", "")
+            wb_default_option_receipt = {
+                "label": "Любой этап WB",
+                "value": wb_default_option.get_attribute("value"),
+            }
+            summary_box = extra_filters.locator("summary").bounding_box()
+            body_box = extra_filters.locator(".mp-extra-filter-body").bounding_box()
+            listhead_box = page.locator(".mp-listhead").first.bounding_box()
+            assert summary_box and body_box and listhead_box
+            assert body_box["y"] >= summary_box["y"] + summary_box["height"] - 1, {
+                "summary": summary_box, "body": body_box,
+            }
+            assert body_box["y"] + body_box["height"] <= listhead_box["y"] + 1, {
+                "body": body_box, "listhead": listhead_box,
+            }
             if width <= 390:
-                summary_box = extra_filters.locator("summary").bounding_box()
-                body_box = extra_filters.locator(".mp-extra-filter-body").bounding_box()
-                assert summary_box and body_box
                 assert body_box["x"] >= 0 and body_box["x"] + body_box["width"] <= width + 1, body_box
-                assert body_box["y"] >= summary_box["y"] + summary_box["height"] - 1, {
-                    "summary": summary_box, "body": body_box,
-                }
             expanded_dimensions = page.evaluate("""() => ({
                 scroll: document.documentElement.scrollWidth,
                 viewport: document.documentElement.clientWidth,
@@ -238,6 +251,7 @@ with sync_playwright() as playwright:
             assert selected_browser_state(page)["selected"] == selection_before_disclosure
             keyboard_open_close = True
             open_disclosure_screenshot = None
+            selected_count_badge = None
 
             if width == 320 and theme == "light":
                 bootstrap = json.loads(page.locator("#mp-bootstrap").text_content())
@@ -297,7 +311,15 @@ with sync_playwright() as playwright:
                 set_catalog_extra_filters_open_by_keyboard(page, opened=False)
                 summary = page.locator("[data-catalog-extra-filters] summary")
                 expect(summary).to_be_visible()
-                expect(summary.locator(".mp-extra-filter-count")).to_have_text("Выбрано 2 фильтра")
+                count_badge = summary.locator("[data-catalog-extra-filter-count]")
+                expect(count_badge).to_have_text("2")
+                selected_count_badge = count_badge.evaluate("""element => ({
+                    text: element.textContent.trim(),
+                    scrollWidth: element.scrollWidth,
+                    clientWidth: element.clientWidth,
+                })""")
+                assert selected_count_badge["clientWidth"] > 0, selected_count_badge
+                assert selected_count_badge["scrollWidth"] <= selected_count_badge["clientWidth"], selected_count_badge
                 expect(summary).to_have_attribute(
                     "aria-label",
                     "Дополнительные фильтры. Выбрано: С фото, В наличии у поставщика",
@@ -423,6 +445,8 @@ with sync_playwright() as playwright:
                                           "toolbar_width": toolbar_box["width"],
                                           "expanded_scroll_width": expanded_dimensions["scroll"],
                                           "expanded_client_width": expanded_dimensions["viewport"],
+                                          "wb_default_option": wb_default_option_receipt,
+                                          "selected_count_badge": selected_count_badge,
                                           "open_screenshot": open_disclosure_screenshot,
                                       }})
             context.unroute_all(behavior="wait")
