@@ -32,7 +32,10 @@ from services.ozon_bulk_upload import (
     OzonBulkUploadService as Upload,
     OzonBulkUploadValidationError,
 )
-from services.marketplace_drafts import MarketplaceDraftService
+from services.marketplace_drafts import (
+    MarketplaceDraftService,
+    MarketplaceDraftValidationError,
+)
 from routes.marketplace_drafts import register_marketplace_draft_routes
 from routes.ozon_bulk_uploads import register_ozon_bulk_upload_routes
 
@@ -1334,6 +1337,82 @@ def test_draft_selection_type_and_dictionary_search_are_local_and_read_only(case
     assert OzonBulkUploadRun.query.count() == 0
     assert OzonBulkUploadItem.query.count() == 0
     assert MarketplaceOperation.query.count() == 0
+
+
+def test_required_brand_search_is_exposed_and_bulk_resolution_requires_exact_id(
+    case, monkeypatch,
+):
+    now = datetime.utcnow()
+    brand = MarketplaceAttributeDefinition(
+        marketplace_id=case.marketplace.id,
+        product_type_id=case.product_type.id,
+        external_attribute_id='31',
+        name='Бренд',
+        data_type='String',
+        is_required=True,
+        dictionary_id='brand-dictionary',
+        max_value_count=1,
+        is_available=True,
+        is_enabled=True,
+        last_seen_at=now,
+        values_synced_at=now,
+        values_sync_status='success',
+        values_snapshot_hash='brand-values-hash',
+        values_version=1,
+        values_count=1,
+        restriction_value_ids_json=json.dumps(['41001']),
+    )
+    db.session.add(brand)
+    db.session.commit()
+    choice = {'dictionary_value_id': '41001', 'value': 'Acme North'}
+    monkeypatch.setattr(
+        'services.ozon_brand_search.OzonBrandSearch.value_choices',
+        lambda *args: [choice],
+    )
+    scope = selection(case, [case.draft.id])
+    before = (case.draft.version, case.draft.validation_result_json)
+
+    result = Repair.search_dictionary_values(
+        seller_id=case.seller.id,
+        selection=scope,
+        draft_id=case.draft.id,
+        external_attribute_id='31',
+        query='Acme',
+    )
+
+    assert result['items'] == [{'id': '41001', 'value': 'Acme North'}]
+    assert (case.draft.version, case.draft.validation_result_json) == before
+    assert Repair._resolve_attribute_values(
+        definition=brand,
+        raw_value='Acme North',
+        expected_external_value_id='41001',
+        draft=case.draft,
+    ) == [choice]
+    assert Repair._row_patch(
+        draft=case.draft,
+        values={
+            'attribute:31': 'Acme North',
+            'attribute_value_id:31': '41001',
+        },
+        attribute_keys=['attribute:31'],
+    )['attributes'] == [{
+        'attribute_id': '31',
+        'complex_id': '0',
+        'values': [choice],
+    }]
+    with pytest.raises(MarketplaceDraftValidationError):
+        Repair._resolve_attribute_values(
+            definition=brand,
+            raw_value='Acme North Ltd',
+            expected_external_value_id='41001',
+            draft=case.draft,
+        )
+    with pytest.raises(MarketplaceDraftValidationError):
+        Repair._resolve_attribute_values(
+            definition=brand,
+            raw_value='Acme North',
+            draft=case.draft,
+        )
 
 
 def test_draft_selection_marks_active_reviewed_draft_as_blocked(case):

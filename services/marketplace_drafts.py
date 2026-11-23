@@ -8688,12 +8688,14 @@ class MarketplaceDraftService:
     def _validate_attributes(
         cls,
         *,
+        draft: Optional[MarketplaceProductDraft] = None,
         product_type: MarketplaceProductType,
         attributes: list,
         complex_groups: list,
         errors: list,
         implicitly_supplied: Optional[set] = None,
-    ) -> None:
+    ) -> bool:
+        uses_ozon_brand_search = False
         implicitly_supplied = implicitly_supplied or set()
         definitions = MarketplaceAttributeDefinition.query.filter_by(
             product_type_id=product_type.id,
@@ -8910,6 +8912,7 @@ class MarketplaceDraftService:
                 for row in rows:
                     resolved[(attribute_id, row.external_value_id)] = row
 
+        brand_search_choices_by_definition = {}
         for item, definition, path in supplied:
             if not definition.dictionary_id:
                 continue
@@ -8922,6 +8925,32 @@ class MarketplaceDraftService:
                     continue
                 row = resolved.get((definition.id, external_id))
                 if row is None:
+                    # Ozon's exact type/attribute value-search endpoint can
+                    # return a value that is absent from the separately
+                    # synchronized full /values snapshot. Keep that snapshot
+                    # untouched; accept only the exact pair from the durable,
+                    # source-scoped brand-search evidence lane. The evidence
+                    # helper rechecks account, source, schema, dictionary,
+                    # restrictions and any negative local row on every
+                    # validation (including publication preflight).
+                    if (
+                        draft is not None
+                        and definition.external_attribute_id
+                        in cls.OZON_BRAND_ATTRIBUTE_IDS
+                        and definition.is_required
+                        and (not restriction or external_id in restriction)
+                    ):
+                        if definition.id not in brand_search_choices_by_definition:
+                            from services.ozon_brand_search import OzonBrandSearch
+                            brand_search_choices_by_definition[definition.id] = (
+                                OzonBrandSearch.value_choices(draft, definition)
+                            )
+                        if {
+                            "dictionary_value_id": external_id,
+                            "value": value.get("value"),
+                        } in brand_search_choices_by_definition[definition.id]:
+                            uses_ozon_brand_search = True
+                            continue
                     errors.append(cls._validation_item(
                         "dictionary_value_out_of_scope", path,
                         f"Значение отсутствует в справочнике «{definition.name}» этого типа",
@@ -8937,6 +8966,7 @@ class MarketplaceDraftService:
                         "dictionary_display_mismatch", path,
                         f"Display value для «{definition.name}» не совпадает с official value",
                     ))
+        return uses_ozon_brand_search
 
     @classmethod
     def _build_validation_result(
@@ -9322,8 +9352,10 @@ class MarketplaceDraftService:
                 "Укажите явный currency_code=RUB для текущего rollout",
             ))
 
+        uses_ozon_brand_search = False
         if product_type and OzonReferenceService.reference_is_fresh(product_type, now=now):
-            cls._validate_attributes(
+            uses_ozon_brand_search = cls._validate_attributes(
+                draft=draft,
                 product_type=product_type,
                 attributes=attributes,
                 complex_groups=complex_groups,
@@ -9361,6 +9393,8 @@ class MarketplaceDraftService:
             },
             "validated_at": now.isoformat(),
         }
+        if uses_ozon_brand_search:
+            result["uses_ozon_brand_search"] = True
         automatic_cleanup = cls._automatic_cleanup_summary(draft)
         if automatic_cleanup is not None:
             result["automatic_attribute_cleanup"] = automatic_cleanup

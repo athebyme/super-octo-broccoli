@@ -2677,15 +2677,47 @@ class OzonBulkRepairService:
             MarketplaceAttributeValue.value_normalized.asc(),
             MarketplaceAttributeValue.id.asc(),
         ).limit(limit + 1).all()
+        local_items = [
+            {"id": row.external_value_id, "value": row.value}
+            for row in rows[:limit]
+        ]
+        items = list(local_items)
+        if (
+            external_attribute_id
+            in MarketplaceDraftService.OZON_BRAND_ATTRIBUTE_IDS
+            and definition.is_required
+        ):
+            from services.ozon_brand_search import OzonBrandSearch
+            source_choices = OzonBrandSearch.value_choices(draft, definition)
+            local_by_id = {row["id"]: row["value"] for row in local_items}
+            source_items = []
+            normalized_query = OzonReferenceService.normalize_value(search)
+            for choice in source_choices:
+                value_id = choice["dictionary_value_id"]
+                display = choice["value"]
+                local_display = local_by_id.get(value_id)
+                if local_display is not None and local_display != display:
+                    continue
+                if normalized_query and (
+                    normalized_query not in OzonReferenceService.normalize_value(display)
+                    and normalized_query not in value_id.casefold()
+                ):
+                    continue
+                source_items.append({
+                    "id": value_id,
+                    "value": local_display if local_display is not None else display,
+                })
+            source_item_ids = {row["id"] for row in source_items}
+            items = source_items + [
+                row for row in local_items if row["id"] not in source_item_ids
+            ]
+        truncated = len(rows) > limit
+        if len(items) > limit:
+            items = items[:limit]
+            truncated = True
         return {
-            "items": [
-                {
-                    "id": row.external_value_id,
-                    "value": row.value,
-                }
-                for row in rows[:limit]
-            ],
-            "truncated": len(rows) > limit,
+            "items": items,
+            "truncated": truncated,
         }
 
     @classmethod
@@ -3194,6 +3226,7 @@ class OzonBulkRepairService:
         definition: MarketplaceAttributeDefinition,
         raw_value: Any,
         expected_external_value_id: Any = None,
+        draft: Optional[MarketplaceProductDraft] = None,
     ) -> list:
         rendered = cls._cell_text(
             raw_value,
@@ -3277,6 +3310,23 @@ class OzonBulkRepairService:
             normalized = OzonReferenceService.normalize_value(value)
             matches = by_normalized.get(normalized, [])
             if len(matches) != 1:
+                if (
+                    expected_id
+                    and draft is not None
+                    and definition.external_attribute_id
+                    in MarketplaceDraftService.OZON_BRAND_ATTRIBUTE_IDS
+                    and definition.is_required
+                ):
+                    from services.ozon_brand_search import OzonBrandSearch
+                    selected = {
+                        "dictionary_value_id": expected_id,
+                        "value": value,
+                    }
+                    if selected in OzonBrandSearch.value_choices(
+                        draft, definition,
+                    ):
+                        result.append(selected)
+                        continue
                 raise MarketplaceDraftValidationError(
                     f"«{value}» не является одним точным официальным "
                     f"значением «{definition.name}»"
@@ -3455,6 +3505,7 @@ class OzonBulkRepairService:
                 expected_external_value_id=values.get(
                     f"attribute_value_id:{external_id}"
                 ),
+                draft=draft,
             )
             if not resolved:
                 continue

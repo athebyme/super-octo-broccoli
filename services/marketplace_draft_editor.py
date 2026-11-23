@@ -168,9 +168,49 @@ class MarketplaceDraftEditor:
             ))
         rows = values.order_by(MarketplaceAttributeValue.value_normalized,
                                MarketplaceAttributeValue.id).limit(31).all()
+        local_items = [
+            {'id': row.external_value_id, 'value': row.value}
+            for row in rows[:30]
+        ]
+        items = list(local_items)
+        if (
+            attribute_id in MarketplaceDraftService.OZON_BRAND_ATTRIBUTE_IDS
+            and definition.is_required
+        ):
+            # Search-only brand observations stay separate from the full
+            # /values snapshot. The proof service filters stale and negative
+            # local collisions; keep exact local response labels authoritative.
+            from services.ozon_brand_search import OzonBrandSearch
+            source_choices = OzonBrandSearch.value_choices(draft, definition)
+            local_by_id = {item['id']: item['value'] for item in local_items}
+            source_items = []
+            normalized_query = OzonReferenceService.normalize_value(query)
+            for choice in source_choices:
+                value_id = choice['dictionary_value_id']
+                display = choice['value']
+                local_display = local_by_id.get(value_id)
+                if local_display is not None and local_display != display:
+                    continue
+                if normalized_query and (
+                    normalized_query not in OzonReferenceService.normalize_value(display)
+                    and normalized_query not in value_id.casefold()
+                ):
+                    continue
+                source_items.append({
+                    'id': value_id,
+                    'value': local_display if local_display is not None else display,
+                })
+            source_item_ids = {item['id'] for item in source_items}
+            items = source_items + [
+                item for item in local_items if item['id'] not in source_item_ids
+            ]
+        has_more = len(rows) > 30
+        if len(items) > 30:
+            items = items[:30]
+            has_more = True
         return {
             'product_type_id': draft.product_type_id,
             'attribute_id': attribute_id,
-            'items': [{'id': row.external_value_id, 'value': row.value} for row in rows[:30]],
-            'has_more': len(rows) > 30,
+            'items': items,
+            'has_more': has_more,
         }

@@ -157,6 +157,115 @@ def test_dictionary_result_is_bounded_and_schema_search_handles_cyrillic(draft_f
     assert not MarketplaceDraftService.search_product_types(seller_id=f.seller1_id, query='%')
 
 
+def test_required_brand_search_choice_is_visible_and_revalidated_exactly(draft_fixture):
+    f = draft_fixture
+    f.brand_attribute.dictionary_id = 'brand-dictionary'
+    f.brand_attribute.values_synced_at = f.now
+    f.brand_attribute.values_sync_status = 'success'
+    f.brand_attribute.values_snapshot_hash = 'brand-values-hash'
+    f.brand_attribute.values_version = 1
+    f.brand_attribute.values_count = 1
+    f.brand_attribute.restriction_value_ids_json = json.dumps(
+        ['41001', '41002', '41003'],
+    )
+    db.session.add_all([
+        MarketplaceAttributeValue(
+            marketplace_id=f.marketplace.id,
+            product_type_id=f.product_type.id,
+            attribute_id=f.brand_attribute.id,
+            external_value_id='41002',
+            value='Local Canonical Brand',
+            value_normalized='local canonical brand',
+            is_available=True,
+        ),
+        MarketplaceAttributeValue(
+            marketplace_id=f.marketplace.id,
+            product_type_id=f.product_type.id,
+            attribute_id=f.brand_attribute.id,
+            external_value_id='41003',
+            value='Different Local Display',
+            value_normalized='different local display',
+            is_available=True,
+        ),
+    ])
+    db.session.commit()
+    choice = {'dictionary_value_id': '41001', 'value': 'Acme North'}
+    source_choices = [
+        choice,
+        {'dictionary_value_id': '41002', 'value': 'Local Canonical Brand'},
+    ]
+
+    with patch(
+        'services.ozon_brand_search.OzonBrandSearch.value_choices',
+        return_value=source_choices,
+    ) as value_choices:
+        result = MarketplaceDraftEditor.dictionary(
+            seller_id=f.seller1_id,
+            draft_id=f.draft.id,
+            attribute_id='31',
+            product_type_id=f.product_type.id,
+        )
+
+    assert result['items'] == [
+        {'id': '41001', 'value': 'Acme North'},
+        {'id': '41002', 'value': 'Local Canonical Brand'},
+        {'id': '41003', 'value': 'Different Local Display'},
+    ]
+    value_choices.assert_called_once_with(f.draft, f.brand_attribute)
+
+    errors = []
+    with patch(
+        'services.ozon_brand_search.OzonBrandSearch.value_choices',
+        return_value=[choice],
+    ):
+        accepted = MarketplaceDraftService._validate_attributes(
+            draft=f.draft,
+            product_type=f.product_type,
+            attributes=[{
+                'attribute_id': '31',
+                'complex_id': '0',
+                'values': [
+                    {'dictionary_value_id': '41001', 'value': 'Acme North'},
+                ],
+            }],
+            complex_groups=[],
+            errors=errors,
+        )
+
+    assert accepted is True
+    assert not any(
+        error['field'] == 'attributes[0]'
+        and error['code'].startswith('dictionary_')
+        for error in errors
+    )
+
+    mismatch_errors = []
+    with patch(
+        'services.ozon_brand_search.OzonBrandSearch.value_choices',
+        return_value=[choice],
+    ):
+        accepted_mismatch = MarketplaceDraftService._validate_attributes(
+            draft=f.draft,
+            product_type=f.product_type,
+            attributes=[{
+                'attribute_id': '31',
+                'complex_id': '0',
+                'values': [
+                    {'dictionary_value_id': '41001', 'value': 'Acme North Ltd'},
+                ],
+            }],
+            complex_groups=[],
+            errors=mismatch_errors,
+        )
+
+    assert accepted_mismatch is False
+    assert any(
+        error['code'] == 'dictionary_value_out_of_scope'
+        and error['field'] == 'attributes[0]'
+        for error in mismatch_errors
+    )
+
+
 def test_published_editor_discloses_preserved_media_and_exact_deletion_identities():
     from tests import test_marketplace_publications as publication_fixtures
     fixture = publication_fixtures.MarketplacePublicationServiceTest()
