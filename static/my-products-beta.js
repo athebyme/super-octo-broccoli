@@ -1521,6 +1521,7 @@
                     this.itemsScope !== this.feedScopeKey() ||
                     (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) return true;
                 if (!this.selected.length) return false;
+                if (!this.selectionRowsVerified) return !this.selectionReviewAvailable;
                 var action = this.supplierRefreshSelectionAction;
                 return !action || action.disabled || this.selectedItems.length !== this.selected.length;
             },
@@ -1577,6 +1578,9 @@
                     !this.loading && !this.loadingMore && !this.selectAllLoading &&
                     !this.selectionReviewLoading && this.itemsScope === this.feedScopeKey() &&
                     (this.searchInput || '').trim().slice(0, 200) === this.filters.search;
+            },
+            bulkIntentVerificationAvailable: function () {
+                return this.selectionRowsVerified || this.selectionReviewAvailable;
             },
             hasUnshownResults: function () {
                 return this.itemsScope === this.feedScopeKey() &&
@@ -1675,7 +1679,11 @@
                     ? 'За один запуск можно выбрать не больше 200 товаров.'
                     : this.selectionReviewLoading
                         ? 'проверяем точный список выбранных товаров…'
-                        : 'Сначала проверьте выбранный список кнопкой «Показать выбранные». Товары вне списка не будут включены автоматически.';
+                        : this.importBatchMode || this.supplierRefreshBatchMode
+                            ? 'Дождитесь подтверждения точного состава подборки.'
+                            : this.selectionReviewAvailable
+                                ? 'Первое действие проверит точный состав выбора. Отметки вне фильтра останутся в выборе.'
+                                : 'Обновите список и выберите товары снова.';
                 return [{
                     title: 'Основные действия',
                     items: [
@@ -2241,6 +2249,55 @@
                     return !!(result && result.ok);
                 });
             },
+            bulkIntentSelectionIsCurrent: function (snapshot) {
+                return !!snapshot && sameOrderedIds(this.selected, snapshot.ids) &&
+                    this._feedRevision === snapshot.feedRevision &&
+                    this.feedScopeKey() === snapshot.scopeKey && this.itemsScope === snapshot.scopeKey &&
+                    (this.searchInput || '').trim().slice(0, 200) === snapshot.searchValue &&
+                    this.filters.search === snapshot.searchValue &&
+                    !this.loading && !this.loadingMore && !this.selectAllLoading &&
+                    !this.selectionReviewLoading && !this.importBatchMode &&
+                    !this.supplierRefreshBatchMode &&
+                    (!snapshot.readRequired || sameOrderedIds(this.selectionReviewIds, snapshot.ids));
+            },
+            ensureBulkIntentSelection: function () {
+                if (this.selectionReviewLoading) {
+                    this.error = 'Проверяем точный список выбранных товаров. Подождите завершения чтения.';
+                    return Promise.resolve(null);
+                }
+                var snapshot = {
+                    ids: this.selected.slice(),
+                    scopeKey: this.feedScopeKey(),
+                    feedRevision: this._feedRevision,
+                    searchValue: (this.searchInput || '').trim().slice(0, 200),
+                    readRequired: !this.selectionRowsVerified,
+                };
+                if (this.selectionRowsVerified) return Promise.resolve(snapshot);
+                if (!this.selectionReviewAvailable || !validSelectionReviewIds(this.selected)) {
+                    this.error = this.selected.length > MAX_BULK_SELECTION
+                        ? 'За один запуск можно выбрать не больше 200 товаров.'
+                        : this.importBatchMode || this.supplierRefreshBatchMode
+                            ? 'Дождитесь подтверждения точного состава подборки.'
+                            : 'Обновите список и выберите товары снова.';
+                    return Promise.resolve(null);
+                }
+                var self = this;
+                this.error = '';
+                return this.readSelectionReviewRows(snapshot.ids, { activate: false }).then(function (result) {
+                    return result && result.ok &&
+                        self.bulkIntentSelectionIsCurrent(snapshot) &&
+                        self.selectionRowsVerified &&
+                        sameOrderedIds(self.selectionReviewIds, snapshot.ids)
+                        ? snapshot : null;
+                });
+            },
+            bulkActionForKey: function (key) {
+                var actions = (this.actionGroups || []).reduce(function (all, group) {
+                    return all.concat(group.items || []);
+                }, []);
+                return actions.find(function (action) { return action.key === key; }) ||
+                    this.secondaryActions.find(function (action) { return action.key === key; }) || null;
+            },
             focusCatalogAfterSelectionReview: function () {
                 var list = this.$refs.catalogListFocus;
                 if (list && typeof list.focus === 'function') {
@@ -2707,24 +2764,41 @@
                 });
             },
             activateBulkIntent: function (group, event) {
+                if (this.selectionReviewLoading || !group || typeof group.key !== 'string') return false;
+                var groupKey = group.key;
+                var trigger = event && event.currentTarget;
                 var details = this.$refs.moreActions;
                 if (details) details.open = false;
                 var headMore = this.$refs.headMore;
                 if (headMore) headMore.open = false;
+                if (!this.selectionRowsVerified) {
+                    this.closeBulkActionPanel(false);
+                    var self = this;
+                    return this.ensureBulkIntentSelection().then(function (snapshot) {
+                        if (!snapshot || !self.bulkIntentSelectionIsCurrent(snapshot) ||
+                            !self.selectionRowsVerified) return false;
+                        var currentGroup = self.bulkIntentGroups.find(function (candidate) {
+                            return candidate.key === groupKey;
+                        });
+                        if (!currentGroup) return false;
+                        return self.activateBulkIntent(currentGroup,
+                            trigger ? {currentTarget: trigger} : null);
+                    });
+                }
                 if (group.actions.length === 1) {
                     var directKey = group.actions[0].key;
                     var returnFocus = ['ozon', 'wb_prices', 'ozon_prices', 'common_content'].includes(directKey)
-                        ? event && event.currentTarget : null;
+                        ? trigger : null;
                     this.closeBulkActionPanel(false);
-                    this.startAction(group.actions[0], returnFocus);
-                    return;
+                    return this.startAction(group.actions[0], returnFocus);
                 }
                 if (this.activeBulkActionGroup === group.key) {
                     this.closeBulkActionPanel(false);
-                    return;
+                    return false;
                 }
                 this.activeBulkActionGroup = group.key;
-                this._bulkActionTrigger = event && event.currentTarget;
+                this._bulkActionTrigger = trigger;
+                return true;
             },
             runBulkIntentAction: function (action, event) {
                 var key = action && action.key;
@@ -2733,7 +2807,7 @@
                     : key === 'ozon'
                         ? (event && event.currentTarget) || this._bulkActionTrigger : null;
                 this.closeBulkActionPanel(false);
-                this.startAction(action, returnFocus);
+                return this.startAction(action, returnFocus);
             },
             onMoreActionsToggle: function (event) {
                 if (event && event.currentTarget && event.currentTarget.open) {
@@ -4116,10 +4190,12 @@
             activateSupplierUpdatesEntry: function (event) {
                 if (this.supplierUpdatesEntryDisabled) return false;
                 if (!this.selected.length) return this.toggleSupplierUpdates();
+                if (!this.selectionRowsVerified) {
+                    return this.startAction({ key: 'refresh_supplier' }, event && event.currentTarget);
+                }
                 var action = this.supplierRefreshSelectionAction;
                 if (!action || action.disabled) return false;
-                this.runBulkIntentAction(action, event);
-                return true;
+                return this.runBulkIntentAction(action, event);
             },
             resetFilters: function () {
                 if (this.importBatchMode || this.supplierRefreshBatchMode) return;
@@ -4538,13 +4614,24 @@
                 if (this.loading || this.itemsScope !== this.feedScopeKey() ||
                     (this.searchInput || '').trim().slice(0, 200) !== this.filters.search) {
                     this.error = 'Список обновляется. Дождитесь загрузки и выберите товары снова.';
-                    return;
+                    return false;
                 }
                 if (!this.selectionRowsVerified) {
-                    this.error = this.selectionReviewLoading
-                        ? 'Проверяем точный список выбранных товаров. Подождите завершения чтения.'
-                        : 'Сначала проверьте точный список кнопкой «Показать выбранные». Действия по непроверенному выбору недоступны.';
-                    return;
+                    var actionKey = action && action.key;
+                    if (typeof actionKey !== 'string') return false;
+                    var self = this;
+                    return this.ensureBulkIntentSelection().then(function (snapshot) {
+                        if (!snapshot || !self.bulkIntentSelectionIsCurrent(snapshot) ||
+                            !self.selectionRowsVerified) return false;
+                        var currentAction = self.bulkActionForKey(actionKey);
+                        if (!currentAction || currentAction.disabled) {
+                            self.error = currentAction && currentAction.hint
+                                ? currentAction.hint
+                                : 'Выбор не подходит для этого действия. Проверьте товары и повторите попытку.';
+                            return false;
+                        }
+                        return self.startAction(currentAction, returnFocus);
+                    });
                 }
                 var chosen = this.selectedItems;
                 var selectionIds = this.selected.slice();
@@ -4552,7 +4639,7 @@
                     new Set(selectionIds).size !== selectionIds.length ||
                     chosen.some(function (item) { return selectionIds.indexOf(item.id) === -1; })) {
                     this.error = 'Выбор изменился. Обновите список и отметьте товары заново.';
-                    return;
+                    return false;
                 }
                 if (action && action.key === 'push_wb' &&
                     (this.wbCreateStorageProblem || this.wbCreatePending)) {

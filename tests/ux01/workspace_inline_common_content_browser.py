@@ -63,6 +63,7 @@ def run():
     preview_requests = []
     feed_requests = []
     applies = []
+    selection_reads = []
     product_ids = [primary, secondary]
     domain_before, audit_before = domain_snapshot(product_ids)
     with fixture.app.app_context():
@@ -82,10 +83,20 @@ def run():
                 applies.append(parsed.path)
                 assert len(applies) == 1
             if request.method == "POST" and parsed.path == "/api/my-products/selection":
-                assert request.post_data_json == {"ids": product_ids}
+                body = request.post_data_json
+                assert body == {"ids": product_ids}
+                provider_attempts_before = fixture.REPORT["provider_attempts"]
                 response = route.fetch(max_redirects=0)
                 assert response.status == 200
-                assert [item["id"] for item in response.json()["items"]] == product_ids
+                payload = response.json()
+                assert payload.get("success") is True
+                returned_ids = [item["id"] for item in payload["items"]]
+                assert returned_ids == product_ids
+                selection_reads.append({
+                    "requested_ids": body["ids"],
+                    "returned_ids": returned_ids,
+                    "provider_attempt_delta": fixture.REPORT["provider_attempts"] - provider_attempts_before,
+                })
                 route.fulfill(response=response)
                 return
         fixture.bridge(route)
@@ -219,11 +230,44 @@ def run():
             scope = fixture.beta_catalog_state(page)
             assert scope["selected"] == [primary, secondary]
             assert scope["itemIds"] == [primary]
-            page.locator("[data-selection-review-show]").click()
-            expect(page.locator("[data-selection-review-row]")).to_have_count(2)
+            page.evaluate("""() => {
+                window.__explicitSelectionReviewClicks = 0;
+                document.addEventListener('click', event => {
+                    if (event.target.closest('[data-selection-review-show]')) {
+                        window.__explicitSelectionReviewClicks += 1;
+                    }
+                }, true);
+            }""")
+            provider_attempts_before_action = fixture.REPORT["provider_attempts"]
+            selection_read_key = "POST /api/my-products/selection"
+            fixture.delay_fetches(page, [selection_read_key])
+
+            def release_verified_selection_read(launcher):
+                fixture.wait_for_delayed_fetch(page, selection_read_key)
+                expect(launcher).to_have_attribute("aria-busy", "true")
+                expect(launcher).to_have_attribute("aria-disabled", "true")
+                expect(launcher).to_be_focused()
+                launcher.press("Enter")
+                assert page.locator(".mp-selection-review").count() == 0
+                fixture.release_delayed_fetch(page, selection_read_key)
+
             with page.expect_response(editor_read) as bulk_opened:
-                invoke_workspace_action(page, "common_content")
+                direct_action_steps = invoke_workspace_action(
+                    page,
+                    "common_content",
+                    expected_selection_ids=product_ids,
+                    selection_pending=release_verified_selection_read,
+                )
             assert_editor_read(bulk_opened.value, [primary, secondary])
+            assert direct_action_steps == 1
+            assert selection_reads == [{
+                "requested_ids": product_ids,
+                "returned_ids": product_ids,
+                "provider_attempt_delta": 0,
+            }]
+            assert page.evaluate("window.__explicitSelectionReviewClicks") == 0
+            assert page.locator(".mp-selection-review").count() == 0
+            assert fixture.REPORT["provider_attempts"] == provider_attempts_before_action
             expect(dialog.locator('[data-action="choose-product"]')).to_have_count(2)
             expect(dialog.locator(".cpc-selection")).to_be_visible()
             expect(dialog.locator('[data-field-section="title"]')).to_contain_text(original)
@@ -254,6 +298,24 @@ def run():
             after_save = fixture.beta_catalog_state(page)
             assert after_save["selected"] == [primary, secondary]
             assert after_save["itemIds"] == []
+            retained_marks = page.evaluate("""() => {
+                const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+                return proxy ? {
+                    verified: proxy.selectionRowsVerified,
+                    selected: proxy.selected.slice(),
+                    usableSelectedItems: proxy.selectedItems.map(item => item.id),
+                    reviewIds: proxy.selectionReviewIds.slice(),
+                    reviewActive: proxy.selectionReviewActive,
+                } : null;
+            }""")
+            assert retained_marks == {
+                "verified": True,
+                "selected": product_ids,
+                "usableSelectedItems": product_ids,
+                "reviewIds": product_ids,
+                "reviewActive": False,
+            }
+            assert page.locator("[data-selection-review-show]").is_enabled()
             assert page.url == url and page.evaluate("window.__workspaceDocument === document")
             domain_after, audit_after = domain_snapshot(product_ids)
             assert domain_after[primary]["title"] == NEW_TITLE
@@ -271,6 +333,23 @@ def run():
                               "marketplace_draft_unchanged": True, "marketplace_listings_unchanged": True,
                               "same_document": True,
                               "busy_blocks_dismiss": True}
+            REPORT["selection_on_action"] = {
+                "action_steps": direct_action_steps,
+                "selection_reads": len(selection_reads),
+                "requested_ids": selection_reads[0]["requested_ids"],
+                "returned_ids": selection_reads[0]["returned_ids"],
+                "explicit_review_clicks_before_open": 0,
+                "review_panel_activated": False,
+                "selection_read_busy": True,
+                "focus_retained_while_pending": True,
+                "rapid_reactivation_ignored": True,
+                "editor_product_ids": product_ids,
+                "provider_attempt_delta": selection_reads[0]["provider_attempt_delta"],
+                "filter_empty_after_rename": after_save["itemIds"] == [],
+                "retained_selected_ids": retained_marks["selected"],
+                "retained_usable_selected_item_ids": retained_marks["usableSelectedItems"],
+                "retained_selection_verified": retained_marks["verified"],
+            }
             context.close()
         browser.close()
 

@@ -164,7 +164,9 @@
                     data-supplier-updates-entry
                     :aria-label="supplierUpdatesEntryAriaLabel"
                     :aria-pressed="selected.length ? null : activeTab === 'updates'"
-                    :disabled="supplierUpdatesEntryDisabled"
+                    :aria-busy="selected.length && selectionReviewLoading ? 'true' : 'false'"
+                    :aria-disabled="selected.length && selectionReviewLoading ? 'true' : null"
+                    :disabled="supplierUpdatesEntryDisabled && !(selected.length && selectionReviewLoading)"
                     @click="activateSupplierUpdatesEntry($event)">
                 <span class="mp-head-action-label--full">{{ selected.length ? 'Обновить выбранные' : 'Обновления поставщика' }}</span>
                 <span class="mp-head-action-label--compact" aria-hidden="true">{{ selected.length ? 'Обновить' : 'Обновления' }}</span>
@@ -626,7 +628,7 @@
                     <button v-for="action in secondaryActions" :key="action.key" type="button"
                             class="shk-actions-item" :class="{'is-danger': action.danger}"
                             :data-bulk-action-key="action.key"
-                            :disabled="action.disabled"
+                            :disabled="action.disabled || selectionReviewLoading"
                             @click="startAction(action, $event.currentTarget.closest('details').querySelector('summary')); $event.currentTarget.closest('details').open = false">
                         <span class="shk-actions-item-label">{{ action.label }}</span>
                         <span v-if="action.hint" class="shk-actions-item-hint">{{ action.hint }}</span>
@@ -650,7 +652,7 @@
                             type="button" class="mp-import-next-action"
                             :data-supplier-import-next-action="action.key"
                             :data-bulk-action-key="action.key"
-                            :disabled="action.disabled" :title="action.hint || null"
+                            :disabled="action.disabled || selectionReviewLoading" :title="action.hint || null"
                             @click="runBulkIntentAction(action, $event)">
                         {{ action.shortLabel }}
                     </button>
@@ -663,8 +665,11 @@
                  @keydown.esc.stop.prevent="closeBulkActionPanel(true)">
                 <button type="button" class="mp-bulk-intent"
                         :data-bulk-action-group="group.key"
+                        data-selection-intent-verify
                         :data-bulk-direct-action="group.actions.length === 1 ? group.actions[0].key : null"
-                        :disabled="!selectionRowsVerified"
+                        :disabled="!bulkIntentVerificationAvailable && !selectionReviewLoading"
+                        :aria-disabled="selectionReviewLoading ? 'true' : null"
+                        :aria-busy="selectionReviewLoading ? 'true' : 'false'"
                         :aria-expanded="group.actions.length !== 1 ? (activeBulkActionGroup === group.key ? 'true' : 'false') : null"
                         @click="activateBulkIntent(group, $event)">
                     <span class="mp-bulk-intent-name">{{ group.label }}</span>
@@ -883,5 +888,5 @@
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261123-inline-common-editor-r1') }}"></script>
 <script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261123-unified-catalog-prices-r63b') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-inline-common-dialog-r1') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-selection-on-first-intent-r1') }}"></script>
 {% endblock %}

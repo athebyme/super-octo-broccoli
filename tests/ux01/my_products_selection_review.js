@@ -148,6 +148,50 @@ function page(items, total = items.length) {
   };
 }
 
+function makeGroupIntentApp(selectionIds, responseItems, postImpl) {
+  const app = makeApp();
+  const feedRows = [row(90)];
+  const feedPagination = {page: 1, per_page: 50, total: 1, pages: 1, has_next: false};
+  app.items = feedRows;
+  app.pagination = feedPagination;
+  app.itemsScope = app.feedScopeKey();
+  app.selected = selectionIds.slice();
+  app.selectionReviewActive = false;
+  app.selectionReviewRows = [];
+  app.selectionReviewIds = [];
+  app.activeBulkActionGroup = '';
+
+  const posts = [];
+  const started = [];
+  app.$api.post = function (url, body, options) {
+    const call = {
+      url,
+      body: JSON.parse(JSON.stringify(body)),
+      signal: options && options.signal,
+    };
+    posts.push(call);
+    return postImpl
+      ? postImpl(call)
+      : Promise.resolve({success: true, items: responseItems});
+  };
+  app.startAction = function (action, returnFocus) {
+    started.push({action, returnFocus});
+    return true;
+  };
+  return {app, feedRows, feedPagination, posts, started};
+}
+
+function rowsForGroup(groupKey, ids) {
+  return ids.map(id => {
+    const item = row(id);
+    if (groupKey === 'cards' || groupKey === 'prices') {
+      item.wb = {product_id: 5000 + id};
+    }
+    if (groupKey === 'refresh') item.has_supplier_update = true;
+    return item;
+  });
+}
+
 async function settle() {
   await new Promise(resolve => setImmediate(resolve));
   await new Promise(resolve => setImmediate(resolve));
@@ -460,6 +504,163 @@ async function main() {
   assert.equal(stale.selectionReviewActive, false);
   assert.equal(stale.selectionReviewRows.length, 0);
 
+  const actionIntentIds = [22, 11];
+  for (const groupKey of ['cards', 'prices', 'create', 'refresh']) {
+    const reviewedRows = rowsForGroup(groupKey, actionIntentIds);
+    const harness = makeGroupIntentApp(actionIntentIds, reviewedRows);
+    const {app: intentApp, feedRows, feedPagination, posts: intentPosts, started} = harness;
+    const group = intentApp.bulkIntentGroups.find(candidate => candidate.key === groupKey);
+    assert.ok(group, groupKey + ' keeps its group-level entry point while rows are unverified');
+    const trigger = {isConnected: true, focusCount: 0, focus() { this.focusCount += 1; }};
+    let headingFocusCount = 0;
+    intentApp.$refs.selectionReviewHeading.focus = () => { headingFocusCount += 1; };
+    fakeDocument.activeElement = trigger;
+    const assignmentCount = assignments.length;
+
+    await intentApp.activateBulkIntent(group, {currentTarget: trigger});
+
+    assert.equal(intentPosts.length, 1, groupKey + ' performs one exact read before opening its action');
+    assert.equal(intentPosts[0].url, '/api/my-products/selection');
+    sameJson(intentPosts[0].body.ids, actionIntentIds,
+      groupKey + ' reads hidden selection members in the original ordered selection');
+    assert.equal(intentPosts[0].signal.aborted, false);
+    assert.equal(intentApp.selectionRowsVerified, true);
+    sameJson(intentApp.selectedItems.map(item => item.id), actionIntentIds,
+      groupKey + ' derives eligibility from the exact returned rows');
+    assert.equal(intentApp.selectionReviewActive, false,
+      'action-time verification does not activate the optional manual review view');
+    assert.equal(intentApp.items, feedRows, 'action-time verification leaves the filtered feed rows intact');
+    assert.equal(intentApp.pagination, feedPagination, 'action-time verification leaves feed pagination intact');
+    assert.equal(headingFocusCount, 0, 'action-time verification does not steal focus for manual review');
+    assert.equal(fakeDocument.activeElement, trigger, 'the group trigger retains keyboard focus');
+    assert.equal(trigger.focusCount, 0, 'the action-time read does not move focus back to the trigger');
+    assert.equal(assignments.length, assignmentCount, 'verification does not navigate or submit a provider action');
+    assert.ok(intentPosts.every(call => call.url === '/api/my-products/selection'),
+      'the group intent issues no provider write while verifying');
+
+    const freshGroup = intentApp.bulkIntentGroups.find(candidate => candidate.key === groupKey);
+    assert.ok(freshGroup.actions.length > 0, groupKey + ' uses eligibility from the newly read rows');
+    assert.ok(started.every(entry => entry.action && entry.action.key !== groupKey),
+      'a group key is never passed to the single-action dispatcher');
+    if (freshGroup.actions.length === 1) {
+      sameJson(started.map(entry => entry.action.key), [freshGroup.actions[0].key],
+        groupKey + ' dispatches only its one currently eligible action');
+    } else {
+      assert.deepEqual(started, [], groupKey + ' opens a choice panel when multiple current actions are eligible');
+      assert.equal(intentApp.activeBulkActionGroup, groupKey);
+    }
+  }
+
+  const headerRefresh = makeGroupIntentApp(actionIntentIds, rowsForGroup('refresh', actionIntentIds));
+  headerRefresh.app.startAction = component.methods.startAction.bind(headerRefresh.app);
+  let refreshPreview;
+  headerRefresh.app.openSupplierRefreshReview = (targetIds, selectedIds) => {
+    refreshPreview = {targetIds, selectedIds};
+  };
+  assert.equal(headerRefresh.app.supplierRefreshSelectionAction, null);
+  assert.equal(headerRefresh.app.supplierUpdatesEntryDisabled, false);
+  await headerRefresh.app.activateSupplierUpdatesEntry({currentTarget: {}});
+  assert.equal(headerRefresh.posts.length, 1);
+  assert.equal(headerRefresh.posts[0].url, '/api/my-products/selection');
+  sameJson(headerRefresh.posts[0].body.ids, actionIntentIds);
+  sameJson(refreshPreview, {targetIds: actionIntentIds, selectedIds: actionIntentIds});
+  assert.equal(headerRefresh.app.selectionReviewActive, false);
+
+  const mismatchedIntentRows = rowsForGroup('cards', actionIntentIds).reverse();
+  const mismatchedIntent = makeGroupIntentApp(actionIntentIds, mismatchedIntentRows);
+  const mismatchedIntentGroup = mismatchedIntent.app.bulkIntentGroups.find(group => group.key === 'cards');
+  let mismatchHeadingFocus = 0;
+  mismatchedIntent.app.$refs.selectionReviewHeading.focus = () => { mismatchHeadingFocus += 1; };
+  const mismatchTrigger = {isConnected: true, focus() { throw new Error('Unexpected trigger focus'); }};
+  fakeDocument.activeElement = mismatchTrigger;
+  const mismatchIntentResult = await mismatchedIntent.app.activateBulkIntent(
+    mismatchedIntentGroup, {currentTarget: mismatchTrigger},
+  );
+  assert.equal(mismatchIntentResult, false, 'a reordered exact response cannot continue an action group');
+  assert.equal(mismatchedIntent.posts.length, 1);
+  sameJson(mismatchedIntent.posts[0].body.ids, actionIntentIds);
+  sameJson(mismatchedIntent.app.selected, actionIntentIds,
+    'a mismatched response preserves the visible ordered marks');
+  assert.equal(mismatchedIntent.app.selectionReviewActive, false);
+  assert.equal(mismatchedIntent.app.selectionRowsVerified, false);
+  assert.match(mismatchedIntent.app.selectionReviewError, /точный список/);
+  assert.deepEqual(mismatchedIntent.started, [], 'a mismatched read cannot dispatch an action');
+  assert.equal(mismatchedIntent.app.activeBulkActionGroup, '', 'a mismatched read cannot open the action panel');
+  assert.equal(mismatchHeadingFocus, 0);
+  assert.equal(fakeDocument.activeElement, mismatchTrigger);
+
+  let resolveRapidIntentRead;
+  let rapidIntentSignal;
+  const rapidIntent = makeGroupIntentApp(actionIntentIds, null, call => {
+    rapidIntentSignal = call.signal;
+    return new Promise(resolve => { resolveRapidIntentRead = resolve; });
+  });
+  const rapidIntentGroup = rapidIntent.app.bulkIntentGroups.find(group => group.key === 'refresh');
+  const rapidIntentTrigger = {isConnected: true, focus() { throw new Error('Unexpected trigger focus'); }};
+  fakeDocument.activeElement = rapidIntentTrigger;
+  const firstIntentClick = rapidIntent.app.activateBulkIntent(
+    rapidIntentGroup, {currentTarget: rapidIntentTrigger},
+  );
+  const secondIntentClick = rapidIntent.app.activateBulkIntent(
+    rapidIntentGroup, {currentTarget: rapidIntentTrigger},
+  );
+  await settle();
+  assert.equal(rapidIntent.posts.length, 1, 'rapid activation never duplicates the exact selection read');
+  sameJson(rapidIntent.posts[0].body.ids, actionIntentIds);
+  assert.equal(rapidIntent.app.selectionReviewLoading, true);
+  assert.deepEqual(rapidIntent.started, [], 'no action is dispatched while the exact read is pending');
+
+  rapidIntent.app.selected = [22];
+  component.watch.selected.handler.call(rapidIntent.app, rapidIntent.app.selected);
+  resolveRapidIntentRead({success: true, items: rowsForGroup('refresh', actionIntentIds)});
+  const [firstIntentResult, secondIntentResult] = await Promise.all([
+    Promise.resolve(firstIntentClick), Promise.resolve(secondIntentClick), settle(),
+  ]);
+  assert.equal(rapidIntentSignal.aborted, true, 'a changed selection aborts the pending exact read');
+  assert.equal(firstIntentResult, false, 'a late response for a changed selection cannot continue');
+  assert.equal(secondIntentResult, false, 'the repeated click cannot continue after selection drift');
+  assert.equal(rapidIntent.posts.length, 1);
+  sameJson(rapidIntent.app.selected, [22]);
+  assert.equal(rapidIntent.app.selectionReviewActive, false);
+  assert.deepEqual(rapidIntent.started, [], 'late rows cannot dispatch the previously selected action');
+  assert.equal(rapidIntent.app.activeBulkActionGroup, '');
+  assert.equal(fakeDocument.activeElement, rapidIntentTrigger);
+
+  let resolveFilterDriftRead;
+  let filterDriftSignal;
+  const filterDrift = makeGroupIntentApp(actionIntentIds, null, call => {
+    filterDriftSignal = call.signal;
+    return new Promise(resolve => { resolveFilterDriftRead = resolve; });
+  });
+  const filterDriftGroup = filterDrift.app.bulkIntentGroups.find(group => group.key === 'create');
+  const filterDriftTrigger = {isConnected: true, focus() { throw new Error('Unexpected trigger focus'); }};
+  let filterFeedReads = 0;
+  filterDrift.app.$api.get = function (url) {
+    filterFeedReads += 1;
+    assert.equal(url, '/api/my-products');
+    return Promise.resolve(page([row(90)], 1));
+  };
+  fakeDocument.activeElement = filterDriftTrigger;
+  const filterDriftClick = filterDrift.app.activateBulkIntent(
+    filterDriftGroup, {currentTarget: filterDriftTrigger},
+  );
+  await settle();
+  assert.equal(filterDrift.posts.length, 1);
+  assert.equal(filterDrift.app.selectionReviewLoading, true);
+  filterDrift.app.filters.sort = 'title';
+  component.watch.filters.handler.call(filterDrift.app);
+  resolveFilterDriftRead({success: true, items: rowsForGroup('create', actionIntentIds)});
+  const filterDriftResult = await Promise.all([Promise.resolve(filterDriftClick), settle()]);
+  assert.equal(filterFeedReads, 1, 'filter drift follows the ordinary single feed refresh');
+  assert.equal(filterDriftSignal.aborted, true, 'a changed scope aborts the pending exact read');
+  assert.equal(filterDriftResult[0], false, 'late rows for a changed filter scope cannot continue');
+  assert.equal(filterDrift.posts.length, 1);
+  sameJson(filterDrift.app.selected, actionIntentIds, 'filter changes preserve the selected IDs');
+  assert.equal(filterDrift.app.selectionReviewActive, false);
+  assert.deepEqual(filterDrift.started, [], 'late rows for an old filter cannot dispatch an action');
+  assert.equal(filterDrift.app.activeBulkActionGroup, '');
+  assert.equal(fakeDocument.activeElement, filterDriftTrigger);
+
   const timedOut = makeApp();
   timedOut.items = [row(11)];
   timedOut.itemsScope = timedOut.feedScopeKey();
@@ -563,6 +764,10 @@ async function main() {
   const css = fs.readFileSync(cssPath, 'utf8');
   assert.match(template, /'selection': url_for\('api_my_products_selection'\)/);
   assert.match(template, /data-selection-review-show/);
+  assert.match(template, /data-selection-intent-verify/,
+    'group launches advertise the exact-selection check they perform');
+  assert.match(template, /:aria-busy="selectionReviewLoading \? 'true' : 'false'/,
+    'the group launch exposes the in-flight exact read to assistive technology');
   assert.match(template, /data-selection-review-return/);
   assert.match(template, /data-selection-outside-count/);
   assert.match(template, /data-selection-review-row/);
@@ -591,7 +796,7 @@ async function main() {
   assert.match(css, /\.mp-extra-filters summary:focus-visible/);
   assert.match(css, /\.mp-selection-review[\s\S]*--focus-outline/);
   assert.match(template, /filename='my-products-beta\.css', v='20261123-inline-common-dialog-r1'/);
-  assert.match(template, /filename='my-products-beta\.js', v='20261123-inline-common-dialog-r1'/);
+  assert.match(template, /filename='my-products-beta\.js', v='20261123-selection-on-first-intent-r1'/);
 
   const legacyScope = {
     activeTab: 'pending', search: '', supplier: '', has_photos: '', stock: '',

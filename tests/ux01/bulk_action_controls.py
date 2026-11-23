@@ -1,5 +1,7 @@
 """Drive the seller workspace's direct and multi-destination actions."""
 
+from urllib.parse import urlsplit
+
 
 ACTION_GROUP = {
     "common_content": "cards",
@@ -43,18 +45,66 @@ def _assert_native_price_entry(page, key):
     }""")
 
 
-def invoke_workspace_action(page, key):
+def _is_selection_read(response):
+    parsed = urlsplit(response.url)
+    return parsed.path == "/api/my-products/selection" and response.request.method == "POST"
+
+
+def invoke_workspace_action(page, key, *, expected_selection_ids=None, selection_pending=None):
     """Follow a real selected-product action, checking its exact destination."""
     native_price_dialog = key in PRICE_ACTIONS and _native_price_dialog_available(page)
     launcher = workspace_action_launcher(page, ACTION_GROUP[key])
     assert launcher.is_enabled(), key
-    direct = launcher.get_attribute("data-bulk-direct-action")
-    if direct:
-        assert direct == key, (key, direct)
-        launcher.click()
+    action_already_launched = False
+    if expected_selection_ids is not None:
+        verified = page.evaluate("""() => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return !!(proxy && proxy.selectionRowsVerified);
+        }""")
+        assert not verified, "This case must exercise verification on the first group click"
+        assert launcher.get_attribute("data-selection-intent-verify") is not None
+        selected_ids = page.evaluate("""() => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy ? proxy.selected.slice() : null;
+        }""")
+        assert selected_ids == expected_selection_ids and selected_ids
+        with page.expect_response(_is_selection_read) as selection_read:
+            launcher.press("Enter")
+            if selection_pending is not None:
+                selection_pending(launcher)
+        response = selection_read.value
+        assert response.status == 200
+        assert response.request.post_data_json == {"ids": expected_selection_ids}
+        payload = response.json()
+        assert payload.get("success") is True
+        assert [item.get("id") for item in payload.get("items", [])] == expected_selection_ids
+        page.wait_for_function("""() => {
+            const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
+            return proxy && proxy.selectionRowsVerified && !proxy.selectionReviewLoading;
+        }""")
+        assert page.locator(".mp-selection-review").count() == 0
+        page.wait_for_function("""({group, key}) => {
+            const launcher = document.querySelector(`button[data-bulk-action-group="${group}"]`);
+            const option = document.querySelector(`#mp-bulk-panel-${group} [data-bulk-action-key="${key}"]`);
+            return !!(launcher && (launcher.dataset.bulkDirectAction === key || option));
+        }""", arg={"group": ACTION_GROUP[key], "key": key})
+        launcher = workspace_action_launcher(page, ACTION_GROUP[key])
+        direct = launcher.get_attribute("data-bulk-direct-action")
+        if direct:
+            assert direct == key, (key, direct)
+            action_already_launched = True
+    else:
+        direct = launcher.get_attribute("data-bulk-direct-action")
+        if direct:
+            assert direct == key, (key, direct)
+            launcher.click()
+            action_already_launched = True
+        else:
+            launcher.click()
+
+    if action_already_launched:
         steps = 1
     else:
-        launcher.click()
         destination = page.locator(f'[data-bulk-action-key="{key}"]')
         destination.wait_for()
         assert destination.is_enabled(), key
