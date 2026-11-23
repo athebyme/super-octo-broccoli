@@ -584,7 +584,7 @@ class MyProductsFeedTest(unittest.TestCase):
             {'ids': [1.0]},
             {'ids': [str(self.draft_id)]},
             {'ids': [self.draft_id, self.draft_id]},
-            {'ids': [(1 << 63)]},
+            {'ids': [(1 << 53)]},
             {'ids': list(range(1, 202))},
             {'ids': [self.draft_id], 'extra': True},
         ]
@@ -640,6 +640,36 @@ class MyProductsFeedTest(unittest.TestCase):
             'success': False,
             'error': 'Выбранный список недоступен',
         })
+
+    def test_selection_review_accepts_maximum_safe_javascript_id(self):
+        from models import ImportedProduct
+
+        max_safe_id = (1 << 53) - 1
+        row = ImportedProduct(
+            id=max_safe_id,
+            seller_id=self.seller_id,
+            external_id='imp-max-safe-id',
+            source_type='synthetic',
+            title='Safe integer boundary',
+            import_status='validated',
+        )
+        self.db.session.add(row)
+        self.db.session.commit()
+
+        with self._auth():
+            accepted = self.client.post(
+                '/api/my-products/selection', json={'ids': [max_safe_id]},
+            )
+            rejected = self.client.post(
+                '/api/my-products/selection', json={'ids': [max_safe_id + 1]},
+            )
+
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(accepted.get_json()['items'][0]['id'], max_safe_id)
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(
+            rejected.get_json()['error'], 'Выбранный список недействителен',
+        )
 
     def test_selection_review_requires_csrf_and_never_caches_framework_errors(self):
         previous = self.app.config.get('WTF_CSRF_ENABLED')

@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 MAX_BULK_PRODUCTS = 200
 MY_PRODUCTS_SELECTION_MAX_IDS = 200
 MY_PRODUCTS_SELECTION_MAX_BODY_BYTES = 16 * 1024
+MY_PRODUCTS_SELECTION_MAX_JS_ID = (1 << 53) - 1
 MY_PRODUCTS_SELECTION_INVALID_ERROR = 'Выбранный список недействителен'
 MY_PRODUCTS_SELECTION_UNAVAILABLE_ERROR = 'Выбранный список недоступен'
 WB_BULK_CREATE_REQUEST_KEY_RE = re.compile(r'^[0-9a-f]{32}$')
@@ -296,7 +297,7 @@ def _my_products_selection_json_ids():
         if (
             type(value) is not int
             or value <= 0
-            or value > MAX_SIGNED_SQLITE_ID
+            or value > MY_PRODUCTS_SELECTION_MAX_JS_ID
             or value in seen
         ):
             raise ValueError('invalid selection')
