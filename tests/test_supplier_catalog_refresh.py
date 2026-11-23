@@ -16,9 +16,15 @@ from services.supplier_catalog_refresh import (
     SupplierCatalogRefreshError,
     enqueue_catalog_refresh,
     get_catalog_refresh,
+    get_catalog_schedule,
     run_catalog_refresh_tick,
+    set_catalog_schedule,
 )
 from services.supplier_catalog_refresh_models import SupplierCatalogRefreshRun
+from services.supplier_catalog_schedule_models import (
+    SupplierCatalogSchedule,
+    SupplierCatalogScheduledRun,
+)
 from services.supplier_service import SupplierService
 import services.supplier_service as supplier_service_module
 
@@ -63,6 +69,7 @@ def refresh_db(refresh_app):
             "supplier_id": supplier.id,
             "admin_id": admin.id,
             "extra_supplier_ids": [],
+            "extra_admin_ids": [],
         }
         db.session.remove()
 
@@ -70,13 +77,32 @@ def refresh_db(refresh_app):
 
     with refresh_app.app_context():
         db.session.remove()
+        SupplierCatalogScheduledRun.query.filter(
+            SupplierCatalogScheduledRun.run_id.in_(
+                db.session.query(SupplierCatalogRefreshRun.id).filter(
+                    SupplierCatalogRefreshRun.supplier_id.in_(
+                        [fixture["supplier_id"], *fixture["extra_supplier_ids"]],
+                    ),
+                ),
+            ),
+        ).delete(synchronize_session=False)
+        SupplierCatalogSchedule.query.filter(
+            SupplierCatalogSchedule.supplier_id.in_(
+                [fixture["supplier_id"], *fixture["extra_supplier_ids"]],
+            ),
+        ).delete(synchronize_session=False)
         AdminAuditLog.query.filter_by(admin_user_id=fixture["admin_id"]).delete()
+        for extra_admin_id in fixture["extra_admin_ids"]:
+            AdminAuditLog.query.filter_by(admin_user_id=extra_admin_id).delete()
         SupplierCatalogRefreshRun.query.filter_by(
             supplier_id=fixture["supplier_id"],
         ).delete()
         supplier = db.session.get(Supplier, fixture["supplier_id"])
         admin = db.session.get(User, fixture["admin_id"])
         for supplier_id in fixture["extra_supplier_ids"]:
+            SupplierCatalogSchedule.query.filter_by(
+                supplier_id=supplier_id,
+            ).delete()
             SupplierCatalogRefreshRun.query.filter_by(
                 supplier_id=supplier_id,
             ).delete()
@@ -98,6 +124,18 @@ def stable_config(monkeypatch):
         SupplierService,
         "supplier_catalog_config_digest",
         staticmethod(lambda _supplier: digest),
+        raising=False,
+    )
+    return digest
+
+
+@pytest.fixture
+def stable_catalog_config(monkeypatch):
+    digest = "a" * 64
+    monkeypatch.setattr(
+        SupplierService,
+        "supplier_catalog_config_digest",
+        staticmethod(lambda _supplier, *, catalog_only=False: digest),
         raising=False,
     )
     return digest
@@ -172,6 +210,80 @@ def _read_receipt(fixture, run_id, supplier_id=None):
         return get_catalog_refresh(
             supplier_id or fixture["supplier_id"], run_id,
         )
+
+
+def _set_schedule(fixture, *, enabled=True, interval_hours=24, revision=None, actor_id=None):
+    with fixture["app"].app_context():
+        return set_catalog_schedule(
+            supplier_id=fixture["supplier_id"],
+            admin_user_id=actor_id or fixture["admin_id"],
+            enabled=enabled,
+            interval_hours=interval_hours,
+            expected_revision=revision,
+        )
+
+
+def _mock_catalog_sync(monkeypatch, *, result=None, crash=None, revoke_before_checkpoint=False):
+    result = result or _result()
+    calls = []
+
+    def sync(
+        supplier_id,
+        *,
+        start_time,
+        expected_config_digest,
+        raw_checkpoint,
+        catalog_only=False,
+        pre_fetch_check=None,
+    ):
+        del start_time
+        assert supplier_id > 0
+        assert expected_config_digest == "a" * 64
+        calls.append({
+            "supplier_id": supplier_id,
+            "catalog_only": catalog_only,
+            "pre_fetch_check": pre_fetch_check is not None,
+        })
+        if pre_fetch_check is not None:
+            pre_fetch_check()
+        db.session.rollback()
+        calls.append({"provider_started": True})
+        if revoke_before_checkpoint:
+            schedule = db.session.get(SupplierCatalogSchedule, supplier_id)
+            schedule.enabled = False
+            schedule.revision += 1
+            schedule.updated_at = datetime.utcnow()
+            db.session.commit()
+        db.session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        if crash == "before_commit":
+            raw_checkpoint(result, datetime.utcnow())
+            raise SystemExit("synthetic scheduled worker exit before raw commit")
+        try:
+            raw_checkpoint(result, datetime.utcnow())
+        except SupplierCatalogRefreshError as exc:
+            db.session.rollback()
+            return SimpleNamespace(
+                success=False,
+                total_in_csv=0,
+                added=0,
+                updated=0,
+                errors=1,
+                catalog_error_code=exc.code,
+                price_followup_status="skipped",
+                price_followup_conflicts=0,
+            )
+        if crash == "after_commit":
+            db.session.commit()
+            raise SystemExit("synthetic scheduled worker exit after raw commit")
+        db.session.commit()
+        return result
+
+    monkeypatch.setattr(
+        SupplierService,
+        "_sync_from_csv_locked",
+        staticmethod(sync),
+    )
+    return calls
 
 
 def test_duplicate_active_post_returns_same_receipt_and_one_audit(
@@ -547,7 +659,13 @@ def test_corrupt_candidate_is_not_locked_or_mutated(
     monkeypatch.setattr(supplier_service_module, "_supplier_catalog_sync_lock", lock)
     summary = run_catalog_refresh_tick(refresh_db["app"])
 
-    assert summary == {"processed": 0, "interrupted": 0, "busy": 0, "failed": 0}
+    assert summary == {
+        "processed": 0,
+        "interrupted": 0,
+        "busy": 0,
+        "failed": 0,
+        "scheduled": 0,
+    }
     lock.assert_not_called()
     receipt = _read_receipt(refresh_db, queued["id"])
     assert receipt["status"] == "pending"
@@ -585,3 +703,465 @@ def test_admission_rejects_bad_actor_and_malformed_scope(refresh_db):
                 expected_latest_id="not-a-run-id",
             )
         assert id_error.value.code == "invalid_expected_run_id"
+
+
+def test_schedule_get_set_cas_noop_and_actor_audit(refresh_db):
+    with refresh_db["app"].app_context():
+        assert get_catalog_schedule(refresh_db["supplier_id"]) is None
+        assert SupplierCatalogSchedule.query.count() == 0
+
+    created = _set_schedule(refresh_db)
+    assert created["supplier_id"] == refresh_db["supplier_id"]
+    assert created["enabled"] is True
+    assert created["interval_hours"] == 24
+    assert created["authorized_by_user_id"] == refresh_db["admin_id"]
+    assert created["revision"] == 1
+    assert created["next_due_at"] is not None
+
+    unchanged = _set_schedule(refresh_db, revision=created["revision"])
+    assert unchanged == created
+    with refresh_db["app"].app_context():
+        assert AdminAuditLog.query.filter_by(
+            action="set_supplier_catalog_schedule",
+        ).count() == 1
+
+        second_admin = User(
+            username=f"refresh-second-admin-{uuid.uuid4().hex}",
+            email=f"refresh-second-admin-{uuid.uuid4().hex}@test.local",
+            is_admin=True,
+        )
+        second_admin.set_password("synthetic-password")
+        db.session.add(second_admin)
+        db.session.commit()
+        refresh_db["extra_admin_ids"].append(second_admin.id)
+        second_admin_id = second_admin.id
+
+    transferred = _set_schedule(
+        refresh_db,
+        revision=created["revision"],
+        actor_id=second_admin_id,
+    )
+    assert transferred["authorized_by_user_id"] == second_admin_id
+    assert transferred["revision"] == created["revision"] + 1
+    assert transferred["next_due_at"] >= created["next_due_at"]
+    with refresh_db["app"].app_context():
+        audits = AdminAuditLog.query.filter_by(
+            action="set_supplier_catalog_schedule",
+        ).order_by(AdminAuditLog.id.asc()).all()
+        assert [row.admin_user_id for row in audits] == [
+            refresh_db["admin_id"], second_admin_id,
+        ]
+        assert json.loads(audits[-1].details) == {
+            "enabled": True,
+            "interval_hours": 24,
+            "revision": transferred["revision"],
+        }
+        with pytest.raises(SupplierCatalogRefreshError) as stale:
+            set_catalog_schedule(
+                supplier_id=refresh_db["supplier_id"],
+                admin_user_id=second_admin_id,
+                enabled=True,
+                interval_hours=24,
+                expected_revision=created["revision"],
+            )
+        assert stale.value.code == "schedule_conflict"
+
+
+@pytest.mark.parametrize(
+    ("enabled", "interval_hours", "expected_code"),
+    [
+        (1, 24, "invalid_enabled"),
+        (True, True, "invalid_interval_hours"),
+        (True, 5, "invalid_interval_hours"),
+        (True, 169, "invalid_interval_hours"),
+        (True, 24, "invalid_expected_revision"),
+    ],
+)
+def test_schedule_rejects_noncanonical_values(
+    refresh_db, enabled, interval_hours, expected_code,
+):
+    with refresh_db["app"].app_context():
+        with pytest.raises(SupplierCatalogRefreshError) as error:
+            set_catalog_schedule(
+                supplier_id=refresh_db["supplier_id"],
+                admin_user_id=refresh_db["admin_id"],
+                enabled=enabled,
+                interval_hours=interval_hours,
+                expected_revision=("bad" if expected_code == "invalid_expected_revision" else None),
+            )
+        assert error.value.code == expected_code
+
+
+def test_schedule_get_is_read_only_and_does_not_create_queue(refresh_db):
+    before = _set_schedule(refresh_db)
+    with refresh_db["app"].app_context():
+        supplier = db.session.get(Supplier, refresh_db["supplier_id"])
+        supplier.name = "uncommitted schedule fixture edit"
+        first = get_catalog_schedule(refresh_db["supplier_id"])
+        second = get_catalog_schedule(refresh_db["supplier_id"])
+        assert first == second == before
+        assert db.session.is_modified(supplier)
+        assert SupplierCatalogRefreshRun.query.count() == 0
+        assert AdminAuditLog.query.filter_by(
+            action="set_supplier_catalog_schedule",
+        ).count() == 1
+        db.session.rollback()
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_status", "expected_error"),
+    [
+        (_result(), "completed", None),
+        (_result(errors=1), "partial", "postprocess_partial"),
+    ],
+)
+def test_due_schedule_runs_catalog_only_and_records_origin(
+    refresh_db, stable_catalog_config, monkeypatch,
+    result, expected_status, expected_error,
+):
+    del stable_catalog_config
+    _patch_lock(monkeypatch)
+    calls = _mock_catalog_sync(monkeypatch, result=result)
+    schedule = _set_schedule(refresh_db, interval_hours=24)
+
+    summary = run_catalog_refresh_tick(refresh_db["app"])
+
+    assert summary["processed"] == 1
+    assert summary["scheduled"] == 1
+    assert calls[0]["catalog_only"] is True
+    assert calls[0]["pre_fetch_check"] is True
+    with refresh_db["app"].app_context():
+        run = SupplierCatalogRefreshRun.query.filter_by(
+            supplier_id=refresh_db["supplier_id"],
+        ).one()
+        receipt = get_catalog_refresh(refresh_db["supplier_id"], run.id)
+        extension = db.session.get(SupplierCatalogScheduledRun, run.id)
+        current_schedule = db.session.get(
+            SupplierCatalogSchedule, refresh_db["supplier_id"],
+        )
+        assert run.admin_user_id == refresh_db["admin_id"]
+        assert receipt["trigger_kind"] == "scheduled"
+        assert receipt["due_at"] == schedule["next_due_at"]
+        assert extension.schedule_revision == schedule["revision"]
+        assert receipt["status"] == expected_status
+        assert receipt["error_code"] == expected_error
+        assert receipt["price_status"] == "skipped"
+        assert receipt["price_conflicts"] is None
+        assert current_schedule.revision == schedule["revision"]
+        assert current_schedule.next_due_at > datetime.utcnow()
+        assert AdminAuditLog.query.filter_by(
+            action="queue_supplier_catalog_refresh",
+        ).count() == 0
+
+    again = run_catalog_refresh_tick(refresh_db["app"])
+    assert again["processed"] == 0
+    assert again["scheduled"] == 0
+    assert len([call for call in calls if call.get("provider_started")]) == 1
+
+
+def test_manual_pending_receipt_runs_before_due_schedule_and_coexists(
+    refresh_db, stable_catalog_config, monkeypatch,
+):
+    del stable_catalog_config
+    _patch_lock(monkeypatch)
+    calls = _mock_catalog_sync(monkeypatch)
+    schedule = _set_schedule(refresh_db)
+    manual, created = _enqueue(refresh_db)
+    assert created is True
+    duplicate, duplicate_created = _enqueue(refresh_db, manual["id"])
+    assert duplicate_created is False
+    assert duplicate["id"] == manual["id"]
+
+    first = run_catalog_refresh_tick(refresh_db["app"])
+    assert first["processed"] == 1
+    assert first["scheduled"] == 0
+    assert _read_receipt(refresh_db, manual["id"])["trigger_kind"] == "manual"
+    with refresh_db["app"].app_context():
+        current_schedule = db.session.get(
+            SupplierCatalogSchedule, refresh_db["supplier_id"],
+        )
+        assert current_schedule.revision == schedule["revision"]
+        assert current_schedule.next_due_at == datetime.fromisoformat(schedule["next_due_at"])
+        assert SupplierCatalogScheduledRun.query.count() == 0
+
+    second = run_catalog_refresh_tick(refresh_db["app"])
+    assert second["processed"] == 1
+    assert second["scheduled"] == 1
+    assert _read_receipt(refresh_db, manual["id"])["trigger_kind"] == "manual"
+    with refresh_db["app"].app_context():
+        scheduled = SupplierCatalogRefreshRun.query.filter_by(
+            supplier_id=refresh_db["supplier_id"],
+        ).filter(SupplierCatalogRefreshRun.id != manual["id"]).one()
+        assert get_catalog_refresh(refresh_db["supplier_id"], scheduled.id)["trigger_kind"] == "scheduled"
+        assert len([call for call in calls if call.get("provider_started")]) == 2
+
+
+def test_manual_active_run_prevents_duplicate_scheduled_admission(
+    refresh_db, stable_catalog_config, monkeypatch,
+):
+    del stable_catalog_config
+    _patch_lock(monkeypatch)
+    schedule = _set_schedule(refresh_db)
+    manual, created = _enqueue(refresh_db)
+    assert created is True
+    with refresh_db["app"].app_context():
+        scheduled_module = __import__(
+            "services.supplier_catalog_refresh", fromlist=["_admit_due_schedule"],
+        )
+        second_admission = scheduled_module._admit_due_schedule(
+            refresh_db["supplier_id"], schedule["revision"],
+        )
+        assert second_admission is None
+        assert SupplierCatalogRefreshRun.query.filter_by(
+            supplier_id=refresh_db["supplier_id"],
+        ).count() == 1
+        assert SupplierCatalogScheduledRun.query.count() == 0
+        assert db.session.get(
+            SupplierCatalogSchedule, refresh_db["supplier_id"],
+        ).next_due_at == datetime.fromisoformat(schedule["next_due_at"])
+    receipt, created_again = _enqueue(refresh_db, manual["id"])
+    assert created_again is False
+    assert receipt["id"] == manual["id"]
+
+
+def test_scheduled_admission_guard_and_missed_interval_coalescing(
+    refresh_db, stable_catalog_config, monkeypatch,
+):
+    del stable_catalog_config
+    _patch_lock(monkeypatch)
+    calls = _mock_catalog_sync(monkeypatch)
+    schedule = _set_schedule(refresh_db)
+    old_due = datetime.utcnow() - timedelta(days=9)
+    with refresh_db["app"].app_context():
+        current = db.session.get(
+            SupplierCatalogSchedule, refresh_db["supplier_id"],
+        )
+        current.next_due_at = old_due
+        db.session.commit()
+        scheduled_module = __import__(
+            "services.supplier_catalog_refresh", fromlist=["_admit_due_schedule"],
+        )
+        admitted = scheduled_module._admit_due_schedule(
+            refresh_db["supplier_id"], schedule["revision"],
+        )
+        assert admitted is not None
+        run_id, admitted_due = admitted
+        current = db.session.get(
+            SupplierCatalogSchedule, refresh_db["supplier_id"],
+        )
+        advanced_due = current.next_due_at
+        assert advanced_due > datetime.utcnow()
+        assert advanced_due - datetime.utcnow() <= timedelta(hours=24)
+
+        # Force the schedule due again while the first receipt remains active;
+        # the supplier-scoped partial unique guard must still reject a second.
+        current.next_due_at = old_due
+        db.session.commit()
+        duplicate = scheduled_module._admit_due_schedule(
+            refresh_db["supplier_id"], schedule["revision"],
+        )
+        assert duplicate is None
+        assert SupplierCatalogRefreshRun.query.filter_by(
+            supplier_id=refresh_db["supplier_id"],
+        ).count() == 1
+        assert SupplierCatalogScheduledRun.query.count() == 1
+        assert db.session.get(
+            SupplierCatalogScheduledRun, run_id,
+        ).due_at == old_due
+        current = db.session.get(
+            SupplierCatalogSchedule, refresh_db["supplier_id"],
+        )
+        current.next_due_at = advanced_due
+        db.session.commit()
+
+    # This test exercises admission directly; a later tick processes its one
+    # pending receipt despite next_due_at already advancing.
+    summary = run_catalog_refresh_tick(refresh_db["app"])
+    assert summary["scheduled"] == 1
+    assert len([call for call in calls if call.get("provider_started")]) == 1
+    with refresh_db["app"].app_context():
+        receipt = get_catalog_refresh(refresh_db["supplier_id"], run_id)
+        assert receipt["due_at"] == old_due.isoformat()
+        assert admitted_due == old_due
+
+
+@pytest.mark.parametrize("crash", ["before_commit", "after_commit"])
+def test_scheduled_running_receipt_is_interrupted_without_replay(
+    refresh_db, stable_catalog_config, monkeypatch, crash,
+):
+    del stable_catalog_config
+    _patch_lock(monkeypatch)
+    calls = _mock_catalog_sync(monkeypatch, crash=crash)
+    _set_schedule(refresh_db)
+
+    with pytest.raises(SystemExit):
+        run_catalog_refresh_tick(refresh_db["app"])
+    with refresh_db["app"].app_context():
+        run = SupplierCatalogRefreshRun.query.filter_by(
+            supplier_id=refresh_db["supplier_id"],
+        ).one()
+        assert run.status == "running"
+        before_raw = run.raw_committed_at
+        assert (before_raw is not None) is (crash == "after_commit")
+
+    sync = Mock(side_effect=AssertionError("interrupted scheduled work must not replay"))
+    monkeypatch.setattr(SupplierService, "_sync_from_csv_locked", sync)
+    recovered = run_catalog_refresh_tick(refresh_db["app"])
+    assert recovered["interrupted"] == 1
+    assert recovered["processed"] == 0
+    sync.assert_not_called()
+    with refresh_db["app"].app_context():
+        run = SupplierCatalogRefreshRun.query.filter_by(
+            supplier_id=refresh_db["supplier_id"],
+        ).one()
+        assert run.status == "interrupted"
+        assert (run.raw_committed_at is not None) is (crash == "after_commit")
+        assert db.session.get(
+            SupplierCatalogSchedule, refresh_db["supplier_id"],
+        ).revision == 1
+    assert len([call for call in calls if call.get("provider_started")]) == 1
+
+
+def test_schedule_revoked_after_fetch_fails_raw_checkpoint_and_skips_price(
+    refresh_db, stable_catalog_config, monkeypatch,
+):
+    del stable_catalog_config
+    _patch_lock(monkeypatch)
+    calls = _mock_catalog_sync(monkeypatch, revoke_before_checkpoint=True)
+    _set_schedule(refresh_db)
+
+    summary = run_catalog_refresh_tick(refresh_db["app"])
+
+    assert summary["processed"] == 1
+    assert len([call for call in calls if call.get("provider_started")]) == 1
+    with refresh_db["app"].app_context():
+        run = SupplierCatalogRefreshRun.query.filter_by(
+            supplier_id=refresh_db["supplier_id"],
+        ).one()
+        receipt = get_catalog_refresh(refresh_db["supplier_id"], run.id)
+        assert run.raw_committed_at is None
+        assert receipt["status"] == "failed"
+        assert receipt["error_code"] == "scheduled_consent_revoked"
+        assert receipt["price_status"] == "skipped"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "disabled_schedule", "inactive_supplier", "blank_source",
+        "malformed_source", "inactive_admin", "blocked_admin",
+    ],
+)
+def test_due_schedule_skips_invalid_source_or_revoked_consent_without_provider_get(
+    refresh_db, stable_catalog_config, monkeypatch, change,
+):
+    del stable_catalog_config
+    _patch_lock(monkeypatch)
+    sync = Mock(side_effect=AssertionError("ineligible schedule must not read source"))
+    monkeypatch.setattr(SupplierService, "_sync_from_csv_locked", sync)
+    _set_schedule(refresh_db)
+    with refresh_db["app"].app_context():
+        if change == "disabled_schedule":
+            current = db.session.get(
+                SupplierCatalogSchedule, refresh_db["supplier_id"],
+            )
+            set_catalog_schedule(
+                supplier_id=refresh_db["supplier_id"],
+                admin_user_id=refresh_db["admin_id"],
+                enabled=False,
+                interval_hours=current.interval_hours,
+                expected_revision=current.revision,
+            )
+        elif change == "inactive_supplier":
+            db.session.get(Supplier, refresh_db["supplier_id"]).is_active = False
+        elif change == "blank_source":
+            db.session.get(Supplier, refresh_db["supplier_id"]).csv_source_url = "  "
+        elif change == "malformed_source":
+            db.session.get(Supplier, refresh_db["supplier_id"]).csv_source_url = "file:///etc/passwd"
+        else:
+            admin = db.session.get(User, refresh_db["admin_id"])
+            if change == "inactive_admin":
+                admin.is_active = False
+            else:
+                admin.blocked_at = datetime.utcnow()
+        db.session.commit()
+
+    summary = run_catalog_refresh_tick(refresh_db["app"])
+    assert summary["processed"] == 0
+    assert summary["scheduled"] == 0
+    sync.assert_not_called()
+    with refresh_db["app"].app_context():
+        assert SupplierCatalogRefreshRun.query.count() == 0
+
+
+def test_disabling_schedule_does_not_mutate_an_already_running_receipt(
+    refresh_db, stable_catalog_config,
+):
+    del stable_catalog_config
+    schedule = _set_schedule(refresh_db)
+    with refresh_db["app"].app_context():
+        scheduled_module = __import__(
+            "services.supplier_catalog_refresh", fromlist=["_admit_due_schedule"],
+        )
+        admitted = scheduled_module._admit_due_schedule(
+            refresh_db["supplier_id"], schedule["revision"],
+        )
+        assert admitted is not None
+        run_id, _due_at = admitted
+        run = db.session.get(SupplierCatalogRefreshRun, run_id)
+        run.status = "running"
+        run.started_at = datetime.utcnow()
+        run.raw_committed_at = datetime.utcnow() - timedelta(seconds=1)
+        before = (run.status, run.started_at, run.raw_committed_at)
+        db.session.commit()
+        current_schedule = db.session.get(
+            SupplierCatalogSchedule, refresh_db["supplier_id"],
+        )
+        old_due = current_schedule.next_due_at
+
+        disabled = set_catalog_schedule(
+            supplier_id=refresh_db["supplier_id"],
+            admin_user_id=refresh_db["admin_id"],
+            enabled=False,
+            interval_hours=current_schedule.interval_hours,
+            expected_revision=current_schedule.revision,
+        )
+        current_run = db.session.get(SupplierCatalogRefreshRun, run_id)
+        assert disabled["enabled"] is False
+        assert disabled["revision"] == schedule["revision"] + 1
+        assert disabled["next_due_at"] == old_due.isoformat()
+        assert (current_run.status, current_run.started_at, current_run.raw_committed_at) == before
+
+
+def test_changed_schedule_generation_fails_pending_receipt_before_provider_get(
+    refresh_db, stable_catalog_config, monkeypatch,
+):
+    del stable_catalog_config
+    _patch_lock(monkeypatch)
+    sync = Mock(side_effect=AssertionError("stale generation must not read source"))
+    monkeypatch.setattr(SupplierService, "_sync_from_csv_locked", sync)
+    schedule = _set_schedule(refresh_db)
+    with refresh_db["app"].app_context():
+        scheduled_module = __import__(
+            "services.supplier_catalog_refresh", fromlist=["_admit_due_schedule"],
+        )
+        admitted = scheduled_module._admit_due_schedule(
+            refresh_db["supplier_id"], schedule["revision"],
+        )
+        assert admitted is not None
+        run_id, _due_at = admitted
+        current = db.session.get(
+            SupplierCatalogSchedule, refresh_db["supplier_id"],
+        )
+        current.revision += 1
+        current.updated_at = datetime.utcnow()
+        db.session.commit()
+
+    summary = run_catalog_refresh_tick(refresh_db["app"])
+    assert summary["processed"] == 0
+    assert summary["failed"] == 1
+    sync.assert_not_called()
+    receipt = _read_receipt(refresh_db, run_id)
+    assert receipt["status"] == "failed"
+    assert receipt["error_code"] == "scheduled_consent_revoked"
+    assert receipt["trigger_kind"] == "scheduled"
