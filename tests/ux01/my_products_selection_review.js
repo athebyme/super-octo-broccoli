@@ -539,7 +539,14 @@ async function main() {
   assert.match(template, /data-catalog-extra-filters/);
   assert.match(template, /data-catalog-wb-status/);
   assert.match(template, /:value="activeTab === 'updates' \? '' : activeTab"/);
-  assert.match(template, /v-if="filters\.marketplace !== 'ozon'" class="mp-extra-filters"/);
+  const sharedExtraFilters = template.match(/<details class="mp-extra-filters" data-catalog-extra-filters>([\s\S]*?)<\/details>/);
+  assert.ok(sharedExtraFilters, 'advanced controls stay in one shared native disclosure');
+  assert.match(sharedExtraFilters[1], /<select v-if="filters\.marketplace !== 'ozon'" data-catalog-wb-status/,
+    'the WB-only status control is absent from Ozon-only scope');
+  assert.match(sharedExtraFilters[1], /<select v-model="filters\.sort" class="mp-select" data-catalog-sort aria-label="Сортировка">/,
+    'one actual sort select remains directly available inside the disclosure');
+  assert.equal((sharedExtraFilters[1].match(/data-catalog-sort/g) || []).length, 1,
+    'the sort control is not duplicated');
   assert.match(template, /data-catalog-marketplace-status aria-label="Статус карточек"/);
   assert.doesNotMatch(template, /class="mp-tabs"/,
     'the old competing status tabs are no longer rendered');
@@ -548,8 +555,8 @@ async function main() {
   assert.match(css, /\.mp-marketplace-choice:focus-visible/);
   assert.match(css, /\.mp-extra-filters summary:focus-visible/);
   assert.match(css, /\.mp-selection-review[\s\S]*--focus-outline/);
-  assert.match(template, /filename='my-products-beta\.css', v='20261123-unified-marketplace-filters-r71'/);
-  assert.match(template, /filename='my-products-beta\.js', v='20261123-unified-marketplace-filters-r71'/);
+  assert.match(template, /filename='my-products-beta\.css', v='20261123-compact-catalog-toolbar-r71'/);
+  assert.match(template, /filename='my-products-beta\.js', v='20261123-compact-catalog-toolbar-r71'/);
 
   const legacyScope = {
     activeTab: 'pending', search: '', supplier: '', has_photos: '', stock: '',
