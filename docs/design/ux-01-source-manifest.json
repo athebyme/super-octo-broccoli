@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-23T04:48:27.754589+00:00",
+  "generated_at": "2026-11-23T04:54:22.192865+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -2681,7 +2681,7 @@
     },
     {
       "path": "static/my-products-beta.css",
-      "sha256": "7db97a315e5b19c6b068ae8fa3ba350e060d95c0dd7b2859ecddcee04d08f35c"
+      "sha256": "0ceb440d01ff3dcdbbe7ddb2eba73172380aeeb2cedb2c3d2edb12f616daabf2"
     },
     {
       "path": "static/my-products-beta.js",
@@ -3361,7 +3361,7 @@
     },
     {
       "path": "templates/my_products_beta.html",
-      "sha256": "da323bac15ea71ba167c2146b08ea2019a163667c75f5466feac1c24ca47ff73"
+      "sha256": "553250ac4e291adeabffa3bdd4ed067a0f17fcecdddcd350a9b8d81968080257"
     },
     {
       "path": "templates/notifications.html",
@@ -5341,12 +5341,12 @@
     },
     {
       "path": "tests/ux01/workspace_catalog_layout_browser.py",
-      "sha256": "6b628e46e700f406b607619b5b0873d4015af3afbe8f8d0a4ee684a7a233b08f"
+      "sha256": "f83ebd2992799bb9fd061b19fea1fe1568944019c595dedc20aecee14029d45a"
     },
     {
       "path": "tests/ux01/workspace_catalog_price_browser.py",
       "sha256": "6f39e443d991ebaa3f7ff379c1051438fd727de24a3d7ba25764acfa5691f63d"
     }
   ],
-  "aggregate_sha256": "992faa3c844a64d5471d0918dcb6ddab235cb2015e308df38cb9a5f9d5edb41c"
+  "aggregate_sha256": "84f9e142d3d5e521b3c97321bcb5e1b5443af4ad5db13b90e864975ebff2bb50"
 }
