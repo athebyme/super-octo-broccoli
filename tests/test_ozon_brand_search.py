@@ -11,6 +11,7 @@ from cryptography.fernet import Fernet
 from models import (
     BackgroundJob,
     MarketplaceAttributeDefinition,
+    MarketplaceAttributeValue,
     MarketplaceListing,
     OzonBulkUploadItem,
     OzonBulkUploadRun,
@@ -185,6 +186,26 @@ class OzonBrandSearchTest(OzonPublicationFixture, TestCase):
             deadline_monotonic=None,
             now=now or datetime.utcnow(),
             client_factory=lambda credentials, **kwargs: client,
+        )
+
+    def _store_brand_cell(self, *, value_id="101", value="Acme"):
+        self.draft.attributes_json = json.dumps([{
+            "attribute_id": "31",
+            "complex_id": "0",
+            "values": [{
+                "dictionary_value_id": value_id,
+                "value": value,
+            }],
+        }])
+        db.session.commit()
+
+    def _draft_state(self):
+        db.session.refresh(self.draft)
+        return (
+            self.draft.version,
+            self.draft.created_at,
+            self.draft.updated_at,
+            self.draft.attributes_json,
         )
 
     @staticmethod
@@ -366,6 +387,139 @@ class OzonBrandSearchTest(OzonPublicationFixture, TestCase):
             OzonBrandSearch.value_choices(self.draft, self.definition),
             [{"dictionary_value_id": "101", "value": "Acme"}],
         )
+
+    def test_search_only_cell_reverifies_once_per_fresh_reference_scope(self):
+        first = _FakeSearchClient({"result": [{"id": 101, "value": "Acme"}]})
+        self.assertTrue(self._prepare(first))
+        original_scope = OzonBrandSearch._definition_scope(
+            self.draft, self.definition,
+        )
+        original_state = self._draft_state()
+        self.assertEqual(self._brand_cells(self.draft)[0]["values"], [{
+            "value": "Acme",
+            "dictionary_value_id": "101",
+        }])
+
+        # A fresh dictionary and credential generation must not make a saved
+        # search-only value impossible to validate. Verify it in the new scope
+        # without rewriting the user's cell or draft timestamps/version.
+        self.definition.values_version += 1
+        self.definition.values_snapshot_hash = "4" * 64
+        self.account.credential_version += 1
+        db.session.commit()
+        dictionary_scope = OzonBrandSearch._definition_scope(
+            self.draft, self.definition,
+        )
+        self.assertNotEqual(
+            dictionary_scope["scope_hash"], original_scope["scope_hash"],
+        )
+        renewed = _FakeSearchClient({"result": [{"id": 101, "value": "Acme"}]})
+        self.assertFalse(self._prepare(renewed, confirmed=False))
+        self.assertEqual(len(renewed.calls), 1)
+        self.assertEqual(self._draft_state(), original_state)
+        self.assertEqual(
+            OzonBrandSearch.value_choices(self.draft, self.definition),
+            [{"dictionary_value_id": "101", "value": "Acme"}],
+        )
+        renewed_validation = MarketplaceDraftService._build_validation_result(
+            self.draft,
+        )
+        self.assertFalse(any(
+            error.get("code") == "dictionary_value_out_of_scope"
+            for error in renewed_validation["errors"]
+        ))
+        proof = OzonBrandSearchEvidence.query.filter_by(
+            scope_hash=dictionary_scope["scope_hash"],
+        ).one()
+        self.assertEqual(proof.status, "completed")
+
+        # The same fresh scope uses its cached proof and makes no second read.
+        cached = _FakeSearchClient({"result": [{"id": 101, "value": "Acme"}]})
+        self.assertFalse(self._prepare(cached, confirmed=False))
+        self.assertEqual(cached.calls, [])
+        self.assertEqual(self._draft_state(), original_state)
+
+        # A separate schema generation is a separate bounded proof scope.
+        self.product_type.attributes_version += 1
+        self.product_type.attributes_schema_hash = "5" * 64
+        db.session.commit()
+        schema_scope = OzonBrandSearch._definition_scope(
+            self.draft, self.definition,
+        )
+        self.assertNotEqual(
+            schema_scope["scope_hash"], dictionary_scope["scope_hash"],
+        )
+        schema_renewed = _FakeSearchClient({
+            "result": [{"id": 101, "value": "Acme"}],
+        })
+        self.assertFalse(self._prepare(schema_renewed, confirmed=False))
+        self.assertEqual(len(schema_renewed.calls), 1)
+        self.assertEqual(self._draft_state(), original_state)
+        self.assertEqual(
+            OzonBrandSearch.value_choices(self.draft, self.definition),
+            [{"dictionary_value_id": "101", "value": "Acme"}],
+        )
+
+    def test_search_only_verify_unknown_result_stays_fenced_in_same_scope(self):
+        self._store_brand_cell()
+        original_state = self._draft_state()
+        unknown = _FakeSearchClient(error=OzonAPIError("unknown"))
+        self.assertFalse(self._prepare(unknown, confirmed=False))
+        self.assertEqual(len(unknown.calls), 1)
+        evidence = OzonBrandSearchEvidence.query.one()
+        self.assertEqual(evidence.status, "unavailable")
+        self.assertEqual(self._draft_state(), original_state)
+
+        later = _FakeSearchClient({"result": [{"id": 101, "value": "Acme"}]})
+        self.assertFalse(self._prepare(later, confirmed=False))
+        self.assertEqual(later.calls, [])
+        self.assertEqual(OzonBrandSearchEvidence.query.one().status, "unavailable")
+        self.assertEqual(self._draft_state(), original_state)
+
+    def test_verify_only_rejects_unrelated_denied_and_local_dictionary_cells(self):
+        cases = (
+            ("unrelated", "101", "Other", "[]", None),
+            ("noncanonical id", "00101", "Acme", "[]", None),
+            ("restricted id", "101", "Acme", '["102"]', None),
+            ("local exact", "101", "Acme", "[]", (True, "Acme")),
+            ("local inactive", "101", "Acme", "[]", (False, "Acme")),
+            ("local label changed", "101", "Acme", "[]", (True, "Acme official")),
+        )
+        for label, value_id, value, restriction, local in cases:
+            with self.subTest(case=label):
+                self.definition.restriction_value_ids_json = restriction
+                self._store_brand_cell(value_id=value_id, value=value)
+                local_row = None
+                if local is not None:
+                    available, official_value = local
+                    local_row = MarketplaceAttributeValue(
+                        marketplace_id=self.marketplace.id,
+                        product_type_id=self.product_type.id,
+                        attribute_id=self.definition.id,
+                        external_value_id=value_id,
+                        value=official_value,
+                        value_normalized=OzonReferenceService.normalize_value(
+                            official_value,
+                        ),
+                        is_available=available,
+                    )
+                    db.session.add(local_row)
+                    db.session.commit()
+                else:
+                    db.session.commit()
+                original_state = self._draft_state()
+                client = _FakeSearchClient({
+                    "result": [{"id": 101, "value": "Acme"}],
+                })
+
+                self.assertFalse(self._prepare(client, confirmed=False))
+                self.assertEqual(client.calls, [])
+                self.assertEqual(OzonBrandSearchEvidence.query.count(), 0)
+                self.assertEqual(self._draft_state(), original_state)
+
+                if local_row is not None:
+                    db.session.delete(local_row)
+                    db.session.commit()
 
     def test_linked_listing_hides_search_choices(self):
         client = _FakeSearchClient({"result": [{"id": 101, "value": "Acme"}]})

@@ -452,20 +452,6 @@ class OzonBrandSearch:
         ) if choices is not None else []
 
     @classmethod
-    def _cell_has_proof(cls, draft, definition, scope) -> bool:
-        cells = cls._brand_cells(draft)
-        if cells is None or len(cells) != 1 or cells[0][0] != definition.external_attribute_id:
-            return False
-        proof = OzonBrandSearchEvidence.query.filter_by(
-            scope_hash=scope["scope_hash"],
-            seller_id=draft.seller_id,
-            account_id=draft.account_id,
-            status="completed",
-        ).first()
-        choices = cls._choices(proof)
-        return bool(choices is not None and cells[0][1] in choices)
-
-    @classmethod
     def _local_match(cls, definition, literal, allowlist) -> bool:
         query = MarketplaceAttributeValue.query.filter(
             MarketplaceAttributeValue.marketplace_id == definition.marketplace_id,
@@ -480,6 +466,40 @@ class OzonBrandSearch:
                 MarketplaceAttributeValue.external_value_id.in_(allowlist),
             )
         return query.first() is not None
+
+    @classmethod
+    def _search_only_cell_is_eligible(cls, cells, definition, scope) -> bool:
+        """Allow a fresh verify-only read for one exact, noncanonical brand cell.
+
+        A saved search-only value can outlive its schema/dictionary/credential
+        scope. It may be re-proven under the current scope only while the
+        observed source still says the same brand and the current full
+        dictionary has no row for that ID. The cell itself is never changed.
+        """
+        if len(cells) != 1:
+            return False
+        attribute_id, cell = cells[0]
+        external_id = cell.get("dictionary_value_id")
+        value = cls._literal(cell.get("value"))
+        if (
+            attribute_id != definition.external_attribute_id
+            or cls._positive_id(external_id) is None
+            or value is None
+            or cls._norm(value) != cls._norm(scope["literal"])
+            or (scope["allowlist"] and external_id not in scope["allowlist"])
+        ):
+            return False
+
+        # Any row in the current full snapshot is authoritative, including an
+        # unavailable row or one whose official label differs from this
+        # search-only cell. Search evidence must not supersede that snapshot.
+        local_row = MarketplaceAttributeValue.query.filter(
+            MarketplaceAttributeValue.marketplace_id == definition.marketplace_id,
+            MarketplaceAttributeValue.product_type_id == definition.product_type_id,
+            MarketplaceAttributeValue.attribute_id == definition.id,
+            MarketplaceAttributeValue.external_value_id == external_id,
+        ).first()
+        return local_row is None
 
     @classmethod
     def _claim(cls, scope, seller_id, account_id, now):
@@ -759,7 +779,7 @@ class OzonBrandSearch:
         confirmed_queue_created_draft, deadline_monotonic=None, now=None,
         client_factory=None,
     ) -> bool:
-        """Run one durable search; auto-stage only one exact provider ID."""
+        """Search once per exact scope; only empty cells can be auto-staged."""
         from services.ozon_upload_queue import OzonUploadQueueService
         now = now or datetime.utcnow()
         if (
@@ -799,7 +819,7 @@ class OzonBrandSearch:
         if not cells:
             if cls._local_match(definition, scope["literal"], scope["allowlist"]):
                 return False
-        elif not cls._cell_has_proof(draft, definition, scope):
+        elif not cls._search_only_cell_is_eligible(cells, definition, scope):
             return False
         if deadline_monotonic is not None and (
             deadline_monotonic - time.monotonic() < cls.MIN_START_SECONDS
