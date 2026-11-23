@@ -4,6 +4,7 @@ from datetime import datetime
 import json
 
 import pytest
+from sqlalchemy import update
 
 from tests import test_marketplace_publications as fixtures
 from models import (
@@ -17,6 +18,7 @@ from models import (
 from services.marketplace_drafts import MarketplaceDraftConflict
 from services.ozon_bulk_repair import OzonBulkRepairService as Repair
 from services.ozon_reference_service import OzonReferenceService
+from services.supplier_service import hydrate_missing_imported_observed_snapshot
 
 
 @pytest.fixture
@@ -225,6 +227,46 @@ def test_unknown_source_does_not_block_ordinary_dictionary_edit(source_case):
         comparisons=comparisons,
         proof_payloads=proofs,
     )
+
+
+def test_hydration_keeps_newer_snapshot_after_compare_and_set_miss(source_case):
+    case, _definitions, _supplier_product = source_case
+    source = case.source
+    source.original_data = '{}'
+    db.session.commit()
+    assert source.original_data == '{}' and source.supplier_content_revision == 7
+    assert source.supplier_product.supplier is not None
+    source.title = 'Unrelated pending seller edit'
+    newer = json.dumps({'colors': ['black'], 'description': 'Newer confirmed snapshot'})
+
+    # Change the database row while retaining the copy already loaded by
+    # preparation. The snapshot comparison must use the stored row.
+    with db.session.no_autoflush:
+        db.session.execute(
+            update(ImportedProduct)
+            .filter_by(id=source.id)
+            .values(original_data=newer, supplier_content_revision=8)
+            .execution_options(synchronize_session=False)
+        )
+    assert source.original_data == '{}'
+    assert hydrate_missing_imported_observed_snapshot(source) is False
+    assert source.original_data == newer
+    assert source.supplier_content_revision == 8
+    assert source.title == 'Unrelated pending seller edit'
+
+
+def test_successful_hydration_participates_in_the_existing_transaction(source_case):
+    case, _definitions, _supplier_product = source_case
+    source = case.source
+    source.original_data = '{}'
+    db.session.commit()
+
+    assert hydrate_missing_imported_observed_snapshot(source) is True
+    assert json.loads(source.original_data)['colors'] == ['pink', 'white']
+    assert not db.session.is_modified(source)
+    db.session.rollback()
+    assert source.original_data == '{}'
+    assert source.supplier_content_revision == 7
 
 
 def test_exact_mapping_rejects_nearby_attribute_or_dictionary_ids(source_case):

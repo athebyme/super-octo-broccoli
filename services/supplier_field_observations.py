@@ -7,10 +7,64 @@ observations here. Channel-specific source/link checks remain with callers.
 from __future__ import annotations
 
 import json
-from typing import Any, Mapping
+from typing import Any, Mapping, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from models import ImportedProduct, SupplierProduct
 
 
 SUPPLIER_SOURCE_KEYS = {"colors", "country"}
+
+
+def supplier_copy_identity_rejection(
+    imported: ImportedProduct,
+    supplier_product: SupplierProduct | None,
+) -> str | None:
+    """Require an exact, current seller copy of one supplier product.
+
+    The result codes match the source-link contract used by marketplace
+    evidence. A missing or unversioned copy is unknown, even when its foreign
+    key points at a supplier row; callers must not hydrate it from newer data.
+    This helper only reads the supplied objects and never changes them.
+    """
+    if supplier_product is None or supplier_product.supplier is None:
+        return "source_link_missing"
+    supplier = supplier_product.supplier
+
+    if (
+        imported.supplier_product_id is None
+        or imported.supplier_product_id != supplier_product.id
+        or imported.supplier_id is None
+        or imported.supplier_id != supplier_product.supplier_id
+        or supplier.id != supplier_product.supplier_id
+        or not (supplier.code and supplier.code.strip())
+        or imported.source_type != supplier.code
+    ):
+        return "source_link_invalid"
+
+    imported_sku = imported.external_id
+    source_sku = supplier_product.external_id
+    if not (
+        isinstance(imported_sku, str)
+        and imported_sku.strip()
+        and isinstance(source_sku, str)
+        and source_sku.strip()
+    ):
+        return "source_sku_unavailable"
+    if imported_sku != source_sku:
+        return "source_sku_mismatch"
+
+    copied_revision = imported.supplier_content_revision
+    current_revision = supplier_product.content_revision
+    if (
+        type(copied_revision) is not int
+        or copied_revision <= 0
+        or type(current_revision) is not int
+        or current_revision <= 0
+        or copied_revision != current_revision
+    ):
+        return "source_revision_stale"
+    return None
 
 
 def load_source_snapshot(raw: Any) -> dict[str, Any] | None:

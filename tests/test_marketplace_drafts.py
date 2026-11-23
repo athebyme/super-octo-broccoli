@@ -1550,6 +1550,180 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             "Точное описание из фида поставщика",
         )
 
+    def test_fact_pack_uses_only_current_exact_supplier_copy_for_empty_copy(self):
+        product = self._product(external_id="supplier-copy-current")
+        supplier_product = product.supplier_product
+        source_snapshot = json.loads(supplier_product.original_data_json)
+        source_snapshot.update({
+            "title": "Текущий заголовок поставщика",
+            "category": "Точная категория поставщика",
+            "colors": ["Синий"],
+            "characteristics": {"Источник": "Текущее значение"},
+        })
+        supplier_product.original_data_json = json.dumps(
+            source_snapshot, ensure_ascii=False,
+        )
+        supplier_product.content_revision = 7
+        product.supplier_content_revision = 7
+        product.original_data = None
+        db.session.commit()
+
+        pack = MarketplaceFactPackBuilder.build(product)
+
+        self.assertEqual(
+            pack["facts"]["identity"]["source_title"],
+            "Текущий заголовок поставщика",
+        )
+        self.assertEqual(
+            pack["provenance"]["identity.source_title"],
+            {
+                "source": "supplier_product.original_data_json.title",
+                "trust": "observed",
+            },
+        )
+        self.assertEqual(
+            pack["facts"]["identity"]["source_category"],
+            "Точная категория поставщика",
+        )
+        self.assertEqual(
+            pack["facts"]["attributes"]["colors"], ["Синий"],
+        )
+        self.assertEqual(
+            pack["facts"]["attributes"]["characteristics"],
+            [{"name": "Источник", "value": "Текущее значение"}],
+        )
+
+    def test_fact_pack_does_not_fallback_to_unversioned_stale_or_wrong_supplier(self):
+        product = self._product(external_id="supplier-copy-fallback-guard")
+        supplier_product = product.supplier_product
+        source_snapshot = json.loads(supplier_product.original_data_json)
+        source_snapshot.update({
+            "title": "Нельзя подставлять устаревший источник",
+            "category": "Нельзя подставлять категорию источника",
+            "characteristics": {"Источник": "Неизвестная актуальность"},
+        })
+        supplier_product.original_data_json = json.dumps(
+            source_snapshot, ensure_ascii=False,
+        )
+        product.original_data = None
+
+        for case, copied_revision, source_revision, imported_sku in (
+            ("unversioned", 0, 5, supplier_product.external_id),
+            ("stale", 4, 5, supplier_product.external_id),
+            ("wrong_identity", 5, 5, "different-source-sku"),
+        ):
+            with self.subTest(case=case):
+                supplier_product.content_revision = source_revision
+                product.supplier_content_revision = copied_revision
+                product.external_id = imported_sku
+                db.session.flush()
+
+                pack = MarketplaceFactPackBuilder.build(product)
+
+                self.assertNotIn(
+                    "source_title", pack["facts"]["identity"],
+                )
+                self.assertEqual(
+                    pack["facts"]["identity"]["source_category"],
+                    product.category,
+                )
+                self.assertEqual(
+                    pack["provenance"]["identity.source_category"]["source"],
+                    "imported_product.category",
+                )
+                self.assertNotIn(
+                    "characteristics", pack["facts"].get("attributes", {}),
+                )
+                # Seller-owned copy fields still have their existing fallback.
+                self.assertEqual(
+                    pack["facts"]["identity"]["title"], product.title,
+                )
+                self.assertEqual(
+                    pack["facts"]["identifiers"]["vendor_code"],
+                    product.external_vendor_code,
+                )
+                self.assertEqual(
+                    pack["provenance"]["identifiers.vendor_code"]["source"],
+                    "imported_product.external_vendor_code",
+                )
+
+    def test_fact_pack_keeps_populated_seller_copy_ahead_of_newer_supplier_revision(self):
+        product = self._product(external_id="supplier-copy-populated")
+        supplier_product = product.supplier_product
+        source_snapshot = json.loads(supplier_product.original_data_json)
+        source_snapshot.update({
+            "title": "Более новый заголовок поставщика",
+            "characteristics": {"Источник": "Новое значение"},
+        })
+        supplier_product.original_data_json = json.dumps(
+            source_snapshot, ensure_ascii=False,
+        )
+        supplier_product.content_revision = 8
+        product.supplier_content_revision = 7
+        product.original_data = json.dumps({
+            "title": "Сохранённый заголовок продавца",
+            "characteristics": {"Копия": "Сохранённое значение"},
+        }, ensure_ascii=False)
+        db.session.commit()
+
+        pack = MarketplaceFactPackBuilder.build(product)
+
+        self.assertEqual(
+            pack["facts"]["identity"]["source_title"],
+            "Сохранённый заголовок продавца",
+        )
+        self.assertEqual(
+            pack["provenance"]["identity.source_title"]["source"],
+            "imported_product.original_data.title",
+        )
+        self.assertEqual(
+            pack["facts"]["attributes"]["characteristics"],
+            [{"name": "Копия", "value": "Сохранённое значение"}],
+        )
+
+    def test_fact_pack_seller_common_override_still_wins_over_current_source_fallback(self):
+        product = self._product(external_id="supplier-copy-common-override")
+        supplier_product = product.supplier_product
+        supplier_product.content_revision = 3
+        product.supplier_content_revision = 3
+        product.original_data = None
+        db.session.commit()
+
+        preview = CommonProductContentService.preview(
+            seller_id=self.seller1_id,
+            user_id=1,
+            raw_items=[{
+                "product_id": product.id,
+                "expected_content_edit_version": product.content_edit_version,
+                "changes": {
+                    "title": {"mode": "override", "value": "Ручной заголовок"},
+                },
+                "recipients": [],
+            }],
+        )
+        CommonProductContentService.apply(
+            seller_id=self.seller1_id,
+            user_id=1,
+            token=preview["preview_token"],
+        )
+        db.session.commit()
+        db.session.refresh(product)
+
+        pack = MarketplaceFactPackBuilder.build(product)
+
+        self.assertEqual(pack["facts"]["identity"]["title"], "Ручной заголовок")
+        self.assertEqual(
+            pack["provenance"]["identity.title"],
+            {"source": "seller_common_content.title", "trust": "seller_override"},
+        )
+        self.assertEqual(
+            pack["facts"]["identity"]["source_title"], "Футболка",
+        )
+        self.assertEqual(
+            pack["provenance"]["identity.source_title"]["source"],
+            "supplier_product.original_data_json.title",
+        )
+
     def test_unedited_legacy_draft_keeps_its_original_fact_hash_and_readiness(self):
         product, draft = self._ready_draft(external_id="legacy-fact-hash")
         draft = MarketplaceDraftService.validate_draft(

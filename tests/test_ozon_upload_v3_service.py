@@ -8,8 +8,9 @@ import unittest
 
 from models import (
     BackgroundJob, ImportedProduct, MarketplaceAttributeDefinition,
-    MarketplaceAttributeValue, MarketplaceListingSnapshot, MarketplaceOperation,
-    OzonBulkUploadItem, OzonBulkUploadRun, db,
+    MarketplaceAttributeValue, MarketplaceCategoryMapping,
+    MarketplaceListingSnapshot, MarketplaceOperation, OzonBulkUploadItem,
+    OzonBulkUploadRun, SellerSupplier, Supplier, SupplierProduct, db,
 )
 from services.marketplace_drafts import MarketplaceDraftService
 from services.marketplace_product_links import MarketplaceProductLinkService
@@ -197,6 +198,241 @@ class OzonUploadV3ServiceTest(OzonPublicationFixture, unittest.TestCase):
         item = OzonBulkUploadItem.query.filter_by(run_id=run.id).first()
         self.assertIn(item.phase, {"prepared", "needs_input", "waiting_reference"})
         self.assertIsNone(item.operation_id)
+
+    def _versioned_supplier_pair(self, supplier, *, copied_revision, suffix):
+        external_id = f"revision-source-{suffix}"
+        seller_offer = f"seller-owned-offer-{suffix}"
+        source = ImportedProduct(
+            seller_id=self.seller.id,
+            supplier_id=supplier.id,
+            supplier_content_revision=copied_revision,
+            external_id=external_id,
+            external_vendor_code=seller_offer,
+            source_type=supplier.code,
+            title=f"Seller-owned title {suffix}",
+            description=f"Seller-owned description {suffix}",
+            category="Категория",
+            original_data="",
+        )
+        markers = {
+            "title": f"CURRENT_SHARED_TITLE_{suffix}",
+            "description": f"CURRENT_SHARED_DESCRIPTION_{suffix}",
+            "brand": f"CURRENT_SHARED_BRAND_{suffix}",
+            "category": f"CURRENT_SHARED_CATEGORY_{suffix}",
+            "country": f"CURRENT_SHARED_COUNTRY_{suffix}",
+            "color": f"CURRENT_SHARED_COLOR_{suffix}",
+            "characteristic_name": f"CURRENT_SHARED_CHARACTERISTIC_{suffix}",
+            "characteristic_value": f"CURRENT_SHARED_VALUE_{suffix}",
+        }
+        snapshot = {
+            "external_id": external_id,
+            "vendor_code": seller_offer,
+            "title": markers["title"],
+            "description": markers["description"],
+            "brand": markers["brand"],
+            "category": markers["category"],
+            "country": markers["country"],
+            "colors": [markers["color"]],
+            "characteristics": {
+                markers["characteristic_name"]: markers["characteristic_value"],
+            },
+            "observed_supplier_fields_version": 1,
+            "observed_supplier_fields": {
+                "colors": [markers["color"]],
+                "country": markers["country"],
+            },
+        }
+        supplier_product = SupplierProduct(
+            supplier_id=supplier.id,
+            external_id=external_id,
+            vendor_code=seller_offer,
+            title=markers["title"],
+            description=markers["description"],
+            brand=markers["brand"],
+            category=markers["category"],
+            country=markers["country"],
+            colors_json=json.dumps([markers["color"]], ensure_ascii=False),
+            characteristics_json=json.dumps([{
+                "name": markers["characteristic_name"],
+                "value": markers["characteristic_value"],
+            }], ensure_ascii=False),
+            original_data_json=json.dumps(snapshot, ensure_ascii=False),
+            content_revision=8,
+        )
+        db.session.add_all([source, supplier_product])
+        db.session.flush()
+        source.supplier_product_id = supplier_product.id
+        return source, supplier_product, markers
+
+    def _active_supplier_category_mapping(self, source, supplier):
+        identity = MarketplaceDraftService._mapping_identities(source)[-1]
+        mapping = MarketplaceCategoryMapping(
+            seller_id=self.seller.id,
+            marketplace_id=self.marketplace.id,
+            supplier_id=supplier.id,
+            product_type_id=self.product_type.id,
+            scope_key=identity["scope_key"],
+            source_type=identity["source_type"],
+            source_category=identity["source_category"],
+            source_category_normalized=identity["source_category_normalized"],
+            external_category_id=self.product_type.category.external_category_id,
+            external_type_id=self.product_type.external_type_id,
+            mapping_source="manual",
+            mapping_status="active",
+            confidence=1.0,
+            evidence_json="{}",
+        )
+        db.session.add(mapping)
+
+    def test_source_prepare_does_not_hydrate_unversioned_or_stale_supplier_copy(self):
+        supplier = Supplier(
+            name="Revision Evidence Supplier",
+            code="revision-evidence-test",
+        )
+        db.session.add(supplier)
+        db.session.flush()
+        db.session.add(SellerSupplier(
+            seller_id=self.seller.id,
+            supplier_id=supplier.id,
+            is_active=True,
+        ))
+        unversioned, _unversioned_source, unversioned_markers = (
+            self._versioned_supplier_pair(
+                supplier, copied_revision=0, suffix="zero",
+            )
+        )
+        stale, _stale_source, stale_markers = self._versioned_supplier_pair(
+            supplier, copied_revision=7, suffix="stale",
+        )
+        self._active_supplier_category_mapping(unversioned, supplier)
+        db.session.commit()
+
+        accepted = OzonBulkUploadService.accept_source_prepare(
+            seller_id=self.seller.id,
+            account_id=self.account.id,
+            imported_product_ids=[unversioned.id, stale.id],
+            request_key="stale-copy-source-prepare-01",
+            created_by_user_id=self.user.id,
+        )
+        with patch(
+            "services.openai_decisions_runtime.create_openai_decisions_pipeline",
+            side_effect=AssertionError("local preparation attempted a model call"),
+        ) as decisions_pipeline, patch.object(
+            MarketplacePublicationService,
+            "_account_adapter_credentials",
+            side_effect=AssertionError("local preparation consulted provider credentials"),
+        ) as provider_credentials, patch.object(
+            MarketplacePublicationService,
+            "enqueue_reviewed_upload_item",
+            side_effect=AssertionError("source preparation enqueued a provider write"),
+        ) as provider_enqueue:
+            result = OzonBulkUploadService.run_due_preparation()
+
+        self.assertEqual(result["processed_items"], 2)
+        decisions_pipeline.assert_not_called()
+        provider_credentials.assert_not_called()
+        provider_enqueue.assert_not_called()
+
+        run = OzonBulkUploadRun.query.filter_by(job_id=accepted.job.id).one()
+        items = OzonBulkUploadItem.query.filter_by(run_id=run.id).order_by(
+            OzonBulkUploadItem.ordinal.asc(),
+        ).all()
+        self.assertEqual(len(items), 2)
+        self.assertEqual({item.imported_product_id for item in items}, {
+            unversioned.id, stale.id,
+        })
+        source_by_id = {unversioned.id: unversioned, stale.id: stale}
+        markers_by_id = {
+            unversioned.id: unversioned_markers,
+            stale.id: stale_markers,
+        }
+        for item in items:
+            source = source_by_id[item.imported_product_id]
+            markers = markers_by_id[item.imported_product_id]
+            self.assertIn(
+                item.phase,
+                {"prepared", "needs_input", "waiting_reference"},
+                item.error_code,
+            )
+            self.assertIsNotNone(item.draft_id)
+            self.assertIsNone(item.operation_id)
+            draft = MarketplaceDraftService.get_draft(
+                seller_id=self.seller.id,
+                draft_id=item.draft_id,
+            )
+            self.assertEqual(draft.imported_product_id, source.id)
+            self.assertEqual(draft.seller_id, self.seller.id)
+            self.assertEqual(draft.account_id, self.account.id)
+            self.assertEqual(json.loads(draft.content_json), {
+                "name": source.title,
+                "description": source.description,
+            })
+            self.assertEqual(
+                json.loads(draft.source_facts_json)["facts"]["identity"]["title"],
+                source.title,
+            )
+            persisted_material = "\n".join((
+                draft.source_facts_json,
+                draft.provenance_json,
+                draft.content_json,
+                draft.attributes_json,
+                draft.complex_attributes_json,
+                draft.media_json,
+                draft.dimensions_json,
+                draft.barcodes_json,
+            ))
+            for marker in markers.values():
+                self.assertNotIn(marker, persisted_material)
+            self.assertNotIn("colors", json.loads(draft.source_facts_json)["facts"].get(
+                "attributes", {},
+            ))
+
+        db.session.expire_all()
+        persisted_sources = ImportedProduct.query.filter(
+            ImportedProduct.id.in_([unversioned.id, stale.id]),
+        ).all()
+        self.assertEqual({source.supplier_content_revision for source in persisted_sources}, {0, 7})
+        self.assertEqual({source.original_data for source in persisted_sources}, {""})
+        self.assertTrue(all(source.colors is None for source in persisted_sources))
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+
+    def test_current_supplier_copy_revision_allows_explicit_snapshot_recovery(self):
+        from types import SimpleNamespace
+
+        from services.ozon_bulk_repair import OzonBulkRepairService
+        from services.supplier_service import hydrate_missing_imported_observed_snapshot
+
+        supplier = Supplier(
+            name="Revision Evidence Supplier",
+            code="revision-evidence-current-test",
+        )
+        db.session.add(supplier)
+        db.session.flush()
+        source, _supplier_product, markers = self._versioned_supplier_pair(
+            supplier, copied_revision=8, suffix="current",
+        )
+        db.session.commit()
+
+        self.assertTrue(hydrate_missing_imported_observed_snapshot(source))
+        db.session.commit()
+        db.session.refresh(source)
+        copied = json.loads(source.original_data)
+        self.assertEqual(copied["colors"], [markers["color"]])
+        self.assertEqual(copied["country"], markers["country"])
+        self.assertEqual(copied["title"], markers["title"])
+        self.assertEqual(source.supplier_content_revision, 8)
+        evidence = OzonBulkRepairService._source_supplier_evidence(
+            SimpleNamespace(
+                imported_product=source,
+                imported_product_id=source.id,
+                seller_id=self.seller.id,
+            )
+        )
+        self.assertEqual(evidence["status"], "confirmed")
+        self.assertEqual(evidence["fields"], {
+            "colors": [markers["color"]],
+            "country": markers["country"],
+        })
 
     def test_reviewed_ready_local_draft_stops_at_prepared_phase(self):
         accepted = self._source(key="p" * 24)

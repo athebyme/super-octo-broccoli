@@ -621,10 +621,13 @@ def test_any_supplier_or_wb_mapping_blocks_and_existing_wb_projection_alone_does
     assert build_candidate(case) is None
 
 
-@pytest.mark.parametrize("parity_change", ["revision", "snapshot"])
+@pytest.mark.parametrize("parity_change", ["revision", "unversioned", "snapshot"])
 def test_supplier_revision_or_original_snapshot_mismatch_rejects(parity_change, case):
     if parity_change == "revision":
         case.supplier_product.content_revision += 1
+    elif parity_change == "unversioned":
+        case.product.supplier_content_revision = 0
+        case.supplier_product.content_revision = 0
     else:
         case.product.original_data = json.dumps({
             "title": SOURCE_TITLE,

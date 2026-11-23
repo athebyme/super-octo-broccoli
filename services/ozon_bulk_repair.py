@@ -77,6 +77,7 @@ from services.supplier_field_observations import (
     load_source_snapshot as _load_supplier_source_snapshot,
     normalized_snapshot_values as _normalized_supplier_snapshot_values,
     observed_supplier_fields as _observed_supplier_fields,
+    supplier_copy_identity_rejection,
 )
 
 
@@ -1047,42 +1048,9 @@ class OzonBulkRepairService:
             return unknown
 
         supplier_product = imported.supplier_product
-        supplier = (
-            supplier_product.supplier
-            if supplier_product is not None else None
-        )
-        if supplier_product is None or supplier is None:
-            return unknown
-        if (
-            imported.supplier_product_id != supplier_product.id
-            or imported.supplier_id != supplier_product.supplier_id
-            or supplier.id != supplier_product.supplier_id
-            or imported.source_type != supplier.code
-        ):
-            return {**unknown, "reason": "source_link_invalid"}
-
-        imported_sku = imported.external_id
-        source_sku = supplier_product.external_id
-        if not (
-            isinstance(imported_sku, str)
-            and imported_sku.strip()
-            and isinstance(source_sku, str)
-            and source_sku.strip()
-        ):
-            return {**unknown, "reason": "source_sku_unavailable"}
-        if imported_sku != source_sku:
-            return {**unknown, "reason": "source_sku_mismatch"}
-
-        copied_revision = imported.supplier_content_revision
-        current_revision = supplier_product.content_revision
-        if (
-            type(copied_revision) is not int
-            or copied_revision <= 0
-            or type(current_revision) is not int
-            or current_revision <= 0
-            or copied_revision != current_revision
-        ):
-            return {**unknown, "reason": "source_revision_stale"}
+        rejection = supplier_copy_identity_rejection(imported, supplier_product)
+        if rejection:
+            return {**unknown, "reason": rejection}
 
         copied = _load_supplier_source_snapshot(imported.original_data)
         if not copied:
@@ -1143,13 +1111,13 @@ class OzonBulkRepairService:
         source_identity = {
             "imported_product_id": imported.id,
             "supplier_product_id": supplier_product.id,
-            "supplier_id": supplier.id,
+            "supplier_id": supplier_product.supplier_id,
             "source_type": imported.source_type,
             "sku_sha256": hashlib.sha256(
-                imported_sku.encode("utf-8")
+                imported.external_id.encode("utf-8")
             ).hexdigest(),
-            "copied_revision": copied_revision,
-            "current_revision": current_revision,
+            "copied_revision": imported.supplier_content_revision,
+            "current_revision": supplier_product.content_revision,
         }
         source_basis = {
             "identity": source_identity,

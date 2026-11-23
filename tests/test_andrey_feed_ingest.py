@@ -19,7 +19,10 @@ from services.supplier_service import (
     _update_imported_from_supplier,
     _update_supplier_product,
 )
-from models import ImportedProduct, SupplierProduct
+from models import ImportedProduct, Supplier, SupplierProduct
+from services.supplier_field_observations import (
+    supplier_copy_identity_rejection,
+)
 
 
 FEED_HEADER = [
@@ -274,7 +277,8 @@ class TestUpdateSupplierProduct(unittest.TestCase):
 
 class TestImportedProductCopy(unittest.TestCase):
     def _supplier_product(self):
-        sp = SupplierProduct(supplier_id=1)
+        supplier = Supplier(id=1, name='Andrey', code='andrey')
+        sp = SupplierProduct(supplier_id=1, supplier=supplier)
         sp.id = 10
         sp.external_id = '0T-00000877'
         sp.title = 'Лубрикант HOT'
@@ -284,6 +288,21 @@ class TestImportedProductCopy(unittest.TestCase):
         sp.original_data_json = json.dumps({'title': 'Лубрикант HOT'})
         sp.content_revision = 1
         return sp
+
+    def _imported_copy(self, sp, *, original_data=None):
+        return ImportedProduct(
+            seller_id=1,
+            supplier_id=sp.supplier_id,
+            supplier_product_id=sp.id,
+            supplier_product=sp,
+            supplier_content_revision=sp.content_revision,
+            source_type=sp.supplier.code,
+            external_id=sp.external_id,
+            original_data=(
+                json.dumps(original_data, ensure_ascii=False)
+                if original_data is not None else '{}'
+            ),
+        )
 
     def test_copy_full_barcodes_and_rrp(self):
         sp = self._supplier_product()
@@ -331,14 +350,12 @@ class TestImportedProductCopy(unittest.TestCase):
         sp.characteristics_json = json.dumps({
             "Материал": "Силикон",
         }, ensure_ascii=False)
-        imp = ImportedProduct(
-            seller_id=1,
-            supplier_product_id=sp.id,
-            supplier_product=sp,
-            original_data=json.dumps({
+        imp = self._imported_copy(
+            sp,
+            original_data={
                 "title": "Снимок продавца",
                 "photo_urls": ["https://img.test/kept.jpg"],
-            }, ensure_ascii=False),
+            },
         )
 
         changed = hydrate_missing_imported_observed_snapshot(imp)
@@ -363,6 +380,108 @@ class TestImportedProductCopy(unittest.TestCase):
             ['4042342000719', '4042342000720'],
         )
         self.assertFalse(hydrate_missing_imported_observed_snapshot(imp))
+
+    def test_hydration_requires_exact_identity_and_positive_current_revision(self):
+        cases = (
+            (
+                'stale revision',
+                lambda imp, sp: setattr(imp, 'supplier_content_revision', 0),
+                'source_revision_stale',
+            ),
+            (
+                'zero revisions',
+                lambda imp, sp: (
+                    setattr(imp, 'supplier_content_revision', 0),
+                    setattr(sp, 'content_revision', 0),
+                ),
+                'source_revision_stale',
+            ),
+            (
+                'supplier product FK mismatch',
+                lambda imp, sp: setattr(
+                    imp, 'supplier_product_id', sp.id + 1,
+                ),
+                'source_link_invalid',
+            ),
+            (
+                'supplier FK mismatch',
+                lambda imp, sp: setattr(
+                    imp, 'supplier_id', sp.supplier_id + 1,
+                ),
+                'source_link_invalid',
+            ),
+            (
+                'source type mismatch',
+                lambda imp, sp: setattr(
+                    imp, 'source_type', 'another-supplier',
+                ),
+                'source_link_invalid',
+            ),
+            (
+                'missing copied SKU',
+                lambda imp, sp: setattr(imp, 'external_id', None),
+                'source_sku_unavailable',
+            ),
+            (
+                'copied SKU mismatch',
+                lambda imp, sp: setattr(
+                    imp, 'external_id', 'different-sku',
+                ),
+                'source_sku_mismatch',
+            ),
+        )
+        for label, change, expected_reason in cases:
+            with self.subTest(identity_case=label):
+                sp = self._supplier_product()
+                sp.photo_urls_json = json.dumps([
+                    {'original': 'https://img.test/current.jpg'},
+                ])
+                imp = self._imported_copy(sp)
+                change(imp, sp)
+                original_before = imp.original_data
+
+                self.assertEqual(
+                    supplier_copy_identity_rejection(imp, sp),
+                    expected_reason,
+                )
+                self.assertFalse(
+                    hydrate_missing_imported_observed_snapshot(imp),
+                )
+                self.assertEqual(imp.original_data, original_before)
+
+    def test_hydration_requires_linked_supplier_relation_and_exact_code(self):
+        sp = self._supplier_product()
+        imp = self._imported_copy(sp)
+
+        self.assertEqual(
+            supplier_copy_identity_rejection(imp, None),
+            'source_link_missing',
+        )
+        self.assertEqual(
+            supplier_copy_identity_rejection(imp, sp),
+            None,
+        )
+
+        sp.supplier.code = 'renamed-supplier'
+        self.assertEqual(
+            supplier_copy_identity_rejection(imp, sp),
+            'source_link_invalid',
+        )
+
+    def test_empty_legacy_json_still_hydrates_at_exact_positive_revision(self):
+        sp = self._supplier_product()
+        sp.dimensions_json = json.dumps({
+            'Вес упаковки, кг': '0.123',
+        }, ensure_ascii=False)
+        imp = self._imported_copy(sp, original_data={})
+        imp.original_data = ''
+
+        self.assertIsNone(supplier_copy_identity_rejection(imp, sp))
+        self.assertTrue(hydrate_missing_imported_observed_snapshot(imp))
+        self.assertEqual(
+            json.loads(imp.original_data)['dimensions'],
+            {'Вес упаковки, кг': '0.123'},
+        )
 
     def test_copy_falls_back_to_single_barcode(self):
         sp = self._supplier_product()

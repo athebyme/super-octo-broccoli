@@ -187,6 +187,9 @@ def _source_observation(
         or product.supplier_product_id != supplier_product.id
         or product.supplier_id is None
         or product.supplier_id != supplier_product.supplier_id
+        or type(product.supplier_content_revision) is not int
+        or product.supplier_content_revision <= 0
+        or type(supplier_product.content_revision) is not int
         or product.supplier_content_revision != supplier_product.content_revision
         or product.source_type != supplier.code
         or product.external_id != supplier_product.external_id

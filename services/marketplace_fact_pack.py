@@ -15,6 +15,7 @@ import math
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 from models import ImportedProduct, SupplierProduct
+from services.supplier_field_observations import supplier_copy_identity_rejection
 
 
 class MarketplaceFactPackError(ValueError):
@@ -393,14 +394,23 @@ class MarketplaceFactPackBuilder:
 
         supplier_product: Optional[SupplierProduct] = imported_product.supplier_product
         imported_original = cls._load_object(imported_product.original_data)
-        supplier_original = cls._load_object(
-            supplier_product.original_data_json if supplier_product else None
-        )
-        original = imported_original or supplier_original
-        original_source = (
-            "imported_product.original_data"
-            if imported_original else "supplier_product.original_data_json"
-        )
+        # A populated seller copy remains authoritative for this seller, even
+        # when its revision is old. Refreshing it is a separate, explicit
+        # content action.
+        original = imported_original
+        original_source = "imported_product.original_data"
+        if (
+            not original
+            and supplier_product is not None
+            and supplier_copy_identity_rejection(
+                imported_product, supplier_product,
+            ) is None
+        ):
+            # Only an empty seller copy may fall back to the exact current raw
+            # supplier snapshot. An unversioned/stale or mislinked copy must
+            # not be parsed or hydrated from a shared record during preparation.
+            original = cls._load_object(supplier_product.original_data_json)
+            original_source = "supplier_product.original_data_json"
 
         facts: Dict[str, Any] = {}
         provenance: Dict[str, Any] = {}

@@ -33,8 +33,9 @@ from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
 import requests
-from sqlalchemy import select, text
+from sqlalchemy import inspect as sqlalchemy_inspect, select, text, update
 from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
@@ -47,6 +48,9 @@ from services.smart_product_parser import (
     advance_supplier_content_revisions,
     supplier_material_input_fingerprint,
     supplier_product_material_fingerprint,
+)
+from services.supplier_field_observations import (
+    supplier_copy_identity_rejection,
 )
 
 logger = logging.getLogger(__name__)
@@ -6118,22 +6122,34 @@ def _supplier_observed_snapshot(sp: SupplierProduct) -> Optional[str]:
 def hydrate_missing_imported_observed_snapshot(
     imp: ImportedProduct,
 ) -> bool:
-    """Fill only absent source facts from the exact linked supplier row.
+    """Fill absent source facts only from the exact copied supplier revision.
 
     This is used by an explicitly confirmed Ozon synchronization to repair
     legacy ImportedProduct snapshots that predate full photo/dimension/
     characteristic copying.  Existing snapshot values and seller-owned card
     fields are never replaced, and ``supplier_content_revision`` is deliberately
-    left unchanged because this is not a full supplier-card refresh.
+    left unchanged because this is not a full supplier-card refresh. A foreign
+    key by itself is insufficient: source type, supplier, SKU, and positive
+    copied/current revisions must all identify the same source card.
     """
-    if (
-        not isinstance(imp, ImportedProduct)
-        or imp.supplier_product_id is None
-        or imp.supplier_product is None
-        or imp.supplier_product.id != imp.supplier_product_id
+    if not isinstance(imp, ImportedProduct):
+        return False
+    state = sqlalchemy_inspect(imp)
+    if not (state.persistent or state.transient):
+        return False
+    copy_fields = (
+        "seller_id", "supplier_product_id", "supplier_id", "source_type",
+        "external_id", "supplier_content_revision", "original_data",
+    )
+    if state.persistent and any(
+        state.attrs[name].history.has_changes() for name in copy_fields
     ):
         return False
-    raw_supplier = _supplier_observed_snapshot(imp.supplier_product)
+
+    supplier_product = imp.supplier_product
+    if supplier_copy_identity_rejection(imp, supplier_product) is not None:
+        return False
+    raw_supplier = _supplier_observed_snapshot(supplier_product)
     if not raw_supplier:
         return False
     try:
@@ -6142,8 +6158,10 @@ def hydrate_missing_imported_observed_snapshot(
         return False
     if not isinstance(supplier_snapshot, dict):
         return False
+
+    expected_copy = {name: getattr(imp, name) for name in copy_fields}
     try:
-        current = json.loads(imp.original_data or "{}")
+        current = json.loads(expected_copy["original_data"] or "{}")
     except (TypeError, ValueError):
         current = {}
     if not isinstance(current, dict):
@@ -6159,12 +6177,33 @@ def hydrate_missing_imported_observed_snapshot(
             changed = True
     if not changed:
         return False
-    imp.original_data = json.dumps(
+
+    serialized = json.dumps(
         current,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     )
+
+    if state.transient:
+        imp.original_data = serialized
+        return True
+
+    session = state.session
+    statement = (
+        update(ImportedProduct)
+        .filter_by(id=imp.id, **expected_copy)
+        .values(original_data=serialized)
+        .execution_options(synchronize_session=False)
+    )
+    with session.no_autoflush:
+        result = session.execute(statement)
+    if result.rowcount != 1:
+        session.expire(imp, [*copy_fields, "supplier_product"])
+        return False
+    # The transaction already contains the guarded update. A second ORM
+    # update could overwrite a newer snapshot without that comparison.
+    set_committed_value(imp, "original_data", serialized)
     return True
 
 
