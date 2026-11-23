@@ -628,6 +628,41 @@ def test_legacy_characteristic_labels_use_only_agreeing_current_wb_cache():
             ),
         }
     )
+    oversized_characteristic_id = "9" * 5000
+    oversized_before_items = [
+        {"id": 101, "value": ["до с длинным ID"]},
+        {"id": oversized_characteristic_id, "value": ["неразобранное поле"]},
+        {"id": "0101", "value": ["неканонический ID"]},
+    ]
+    oversized_after_items = [
+        {"id": 101, "value": ["после с длинным ID"]},
+        {"id": oversized_characteristic_id, "value": ["неразобранное поле после"]},
+        {"id": "0101", "value": ["неканонический ID после"]},
+    ]
+    oversized_id_change = SimpleNamespace(
+        **{
+            **change.__dict__,
+            "id": 3103,
+            "snapshot_before": {
+                "object_name": "Товары для дома",
+                "characteristics": oversized_before_items,
+            },
+            "snapshot_after": {
+                "object_name": "Товары для дома",
+                "characteristics": oversized_after_items,
+            },
+        }
+    )
+    conflicting_subject_change = SimpleNamespace(
+        **{
+            **change.__dict__,
+            "id": 3104,
+            "snapshot_before": {
+                **change.snapshot_before,
+                "subject_id": 999,
+            },
+        }
+    )
 
     with patch(
         "services.wb_history_characteristics.Marketplace",
@@ -643,12 +678,17 @@ def test_legacy_characteristic_labels_use_only_agreeing_current_wb_cache():
         return_value=schema,
     ) as schema_lookup:
         presentations = present_legacy_wb_characteristics(
-            [change, foreign_change],
+            [
+                change,
+                foreign_change,
+                oversized_id_change,
+                conflicting_subject_change,
+            ],
             92,
         )
         schema_lookup.assert_called_once()
 
-    assert set(presentations) == {3101}
+    assert set(presentations) == {3101, 3103}
     legacy = presentations[3101]
     assert legacy["source_label"] == "По сохранённому справочнику WB"
     assert [item.get("name") for item in legacy["before"][:3]] == [
@@ -658,6 +698,11 @@ def test_legacy_characteristic_labels_use_only_agreeing_current_wb_cache():
     assert legacy["before"][4]["name"] == "Сохранённое название"
     assert legacy["before"][0]["value"] == ["до 1"]
     assert "name" not in before_items[0]
+    oversized_legacy = presentations[3103]
+    assert oversized_legacy["before"][1] == oversized_before_items[1]
+    assert "name" not in oversized_legacy["before"][1]
+    assert oversized_legacy["before"][2] == oversized_before_items[2]
+    assert "name" not in oversized_legacy["before"][2]
 
     html = _render_bulk_history_detail(
         None,

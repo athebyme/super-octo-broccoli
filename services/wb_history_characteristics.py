@@ -11,13 +11,33 @@ from models import (
 from services.wb_edit_review import schema_for_subject
 
 
+_MAX_SIGNED_DB_ID = 2_147_483_647
+_SNAPSHOT_SUBJECT_ID_KEYS = ("subject_id", "subjectID", "subjectId")
+
+
 def _positive_id(value):
-    if type(value) is int and value > 0:
+    if type(value) is int and 0 < value <= _MAX_SIGNED_DB_ID:
         return value
-    if isinstance(value, str) and value.isascii() and value.isdecimal():
+    if (
+        isinstance(value, str)
+        and 1 <= len(value) <= 10
+        and value.isascii()
+        and value.isdecimal()
+        and value[0] != "0"
+    ):
         parsed = int(value)
-        return parsed if parsed > 0 else None
+        return parsed if 0 < parsed <= _MAX_SIGNED_DB_ID else None
     return None
+
+
+def _snapshot_subject_matches(snapshot, expected_subject_id):
+    for key in _SNAPSHOT_SUBJECT_ID_KEYS:
+        if key not in snapshot or snapshot[key] is None:
+            continue
+        snapshot_subject_id = _positive_id(snapshot[key])
+        if snapshot_subject_id != expected_subject_id:
+            return False
+    return True
 
 
 def _has_saved_name(item):
@@ -110,6 +130,8 @@ def present_legacy_wb_characteristics(product_changes, seller_id):
             or not category_name.strip()
             or before_snapshot.get("object_name") != category_name
             or after_snapshot.get("object_name") != category_name
+            or not _snapshot_subject_matches(before_snapshot, subject_id)
+            or not _snapshot_subject_matches(after_snapshot, subject_id)
         ):
             continue
 
