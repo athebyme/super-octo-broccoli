@@ -124,7 +124,7 @@ function makeApp(preserveWorkspaceReturn = false) {
     app.searchInput = '';
     app.filters = {
       search: '', supplier: '', has_photos: '', stock: '', sort: '',
-      marketplace: '', marketplace_state: '',
+      marketplace: '', marketplace_state: '', catalog_category: '',
     };
     app.activeTab = '';
   }

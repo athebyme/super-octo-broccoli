@@ -780,7 +780,7 @@ def exercise_marketplace_filters(browser, bridge, errors):
             assert current_state["selected"] == selected_before_toggle, current_state
             for key in (
                 "search", "supplier", "has_photos", "stock", "sort",
-                "marketplace", "marketplace_state",
+                "marketplace", "marketplace_state", "catalog_category",
             ):
                 expected_value = expected_active_filters.get(key, "")
                 assert current_state["filters"].get(key, "") == expected_value, current_state
@@ -1582,7 +1582,7 @@ def run():
             assert before_review["filters"] == {
                 "search": "UX-BULK-OWNED", "supplier": "", "has_photos": "yes",
                 "stock": "", "sort": "title", "marketplace": "",
-                "marketplace_state": "",
+                "marketplace_state": "", "catalog_category": "",
             }
             provider_attempts_before_review = fixture.REPORT["provider_attempts"]
             external_before_review = len(fixture.REPORT["unexpected_external_requests"])
