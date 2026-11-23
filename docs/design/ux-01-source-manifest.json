@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-23T14:19:52.700197+00:00",
+  "generated_at": "2026-11-23T14:46:58.797664+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "f7f8a7541fa5bc8c6eee07800d16c12e221c0463f198140a7af79cb0eb335be5"
+      "sha256": "6e6b0dac10afeb08a7a661eb6b0a04653eeb375af7addddb5d9191afac54708a"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -2729,7 +2729,7 @@
     },
     {
       "path": "static/my-products-beta.js",
-      "sha256": "f49bc3224218a956aac1685b1cc54dea4bbb75b29bb9cf1023e2aac0d287a944"
+      "sha256": "3045d6c58288053e7d7c73d998876aa6db21dad8c3c853b710dba207eb46287d"
     },
     {
       "path": "static/operations-workspace.css",
@@ -3405,7 +3405,7 @@
     },
     {
       "path": "templates/my_products_beta.html",
-      "sha256": "26d73f050d5d4513168df07ebf14163909bcfad8be05f9bd16cc90f657895b56"
+      "sha256": "622a4f4177341b4a863964d027f513fc964ab1801606ed53ac964c4439fc6686"
     },
     {
       "path": "templates/notifications.html",
@@ -5389,7 +5389,7 @@
     },
     {
       "path": "tests/ux01/inline_supplier_import_browser.py",
-      "sha256": "ad9de151c413ec795c0687c942f037b9cb6782d7f113e5265d3a92576298bbb9"
+      "sha256": "230abb5e2d93b6ced00cf5260bad054d3572a50f32f3244bef44d9c25fa99d7b"
     },
     {
       "path": "tests/ux01/inline_supplier_refresh_browser.py",
@@ -5440,5 +5440,5 @@
       "sha256": "260973076a516b81bba3cae3adcd6b652fdee5585e27fbd0b7401062b78aefb1"
     }
   ],
-  "aggregate_sha256": "7cfb5ff828dc8f4b3984e893efe0c18de21d13050ea4a22a92176e874cb36a8b"
+  "aggregate_sha256": "81cd84b9fc2ad5aa0d66cf6bb65520ee43471b33f6e7344d5e732fa82238b9c8"
 }
