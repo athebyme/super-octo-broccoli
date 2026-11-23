@@ -22,7 +22,10 @@ from services.product_sync_scheduler import init_scheduler, shutdown_scheduler
 from services.supplier_color_observation_scheduler import (
     run_supplier_color_observation_tick,
 )
-from services.supplier_color_observation_store import SupplierColorObservationStore
+from services.supplier_color_observation_store import (
+    MAX_OBSERVATIONS,
+    SupplierColorObservationStore,
+)
 from services.supplier_service import supplier_catalog_config_digest
 from services.supplier_catalog_refresh_models import SupplierCatalogRefreshRun
 from tests.test_marketplace_publications import OzonPublicationFixture
@@ -135,6 +138,15 @@ class SupplierColorObservationSchedulerTest(
             now=now or self.now,
         )
 
+    def _last_attempt(self, store, *, digest=None, now=None):
+        status = store.read_status(
+            self.supplier.id,
+            digest or supplier_catalog_config_digest(self.supplier),
+            now=now or self.now,
+        )
+        self.assertIsNotNone(status)
+        return status["last_attempt"]
+
     def test_real_parser_feed_stores_only_exact_current_linked_color(self):
         with TemporaryDirectory() as directory:
             store = self._store(directory)
@@ -152,6 +164,12 @@ class SupplierColorObservationSchedulerTest(
             self.assertEqual(result["observations_stored"], 1)
             self.assertEqual(fetched, [self.supplier.csv_source_url])
             self.assertEqual(self._stored_colors(store), ["бордо"])
+            self.assertEqual(
+                self._last_attempt(store)["outcome"], "snapshot_saved",
+            )
+            self.assertIs(
+                self._last_attempt(store)["fetch_attempted"], True,
+            )
             self.assertEqual(MarketplaceOperation.query.count(), 0)
             self.assertEqual(self.supplier_product.content_revision, 7)
             self.assertEqual(self.source.supplier_content_revision, 7)
@@ -208,6 +226,12 @@ class SupplierColorObservationSchedulerTest(
             self.assertEqual(result["reads"], 1)
             self.assertEqual(result["feed_failed"], 1)
             self.assertIsNone(self._stored_colors(store))
+            self.assertEqual(
+                self._last_attempt(store)["outcome"], "feed_invalid",
+            )
+            self.assertIs(
+                self._last_attempt(store)["fetch_attempted"], True,
+            )
 
     def test_admin_catalog_refresh_request_defers_without_feed_read(self):
         db.session.add(SupplierCatalogRefreshRun(
@@ -261,6 +285,9 @@ class SupplierColorObservationSchedulerTest(
 
                 self.assertEqual(result["status"], "cleared_without_read")
                 self.assertEqual(result["reads"], 0)
+                attempt = self._last_attempt(store, digest=old_digest)
+                self.assertEqual(attempt["outcome"], "cleared_without_read")
+                self.assertIs(attempt["fetch_attempted"], False)
                 self.assertEqual(calls, [])
                 self.assertIsNone(
                     self._stored_colors(store, digest=old_digest),
@@ -289,10 +316,199 @@ class SupplierColorObservationSchedulerTest(
             self.assertEqual(result["status"], "post_read_deferred")
             self.assertEqual(result["reads"], 1)
             self.assertEqual(result["source_config_changed"], 1)
+            attempt = self._last_attempt(
+                store,
+                digest=supplier_catalog_config_digest(self.supplier),
+            )
+            self.assertEqual(attempt["outcome"], "source_config_changed")
+            self.assertIs(attempt["fetch_attempted"], True)
             self.assertEqual(
                 self._stored_colors(store, digest=old_digest),
                 ["бордо"],
             )
+
+    def test_post_reservation_empty_and_oversized_scopes_close_without_fetch(self):
+        from services import supplier_color_observation_scheduler as scheduler
+
+        with TemporaryDirectory() as directory:
+            store = self._store(directory)
+            calls = []
+            with patch.object(scheduler, "_linked_source_rows", return_value=({}, 0)):
+                result = self._run(store, lambda url: calls.append(url) or _CSV)
+            self.assertEqual(result["status"], "no_exact_ozon_links")
+            self.assertEqual(result["reads"], 0)
+            attempt = self._last_attempt(store)
+            self.assertEqual(attempt["outcome"], "no_exact_ozon_links")
+            self.assertIs(attempt["fetch_attempted"], False)
+            self.assertEqual(calls, [])
+
+        with TemporaryDirectory() as directory:
+            store = self._store(directory)
+            calls = []
+            row = (
+                self.supplier_product.external_id,
+                self.supplier_product.content_revision,
+                self.supplier_product.original_data_json,
+            )
+            with patch.object(
+                scheduler,
+                "_linked_source_rows",
+                return_value=({self.supplier_product.id: row}, MAX_OBSERVATIONS + 1),
+            ):
+                result = self._run(store, lambda url: calls.append(url) or _CSV)
+            self.assertEqual(result["status"], "source_scope_too_large")
+            self.assertEqual(result["reads"], 0)
+            attempt = self._last_attempt(store)
+            self.assertEqual(attempt["outcome"], "source_scope_too_large")
+            self.assertIs(attempt["fetch_attempted"], False)
+            self.assertEqual(calls, [])
+
+    def test_fetch_failure_is_durably_distinct_from_invalid_feed(self):
+        with TemporaryDirectory() as directory:
+            store = self._store(directory)
+
+            def fail_fetch(_url):
+                raise OSError("synthetic private detail must not be retained")
+
+            result = self._run(store, fail_fetch)
+            self.assertEqual(result["status"], "feed_failed")
+            self.assertEqual(result["reads"], 1)
+            attempt = self._last_attempt(store)
+            self.assertEqual(attempt["outcome"], "feed_fetch_failed")
+            self.assertIs(attempt["fetch_attempted"], True)
+            self.assertNotIn("synthetic private detail", str(attempt))
+
+    def test_post_read_admin_ozon_and_scope_deferrals_preserve_previous_snapshot(self):
+        from services import supplier_color_observation_scheduler as scheduler
+
+        # A newly queued admin refresh after the read leaves the old good batch.
+        with TemporaryDirectory() as directory:
+            store = self._store(directory)
+            old_digest = self._seed_old_observation(
+                store, observed_at=self.now - timedelta(hours=25),
+            )
+
+            def queue_admin_refresh(_url):
+                db.session.add(SupplierCatalogRefreshRun(
+                    id="synthetic-post-read-refresh",
+                    supplier_id=self.supplier.id,
+                    admin_user_id=self.user.id,
+                    status="pending",
+                    config_digest="b" * 64,
+                    created_at=self.now,
+                ))
+                db.session.commit()
+                return _CSV
+
+            result = self._run(store, queue_admin_refresh)
+            self.assertEqual(result["status"], "post_read_deferred")
+            attempt = self._last_attempt(store, digest=old_digest)
+            self.assertEqual(attempt["outcome"], "admin_refresh_deferred")
+            self.assertIs(attempt["fetch_attempted"], True)
+            self.assertEqual(self._stored_colors(store, digest=old_digest), ["бордо"])
+            refresh = SupplierCatalogRefreshRun.query.filter_by(
+                id="synthetic-post-read-refresh",
+            ).one()
+            refresh.status = "completed"
+            db.session.commit()
+
+        # Disabling Ozon during the feed read is also an explicit deferred result.
+        with TemporaryDirectory() as directory:
+            store = self._store(directory)
+            old_digest = self._seed_old_observation(
+                store, observed_at=self.now - timedelta(hours=25),
+            )
+
+            def disable_ozon(_url):
+                self.app.config["MARKETPLACE_OZON_ENABLED"] = False
+                return _CSV
+
+            result = self._run(store, disable_ozon)
+            self.assertEqual(result["status"], "post_read_deferred")
+            attempt = self._last_attempt(store, digest=old_digest)
+            self.assertEqual(attempt["outcome"], "ozon_disabled_after_read")
+            self.assertIs(attempt["fetch_attempted"], True)
+            self.assertEqual(self._stored_colors(store, digest=old_digest), ["бордо"])
+
+        # A post-read cap race does not publish the sampled subset.
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = True
+        with TemporaryDirectory() as directory:
+            store = self._store(directory)
+            old_digest = self._seed_old_observation(
+                store, observed_at=self.now - timedelta(hours=25),
+            )
+            original = scheduler._linked_source_rows
+            calls = 0
+
+            def oversized_after_read(supplier, *, limit):
+                nonlocal calls
+                calls += 1
+                rows, count = original(supplier, limit=limit)
+                return (rows, MAX_OBSERVATIONS + 1) if calls == 2 else (rows, count)
+
+            with patch.object(
+                scheduler, "_linked_source_rows", side_effect=oversized_after_read,
+            ):
+                result = self._run(store, lambda _url: _CSV)
+            self.assertEqual(result["status"], "post_read_deferred")
+            attempt = self._last_attempt(store, digest=old_digest)
+            self.assertEqual(attempt["outcome"], "source_scope_too_large")
+            self.assertIs(attempt["fetch_attempted"], True)
+            self.assertEqual(self._stored_colors(store, digest=old_digest), ["бордо"])
+
+    def test_invalid_shape_store_failure_and_unexpected_exception_record_safe_result(self):
+        from types import SimpleNamespace
+        from services import supplier_color_observation_scheduler as scheduler
+
+        with TemporaryDirectory() as directory:
+            store = self._store(directory)
+
+            def invalid_shape(_supplier, *, fetch_bytes):
+                fetch_bytes(self.supplier.csv_source_url)
+                return SimpleNamespace(
+                    total_rows=1,
+                    colors_by_external_id={"sku-color-1": ("бордо",)},
+                    body_sha256="bad",
+                )
+
+            with patch(
+                "services.supplier_color_observation_feed.read_supplier_color_observations",
+                side_effect=invalid_shape,
+            ):
+                result = self._run(store, lambda _url: _CSV)
+            self.assertEqual(result["status"], "feed_invalid")
+            attempt = self._last_attempt(store)
+            self.assertEqual(attempt["outcome"], "feed_invalid")
+            self.assertIs(attempt["fetch_attempted"], True)
+
+        with TemporaryDirectory() as directory:
+            store = self._store(directory)
+            old_digest = self._seed_old_observation(
+                store, observed_at=self.now - timedelta(hours=25),
+            )
+            with patch.object(store, "finish", return_value=False):
+                result = self._run(store, lambda _url: _CSV)
+            self.assertEqual(result["status"], "store_finish_failed")
+            attempt = self._last_attempt(store, digest=old_digest)
+            self.assertEqual(attempt["outcome"], "store_finish_failed")
+            self.assertIs(attempt["fetch_attempted"], True)
+            self.assertEqual(self._stored_colors(store, digest=old_digest), ["бордо"])
+
+        with TemporaryDirectory() as directory:
+            store = self._store(directory)
+            calls = []
+            with patch.object(
+                scheduler,
+                "_linked_source_rows",
+                side_effect=RuntimeError("synthetic private failure detail"),
+            ):
+                result = self._run(store, lambda url: calls.append(url) or _CSV)
+            self.assertEqual(result["status"], "local_failure")
+            self.assertEqual(result["reads"], 0)
+            attempt = self._last_attempt(store)
+            self.assertEqual(attempt["outcome"], "local_failure")
+            self.assertIs(attempt["fetch_attempted"], False)
+            self.assertEqual(calls, [])
 
 
 class _FakeScheduler:

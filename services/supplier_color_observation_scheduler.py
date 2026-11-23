@@ -184,6 +184,30 @@ def _feed_shape_is_valid(feed: Any) -> bool:
     )
 
 
+def _finish_failed_attempt(
+    store,
+    *,
+    supplier_id: int,
+    token: str,
+    config_digest: str,
+    outcome: str,
+    fetch_attempted: bool,
+    finished_at: datetime,
+) -> bool:
+    """Persist one allowlisted non-success receipt without touching good data."""
+    try:
+        return bool(store.finish_failure(
+            supplier_id,
+            token,
+            config_digest,
+            outcome=outcome,
+            fetch_attempted=fetch_attempted,
+            finished_at=finished_at,
+        ))
+    except Exception:
+        return False
+
+
 def run_supplier_color_observation_tick(
     flask_app,
     *,
@@ -194,8 +218,9 @@ def run_supplier_color_observation_tick(
     """Refresh at most one due connected supplier through its configured CSV.
 
     The application database is read before and after the public feed read;
-    its transaction is explicitly ended during network I/O. The only durable
-    write is an atomic replacement in the private evidence ledger.
+    its transaction is explicitly ended during network I/O. Reservation and
+    bounded terminal metadata stay in the private evidence ledger; only a
+    successful finish atomically replaces its observation snapshot.
     """
     current_time = _utc_datetime(now)
     with flask_app.app_context():
@@ -239,255 +264,338 @@ def run_supplier_color_observation_tick(
         db.session.rollback()
         counts = Counter({"reads": 0})
 
-        for supplier_id in supplier_ids:
-            counts["suppliers_considered"] += 1
-            with _supplier_catalog_sync_lock(supplier_id) as acquired:
-                if not acquired:
-                    counts["catalog_busy"] += 1
-                    db.session.rollback()
-                    continue
+        attempt_context = None
 
-                supplier = (
-                    Supplier.query.filter_by(id=supplier_id)
-                    .populate_existing()
-                    .first()
-                )
-                if supplier is None or not supplier.is_active:
-                    db.session.rollback()
-                    continue
-                try:
-                    initial_config = _supplier_catalog_config_snapshot(supplier)
-                    initial_digest = supplier_catalog_config_digest(supplier)
-                    frozen_supplier = SimpleNamespace(**initial_config)
-                    direct_supported = supports_direct_color(frozen_supplier)
-                except Exception:
-                    db.session.rollback()
-                    counts["invalid_config"] += 1
-                    continue
-                if not direct_supported:
-                    db.session.rollback()
-                    counts["unsupported_config"] += 1
-                    continue
+        def close_failed_attempt(outcome: str, *, fetch_attempted: bool) -> bool:
+            nonlocal attempt_context
+            context = attempt_context
+            attempt_context = None
+            if context is None:
+                return False
+            recorded = _finish_failed_attempt(
+                store,
+                supplier_id=context["supplier_id"],
+                token=context["token"],
+                config_digest=context["config_digest"],
+                outcome=outcome,
+                fetch_attempted=fetch_attempted,
+                finished_at=_utc_datetime(now),
+            )
+            if not recorded:
+                counts["store_outcome_failed"] += 1
+            return recorded
 
-                if _admin_refresh_active(supplier_id):
-                    db.session.rollback()
-                    counts["admin_refresh_deferred"] += 1
-                    continue
+        try:
+            for supplier_id in supplier_ids:
+                counts["suppliers_considered"] += 1
+                with _supplier_catalog_sync_lock(supplier_id) as acquired:
+                    if not acquired:
+                        counts["catalog_busy"] += 1
+                        db.session.rollback()
+                        continue
 
-                if not _has_exact_linked_source(supplier):
-                    db.session.rollback()
-                    counts["no_exact_ozon_links"] += 1
-                    continue
-
-                try:
-                    claim = store.reserve(
-                        supplier_id,
-                        initial_digest,
-                        now=current_time,
+                    supplier = (
+                        Supplier.query.filter_by(id=supplier_id)
+                        .populate_existing()
+                        .first()
                     )
-                except Exception:
-                    claim = None
-                    counts["store_reserve_failed"] += 1
-                if claim is None:
-                    db.session.rollback()
-                    counts["not_due_or_store_blocked"] += 1
-                    continue
-
-                # Avoid pulling the raw source snapshots on each scheduler
-                # pass. Even after a due reservation, never partially replace
-                # a ledger whose exact linked scope exceeds its storage cap.
-                pre_rows, pre_row_count = _linked_source_rows(
-                    supplier,
-                    limit=MAX_OBSERVATIONS + 1,
-                )
-                if not pre_rows:
-                    db.session.rollback()
-                    counts["no_exact_ozon_links"] += 1
-                    return _result("no_exact_ozon_links", **counts)
-                if pre_row_count > MAX_OBSERVATIONS:
-                    db.session.rollback()
-                    counts["source_scope_too_large"] += 1
-                    return _result("source_scope_too_large", **counts)
-
-                # Do not hold an application-database read transaction while
-                # the public feed transport is in progress.
-                db.session.rollback()
-                feed = None
-                feed_error = None
-                fetch_attempts = 0
-                potential_color_rows = []
-                for product_id, (external_id, revision, raw_snapshot) in pre_rows.items():
-                    state, _marker_valid, colors = _snapshot_state(raw_snapshot)
-                    if state == "eligible" and colors:
-                        potential_color_rows.append(product_id)
-
-                if potential_color_rows:
+                    if supplier is None or not supplier.is_active:
+                        db.session.rollback()
+                        continue
                     try:
-                        if fetch_bytes is None:
-                            from services.supplier_price_feed import read_supplier_csv_bytes
-
-                            fetcher = read_supplier_csv_bytes
-                        else:
-                            fetcher = fetch_bytes
-
-                        def counted_fetch(url):
-                            nonlocal fetch_attempts
-                            fetch_attempts += 1
-                            return fetcher(url)
-
-                        feed = read_supplier_color_observations(
-                            frozen_supplier,
-                            fetch_bytes=counted_fetch,
-                        )
-                    except SupplierColorFeedError as exc:
-                        feed_error = exc.code
+                        initial_config = _supplier_catalog_config_snapshot(supplier)
+                        initial_digest = supplier_catalog_config_digest(supplier)
+                        frozen_supplier = SimpleNamespace(**initial_config)
+                        direct_supported = supports_direct_color(frozen_supplier)
                     except Exception:
-                        feed_error = "feed_failed"
-                    counts["reads"] += fetch_attempts
-                else:
-                    # A valid empty replacement revokes stale observations for
-                    # rows that are now native, malformed, or no longer raw.
-                    feed = None
+                        db.session.rollback()
+                        counts["invalid_config"] += 1
+                        continue
+                    if not direct_supported:
+                        db.session.rollback()
+                        counts["unsupported_config"] += 1
+                        continue
 
-                if feed_error is not None:
-                    db.session.rollback()
-                    counts["feed_failed"] += 1
-                    logger.info(
-                        "Supplier color observation tick status=feed_failed code=%s",
-                        feed_error,
-                    )
-                    return _result(
-                        "feed_failed",
-                        **counts,
-                    )
+                    if _admin_refresh_active(supplier_id):
+                        db.session.rollback()
+                        counts["admin_refresh_deferred"] += 1
+                        continue
 
-                post_supplier = (
-                    Supplier.query.filter_by(id=supplier_id)
-                    .populate_existing()
-                    .first()
-                )
-                post_rows, post_row_count = (
-                    _linked_source_rows(
-                        post_supplier,
+                    if not _has_exact_linked_source(supplier):
+                        db.session.rollback()
+                        counts["no_exact_ozon_links"] += 1
+                        continue
+
+                    try:
+                        claim = store.reserve(
+                            supplier_id,
+                            initial_digest,
+                            now=current_time,
+                        )
+                    except Exception:
+                        claim = None
+                        counts["store_reserve_failed"] += 1
+                    if claim is None:
+                        db.session.rollback()
+                        counts["not_due_or_store_blocked"] += 1
+                        continue
+                    attempt_context = {
+                        "supplier_id": supplier_id,
+                        "token": claim,
+                        "config_digest": initial_digest,
+                        "fetch_attempted": False,
+                    }
+
+                    # Avoid pulling the raw source snapshots on each scheduler
+                    # pass. Even after a due reservation, never partially replace
+                    # a ledger whose exact linked scope exceeds its storage cap.
+                    pre_rows, pre_row_count = _linked_source_rows(
+                        supplier,
                         limit=MAX_OBSERVATIONS + 1,
                     )
-                    if post_supplier is not None and post_supplier.is_active
-                    else ({}, 0)
-                )
-                try:
-                    post_config = (
-                        _supplier_catalog_config_snapshot(post_supplier)
-                        if post_supplier is not None else None
-                    )
-                    post_digest = (
-                        supplier_catalog_config_digest(post_supplier)
-                        if post_supplier is not None else None
-                    )
-                except Exception:
-                    post_config = None
-                    post_digest = None
-                config_unchanged = bool(
-                    post_config == initial_config
-                    and post_digest == initial_digest
-                    and post_supplier is not None
-                    and post_supplier.is_active
-                )
-                admin_refresh_active = _admin_refresh_active(supplier_id)
-
-                if (
-                    not config_unchanged
-                    or admin_refresh_active
-                    or not flask_app.config.get("MARKETPLACE_OZON_ENABLED", False)
-                    or post_row_count > MAX_OBSERVATIONS
-                ):
-                    # Preserve the last successful same-config batch. The
-                    # store already fences it by config digest, revision, ID,
-                    # and age; a queued admin refresh must not replace it with
-                    # a projection taken across the refresh boundary.
-                    db.session.rollback()
-                    counts["source_config_changed"] += int(not config_unchanged)
-                    counts["admin_refresh_deferred"] += int(admin_refresh_active)
-                    counts["ozon_disabled_after_read"] += int(
-                        not flask_app.config.get("MARKETPLACE_OZON_ENABLED", False)
-                    )
-                    counts["source_scope_too_large"] += int(
-                        post_row_count > MAX_OBSERVATIONS
-                    )
-                    return _result("post_read_deferred", **counts)
-
-                observations: dict[int, tuple[int, str, tuple[str, ...]]] = {}
-                duplicate_external_ids = {
-                    external_id
-                    for external_id, occurrence_count in Counter(
-                        row[0] for row in post_rows.values()
-                    ).items()
-                    if occurrence_count > 1
-                }
-                if feed is not None and not _feed_shape_is_valid(feed):
-                    db.session.rollback()
-                    counts["feed_failed"] += 1
-                    return _result("feed_invalid", **counts)
-
-                if feed is not None:
-                    for product_id, (external_id, revision, raw_snapshot) in pre_rows.items():
-                        current_row = post_rows.get(product_id)
-                        if current_row != (external_id, revision, raw_snapshot):
-                            counts["source_changed"] += 1
-                            continue
-                        if external_id in duplicate_external_ids:
-                            counts["duplicate_source_id"] += 1
-                            continue
-                        state, _marker_valid, raw_colors = _snapshot_state(raw_snapshot)
-                        if state == "native_marker":
-                            counts["native_marker_skipped"] += 1
-                            continue
-                        if state != "eligible" or not raw_colors:
-                            counts[f"{state}_skipped"] += 1
-                            continue
-                        direct_colors = feed.colors_by_external_id.get(external_id)
-                        if (
-                            not isinstance(direct_colors, (list, tuple))
-                            or not direct_colors
-                            or not same_color_literals(list(direct_colors), raw_colors)
-                        ):
-                            counts["feed_source_conflict"] += 1
-                            continue
-                        # Store exact CSV cell literals. The comparer is only
-                        # an equality gate; it never normalizes or translates.
-                        observations[product_id] = (
-                            revision,
-                            _digest_external_id(external_id),
-                            tuple(direct_colors),
+                    if not pre_rows:
+                        db.session.rollback()
+                        counts["no_exact_ozon_links"] += 1
+                        close_failed_attempt(
+                            "no_exact_ozon_links", fetch_attempted=False,
                         )
-                else:
-                    counts["source_changed"] += len(pre_rows)
+                        return _result("no_exact_ozon_links", **counts)
+                    if pre_row_count > MAX_OBSERVATIONS:
+                        db.session.rollback()
+                        counts["source_scope_too_large"] += 1
+                        close_failed_attempt(
+                            "source_scope_too_large", fetch_attempted=False,
+                        )
+                        return _result("source_scope_too_large", **counts)
 
-                db.session.rollback()
-                try:
-                    finished = store.finish(
-                        supplier_id,
-                        claim,
-                        initial_digest,
-                        observations,
-                        observed_at=current_time,
+                    # Do not hold an application-database read transaction while
+                    # the public feed transport is in progress.
+                    db.session.rollback()
+                    feed = None
+                    feed_error = None
+                    fetch_attempts = 0
+                    potential_color_rows = []
+                    for product_id, (external_id, revision, raw_snapshot) in pre_rows.items():
+                        state, _marker_valid, colors = _snapshot_state(raw_snapshot)
+                        if state == "eligible" and colors:
+                            potential_color_rows.append(product_id)
+
+                    if potential_color_rows:
+                        try:
+                            if fetch_bytes is None:
+                                from services.supplier_price_feed import read_supplier_csv_bytes
+
+                                fetcher = read_supplier_csv_bytes
+                            else:
+                                fetcher = fetch_bytes
+
+                            def counted_fetch(url):
+                                nonlocal fetch_attempts
+                                fetch_attempts += 1
+                                if attempt_context is not None:
+                                    attempt_context["fetch_attempted"] = True
+                                return fetcher(url)
+
+                            feed = read_supplier_color_observations(
+                                frozen_supplier,
+                                fetch_bytes=counted_fetch,
+                            )
+                        except SupplierColorFeedError as exc:
+                            feed_error = exc.code
+                        except Exception:
+                            feed_error = "feed_failed"
+                        counts["reads"] += fetch_attempts
+                    else:
+                        # A valid empty replacement revokes stale observations for
+                        # rows that are now native, malformed, or no longer raw.
+                        feed = None
+
+                    if feed_error is not None:
+                        db.session.rollback()
+                        counts["feed_failed"] += 1
+                        failure_outcome = (
+                            "feed_fetch_failed"
+                            if feed_error == "fetch_failed"
+                            else "feed_invalid"
+                            if feed_error == "invalid_feed"
+                            else "local_failure"
+                        )
+                        close_failed_attempt(
+                            failure_outcome,
+                            fetch_attempted=bool(fetch_attempts),
+                        )
+                        logger.info(
+                            "Supplier color observation tick status=feed_failed code=%s",
+                            feed_error,
+                        )
+                        return _result(
+                            "feed_failed",
+                            **counts,
+                        )
+
+                    post_supplier = (
+                        Supplier.query.filter_by(id=supplier_id)
+                        .populate_existing()
+                        .first()
                     )
-                except Exception:
-                    finished = False
-                if not finished:
-                    counts["store_finish_failed"] += 1
-                    return _result("store_finish_failed", **counts)
+                    post_rows, post_row_count = (
+                        _linked_source_rows(
+                            post_supplier,
+                            limit=MAX_OBSERVATIONS + 1,
+                        )
+                        if post_supplier is not None and post_supplier.is_active
+                        else ({}, 0)
+                    )
+                    try:
+                        post_config = (
+                            _supplier_catalog_config_snapshot(post_supplier)
+                            if post_supplier is not None else None
+                        )
+                        post_digest = (
+                            supplier_catalog_config_digest(post_supplier)
+                            if post_supplier is not None else None
+                        )
+                    except Exception:
+                        post_config = None
+                        post_digest = None
+                    config_unchanged = bool(
+                        post_config == initial_config
+                        and post_digest == initial_digest
+                        and post_supplier is not None
+                        and post_supplier.is_active
+                    )
+                    admin_refresh_active = _admin_refresh_active(supplier_id)
 
-                counts["observations_stored"] += len(observations)
-                counts["observed_feed_rows"] += feed.total_rows if feed is not None else 0
-                status = "completed" if feed is not None else "cleared_without_read"
-                logger.info(
-                    "Supplier color observation tick status=%s reads=%s observations=%s",
-                    status,
-                    counts["reads"],
-                    len(observations),
-                )
-                return _result(status, **counts)
+                    if (
+                        not config_unchanged
+                        or admin_refresh_active
+                        or not flask_app.config.get("MARKETPLACE_OZON_ENABLED", False)
+                        or post_row_count > MAX_OBSERVATIONS
+                    ):
+                        # Preserve the last successful same-config batch. The
+                        # store already fences it by config digest, revision, ID,
+                        # and age; a queued admin refresh must not replace it with
+                        # a projection taken across the refresh boundary.
+                        db.session.rollback()
+                        counts["source_config_changed"] += int(not config_unchanged)
+                        counts["admin_refresh_deferred"] += int(admin_refresh_active)
+                        counts["ozon_disabled_after_read"] += int(
+                            not flask_app.config.get("MARKETPLACE_OZON_ENABLED", False)
+                        )
+                        counts["source_scope_too_large"] += int(
+                            post_row_count > MAX_OBSERVATIONS
+                        )
+                        failure_outcome = (
+                            "source_config_changed"
+                            if not config_unchanged
+                            else "admin_refresh_deferred"
+                            if admin_refresh_active
+                            else "ozon_disabled_after_read"
+                            if not flask_app.config.get("MARKETPLACE_OZON_ENABLED", False)
+                            else "source_scope_too_large"
+                        )
+                        close_failed_attempt(
+                            failure_outcome,
+                            fetch_attempted=bool(fetch_attempts),
+                        )
+                        return _result("post_read_deferred", **counts)
 
+                    observations: dict[int, tuple[int, str, tuple[str, ...]]] = {}
+                    duplicate_external_ids = {
+                        external_id
+                        for external_id, occurrence_count in Counter(
+                            row[0] for row in post_rows.values()
+                        ).items()
+                        if occurrence_count > 1
+                    }
+                    if feed is not None and not _feed_shape_is_valid(feed):
+                        db.session.rollback()
+                        counts["feed_failed"] += 1
+                        close_failed_attempt(
+                            "feed_invalid",
+                            fetch_attempted=bool(fetch_attempts),
+                        )
+                        return _result("feed_invalid", **counts)
+
+                    if feed is not None:
+                        for product_id, (external_id, revision, raw_snapshot) in pre_rows.items():
+                            current_row = post_rows.get(product_id)
+                            if current_row != (external_id, revision, raw_snapshot):
+                                counts["source_changed"] += 1
+                                continue
+                            if external_id in duplicate_external_ids:
+                                counts["duplicate_source_id"] += 1
+                                continue
+                            state, _marker_valid, raw_colors = _snapshot_state(raw_snapshot)
+                            if state == "native_marker":
+                                counts["native_marker_skipped"] += 1
+                                continue
+                            if state != "eligible" or not raw_colors:
+                                counts[f"{state}_skipped"] += 1
+                                continue
+                            direct_colors = feed.colors_by_external_id.get(external_id)
+                            if (
+                                not isinstance(direct_colors, (list, tuple))
+                                or not direct_colors
+                                or not same_color_literals(list(direct_colors), raw_colors)
+                            ):
+                                counts["feed_source_conflict"] += 1
+                                continue
+                            # Store exact CSV cell literals. The comparer is only
+                            # an equality gate; it never normalizes or translates.
+                            observations[product_id] = (
+                                revision,
+                                _digest_external_id(external_id),
+                                tuple(direct_colors),
+                            )
+                    else:
+                        counts["source_changed"] += len(pre_rows)
+
+                    db.session.rollback()
+                    try:
+                        finished = store.finish(
+                            supplier_id,
+                            claim,
+                            initial_digest,
+                            observations,
+                            observed_at=_utc_datetime(now),
+                            fetch_attempted=bool(fetch_attempts),
+                        )
+                    except Exception:
+                        finished = False
+                    if not finished:
+                        counts["store_finish_failed"] += 1
+                        close_failed_attempt(
+                            "store_finish_failed",
+                            fetch_attempted=bool(fetch_attempts),
+                        )
+                        return _result("store_finish_failed", **counts)
+
+                    attempt_context = None
+
+                    counts["observations_stored"] += len(observations)
+                    counts["observed_feed_rows"] += feed.total_rows if feed is not None else 0
+                    status = "completed" if feed is not None else "cleared_without_read"
+                    logger.info(
+                        "Supplier color observation tick status=%s reads=%s observations=%s",
+                        status,
+                        counts["reads"],
+                        len(observations),
+                    )
+                    return _result(status, **counts)
+
+        except Exception:
+            db.session.rollback()
+            if attempt_context is None:
+                raise
+            fetch_attempted = attempt_context["fetch_attempted"]
+            counts["reads"] = max(counts["reads"], int(fetch_attempted))
+            close_failed_attempt(
+                "local_failure", fetch_attempted=fetch_attempted,
+            )
+            counts["local_failure"] += 1
+            logger.info("Supplier color observation tick status=local_failure")
+            return _result("local_failure", **counts)
         db.session.rollback()
         if counts["not_due_or_store_blocked"]:
             status = "no_due_supplier"
