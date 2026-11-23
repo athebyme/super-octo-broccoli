@@ -44,6 +44,41 @@ SOURCE_REVIEW_VALUE_ORDINALS = {
     for index, value in enumerate(values)
 }
 
+SOURCE_REFRESH_CASES = {
+    "stale_name": {
+        "title": "R91 inherited name before refresh",
+        "description": "R91 inherited description before refresh",
+        "current_title": "R91 inherited name after refresh",
+        "current_description": "R91 inherited description after refresh",
+        "manual_field": "description",
+        "manual_value": "R91 seller-authored description stays",
+        "stale": True,
+    },
+    "stale_description": {
+        "title": "R91 seller name before refresh",
+        "description": "R91 inherited description before refresh B",
+        "current_title": "R91 inherited name after refresh B",
+        "current_description": "R91 inherited description after refresh B",
+        "manual_field": "name",
+        "manual_value": "R91 seller-authored name stays",
+        "stale": True,
+    },
+    "fresh_selected": {
+        "title": "R91 selected fresh source",
+        "description": "R91 selected fresh description",
+        "current_title": "R91 selected fresh source",
+        "current_description": "R91 selected fresh description",
+        "stale": False,
+    },
+    "stale_unselected": {
+        "title": "R91 unselected stale source before refresh",
+        "description": "R91 unselected stale description before refresh",
+        "current_title": "R91 unselected stale source after refresh",
+        "current_description": "R91 unselected stale description after refresh",
+        "stale": True,
+    },
+}
+
 
 def _source_value_id(attribute_id, type_index, value):
     attribute_offset = 0 if attribute_id == "10096" else 1_000
@@ -239,7 +274,59 @@ def bulk_seed(app):
             db.session.commit()
             supplier_source_drafts[index]=draft.id
             supplier_source_sources[index]=source.id
+
+        source_refresh_drafts={}
+        source_refresh_sources={}
+        for case_name,case in SOURCE_REFRESH_CASES.items():
+            external_id='bulk-source-refresh-'+case_name
+            original={
+                "external_id":external_id,
+                "vendor_code":"R91-"+case_name,
+                "title":case["title"],
+                "description":case["description"],
+                "photo_urls":[PHOTO],
+            }
+            source=ImportedProduct(
+                seller_id=fixture['seller_id'],
+                external_id=external_id,
+                external_vendor_code="R91-"+case_name,
+                source_type='synthetic',
+                category='Synthetic R91 source refresh',
+                title=case["title"],
+                description=case["description"],
+                photo_urls=json.dumps([PHOTO]),
+                original_data=json.dumps(original,ensure_ascii=False,sort_keys=True),
+            )
+            db.session.add(source);db.session.commit()
+            draft=MarketplaceDraftService.create_draft(
+                seller_id=fixture['seller_id'],
+                account_id=fixture['account_id'],
+                imported_product_id=source.id,
+                product_type_id=kinds[0].id,
+            )
+            if case.get("manual_field"):
+                content=json.loads(draft.content_json or "{}")
+                content[case["manual_field"]]=case["manual_value"]
+                draft.content_json=json.dumps(
+                    content,ensure_ascii=False,sort_keys=True,separators=(",",":"),
+                )
+            if case["stale"]:
+                original.update({
+                    "title":case["current_title"],
+                    "description":case["current_description"],
+                })
+                source.title=case["current_title"]
+                source.description=case["current_description"]
+                source.original_data=json.dumps(
+                    original,ensure_ascii=False,sort_keys=True,
+                )
+            db.session.commit()
+            source_refresh_drafts[case_name]=draft.id
+            source_refresh_sources[case_name]=source.id
         return {**fixture,'repair_job':job.job_uid,'repair_drafts':draft_ids,'repair_sources':sources,
                 'supplier_source_drafts':supplier_source_drafts,
                 'supplier_source_sources':supplier_source_sources,
-                'supplier_source_cases':SOURCE_REVIEW_CASES}
+                'supplier_source_cases':SOURCE_REVIEW_CASES,
+                'source_refresh_drafts':source_refresh_drafts,
+                'source_refresh_sources':source_refresh_sources,
+                'source_refresh_cases':SOURCE_REFRESH_CASES}

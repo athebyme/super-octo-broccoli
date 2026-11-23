@@ -23,7 +23,8 @@ OUT=Path('/artifacts');OUT.mkdir(exist_ok=True)
 ASSETS=Path(__file__).with_name('assets')
 report={'status':'running','checks':[],'layouts':[],'js_errors':[],'unexpected_http':[],
         'external':[],'provider_attempts':0,'provider_write_callbacks':0,
-        'synthetic_photo_responses':0,'posts':0,'rows':200,'supplier_source':None}
+        'synthetic_photo_responses':0,'posts':0,'rows':200,'supplier_source':None,
+        'source_refresh':None}
 temporary=tempfile.TemporaryDirectory(prefix='ozon-bulk-repair-')
 os.environ.update(DATABASE_URL='sqlite:///'+str(Path(temporary.name)/'app.sqlite'),SKIP_SCHEDULER='1',
     SECRET_KEY='synthetic-bulk-repair-ci',ENCRYPTION_KEY=base64.urlsafe_b64encode(b'0'*32).decode(),
@@ -37,11 +38,12 @@ def no_network(*args,**kwargs):
 requests.sessions.Session.request=no_network
 socket.create_connection=no_network
 from seller_platform import app
-from models import (db,BackgroundJob,MarketplaceAttributeDefinition,MarketplaceAttributeValue,
-                    MarketplaceProductDraft,MarketplaceOperation)
+from models import (db,BackgroundJob,ImportedProduct,MarketplaceAttributeDefinition,
+                    MarketplaceAttributeValue,MarketplaceProductDraft,MarketplaceOperation)
 from tests.ozon_release.bulk_repair_seed import bulk_seed, SOURCE_REVIEW_CASES
 from tests.ozon_release.seed import USERNAME,PASSWORD,PHOTO
 from services.ozon_bulk_upload import OzonBulkUploadService
+from services.marketplace_drafts import MarketplaceDraftService
 
 app.config.update(TESTING=True,WTF_CSRF_ENABLED=True,SESSION_COOKIE_SECURE=False)
 fixture=bulk_seed(app)
@@ -56,12 +58,20 @@ source_review_draft_ids={index:fixture['supplier_source_drafts'][index]
                          for index in (196,197,198)}
 source_review_selection=[source_review_draft_ids[index] for index in (196,197,198)]
 source_review_control_id=fixture['repair_drafts'][195]
+source_refresh_draft_ids=fixture['source_refresh_drafts']
+source_refresh_source_ids=fixture['source_refresh_sources']
+source_refresh_selection=[source_refresh_draft_ids[key] for key in (
+    'stale_name','stale_description','fresh_selected','stale_unselected',
+)]
+source_refresh_target_ids=source_refresh_selection[:2]
+source_refresh_before=None
 manifest=json.loads((ASSETS/'manifest.json').read_text())
 for item in manifest.values():assert hashlib.sha256((ASSETS/item['file']).read_bytes()).hexdigest()==item['sha256']
 svg=b'<svg xmlns="http://www.w3.org/2000/svg" width="360" height="480"><rect width="360" height="480" fill="#eee9df"/><rect x="80" y="85" width="200" height="300" rx="12" fill="#678b9e"/><circle cx="180" cy="235" r="60" fill="#faf9f7"/></svg>'
 fault={'mode':None}
 page=None
 supplier_source_apply_checks=[]
+source_refresh_apply_checks=[]
 
 
 def source_value_id(source_index, attribute_id, value):
@@ -121,6 +131,36 @@ def snapshot_drafts():
             } for draft in MarketplaceProductDraft.query.order_by(MarketplaceProductDraft.id).all()
         }
 
+def snapshot_source_refresh_drafts():
+    basic=snapshot_drafts()
+    with app.app_context():
+        return {
+            draft_id:{
+                **basic[draft_id],
+                'source_fact_hash':(draft:=db.session.get(MarketplaceProductDraft,draft_id)).source_fact_hash,
+                'source_facts_json':draft.source_facts_json,
+                'provenance_json':draft.provenance_json,
+                'validation_result_json':draft.validation_result_json,
+                'validation_status':draft.validation_status,
+            }
+            for draft_id in source_refresh_draft_ids.values()
+        }
+
+def snapshot_source_refresh_sources():
+    with app.app_context():
+        sources={
+            name:db.session.get(ImportedProduct,source_id)
+            for name,source_id in source_refresh_source_ids.items()
+        }
+        return {
+            name:{
+                'title':source.title,
+                'description':source.description,
+                'original_data':source.original_data,
+            }
+            for name,source in sources.items()
+        }
+
 def bridge(route):
     request=route.request;u=urlsplit(request.url)
     if u.hostname=='127.0.0.1' and u.port==server.server_port:
@@ -130,8 +170,70 @@ def bridge(route):
             if u.path==selection_apply_path:
                 query=parse_qs(u.query,keep_blank_values=True)
                 assert query.get('account_id')==[str(fixture['account_id'])]
-                assert query.get('draft_ids')==[','.join(str(i) for i in source_review_selection)]
                 form=parse_qs(request.post_data or '',keep_blank_values=True)
+                if form.get('refresh_source')==['1']:
+                    assert query.get('draft_ids')==[','.join(str(i) for i in source_refresh_selection)]
+                    assert request.headers.get('accept')=='application/json'
+                    assert form.get('confirm_local')==['1']
+                    assert form.get('csrf_token') and len(form['csrf_token'])==1 and form['csrf_token'][0]
+                    selected=[int(value) for value in form.get('selected_draft_id',[])]
+                    assert selected==source_refresh_target_ids
+                    assert len(selected)==len(set(selected))
+                    expected_keys={
+                        'csrf_token','refresh_source','confirm_local','selected_draft_id',
+                        *{
+                            key
+                            for draft_id in source_refresh_target_ids
+                            for key in (
+                                f'row_{draft_id}_draft_version',
+                                f'row_{draft_id}_imported_product_id',
+                            )
+                        },
+                    }
+                    assert set(form)==expected_keys,(set(form),expected_keys)
+                    assert source_refresh_before is not None
+                    for draft_id in source_refresh_target_ids:
+                        assert form.get(f'row_{draft_id}_draft_version')==[
+                            str(source_refresh_before[draft_id]['version'])
+                        ]
+                        source_name=next(
+                            name for name,target_id in source_refresh_draft_ids.items()
+                            if target_id==draft_id
+                        )
+                        assert form.get(f'row_{draft_id}_imported_product_id')==[
+                            str(source_refresh_source_ids[source_name])
+                        ]
+                    source_refresh_apply_checks.append({
+                        'account_and_selection_exact':True,
+                        'stale_selected_targets_only_in_order':True,
+                        'fresh_selected_and_unselected_stale_excluded':True,
+                        'per_target_version_and_source_exact':True,
+                        'no_ordinary_edit_fields':True,
+                        'csrf_and_explicit_confirmation_present':True,
+                    })
+                    result=route.fetch(max_redirects=0)
+                    if result.status>=400:
+                        report['unexpected_http'].append({'path':u.path,'status':result.status})
+                    assert result.status==200
+                    response_data=result.json()
+                    refresh_report=response_data['report']
+                    response_rows=refresh_report['rows']
+                    response_ids=[row['draft_id'] for row in response_rows]
+                    assert response_data['success'] is True
+                    assert response_data['mode']=='draft_selection'
+                    assert re.fullmatch(r'[0-9a-f]{64}',response_data['scope_key'])
+                    assert refresh_report['mode']=='draft_selection'
+                    assert refresh_report['scope_key']==response_data['scope_key']
+                    assert refresh_report['source_refresh'] is True
+                    assert refresh_report['total']==len(source_refresh_target_ids)
+                    assert response_ids==source_refresh_target_ids
+                    for row in response_rows:
+                        assert row['status']=='needs_input'
+                        assert row['version']==source_refresh_before[row['draft_id']]['version']+2
+                    source_refresh_apply_checks[-1]['selection_scope_and_exact_receipt']=True
+                    route.fulfill(response=result)
+                    return
+                assert query.get('draft_ids')==[','.join(str(i) for i in source_review_selection)]
                 selected=[int(value) for value in form.get('selected_draft_id',[])]
                 assert len(selected)==3 and set(selected)==set(source_review_selection)
                 assert len(selected)==len(set(selected))
@@ -201,7 +303,9 @@ def bridge(route):
                 route.fulfill(status=200,json=body);return
         if u.path.startswith('/api/photos/imported-product/'):
             parts=u.path.split('/')
-            allowed_sources=set(fixture['repair_sources']) | set(fixture['supplier_source_sources'].values())
+            allowed_sources=(set(fixture['repair_sources'])
+                             | set(fixture['supplier_source_sources'].values())
+                             | set(source_refresh_source_ids.values()))
             assert int(parts[-2]) in allowed_sources
             route.fulfill(body=svg,content_type='image/svg+xml');return
         result=route.fetch(max_redirects=0)
@@ -813,6 +917,170 @@ try:
             'layouts':source_layouts,
         }
         passed('supplier_source_comparison_exact_local_save')
+
+        # Refresh only the two explicitly selected stale drafts from their
+        # latest saved Seller Hub products. A selected fresh draft and a stale
+        # draft that is visible but deselected remain byte-for-byte unchanged.
+        source_refresh_list_url=(base+'/marketplaces/drafts?account_id='
+                                 +str(fixture['account_id'])+'&per_page=100')
+        page.goto(source_refresh_list_url)
+        page.locator('#ozon-drafts-list:not([v-cloak])').wait_for()
+        edit_mode=page.locator('[data-draft-selection-mode]')
+        if edit_mode.get_attribute('aria-pressed')!='true':edit_mode.click()
+        selection_summary=page.locator('[data-draft-selection-summary]')
+        if 'выбрано 0' not in selection_summary.inner_text().lower():
+            selection_summary.get_by_role('button',name='Снять выбор',exact=True).click()
+        assert 'выбрано 0' in selection_summary.inner_text().lower()
+        for draft_id in source_refresh_selection:
+            control=page.locator('[data-draft-selection-check="'+str(draft_id)+'"]')
+            control.wait_for()
+            control.check()
+        page.get_by_role('button',name='Изменить карточки',exact=True).click()
+        page.wait_for_url('**/marketplaces/ozon/uploads/selection/repair?*')
+        selection_query=parse_qs(urlsplit(page.url).query)
+        assert selection_query.get('account_id')==[str(fixture['account_id'])]
+        assert selection_query.get('draft_ids')==[','.join(str(i) for i in source_refresh_selection)]
+        page.locator('[data-draft-selection-editor]').wait_for()
+        source_refresh_bootstrap=json.loads(page.locator('#orb-bootstrap').text_content())
+        source_refresh_rows={
+            row['draft_id']:row
+            for group in source_refresh_bootstrap['editor']['groups']
+            for row in group['rows']
+        }
+        assert set(source_refresh_rows)==set(source_refresh_selection)
+        assert page.locator('[data-draft-selection-editor] article.orb-row').count()==4
+        for case_name in ('stale_name','stale_description','stale_unselected'):
+            assert source_refresh_rows[source_refresh_draft_ids[case_name]]['source_refresh_available'] is True
+        assert source_refresh_rows[source_refresh_draft_ids['fresh_selected']]['source_refresh_available'] is False
+        unselected_stale=page.locator('[data-draft="'+str(source_refresh_draft_ids['stale_unselected'])+'"]')
+        unselected_stale.locator('.orb-select input').uncheck()
+        assert not unselected_stale.locator('.orb-select input').is_checked()
+        for case_name in ('stale_name','stale_description','fresh_selected'):
+            assert page.locator('[data-draft="'+str(source_refresh_draft_ids[case_name])+'"]').locator(
+                '.orb-select input'
+            ).is_checked()
+        source_refresh_card=page.locator('[data-draft="'+str(source_refresh_draft_ids['stale_name'])+'"]')
+        source_refresh_card.get_by_role('button',name='Изменить',exact=True).click()
+        source_refresh_description=source_refresh_card.locator(
+            'textarea[name="description-'+str(source_refresh_draft_ids['stale_name'])+'"]'
+        )
+        assert source_refresh_description.input_value()==fixture['source_refresh_cases']['stale_name']['manual_value']
+
+        source_refresh_before=snapshot_source_refresh_drafts()
+        source_products_before=snapshot_source_refresh_sources()
+        with app.app_context():
+            source_refresh_operations_before=MarketplaceOperation.query.count()
+            for case_name in ('stale_name','stale_description','stale_unselected'):
+                draft=db.session.get(MarketplaceProductDraft,source_refresh_draft_ids[case_name])
+                codes={
+                    error['code']
+                    for error in MarketplaceDraftService._build_validation_result(draft)['errors']
+                    if isinstance(error,dict) and isinstance(error.get('code'),str)
+                }
+                assert 'source_facts_stale' in codes,(case_name,codes)
+                assert 'required_attribute_missing' in codes,(case_name,codes)
+
+        refresh_button=page.locator('[data-source-facts-refresh]')
+        assert refresh_button.count()==1
+        assert refresh_button.inner_text().strip()=='Обновить из товаров (2)'
+        refresh_posts_before=report['posts']
+        refresh_url_before=page.url
+        refresh_button.click()
+        refresh_dialog=page.locator('[data-source-facts-refresh-dialog]')
+        refresh_dialog.wait_for()
+        assert '2' in page.locator('[data-source-facts-refresh-count]').inner_text()
+        confirmation_rows=refresh_dialog.locator('ul.orb-review-list > li')
+        assert confirmation_rows.count()==2
+        confirmation_text='\n'.join(confirmation_rows.all_text_contents())
+        assert fixture['source_refresh_cases']['stale_name']['current_title'] in confirmation_text
+        assert fixture['source_refresh_cases']['stale_description']['current_title'] in confirmation_text
+        assert fixture['source_refresh_cases']['fresh_selected']['title'] not in confirmation_text
+        assert fixture['source_refresh_cases']['stale_unselected']['current_title'] not in confirmation_text
+        source_refresh_layout_count_before=len(report['layouts'])
+        layout('source-facts-refresh')
+        source_refresh_layout_count=len(report['layouts'])-source_refresh_layout_count_before
+        page.locator('[data-source-facts-refresh-confirm]').click()
+        page.locator('[data-source-facts-refresh-result]').wait_for()
+        page.wait_for_function(
+            "document.querySelector('#ozon-bulk-repair section[aria-busy]')?.getAttribute('aria-busy')==='false'"
+        )
+        assert page.url==refresh_url_before
+        assert report['posts']==refresh_posts_before+1
+        assert page.locator('[data-source-facts-refresh-result]').count()==1
+        assert source_refresh_description.is_visible()
+        assert source_refresh_description.input_value()==fixture['source_refresh_cases']['stale_name']['manual_value']
+        assert page.locator('[data-source-facts-refresh]').count()==0
+        with app.app_context():
+            source_refresh_after=snapshot_source_refresh_drafts()
+            source_products_after=snapshot_source_refresh_sources()
+            assert MarketplaceOperation.query.count()==source_refresh_operations_before
+        assert source_products_after==source_products_before
+        expected_refresh_changes=set(source_refresh_target_ids)
+        refreshed_versions={
+            draft_id for draft_id in source_refresh_before
+            if source_refresh_after[draft_id]['version']!=source_refresh_before[draft_id]['version']
+        }
+        assert refreshed_versions==expected_refresh_changes,(refreshed_versions,expected_refresh_changes)
+        for draft_id in source_refresh_before:
+            before=source_refresh_before[draft_id]
+            after=source_refresh_after[draft_id]
+            if draft_id not in expected_refresh_changes:
+                assert after==before,(draft_id,before,after)
+                continue
+            assert after['version']==before['version']+2,(draft_id,before['version'],after['version'])
+            assert after['source_fact_hash']!=before['source_fact_hash']
+            content=json.loads(after['content_json'])
+            validation=json.loads(after['validation_result_json'])
+            error_codes={
+                error['code'] for error in validation.get('errors',[])
+                if isinstance(error,dict) and isinstance(error.get('code'),str)
+            }
+            assert 'source_facts_stale' not in error_codes,(draft_id,error_codes)
+            assert 'required_attribute_missing' in error_codes,(draft_id,error_codes)
+            if draft_id==source_refresh_draft_ids['stale_name']:
+                assert content['name']==fixture['source_refresh_cases']['stale_name']['current_title']
+                assert content['description']==fixture['source_refresh_cases']['stale_name']['manual_value']
+            elif draft_id==source_refresh_draft_ids['stale_description']:
+                assert content['name']==fixture['source_refresh_cases']['stale_description']['manual_value']
+                assert content['description']==fixture['source_refresh_cases']['stale_description']['current_description']
+        with app.app_context():
+            unselected_draft=db.session.get(
+                MarketplaceProductDraft,source_refresh_draft_ids['stale_unselected'],
+            )
+            unselected_codes={
+                error['code']
+                for error in MarketplaceDraftService._build_validation_result(unselected_draft)['errors']
+                if isinstance(error,dict) and isinstance(error.get('code'),str)
+            }
+        assert 'source_facts_stale' in unselected_codes
+        assert 'required_attribute_missing' in unselected_codes
+        assert source_refresh_apply_checks==[{
+            'account_and_selection_exact':True,
+            'stale_selected_targets_only_in_order':True,
+            'fresh_selected_and_unselected_stale_excluded':True,
+            'per_target_version_and_source_exact':True,
+            'no_ordinary_edit_fields':True,
+            'csrf_and_explicit_confirmation_present':True,
+            'selection_scope_and_exact_receipt':True,
+        }]
+        assert report['provider_attempts']==0 and report['provider_write_callbacks']==0
+        assert not report['external'] and not report['unexpected_http']
+        report['source_refresh']={
+            'exact_selection_rows':4,
+            'selected_rows':3,
+            'stale_selected_targets':2,
+            'fresh_selected_unchanged':True,
+            'stale_unselected_unchanged':True,
+            'seller_authored_fields_preserved':2,
+            'inherited_fields_rebased':2,
+            'stale_error_removed_and_missing_requirements_retained':True,
+            'source_rows_unchanged':True,
+            'confirmation_layout_checks':source_refresh_layout_count,
+            'posts':report['posts']-refresh_posts_before,
+            'provider_attempts':0,
+            'provider_write_callbacks':0,
+        }
+        passed('draft_selection_source_refresh_exact_local_rebase')
         with app.app_context():assert MarketplaceOperation.query.count()==0
         assert report['provider_attempts']==0 and not report['unexpected_http'] and not report['external']
         report['status']='passed';browser.close()
