@@ -14,6 +14,7 @@ seller-scoped, объём страницы ограничен, каналы до
 получить N+1 на 200 строках.
 """
 
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import load_only
@@ -30,6 +31,11 @@ from models import (
 )
 
 MAX_PAGE_SIZE = 200
+CATALOG_CATEGORY_PAGE_SIZE = 100
+_MAX_CATALOG_CATEGORY_PAGE = ((1 << 63) - 1) // CATALOG_CATEGORY_PAGE_SIZE
+_CATALOG_CATEGORY_CONTROL_GLOB = (
+    '*[' + chr(1) + '-' + chr(31) + chr(127) + '-' + chr(159) + ']*'
+)
 # imported_pending_sync — карточка создана на WB, но артикул ещё не получен
 STATUSES = frozenset({
     'pending', 'validated', 'imported', 'imported_pending_sync', 'failed',
@@ -117,6 +123,7 @@ class MyProductsFeed:
         supplier: Optional[str] = None,
         brand: Optional[str] = None,
         wb_category: Optional[str] = None,
+        catalog_category: Optional[str] = None,
         has_photos: Optional[str] = None,
         stock: Optional[str] = None,
         updates_only: bool = False,
@@ -146,6 +153,9 @@ class MyProductsFeed:
         )
         if marketplace == 'ozon' and not ozon_enabled:
             raise MyProductsFeedFeatureDisabled('Фильтр Ozon отключён')
+        catalog_category_kind, catalog_category_label = (
+            cls._parse_catalog_category_filter(catalog_category)
+        )
 
         query = ImportedProduct.query.filter_by(seller_id=seller_id)
         if marketplace and not marketplace_state:
@@ -229,6 +239,12 @@ class MyProductsFeed:
             query = query.filter(
                 ImportedProduct.mapped_wb_category == wb_category
             )
+        if catalog_category_kind == 'missing':
+            query = query.filter(cls._catalog_category_expression().is_(None))
+        elif catalog_category_kind == 'label':
+            query = query.filter(
+                cls._catalog_category_expression() == catalog_category_label
+            )
         if has_photos == 'yes':
             query = query.filter(
                 ImportedProduct.photo_urls.isnot(None),
@@ -287,6 +303,88 @@ class MyProductsFeed:
             }.get(name, 'Неизвестный фильтр')
             raise MyProductsFeedError(message)
         return value
+
+    @staticmethod
+    def _catalog_category_expression():
+        """The exact category label shown by the catalog row presenter."""
+        return db.func.coalesce(
+            db.func.nullif(ImportedProduct.mapped_wb_category, ''),
+            db.func.nullif(ImportedProduct.category, ''),
+        )
+
+    @staticmethod
+    def _parse_catalog_category_filter(value: Optional[str]):
+        """Parse the explicit missing/label token used by the beta catalog."""
+        if value in (None, ''):
+            return None, None
+        if not isinstance(value, str):
+            raise MyProductsFeedError('Некорректная категория каталога')
+        if value == 'missing':
+            return 'missing', None
+        prefix = 'label:'
+        if not value.startswith(prefix):
+            raise MyProductsFeedError('Некорректная категория каталога')
+        label = value[len(prefix):]
+        if not MyProductsFeed._catalog_category_label_is_valid(label):
+            raise MyProductsFeedError('Некорректная категория каталога')
+        return 'label', label
+
+    @staticmethod
+    def _catalog_category_label_is_valid(label: Any) -> bool:
+        return (
+            isinstance(label, str)
+            and 1 <= len(label) <= 200
+            and not any(
+                unicodedata.category(character) == 'Cc'
+                for character in label
+            )
+        )
+
+    @classmethod
+    def catalog_category_options(
+        cls,
+        *,
+        seller_id: int,
+        page: int = 1,
+    ) -> Dict[str, Any]:
+        """Return bounded distinct labels for the seller-owned catalog."""
+        seller_id = _positive_int(seller_id, 'seller_id')
+        page = _positive_int(page, 'page', 1)
+        if page > _MAX_CATALOG_CATEGORY_PAGE:
+            raise MyProductsFeedError('Страница категорий слишком велика')
+
+        category = cls._catalog_category_expression()
+        # SQLite is the production store. Filtering label length and control
+        # code points before offset/limit keeps option pages disjoint while the
+        # shared Python validator remains the final response boundary.
+        labels = db.session.query(category).filter(
+            ImportedProduct.seller_id == seller_id,
+            category.isnot(None),
+            db.func.length(category) <= 200,
+            category.op('NOT GLOB')(_CATALOG_CATEGORY_CONTROL_GLOB),
+            db.func.instr(category, db.func.char(0)) == 0,
+        ).group_by(category).order_by(category.asc()).offset(
+            (page - 1) * CATALOG_CATEGORY_PAGE_SIZE
+        ).limit(CATALOG_CATEGORY_PAGE_SIZE + 1).all()
+        has_next = len(labels) > CATALOG_CATEGORY_PAGE_SIZE
+        labels = labels[:CATALOG_CATEGORY_PAGE_SIZE]
+        options = [
+            {'key': f'label:{label}', 'label': label}
+            for (label,) in labels
+            if cls._catalog_category_label_is_valid(label)
+        ]
+        has_uncategorized = ImportedProduct.query.with_entities(
+            ImportedProduct.id,
+        ).filter(
+            ImportedProduct.seller_id == seller_id,
+            category.is_(None),
+        ).limit(1).first() is not None
+        return {
+            'options': options,
+            'page': page,
+            'has_next': has_next,
+            'has_uncategorized': has_uncategorized,
+        }
 
     @staticmethod
     def _wb_product_exists(*, seller_id: int, active_only: bool = False):

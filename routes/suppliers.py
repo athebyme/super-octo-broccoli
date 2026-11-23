@@ -1387,12 +1387,13 @@ def _bounded_import_batch_template_value():
 
 
 def _no_store_supplier_import_batch_response(response):
-    """Keep signed batch and marketplace-filter feed responses out of caches."""
+    """Keep scoped feed responses out of caches."""
     response = make_response(response)
     if 'import_batch' in request.args:
         cache_control = 'no-store'
     elif request.path == '/api/my-products' and (
-        'marketplace' in request.args or 'marketplace_state' in request.args
+        'marketplace' in request.args or 'marketplace_state' in request.args or
+        'catalog_category' in request.args
     ):
         cache_control = 'private, no-store'
     else:
@@ -2272,7 +2273,10 @@ def register_supplier_routes(app):
     @app.after_request
     def no_store_my_products_selection_response(response):
         # Also cover framework-generated auth, CSRF and method errors.
-        if request.path == '/api/my-products/selection':
+        if request.path in (
+            '/api/my-products/selection',
+            '/api/my-products/categories',
+        ):
             response.headers['Cache-Control'] = 'private, no-store'
             response.headers['Pragma'] = 'no-cache'
             response.headers['Expires'] = '0'
@@ -4577,11 +4581,16 @@ def register_supplier_routes(app):
         try:
             marketplace_values = request.args.getlist('marketplace')
             marketplace_state_values = request.args.getlist('marketplace_state')
+            catalog_category_values = request.args.getlist('catalog_category')
             if len(marketplace_values) > 1:
                 raise MyProductsFeedError('Площадка указана несколько раз')
             if len(marketplace_state_values) > 1:
                 raise MyProductsFeedError(
                     'Статус карточек указан несколько раз'
+                )
+            if len(catalog_category_values) > 1:
+                raise MyProductsFeedError(
+                    'Категория каталога указана несколько раз'
                 )
             payload = MyProductsFeed.list_products(
                 seller_id=seller.id,
@@ -4590,6 +4599,10 @@ def register_supplier_routes(app):
                 supplier=request.args.get('supplier') or None,
                 brand=request.args.get('brand') or None,
                 wb_category=request.args.get('wb_category') or None,
+                catalog_category=(
+                    catalog_category_values[0]
+                    if catalog_category_values else None
+                ),
                 has_photos=request.args.get('has_photos') or None,
                 stock=request.args.get('stock') or None,
                 updates_only=request.args.get('updates') == '1',
@@ -4664,6 +4677,35 @@ def register_supplier_routes(app):
             'success': True,
             **MyProductsFeed.facets(seller_id=current_user.seller.id),
         })
+
+    @app.route('/api/my-products/categories')
+    @login_required
+    @seller_required
+    def api_my_products_categories():
+        """Read a bounded, seller-scoped page of displayed catalog categories."""
+        from services.my_products_feed import MyProductsFeed, MyProductsFeedError
+
+        page_values = request.args.getlist('page')
+        try:
+            if len(page_values) > 1:
+                raise MyProductsFeedError('Страница указана несколько раз')
+            if not page_values:
+                page = 1
+            else:
+                raw_page = page_values[0]
+                if not re.fullmatch(r'[1-9][0-9]{0,17}', raw_page):
+                    raise MyProductsFeedError('Страница должна быть целым числом')
+                page = int(raw_page)
+            payload = MyProductsFeed.catalog_category_options(
+                seller_id=current_user.seller.id,
+                page=page,
+            )
+        except MyProductsFeedError as exc:
+            return jsonify({
+                'success': False,
+                'error': str(exc),
+            }), 400
+        return jsonify({'success': True, **payload})
 
     @app.route('/my-products')
     @login_required

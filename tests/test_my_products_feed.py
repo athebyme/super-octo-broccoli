@@ -810,6 +810,210 @@ class MyProductsFeedTest(unittest.TestCase):
         self.assertEqual(len(lower.get_json()['items']), 1)
         self.assertEqual(len(upper.get_json()['items']), 1)
 
+    def test_catalog_category_filter_uses_the_display_fallback_and_missing(self):
+        from models import ImportedProduct
+
+        published = ImportedProduct.query.filter_by(id=self.published_id).one()
+        published.mapped_wb_category = 'WB / Свечи'
+        published.category = 'Исходная / Свечи'
+        draft = ImportedProduct.query.filter_by(id=self.draft_id).one()
+        draft.mapped_wb_category = ''
+        draft.category = 'Исходная / Пледы'
+        missing = ImportedProduct(
+            seller_id=self.seller_id,
+            external_id='imp-no-category',
+            source_type='synthetic',
+            title='Без категории',
+            import_status='pending',
+            mapped_wb_category='',
+            category='',
+        )
+        foreign = ImportedProduct.query.filter_by(id=self.foreign_id).one()
+        foreign.mapped_wb_category = 'WB / Свечи'
+        self.db.session.add(missing)
+        self.db.session.commit()
+
+        with self._auth():
+            mapped = self.client.get('/api/my-products?' + urlencode({
+                'catalog_category': 'label:WB / Свечи',
+            }))
+            source_fallback = self.client.get('/api/my-products?' + urlencode({
+                'catalog_category': 'label:Исходная / Пледы',
+            }))
+            uncategorized = self.client.get(
+                '/api/my-products?catalog_category=missing',
+            )
+            legacy_wb_category = self.client.get('/api/my-products?' + urlencode({
+                'wb_category': 'WB / Свечи',
+            }))
+
+        self.assertEqual(mapped.status_code, 200)
+        self.assertEqual(
+            [item['id'] for item in mapped.get_json()['items']],
+            [self.published_id],
+        )
+        self.assertEqual(
+            mapped.get_json()['items'][0]['category'], 'WB / Свечи',
+        )
+        self.assertEqual(
+            [item['id'] for item in source_fallback.get_json()['items']],
+            [self.draft_id],
+        )
+        self.assertEqual(
+            source_fallback.get_json()['items'][0]['category'],
+            'Исходная / Пледы',
+        )
+        self.assertEqual(
+            [item['id'] for item in uncategorized.get_json()['items']],
+            [missing.id],
+        )
+        self.assertEqual(
+            [item['id'] for item in legacy_wb_category.get_json()['items']],
+            [self.published_id],
+        )
+        self.assertIn('private', mapped.headers['Cache-Control'])
+        self.assertIn('no-store', mapped.headers['Cache-Control'])
+
+    def test_catalog_category_filter_rejects_malformed_duplicate_and_control_tokens(self):
+        malformed = [
+            'unknown',
+            'label:',
+            'label:' + ('x' * 201),
+            'label:category\u0000name',
+        ]
+        with self._auth():
+            responses = [
+                self.client.get('/api/my-products?' + urlencode({
+                    'catalog_category': value,
+                }))
+                for value in malformed
+            ]
+            duplicate = self.client.get('/api/my-products?' + urlencode([
+                ('catalog_category', 'label:One'),
+                ('catalog_category', 'label:Two'),
+            ]))
+
+        for response in responses + [duplicate]:
+            self.assertEqual(response.status_code, 400)
+            self.assertTrue(response.get_json()['error'])
+            self.assertIn('private', response.headers['Cache-Control'])
+            self.assertIn('no-store', response.headers['Cache-Control'])
+
+    def test_catalog_category_options_are_paged_and_tenant_scoped(self):
+        from models import ImportedProduct
+
+        self.db.session.add_all([
+            ImportedProduct(
+                seller_id=self.seller_id,
+                external_id=f'category-option-{index:03d}',
+                source_type='synthetic',
+                title=f'Category {index:03d}',
+                import_status='pending',
+                mapped_wb_category=f'Category {index:03d}',
+            )
+            for index in range(101)
+        ])
+        foreign = ImportedProduct.query.filter_by(id=self.foreign_id).one()
+        foreign.mapped_wb_category = 'Foreign-only category'
+        self.db.session.commit()
+
+        with self._auth():
+            first = self.client.get('/api/my-products/categories')
+            second = self.client.get('/api/my-products/categories?page=2')
+            beyond = self.client.get('/api/my-products/categories?page=3')
+
+        first_payload = first.get_json()
+        second_payload = second.get_json()
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(beyond.status_code, 200)
+        self.assertTrue(first_payload['success'])
+        self.assertEqual(first_payload['page'], 1)
+        self.assertTrue(first_payload['has_next'])
+        self.assertTrue(first_payload['has_uncategorized'])
+        self.assertEqual(len(first_payload['options']), 100)
+        self.assertEqual(first_payload['options'][0], {
+            'key': 'label:Category 000',
+            'label': 'Category 000',
+        })
+        self.assertEqual(second_payload['page'], 2)
+        self.assertFalse(second_payload['has_next'])
+        self.assertEqual(second_payload['options'], [{
+            'key': 'label:Category 100',
+            'label': 'Category 100',
+        }])
+        self.assertFalse(beyond.get_json()['has_next'])
+        self.assertEqual(beyond.get_json()['options'], [])
+        self.assertNotIn(
+            'Foreign-only category',
+            json.dumps([first_payload, second_payload], ensure_ascii=False),
+        )
+        for response in (first, second, beyond):
+            self.assertIn('private', response.headers['Cache-Control'])
+            self.assertIn('no-store', response.headers['Cache-Control'])
+            self.assertEqual(response.headers['Pragma'], 'no-cache')
+            self.assertEqual(response.headers['Expires'], '0')
+
+    def test_catalog_category_options_reject_bad_and_duplicate_pages(self):
+        invalid_queries = [
+            'page=0',
+            'page=1.5',
+            'page=99999999999999999',
+            'page=1&page=2',
+        ]
+        with self._auth():
+            responses = [
+                self.client.get('/api/my-products/categories?' + query)
+                for query in invalid_queries
+            ]
+
+        for response in responses:
+            self.assertEqual(response.status_code, 400)
+            self.assertTrue(response.get_json()['error'])
+            self.assertIn('private', response.headers['Cache-Control'])
+            self.assertIn('no-store', response.headers['Cache-Control'])
+
+    def test_catalog_category_options_skip_unsupported_persisted_labels(self):
+        from models import ImportedProduct
+
+        self.db.session.add_all([
+            ImportedProduct(
+                seller_id=self.seller_id,
+                external_id=external_id,
+                source_type='synthetic',
+                title=external_id,
+                import_status='pending',
+                category=label,
+            )
+            for external_id, label in (
+                ('category-valid', 'Сохраняемая'),
+                ('category-too-long', 'x' * 201),
+                ('category-control', 'bad\x01label'),
+                ('category-null-control', 'bad\x00label'),
+            )
+        ])
+        self.db.session.commit()
+
+        with self._auth():
+            response = self.client.get('/api/my-products/categories')
+            too_long_filter = self.client.get('/api/my-products?' + urlencode({
+                'catalog_category': 'label:' + ('x' * 201),
+            }))
+            control_filter = self.client.get('/api/my-products?' + urlencode({
+                'catalog_category': 'label:bad\x01label',
+            }))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['options'], [{
+            'key': 'label:Сохраняемая',
+            'label': 'Сохраняемая',
+        }])
+        self.assertFalse(response.get_json()['has_next'])
+        for rejected in (too_long_filter, control_filter):
+            self.assertEqual(rejected.status_code, 400)
+            self.assertIn('private', rejected.headers['Cache-Control'])
+            self.assertIn('no-store', rejected.headers['Cache-Control'])
+
     def test_facets_count_statuses_and_supplier_updates(self):
         with self._auth():
             response = self.client.get('/api/my-products/facets')
