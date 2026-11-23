@@ -16,6 +16,7 @@ from models import (
     Marketplace,
     MarketplaceCategoryMapping,
     MarketplaceListing,
+    MarketplaceListingLinkEvent,
     MarketplaceOperation,
     MarketplaceProductDraft,
     MarketplaceProductType,
@@ -41,6 +42,7 @@ from services.ozon_prepare_category_decisions import (
     build_ozon_prepare_category_candidate,
     same_ozon_prepare_category_scope,
     prepare_ozon_category_window,
+    _source_observation,
     selected_product_type_id,
 )
 
@@ -48,6 +50,8 @@ from services.ozon_prepare_category_decisions import (
 NOW = datetime(2026, 11, 23, 12, 0)
 SOURCE_TITLE = "Складной текстильный органайзер для дома"
 SOURCE_PATH = "Дом и хранение > Органайзеры"
+OBSERVED_SOURCE_CATEGORY = "Локальная категория поставщика без пути Ozon"
+OBSERVED_MAPPING_ALGORITHM = "ozon-exact-linked-category-consensus-v3"
 
 
 class FakeDecisionsClient:
@@ -249,6 +253,7 @@ def case():
         app=app,
         context=context,
         now=NOW,
+        user=user,
         seller=seller,
         supplier=supplier,
         supplier_product=supplier_product,
@@ -341,6 +346,249 @@ def add_sibling(case, ordinal, *, due_at=NOW, supplier=None, vendor_code=None):
     return item, product
 
 
+def set_target_source_category(case, category):
+    source_snapshot = json.loads(case.supplier_product.original_data_json)
+    source_snapshot["category"] = category
+    source_snapshot["all_categories"] = [category]
+    raw = json.dumps(source_snapshot, ensure_ascii=False, sort_keys=True)
+    case.supplier_product.category = category
+    case.supplier_product.original_data_json = raw
+    case.product.category = category
+    case.product.original_data = raw
+    case.draft.source_fact_hash = MarketplaceFactPackBuilder.build(
+        case.product,
+    )["fact_hash"]
+    db.session.commit()
+    case.item.prepared_version = case.draft.version
+    db.session.commit()
+
+
+def add_exact_linked_observation(
+    case,
+    ordinal,
+    product_type,
+    *,
+    source_category=OBSERVED_SOURCE_CATEGORY,
+    supplier=None,
+    account=None,
+    link_source="exact_source_identity",
+    link_action="auto_link",
+    linked_by_user_id=None,
+    listing_changes=None,
+    create_event=True,
+):
+    """Add one fully current local Ozon listing and its exact link lineage."""
+    supplier = supplier or case.supplier
+    account = account or case.account
+    title = f"Observed organizer {ordinal}"
+    vendor_code = f"OBS-SKU-{ordinal:03d}"
+    external_id = f"observed-supplier-product-{ordinal}"
+    source_raw = json.dumps({
+        "title": title,
+        "category": source_category,
+        "all_categories": [source_category],
+        "vendor_code": vendor_code,
+    }, ensure_ascii=False, sort_keys=True)
+    source = SupplierProduct(
+        supplier_id=supplier.id,
+        external_id=external_id,
+        vendor_code=vendor_code,
+        title=title,
+        category=source_category,
+        content_revision=4,
+        original_data_json=source_raw,
+    )
+    db.session.add(source)
+    db.session.flush()
+    product = ImportedProduct(
+        seller_id=case.seller.id,
+        supplier_id=supplier.id,
+        supplier_product_id=source.id,
+        supplier_content_revision=4,
+        source_type=supplier.code,
+        external_id=external_id,
+        external_vendor_code=vendor_code,
+        title=title,
+        category=source_category,
+        original_data=source_raw,
+        import_status="pending",
+    )
+    db.session.add(product)
+    db.session.flush()
+
+    product_type.attributes_synced_at = case.now
+    product_type.attributes_sync_status = "success"
+    product_type.attributes_schema_hash = (
+        product_type.attributes_schema_hash or f"schema-{product_type.id}"
+    )
+    product_type.last_seen_at = case.now
+    product_type.is_available = True
+    product_type.is_seller_selectable = True
+    product_type.is_disabled_upstream = False
+    product_type.category.is_available = True
+    product_type.category.is_disabled_upstream = False
+    listing = MarketplaceListing(
+        seller_id=case.seller.id,
+        marketplace_id=case.marketplace.id,
+        account_id=account.id,
+        imported_product_id=product.id,
+        product_type_id=product_type.id,
+        offer_id=vendor_code,
+        external_product_id=f"observed-ozon-product-{ordinal}",
+        external_category_id=product_type.category.external_category_id,
+        external_type_id=product_type.external_type_id,
+        title=title,
+        normalized_status="active",
+        link_status="linked",
+        link_source=link_source,
+        link_evidence_json=json.dumps({
+            "supplier_product_id": source.id,
+            "source_category": source_category,
+            "supplier_content_revision": 4,
+        }, ensure_ascii=False, sort_keys=True),
+        link_version=1,
+        linked_at=case.now,
+        linked_by_user_id=linked_by_user_id,
+        last_seen_at=case.now,
+        info_synced_at=case.now,
+        attributes_synced_at=case.now,
+        is_available=True,
+        is_archived=False,
+        sync_fingerprint=f"{ordinal:064x}"[-64:],
+    )
+    for field, value in (listing_changes or {}).items():
+        setattr(listing, field, value)
+    db.session.add(listing)
+    db.session.flush()
+    event = None
+    if create_event:
+        event = MarketplaceListingLinkEvent(
+            seller_id=case.seller.id,
+            marketplace_id=case.marketplace.id,
+            account_id=account.id,
+            listing_id=listing.id,
+            previous_imported_product_id=None,
+            imported_product_id=product.id,
+            action="auto_link",
+            source=link_source,
+            evidence_json=listing.link_evidence_json,
+            actor_user_id=linked_by_user_id,
+            link_version=listing.link_version,
+            created_at=case.now,
+        )
+        event.action = link_action
+        db.session.add(event)
+    db.session.flush()
+    return SimpleNamespace(
+        source=source,
+        product=product,
+        listing=listing,
+        event=event,
+    )
+
+
+def observed_type_pool(case, *, extra_count=0):
+    """Return fresh seller-selectable types in the fixture's one official node."""
+    product_types = [case.type_a, case.type_b]
+    for index in range(extra_count):
+        product_type = MarketplaceProductType(
+            marketplace_id=case.marketplace.id,
+            category_id=case.category.id,
+            external_type_id=str(7100 + index),
+            name=f"Дополнительный тип {index + 1}",
+            is_available=True,
+            is_seller_selectable=True,
+            is_disabled_upstream=False,
+            last_seen_at=case.now,
+            attributes_synced_at=case.now,
+            attributes_sync_status="success",
+            attributes_schema_hash=f"schema-extra-{index}",
+        )
+        db.session.add(product_type)
+        product_types.append(product_type)
+    db.session.flush()
+    for product_type in product_types:
+        product_type.attributes_synced_at = case.now
+        product_type.attributes_sync_status = "success"
+        product_type.attributes_schema_hash = (
+            product_type.attributes_schema_hash or f"schema-{product_type.id}"
+        )
+        product_type.last_seen_at = case.now
+        product_type.is_available = True
+        product_type.is_seller_selectable = True
+        product_type.is_disabled_upstream = False
+        product_type.category.is_available = True
+        product_type.category.is_disabled_upstream = False
+        product_type.category.last_seen_at = case.now
+    return product_types
+
+
+def add_observed_evidence(case, *, per_type=2, category=OBSERVED_SOURCE_CATEGORY,
+                          supplier=None, account=None, extra_count=0,
+                          modifications=None):
+    """Create exact link evidence, with at least two distinct source rows per type."""
+    supplier = supplier or case.supplier
+    product_types = observed_type_pool(case, extra_count=extra_count)
+    evidence = []
+    ordinal = 1
+    for product_type in product_types[:2]:
+        for _ in range(per_type):
+            changes = (modifications or {}).get(ordinal, {})
+            evidence.append(add_exact_linked_observation(
+                case,
+                ordinal,
+                product_type,
+                source_category=category,
+                supplier=changes.get("supplier", supplier),
+                account=changes.get("account", account),
+                link_source=changes.get("link_source", "exact_source_identity"),
+                link_action=changes.get("link_action", "auto_link"),
+                linked_by_user_id=changes.get("linked_by_user_id"),
+                listing_changes=changes.get("listing", {}),
+                create_event=changes.get("create_event", True),
+            ))
+            ordinal += 1
+    db.session.commit()
+    return product_types, evidence
+
+
+def add_stale_supplier_mapping(
+    case,
+    reason,
+    *,
+    mapping_source="deterministic",
+    mapping_status="stale",
+    algorithm=OBSERVED_MAPPING_ALGORITHM,
+    corrected_by_user_id=None,
+):
+    mapping = MarketplaceCategoryMapping(
+        seller_id=case.seller.id,
+        marketplace_id=case.marketplace.id,
+        supplier_id=case.supplier.id,
+        product_type_id=case.type_a.id,
+        scope_key=f"supplier:{case.supplier.id}",
+        source_type=case.supplier.code,
+        source_category=OBSERVED_SOURCE_CATEGORY,
+        source_category_normalized=MarketplaceDraftService._normalized_text(
+            OBSERVED_SOURCE_CATEGORY,
+        ),
+        external_category_id=case.category.external_category_id,
+        external_type_id=case.type_a.external_type_id,
+        mapping_source=mapping_source,
+        mapping_status=mapping_status,
+        confidence=0.99,
+        evidence_json=json.dumps({
+            "algorithm": algorithm,
+            "state": "stale" if mapping_status == "stale" else mapping_status,
+            "reason": reason,
+        }, ensure_ascii=False, sort_keys=True),
+        corrected_by_user_id=corrected_by_user_id,
+    )
+    db.session.add(mapping)
+    db.session.commit()
+    return mapping
+
+
 def test_exact_supplier_path_builds_reusable_scoped_candidate_without_writes(case):
     before_version = case.draft.version
     before_mapping_count = MarketplaceCategoryMapping.query.count()
@@ -379,6 +627,404 @@ def test_exact_supplier_path_builds_reusable_scoped_candidate_without_writes(cas
     assert case.draft.version == before_version
     assert MarketplaceCategoryMapping.query.count() == before_mapping_count
     assert not db.session.is_modified(case.draft)
+
+
+@pytest.mark.parametrize("category_projection", [None, "Different projection label"])
+def test_exact_literal_path_survives_missing_or_stale_category_projection(
+    case,
+    category_projection,
+):
+    case.product.category = category_projection
+    db.session.commit()
+
+    assert _source_observation(case.product) is not None
+    candidate = build_candidate(case)
+
+    assert candidate is not None
+    assert candidate.match_kind == "full_path"
+    assert candidate.context.source_fields["category"] == SOURCE_PATH
+
+
+def test_unmatched_source_uses_only_observed_types_under_one_fresh_node(
+    case,
+    tmp_path,
+):
+    set_target_source_category(case, OBSERVED_SOURCE_CATEGORY)
+    types, evidence = add_observed_evidence(
+        case,
+        extra_count=8,
+        modifications={
+            1: {"link_source": "exact_offer_identity"},
+            4: {
+                "link_source": "seller_confirmation",
+                "link_action": "manual_link",
+                "linked_by_user_id": case.user.id,
+            },
+        },
+    )
+    before_mapping_count = MarketplaceCategoryMapping.query.count()
+    before_version = case.draft.version
+    before_content = case.draft.content_json
+
+    candidate = build_candidate(case)
+
+    assert candidate is not None
+    assert len(types) == 10
+    assert len(types) > 8
+    assert [choice.type_id for choice in candidate.context.choices] == [
+        case.type_a.external_type_id,
+        case.type_b.external_type_id,
+    ]
+    assert all(
+        choice.category_id == case.category.external_category_id
+        for choice in candidate.context.choices
+    )
+    assert candidate.context.source_fields == {
+        "name": SOURCE_TITLE,
+        "category": OBSERVED_SOURCE_CATEGORY,
+    }
+
+    client = FakeDecisionsClient()
+    pipeline = OpenAIDecisionsPipeline(
+        OpenAIDecisionsCache(
+            str(tmp_path / "private" / "decisions.sqlite3"),
+            max_calls_per_day=5,
+        ),
+        client,
+    )
+    outcome = pipeline.run_category_phase([candidate.context], now=case.now)
+    assert outcome.results[0].status == "selected"
+    assert selected_product_type_id(candidate, outcome.results[0]) == case.type_a.id
+    assert len(client.calls) == 1
+    prompt_payload = json.dumps(
+        client.calls[0][0], ensure_ascii=False, sort_keys=True,
+    ) + "\n" + "\n".join(
+        json.dumps({
+            "name": question.name,
+            "instructions": question.instructions,
+            "choices": [
+                {"value": choice.value, "description": choice.description}
+                for choice in question.choices
+            ],
+        }, ensure_ascii=False, sort_keys=True)
+        for question in client.calls[0][1]
+    )
+    assert OBSERVED_SOURCE_CATEGORY in prompt_payload
+    assert candidate.context.product_key not in prompt_payload
+    for row in evidence:
+        assert row.source.external_id not in prompt_payload
+        assert row.source.vendor_code not in prompt_payload
+        assert row.listing.external_product_id not in prompt_payload
+    assert "supplier_product_id" not in prompt_payload
+    assert MarketplaceCategoryMapping.query.count() == before_mapping_count
+    assert MarketplaceOperation.query.count() == 0
+    assert case.draft.version == before_version
+    assert case.draft.content_json == before_content
+    assert case.draft.product_type_id is None
+
+
+@pytest.mark.parametrize("fault", [
+    "other_account",
+    "split_accounts",
+    "other_supplier",
+    "split_suppliers",
+    "stale_listing",
+    "stale_type_schema",
+    "unknown_type",
+    "missing_exact_event",
+    "manual_unconfirmed_link",
+    "mismatching_official_pair",
+    "mixed_nodes",
+    "source_revision_drift",
+    "truncated_scope",
+])
+def test_unmatched_source_alias_fails_closed_for_untrusted_evidence(
+    case,
+    fault,
+    monkeypatch,
+):
+    set_target_source_category(case, OBSERVED_SOURCE_CATEGORY)
+    account2 = None
+    supplier2 = None
+    modifications = {}
+    evidence_supplier = case.supplier
+    if fault in {"other_account", "split_accounts"}:
+        account2 = SellerMarketplaceAccount(
+            seller_id=case.seller.id,
+            marketplace_id=case.marketplace.id,
+            external_account_id=f"alias-evidence-{fault}",
+            label="Other synthetic Ozon account",
+            is_active=True,
+        )
+        db.session.add(account2)
+        db.session.flush()
+        if fault == "other_account":
+            evidence_account = account2
+        else:
+            evidence_account = None
+            modifications = {
+                2: {"account": account2},
+                4: {"account": account2},
+            }
+    else:
+        evidence_account = None
+    if fault in {"other_supplier", "split_suppliers"}:
+        supplier2 = Supplier(
+            name=f"Other alias evidence supplier {fault}",
+            code=f"other-alias-{fault}",
+        )
+        db.session.add(supplier2)
+        db.session.flush()
+        if fault == "other_supplier":
+            evidence_supplier = supplier2
+        else:
+            modifications.update({
+                2: {**modifications.get(2, {}), "supplier": supplier2},
+                4: {**modifications.get(4, {}), "supplier": supplier2},
+            })
+    if fault == "stale_listing":
+        modifications[1] = {
+            "listing": {"last_seen_at": case.now - timedelta(days=3)},
+        }
+    elif fault == "missing_exact_event":
+        modifications[1] = {"create_event": False}
+    elif fault == "manual_unconfirmed_link":
+        modifications[1] = {"link_source": "seller_confirmation"}
+
+    _types, evidence = add_observed_evidence(
+        case,
+        supplier=evidence_supplier,
+        account=evidence_account,
+        modifications=modifications,
+    )
+    if fault == "stale_type_schema":
+        evidence[0].listing.product_type.attributes_synced_at = (
+            case.now - timedelta(days=3)
+        )
+    elif fault == "unknown_type":
+        evidence[0].listing.product_type_id = None
+        evidence[0].listing.external_type_id = None
+    elif fault == "mismatching_official_pair":
+        evidence[0].listing.external_type_id = "999999"
+    elif fault == "source_revision_drift":
+        evidence[0].product.supplier_content_revision = 3
+    elif fault == "truncated_scope":
+        monkeypatch.setattr(
+            "services.ozon_prepare_category_decisions._MAX_OBSERVED_SCOPE_ROWS",
+            3,
+        )
+    elif fault == "mixed_nodes":
+        other_category = MarketplaceTaxonomyCategory(
+            marketplace_id=case.marketplace.id,
+            external_category_id="12",
+            name="Other category",
+            full_path="Other category / Other leaf",
+            depth=1,
+            is_available=True,
+            is_disabled_upstream=False,
+            last_seen_at=case.now,
+        )
+        db.session.add(other_category)
+        db.session.flush()
+        other_type = MarketplaceProductType(
+            marketplace_id=case.marketplace.id,
+            category_id=other_category.id,
+            external_type_id="7999",
+            name="Other observed type",
+            is_available=True,
+            is_seller_selectable=True,
+            is_disabled_upstream=False,
+            last_seen_at=case.now,
+            attributes_synced_at=case.now,
+            attributes_sync_status="success",
+            attributes_schema_hash="schema-other-node",
+        )
+        db.session.add(other_type)
+        db.session.flush()
+        for row in evidence[2:]:
+            row.listing.product_type_id = other_type.id
+            row.listing.external_category_id = other_category.external_category_id
+            row.listing.external_type_id = other_type.external_type_id
+            row.event.evidence_json = row.listing.link_evidence_json
+    db.session.commit()
+
+    assert build_candidate(case) is None
+
+
+def test_target_supplier_product_copy_cannot_count_as_an_observed_peer(case):
+    set_target_source_category(case, OBSERVED_SOURCE_CATEGORY)
+    add_exact_linked_observation(case, 1, case.type_a)
+    add_exact_linked_observation(case, 2, case.type_b)
+    add_exact_linked_observation(case, 3, case.type_b)
+
+    # This second seller copy points at the target's exact SupplierProduct.
+    # It cannot turn one true type-A peer into two independent observations.
+    duplicate = ImportedProduct(
+        seller_id=case.seller.id,
+        supplier_id=case.supplier.id,
+        supplier_product_id=case.supplier_product.id,
+        supplier_content_revision=case.supplier_product.content_revision,
+        source_type=case.supplier.code,
+        external_id=case.supplier_product.external_id,
+        external_vendor_code=case.supplier_product.vendor_code,
+        title=case.product.title,
+        category=OBSERVED_SOURCE_CATEGORY,
+        original_data=case.product.original_data,
+        import_status="pending",
+    )
+    db.session.add(duplicate)
+    db.session.flush()
+    duplicate_listing = MarketplaceListing(
+        seller_id=case.seller.id,
+        marketplace_id=case.marketplace.id,
+        account_id=case.account.id,
+        imported_product_id=duplicate.id,
+        product_type_id=case.type_a.id,
+        offer_id="OBS-TARGET-COPY",
+        external_product_id="observed-target-copy",
+        external_category_id=case.category.external_category_id,
+        external_type_id=case.type_a.external_type_id,
+        title=case.product.title,
+        normalized_status="active",
+        link_status="linked",
+        link_source="exact_source_identity",
+        link_evidence_json=json.dumps({
+            "supplier_product_id": case.supplier_product.id,
+            "source_category": OBSERVED_SOURCE_CATEGORY,
+            "supplier_content_revision": case.supplier_product.content_revision,
+        }, ensure_ascii=False, sort_keys=True),
+        link_version=1,
+        linked_at=case.now,
+        last_seen_at=case.now,
+        info_synced_at=case.now,
+        attributes_synced_at=case.now,
+        is_available=True,
+        is_archived=False,
+        sync_fingerprint="d" * 64,
+    )
+    db.session.add(duplicate_listing)
+    db.session.flush()
+    db.session.add(MarketplaceListingLinkEvent(
+        seller_id=case.seller.id,
+        marketplace_id=case.marketplace.id,
+        account_id=case.account.id,
+        listing_id=duplicate_listing.id,
+        imported_product_id=duplicate.id,
+        action="auto_link",
+        source="exact_source_identity",
+        evidence_json=duplicate_listing.link_evidence_json,
+        link_version=duplicate_listing.link_version,
+        created_at=case.now,
+    ))
+    db.session.commit()
+
+    assert build_candidate(case) is None
+
+
+@pytest.mark.parametrize("reason", [
+    "conflicting_product_types",
+    "heterogeneous_source_category",
+])
+def test_alias_fallback_can_replace_only_stale_v3_supplier_conflict(case, reason):
+    set_target_source_category(case, OBSERVED_SOURCE_CATEGORY)
+    add_observed_evidence(case)
+    mapping = add_stale_supplier_mapping(case, reason)
+    before = (
+        mapping.mapping_source,
+        mapping.mapping_status,
+        mapping.evidence_json,
+        MarketplaceCategoryMapping.query.count(),
+    )
+
+    candidate = build_candidate(case)
+
+    assert candidate is not None
+    assert [choice.type_id for choice in candidate.context.choices] == [
+        case.type_a.external_type_id,
+        case.type_b.external_type_id,
+    ]
+    db.session.refresh(mapping)
+    assert (
+        mapping.mapping_source,
+        mapping.mapping_status,
+        mapping.evidence_json,
+        MarketplaceCategoryMapping.query.count(),
+    ) == before
+
+
+@pytest.mark.parametrize("mapping_kwargs", [
+    {"mapping_source": "manual", "mapping_status": "stale"},
+    {"mapping_source": "deterministic", "mapping_status": "active"},
+    {"mapping_source": "deterministic", "mapping_status": "rejected"},
+    {"mapping_source": "deterministic", "mapping_status": "stale",
+     "reason": "not_enough_exact_listings"},
+    {"mapping_source": "deterministic", "mapping_status": "stale",
+     "algorithm": "ozon-exact-linked-category-consensus-v2"},
+    {"mapping_source": "deterministic", "mapping_status": "stale",
+     "corrected_by_user_id": "seller"},
+])
+def test_alias_fallback_does_not_override_other_mapping_states(case, mapping_kwargs):
+    set_target_source_category(case, OBSERVED_SOURCE_CATEGORY)
+    add_observed_evidence(case)
+    options = dict(mapping_kwargs)
+    reason = options.pop("reason", "conflicting_product_types")
+    corrected_by_user_id = options.pop("corrected_by_user_id", None)
+    if corrected_by_user_id == "seller":
+        corrected_by_user_id = case.user.id
+    add_stale_supplier_mapping(
+        case,
+        reason,
+        corrected_by_user_id=corrected_by_user_id,
+        **options,
+    )
+
+    assert build_candidate(case) is None
+
+
+def test_observed_evidence_change_invalidates_category_candidate_scope(
+    case,
+    tmp_path,
+):
+    set_target_source_category(case, OBSERVED_SOURCE_CATEGORY)
+    _types, evidence = add_observed_evidence(case)
+    before = build_candidate(case)
+    assert before is not None
+    client = FakeDecisionsClient()
+    pipeline = OpenAIDecisionsPipeline(
+        OpenAIDecisionsCache(
+            str(tmp_path / "private" / "decisions.sqlite3"),
+            max_calls_per_day=5,
+        ),
+        client,
+    )
+    response = pipeline.run_category_phase([before.context], now=case.now)
+    assert response.results[0].status == "selected"
+
+    # A new matching current link event still represents exact evidence, but
+    # changes the bounded observation set signature after the model response.
+    listing = evidence[0].listing
+    listing.link_version += 1
+    db.session.add(MarketplaceListingLinkEvent(
+        seller_id=case.seller.id,
+        marketplace_id=case.marketplace.id,
+        account_id=case.account.id,
+        listing_id=listing.id,
+        previous_imported_product_id=None,
+        imported_product_id=evidence[0].product.id,
+        action="auto_link",
+        source="exact_source_identity",
+        evidence_json=listing.link_evidence_json,
+        actor_user_id=None,
+        link_version=listing.link_version,
+        created_at=case.now,
+    ))
+    db.session.commit()
+
+    after = build_candidate(case)
+    assert after is not None
+    assert before.scope_signature != after.scope_signature
+    assert before.candidate_signature != after.candidate_signature
+    assert not same_ozon_prepare_category_scope(before, after)
 
 
 def test_fake_pipeline_selects_exact_local_type_only_above_review_threshold(case, tmp_path):
