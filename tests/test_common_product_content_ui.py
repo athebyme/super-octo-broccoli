@@ -457,6 +457,185 @@ assert.equal(storeWorkspaceReturn(pricePayload, {storage: storage(), crypto: {},
     assert result.returncode == 0, result.stderr
 
 
+def test_ozon_action_selection_subset_is_strict_for_price_and_update_capsules():
+    node = shutil.which("node")
+    assert node, "Node is required to verify the Ozon workspace return capsule"
+    script = r"""
+const assert = require('node:assert/strict');
+const {
+  storeWorkspaceReturn, workspaceReturnFromHash,
+  priceWorkspaceReturnHref, bindPriceWorkspaceResult,
+  priceResultWorkspaceReturnHref, WORKSPACE_RETURN_SESSION_KEY,
+} = require('./static/common-product-content.js');
+function storage() {
+  const values = new Map();
+  return {
+    values,
+    getItem(key) { return values.has(key) ? values.get(key) : null; },
+    setItem(key, value) { values.set(key, String(value)); },
+    removeItem(key) { values.delete(key); },
+  };
+}
+let randomByte = 0;
+const crypto = {getRandomValues(bytes) {
+  for (let i = 0; i < bytes.length; i += 1) bytes[i] = (randomByte + i) & 255;
+  randomByte += 16;
+  return bytes;
+}};
+const now = 1800000000000;
+const owner = '41:9';
+const selectionIds = [7, 14, 22, 35];
+const actionSelectionIds = [14, 35];
+const scope = {tab: 'all', search: 'shirt', supplier: 3, sort: 'title'};
+const batch = 'signed-import-batch-token';
+const ozonTarget = {channel: 'ozon', accountId: 32, ids: [9101, 9102]};
+const basePayload = {owner, selectionIds, scope, batch};
+const priceStorage = storage();
+const priceOptions = {storage: priceStorage, crypto, now};
+const priceNonce = storeWorkspaceReturn({
+  ...basePayload, priceTarget: ozonTarget, actionSelectionIds,
+}, priceOptions);
+assert.match(priceNonce, /^[a-f0-9]{32}$/);
+const priceHash = '#workspace-return=' + priceNonce;
+const priceCapsule = JSON.parse(priceStorage.getItem(WORKSPACE_RETURN_SESSION_KEY));
+assert.equal(priceCapsule.v, 2);
+assert.deepEqual(priceCapsule.selectionIds, selectionIds,
+  'the full original selection is retained for workspace restoration');
+assert.deepEqual(priceCapsule.actionSelectionIds, actionSelectionIds);
+assert.deepEqual(priceCapsule.priceTarget, ozonTarget);
+assert.equal(priceCapsule.owner, owner);
+assert.equal(priceCapsule.expiresAt, now + 60 * 60 * 1000);
+assert.equal(priceCapsule.batch, batch);
+assert.deepEqual(workspaceReturnFromHash(priceHash, {
+  ...priceOptions, owner, priceTarget: ozonTarget, actionSelectionIds,
+}), priceCapsule);
+const hrefPayload = {
+  owner, priceTarget: ozonTarget, actionSelectionIds,
+  workspaceUrl: '/my-products/beta',
+};
+const href = priceWorkspaceReturnHref(priceHash, hrefPayload, priceOptions);
+assert.ok(href.endsWith(priceHash));
+assert.equal(priceWorkspaceReturnHref(priceHash, {
+  ...hrefPayload, actionSelectionIds: [35, 14],
+}, priceOptions), '', 'a reordered action subset cannot reuse the capsule');
+assert.equal(priceStorage.getItem(WORKSPACE_RETURN_SESSION_KEY), null,
+  'a mismatched expected subset consumes the one-time capsule');
+
+const boundStorage = storage();
+const boundOptions = {...priceOptions, storage: boundStorage};
+const boundNonce = storeWorkspaceReturn({
+  ...basePayload, priceTarget: ozonTarget, actionSelectionIds,
+}, boundOptions);
+const boundHash = '#workspace-return=' + boundNonce;
+const priceResult = {channel: 'ozon', accountId: 32, proposalIds: [5001, 5002]};
+assert.equal(bindPriceWorkspaceResult(boundHash, {
+  owner, priceTarget: ozonTarget, actionSelectionIds, priceResult,
+}, boundOptions), boundHash);
+const bound = JSON.parse(boundStorage.getItem(WORKSPACE_RETURN_SESSION_KEY));
+assert.equal(bound.v, 3);
+assert.deepEqual(bound.selectionIds, selectionIds);
+assert.deepEqual(bound.actionSelectionIds, actionSelectionIds,
+  'binding the result preserves the verified action subset');
+assert.equal(bound.nonce, boundNonce);
+assert.equal(bound.expiresAt, now + 60 * 60 * 1000);
+assert.equal(priceResultWorkspaceReturnHref(boundHash, {
+  owner, priceResult, actionSelectionIds, workspaceUrl: '/my-products/beta',
+}, boundOptions), '/my-products/beta?import_batch=' + batch + boundHash);
+
+const invalidSubsets = [
+  [35, 14],       // order differs from the original selection
+  [14, 99],       // contains a foreign ID
+  [],             // action targets cannot be empty
+  [14, 14],       // duplicate ID
+  selectionIds,   // only partial action groups may carry this field
+  '14,35',        // wrong shape
+  null,
+];
+for (const invalid of invalidSubsets) {
+  assert.equal(storeWorkspaceReturn({
+    ...basePayload, priceTarget: ozonTarget, actionSelectionIds: invalid,
+  }, priceOptions), null, 'invalid Ozon price action subset is rejected');
+  assert.equal(storeWorkspaceReturn({
+    ...basePayload,
+    ozonUpdateTarget: {accountId: 32, listingIds: [8001, 8002]},
+    actionSelectionIds: invalid,
+  }, priceOptions), null, 'invalid Ozon update action subset is rejected');
+}
+assert.equal(storeWorkspaceReturn({
+  ...basePayload,
+  priceTarget: {channel: 'ozon', accountId: 32, ids: [9101]},
+  actionSelectionIds,
+}, priceOptions), null, 'the action subset size must match provider target count');
+assert.equal(storeWorkspaceReturn({
+  ...basePayload,
+  priceTarget: {channel: 'wb', accountId: null, ids: [9101, 9102]},
+  actionSelectionIds,
+}, priceOptions), null, 'WB price capsules cannot carry an Ozon action subset');
+assert.equal(storeWorkspaceReturn({
+  ...basePayload, priceTarget: null, actionSelectionIds,
+}, priceOptions), null, 'malformed Ozon price targets fail closed without throwing');
+assert.equal(storeWorkspaceReturn({
+  ...basePayload, wbEditTarget: {accountId: null, productIds: [8001, 8002]},
+  actionSelectionIds,
+}, priceOptions), null, 'WB edit capsules cannot carry an Ozon action subset');
+
+const malformedUnknown = storage();
+malformedUnknown.setItem(WORKSPACE_RETURN_SESSION_KEY, JSON.stringify({
+  ...priceCapsule, unexpected: true,
+}));
+assert.equal(workspaceReturnFromHash(priceHash, {
+  ...priceOptions, storage: malformedUnknown, owner,
+}), null, 'unknown keys fail the strict optional capsule shape');
+const malformedAction = storage();
+malformedAction.setItem(WORKSPACE_RETURN_SESSION_KEY, JSON.stringify({
+  ...priceCapsule, actionSelectionIds: [14, 99],
+}));
+assert.equal(workspaceReturnFromHash(priceHash, {
+  ...priceOptions, storage: malformedAction, owner,
+}), null, 'stored foreign action IDs fail capsule validation');
+
+const updateTarget = {accountId: 32, listingIds: [8001, 8002]};
+const updateStorage = storage();
+const updateOptions = {...priceOptions, storage: updateStorage};
+const updateNonce = storeWorkspaceReturn({
+  ...basePayload, ozonUpdateTarget: updateTarget, actionSelectionIds,
+}, updateOptions);
+assert.match(updateNonce, /^[a-f0-9]{32}$/);
+const updateHash = '#workspace-return=' + updateNonce;
+const updateCapsule = JSON.parse(updateStorage.getItem(WORKSPACE_RETURN_SESSION_KEY));
+assert.equal(updateCapsule.v, 6);
+assert.deepEqual(updateCapsule.selectionIds, selectionIds);
+assert.deepEqual(updateCapsule.actionSelectionIds, actionSelectionIds);
+assert.deepEqual(workspaceReturnFromHash(updateHash, {
+  ...updateOptions, owner, ozonUpdateTarget: updateTarget, actionSelectionIds,
+}), updateCapsule);
+assert.equal(workspaceReturnFromHash(updateHash, {
+  ...updateOptions, owner, ozonUpdateTarget: updateTarget, actionSelectionIds: [14, 22],
+}), null, 'update return matching checks the same action subset');
+
+const legacyUpdateStorage = storage();
+const legacyUpdateNonce = storeWorkspaceReturn({
+  ...basePayload, selectionIds: [7, 14],
+  ozonUpdateTarget: {accountId: 32, listingIds: [8001, 8002]},
+}, {...priceOptions, storage: legacyUpdateStorage});
+const legacyUpdate = JSON.parse(legacyUpdateStorage.getItem(WORKSPACE_RETURN_SESSION_KEY));
+assert.equal(legacyUpdate.v, 6);
+assert.equal(Object.hasOwn(legacyUpdate, 'actionSelectionIds'), false);
+assert.deepEqual(workspaceReturnFromHash('#workspace-return=' + legacyUpdateNonce, {
+  ...priceOptions, storage: legacyUpdateStorage, owner,
+}), legacyUpdate, 'legacy v6 full-set capsules remain valid');
+"""
+    result = subprocess.run(
+        [node, "-e", script],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_wb_edit_workspace_return_binds_nullable_account_and_ordered_ids():
     node = shutil.which("node")
     assert node, "Node is required to verify the WB workspace return capsule"

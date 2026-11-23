@@ -12,7 +12,9 @@
     var WORKSPACE_RETURN_V2_CAPSULE_KEYS = [
         'v', 'nonce', 'owner', 'expiresAt', 'priceTarget', 'selectionIds', 'scope', 'batch',
     ];
+    var WORKSPACE_RETURN_V2_ACTION_CAPSULE_KEYS = WORKSPACE_RETURN_V2_CAPSULE_KEYS.concat('actionSelectionIds');
     var WORKSPACE_RETURN_V3_CAPSULE_KEYS = WORKSPACE_RETURN_V2_CAPSULE_KEYS.concat('priceResult');
+    var WORKSPACE_RETURN_V3_ACTION_CAPSULE_KEYS = WORKSPACE_RETURN_V2_ACTION_CAPSULE_KEYS.concat('priceResult');
     var WORKSPACE_RETURN_V4_CAPSULE_KEYS = [
         'v', 'nonce', 'owner', 'expiresAt', 'prepareTarget', 'prepareJobUid',
         'selectionIds', 'scope', 'batch',
@@ -25,6 +27,7 @@
         'v', 'nonce', 'owner', 'expiresAt', 'ozonUpdateTarget',
         'selectionIds', 'scope', 'batch',
     ];
+    var WORKSPACE_RETURN_V6_ACTION_CAPSULE_KEYS = WORKSPACE_RETURN_V6_CAPSULE_KEYS.concat('actionSelectionIds');
 
     function workspaceReturnNow(options) {
         if (options && typeof options.now === 'function') return options.now();
@@ -199,12 +202,18 @@
     function workspaceReturnCapsuleValid(capsule) {
         try {
             if (!workspaceReturnPlainObject(capsule)) return false;
+            var hasActionSelectionIds = Object.prototype.hasOwnProperty.call(capsule, 'actionSelectionIds');
             var expectedKeys = capsule.v === 1 ? WORKSPACE_RETURN_V1_CAPSULE_KEYS :
                 capsule.v === 2 ? WORKSPACE_RETURN_V2_CAPSULE_KEYS :
                     capsule.v === 3 ? WORKSPACE_RETURN_V3_CAPSULE_KEYS :
                         capsule.v === 4 ? WORKSPACE_RETURN_V4_CAPSULE_KEYS :
                             capsule.v === 5 ? WORKSPACE_RETURN_V5_CAPSULE_KEYS :
                                 capsule.v === 6 ? WORKSPACE_RETURN_V6_CAPSULE_KEYS : null;
+            if (hasActionSelectionIds) {
+                expectedKeys = capsule.v === 2 ? WORKSPACE_RETURN_V2_ACTION_CAPSULE_KEYS :
+                    capsule.v === 3 ? WORKSPACE_RETURN_V3_ACTION_CAPSULE_KEYS :
+                        capsule.v === 6 ? WORKSPACE_RETURN_V6_ACTION_CAPSULE_KEYS : null;
+            }
             if (!expectedKeys || Object.keys(capsule).length !== expectedKeys.length ||
                 !expectedKeys.every(function (key) {
                     return Object.prototype.hasOwnProperty.call(capsule, key);
@@ -234,11 +243,20 @@
                     capsule.selectionIds.length === capsule.wbEditTarget.productIds.length;
             }
             if (capsule.v === 6) {
-                return workspaceReturnOzonUpdateTargetValid(capsule.ozonUpdateTarget) &&
-                    capsule.selectionIds.length === capsule.ozonUpdateTarget.listingIds.length;
+                if (!workspaceReturnOzonUpdateTargetValid(capsule.ozonUpdateTarget)) return false;
+                return hasActionSelectionIds
+                    ? workspaceReturnActionSelectionValid(
+                        capsule.actionSelectionIds, capsule.selectionIds, capsule.ozonUpdateTarget.listingIds
+                    )
+                    : capsule.selectionIds.length === capsule.ozonUpdateTarget.listingIds.length;
             }
-            if (!workspaceReturnPriceTargetValid(capsule.priceTarget) ||
-                capsule.selectionIds.length !== capsule.priceTarget.ids.length) return false;
+            if (!workspaceReturnPriceTargetValid(capsule.priceTarget)) return false;
+            if (hasActionSelectionIds) {
+                if (capsule.priceTarget.channel !== 'ozon' ||
+                    !workspaceReturnActionSelectionValid(
+                        capsule.actionSelectionIds, capsule.selectionIds, capsule.priceTarget.ids
+                    )) return false;
+            } else if (capsule.selectionIds.length !== capsule.priceTarget.ids.length) return false;
             if (capsule.v === 2) return true;
             var result = workspaceReturnPriceResult(capsule.priceResult);
             return Boolean(workspaceReturnResultMatchesTarget(result, capsule.priceTarget) &&
@@ -263,9 +281,16 @@
         var hasPrepareTarget = Object.prototype.hasOwnProperty.call(payload, 'prepareTarget');
         var hasWbEditTarget = Object.prototype.hasOwnProperty.call(payload, 'wbEditTarget');
         var hasOzonUpdateTarget = Object.prototype.hasOwnProperty.call(payload, 'ozonUpdateTarget');
+        var hasActionSelectionIds = Object.prototype.hasOwnProperty.call(payload, 'actionSelectionIds');
         if (hasPrepareTarget && (hasEditorIds || hasPriceTarget || hasPriceResult || hasWbEditTarget || hasOzonUpdateTarget)) return null;
         if (hasWbEditTarget && (hasEditorIds || hasPriceTarget || hasPriceResult || hasOzonUpdateTarget)) return null;
         if (hasOzonUpdateTarget && (hasEditorIds || hasPriceTarget || hasPriceResult)) return null;
+        if (hasActionSelectionIds && !(
+            hasOzonUpdateTarget || (
+                hasPriceTarget && workspaceReturnPriceTargetValid(payload.priceTarget) &&
+                payload.priceTarget.channel === 'ozon'
+            )
+        )) return null;
         if (hasPriceTarget && !workspaceReturnPriceTargetValid(payload.priceTarget)) return null;
         if (hasPrepareTarget && !workspaceReturnPrepareTargetValid(payload.prepareTarget)) return null;
         if (hasWbEditTarget && !workspaceReturnWbEditTargetValid(payload.wbEditTarget)) return null;
@@ -310,6 +335,10 @@
                 listingIds: payload.ozonUpdateTarget.listingIds.slice(),
             };
         }
+        if (hasActionSelectionIds) {
+            if (!Array.isArray(payload.actionSelectionIds)) return null;
+            capsule.actionSelectionIds = payload.actionSelectionIds.slice();
+        }
         if (!workspaceReturnCapsuleValid(capsule)) return null;
         return workspaceReturnWrite(capsule, options) ? nonce : null;
     }
@@ -331,6 +360,25 @@
         return Array.isArray(left) && Array.isArray(right) &&
             left.length === right.length &&
             left.every(function (id, index) { return id === right[index]; });
+    }
+
+    function workspaceReturnOrderedSubset(subset, full) {
+        if (!Array.isArray(subset) || !Array.isArray(full)) return false;
+        var fullIndex = 0;
+        for (var index = 0; index < subset.length; index += 1) {
+            while (fullIndex < full.length && full[fullIndex] !== subset[index]) fullIndex += 1;
+            if (fullIndex >= full.length) return false;
+            fullIndex += 1;
+        }
+        return true;
+    }
+
+    function workspaceReturnActionSelectionValid(actionIds, selectionIds, targetIds) {
+        return workspaceReturnIdList(actionIds, 200) &&
+            workspaceReturnIdList(selectionIds, 200, true) &&
+            actionIds.length < selectionIds.length &&
+            Array.isArray(targetIds) && actionIds.length === targetIds.length &&
+            workspaceReturnOrderedSubset(actionIds, selectionIds);
     }
 
     function workspaceReturnReadStored(storage) {
@@ -372,6 +420,7 @@
         var hasPriceTarget = Object.prototype.hasOwnProperty.call(options, 'priceTarget');
         var hasWbEditTarget = Object.prototype.hasOwnProperty.call(options, 'wbEditTarget');
         var hasOzonUpdateTarget = Object.prototype.hasOwnProperty.call(options, 'ozonUpdateTarget');
+        var hasActionSelectionIds = Object.prototype.hasOwnProperty.call(options, 'actionSelectionIds');
         var now = workspaceReturnNow(options);
         if (!Number.isSafeInteger(now) || now < 0 ||
             !Number.isSafeInteger(now + WORKSPACE_RETURN_TTL_MS) ||
@@ -385,6 +434,7 @@
             (hasPriceTarget && !workspaceReturnPriceTargetValid(options.priceTarget)) ||
             (hasWbEditTarget && !workspaceReturnWbEditTargetValid(options.wbEditTarget)) ||
             (hasOzonUpdateTarget && !workspaceReturnOzonUpdateTargetValid(options.ozonUpdateTarget)) ||
+            (hasActionSelectionIds && !workspaceReturnIdList(options.actionSelectionIds, 200)) ||
             (hasEditorIds &&
                 (capsule.v !== 1 ||
                     !workspaceReturnSameOrderedIds(capsule.editorIds, options.editorIds))) ||
@@ -403,6 +453,12 @@
         if (hasOzonUpdateTarget &&
             (capsule.v !== 6 ||
                 !workspaceReturnOzonUpdateTargetsEqual(capsule.ozonUpdateTarget, options.ozonUpdateTarget))) {
+            consumeWorkspaceReturn(match[1], options);
+            return null;
+        }
+        if (hasActionSelectionIds &&
+            (!Object.prototype.hasOwnProperty.call(capsule, 'actionSelectionIds') ||
+                !workspaceReturnSameOrderedIds(capsule.actionSelectionIds, options.actionSelectionIds))) {
             consumeWorkspaceReturn(match[1], options);
             return null;
         }
@@ -432,10 +488,14 @@
     function priceWorkspaceReturnHref(hash, payload, options) {
         if (!workspaceReturnPlainObject(payload) || payload.workspaceUrl !== '/my-products/beta' ||
             !workspaceReturnOwnerValid(payload.owner)) return '';
-        var returnCapsule = workspaceReturnFromHash(hash, Object.assign({}, options || {}, {
+        var matchOptions = Object.assign({}, options || {}, {
             owner: payload.owner,
             priceTarget: payload.priceTarget,
-        }));
+        });
+        if (Object.prototype.hasOwnProperty.call(payload, 'actionSelectionIds')) {
+            matchOptions.actionSelectionIds = payload.actionSelectionIds;
+        }
+        var returnCapsule = workspaceReturnFromHash(hash, matchOptions);
         return returnCapsule ? workspaceReturnHref(returnCapsule) : '';
     }
 
@@ -443,10 +503,14 @@
         if (!workspaceReturnPlainObject(payload) || !workspaceReturnPriceTargetValid(payload.priceTarget)) return '';
         var result = workspaceReturnPriceResult(payload.priceResult);
         if (!workspaceReturnResultMatchesTarget(result, payload.priceTarget)) return '';
-        var capsule = workspaceReturnFromHash(hash, Object.assign({}, options || {}, {
+        var matchOptions = Object.assign({}, options || {}, {
             owner: payload.owner,
             priceTarget: payload.priceTarget,
-        }));
+        });
+        if (Object.prototype.hasOwnProperty.call(payload, 'actionSelectionIds')) {
+            matchOptions.actionSelectionIds = payload.actionSelectionIds;
+        }
+        var capsule = workspaceReturnFromHash(hash, matchOptions);
         if (!capsule) return '';
         capsule.v = 3;
         capsule.priceResult = result;
@@ -457,7 +521,11 @@
         if (!workspaceReturnPlainObject(payload) || payload.workspaceUrl !== '/my-products/beta') return '';
         var result = workspaceReturnPriceResult(payload.priceResult);
         if (!result) return '';
-        var capsule = workspaceReturnFromHash(hash, Object.assign({}, options || {}, { owner: payload.owner }));
+        var matchOptions = Object.assign({}, options || {}, { owner: payload.owner });
+        if (Object.prototype.hasOwnProperty.call(payload, 'actionSelectionIds')) {
+            matchOptions.actionSelectionIds = payload.actionSelectionIds;
+        }
+        var capsule = workspaceReturnFromHash(hash, matchOptions);
         return capsule && capsule.v === 3 && workspaceReturnResultsEqual(capsule.priceResult, result)
             ? workspaceReturnHref(capsule) : '';
     }
