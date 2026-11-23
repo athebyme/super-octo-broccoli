@@ -26,8 +26,8 @@ from tests.ux01.bulk_action_controls import (
 )
 from models import (
     BackgroundJob, EnrichmentJob, ImportedProduct, Marketplace, MarketplaceListing,
-    MarketplaceProductDraft, PriceChangeBatch, PriceChangeItem, Product, Seller,
-    SupplierProduct, db,
+    MarketplaceProductDraft, OzonBulkUploadItem, OzonBulkUploadRun,
+    PriceChangeBatch, PriceChangeItem, Product, Seller, SupplierProduct, db,
 )
 
 
@@ -926,6 +926,8 @@ def run():
     selection_review_posts = []
     ozon_workspace_handoff_receipts = []
     ozon_workspace_preview_reads = []
+    automatic_publication_posts = []
+    supplier_refresh_combined_ozon_report = None
     catalog_selection_review = None
     price_create_posts = []
     price_create_receipts = []
@@ -973,6 +975,17 @@ def run():
         nonlocal override_over_limit_initial, over_limit_initial_total, mock_over_limit_full
         request = route.request
         parsed = urlsplit(request.url)
+        if (parsed.netloc == urlsplit(fixture.BASE).netloc
+                and request.method == "POST"
+                and (re.fullmatch(r"/marketplaces/operations/drafts/[1-9][0-9]*/publish", parsed.path)
+                     or parsed.path == "/marketplaces/ozon/uploads/from-drafts")):
+            automatic_publication_posts.append(parsed.path)
+            route.fulfill(
+                status=409,
+                content_type="application/json",
+                body=json.dumps({"success": False, "code": "synthetic_no_publish"}),
+            )
+            return
         if (request.method == "GET" and request.resource_type == "image"
                 and request.url in wb_bulk_edit_expected["photo_urls"]):
             wb_bulk_edit_photo_requests.append(request.url)
@@ -2084,6 +2097,13 @@ def run():
         context.add_cookies([fixture.synthetic_login_cookie()])
         context.route("**/*", bridge)
         page = context.new_page()
+        main_frame = page.main_frame
+        main_frame_navigations = []
+        page.on(
+            "framenavigated",
+            lambda frame, target=main_frame, events=main_frame_navigations:
+                events.append(frame.url) if frame == target else None,
+        )
         page.on("pageerror", lambda error: errors.append(str(error)))
         open_products(page)
         assert_marketplace_filter(page, "all")
@@ -3385,6 +3405,15 @@ def run():
                 resume_result_requests.append(True)
 
         page.on("request", record_resume_result_request)
+        inline_ozon_status_reads = []
+
+        def record_inline_ozon_status_read(browser_request):
+            parsed = urlsplit(browser_request.url)
+            if (browser_request.method == "GET" and re.fullmatch(
+                    r"/marketplaces/ozon/uploads/api/ozon-upload-[0-9a-f]{32}", parsed.path)):
+                inline_ozon_status_reads.append(parsed.path)
+
+        page.on("request", record_inline_ozon_status_read)
         resume_route = page.locator("#mp-bootstrap").evaluate(
             "element => JSON.parse(element.textContent).urls.supplierRefreshResult"
         )
@@ -3402,10 +3431,40 @@ def run():
                 mixed_preview["skipped"]) == (1, 1, 1)
         assert mixed_preview["items"][0]["state"] == "changed"
         assert mixed_preview["items"][1]["state"] == "unlinked"
-        with page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_REFRESH
-                                  and response.request.method == "POST") as mixed_refresh:
-            dialog.get_by_role("button", name="Обновить", exact=True).click()
+        prepare_option = dialog.locator("[data-supplier-refresh-prepare-ozon]")
+        assert prepare_option.count() == 1 and prepare_option.is_visible()
+        assert not prepare_option.is_checked(), "Ozon preparation must remain opt-in"
+        account_marker = dialog.locator("[data-supplier-refresh-ozon-account]")
+        assert account_marker.count() == 0
+        prepare_option.check()
+        assert prepare_option.is_checked()
+        account_marker = dialog.locator("[data-supplier-refresh-ozon-account]")
+        assert account_marker.count() == 1 and account_marker.is_visible()
+        if account_marker.evaluate("element => element.tagName") == "OUTPUT":
+            assert account_marker.inner_text().strip() == fixture.OZON_ACCOUNT_LABEL
+        else:
+            assert account_marker.input_value() == str(fixture.FIXTURE["account_id"])
+        refresh_confirm = dialog.locator("[data-supplier-refresh-confirm]")
+        assert refresh_confirm.count() == 1 and refresh_confirm.is_enabled()
+        assert refresh_confirm.inner_text().strip() == "Обновить и подготовить"
+        document_url_before_combined = page.url
+        main_frame_navigations_before_combined = len(main_frame_navigations)
+        refresh_posts_before_combined = sum(post["path"] == LOCAL_REFRESH for post in posts)
+        prepare_posts_before_combined = sum(
+            post["path"] == LOCAL_OZON_PREPARE for post in posts
+        )
+        publication_posts_before_combined = len(automatic_publication_posts)
+        with page.expect_response(
+            lambda response: urlsplit(response.url).path == LOCAL_OZON_PREPARE
+            and response.request.method == "POST",
+        ) as combined_prepare:
+            with page.expect_response(
+                lambda response: urlsplit(response.url).path == LOCAL_REFRESH
+                and response.request.method == "POST",
+            ) as mixed_refresh:
+                refresh_confirm.click()
         assert mixed_refresh.value.status == 200
+        assert combined_prepare.value.status == 202
         assert_supplier_refresh_token_applied(mixed_preview, refresh_apply_tokens)
         mixed_data = mixed_refresh.value.json()
         assert (mixed_data["requested"], mixed_data["updated"], mixed_data["skipped"],
@@ -3418,10 +3477,88 @@ def run():
             "product_id": fixture_ids["wb_id"],
         }], mixed_data["wb_targets"]
         assert mixed_data.get("resume_receipt")
-        assert posts[posts_before_mixed_refresh:] == [{
+        preview_changed_ids = [
+            item["product_id"] for item in mixed_preview["items"]
+            if item.get("state") == "changed"
+        ]
+        receipt_updated_ids = [
+            item["product_id"] for item in mixed_data["items"]
+            if item.get("status") == "updated"
+        ]
+        exact_changed_saved_subset = [
+            product_id for product_id in preview_changed_ids
+            if product_id in set(receipt_updated_ids)
+        ]
+        assert preview_changed_ids == receipt_updated_ids == [fixture_ids["local_id"]]
+        assert exact_changed_saved_subset == [fixture_ids["local_id"]]
+        assert posts[posts_before_mixed_refresh] == {
             "path": LOCAL_REFRESH,
             "body": {"product_ids": [fixture_ids["local_id"], fixture_ids["manual_id"]]},
-        }]
+        }
+        combined_prepare_post = posts[posts_before_mixed_refresh + 1]
+        assert combined_prepare_post["path"] == LOCAL_OZON_PREPARE
+        assert set(combined_prepare_post["body"]) == {
+            "imported_product_ids", "account_id", "request_key", "confirm_prepare",
+        }
+        assert combined_prepare_post["body"]["imported_product_ids"] == exact_changed_saved_subset
+        assert combined_prepare_post["body"]["account_id"] == fixture.FIXTURE["account_id"]
+        assert combined_prepare_post["body"]["confirm_prepare"] is True
+        combined_prepare_key = combined_prepare_post["body"]["request_key"]
+        assert re.fullmatch(r"[a-f0-9]{32}", combined_prepare_key)
+        assert combined_prepare_key != posts[0]["body"]["request_key"]
+        assert "confirm_write" not in combined_prepare_post["body"]
+        assert sum(post["path"] == LOCAL_REFRESH for post in posts) == refresh_posts_before_combined + 1
+        assert sum(post["path"] == LOCAL_OZON_PREPARE for post in posts) == prepare_posts_before_combined + 1
+        assert len(automatic_publication_posts) == publication_posts_before_combined
+        assert fixture.REPORT["provider_attempts"] == 0
+        assert page.url == document_url_before_combined
+        assert len(main_frame_navigations) == main_frame_navigations_before_combined
+        inline_prepare_receipt = page.locator("[data-ozon-local-prepare-receipt]")
+        inline_prepare_receipt.wait_for(state="visible")
+        assert inline_prepare_receipt.locator("[data-ozon-local-prepare-scope]").inner_text().find(
+            fixture.OZON_ACCOUNT_LABEL,
+        ) >= 0
+        assert "Товаров: 1" in inline_prepare_receipt.locator(
+            "[data-ozon-local-prepare-scope]",
+        ).inner_text()
+        combined_run_href = inline_prepare_receipt.locator(
+            "[data-ozon-local-prepare-run]",
+        ).get_attribute("href")
+        combined_run_path = urlsplit(combined_run_href or "").path
+        assert re.fullmatch(
+            r"/marketplaces/ozon/uploads/ozon-upload-[0-9a-f]{32}",
+            combined_run_path,
+        )
+        combined_job_uid = combined_run_path.rsplit("/", 1)[-1]
+        combined_status_path = f"/marketplaces/ozon/uploads/api/{combined_job_uid}"
+        if combined_status_path not in inline_ozon_status_reads:
+            page.wait_for_event(
+                "request",
+                predicate=lambda browser_request: browser_request.method == "GET" and
+                    urlsplit(browser_request.url).path == combined_status_path,
+                timeout=5000,
+            )
+            inline_ozon_status_reads.append(combined_status_path)
+        assert combined_status_path in inline_ozon_status_reads
+        with fixture.app.app_context():
+            combined_job = BackgroundJob.query.filter_by(
+                job_uid=combined_job_uid,
+                seller_id=fixture.FIXTURE["seller_id"],
+            ).one()
+            combined_run = OzonBulkUploadRun.query.filter_by(job_id=combined_job.id).one()
+            combined_items = OzonBulkUploadItem.query.filter_by(run_id=combined_run.id).all()
+            assert combined_run.mode == "source_prepare"
+            assert combined_job.total == 1 and len(combined_items) == 1
+            assert combined_items[0].imported_product_id == fixture_ids["local_id"]
+            assert combined_items[0].operation_id is None
+        supplier_refresh_combined_ozon_report = {
+            "same_document": True,
+            "exact_changed_saved_subset": True,
+            "refresh_posts": 1,
+            "prepare_posts": 1,
+            "automatic_publication_posts": 0,
+            "provider_attempts": 0,
+        }
         resume_key = "supplier-refresh-resume-v1"
         resume_receipt = page.evaluate(
             "key => sessionStorage.getItem(key)", resume_key,
@@ -3435,9 +3572,11 @@ def run():
         mixed_result.get_by_role(
             "heading", name="Обновление от поставщика завершено", exact=True,
         ).wait_for()
-        assert page.evaluate(
-            "document.activeElement === document.querySelector('.mp-refresh-result')"
-        )
+        page.wait_for_function("""() => {
+            const active = document.activeElement;
+            return active === document.querySelector('.mp-refresh-result') ||
+                active === document.querySelector('[data-ozon-local-prepare-receipt]');
+        }""")
         mixed_result.get_by_text("Карточки и итог (2)").click()
         updated_title = mixed_result.locator(".mp-refresh-result-item.is-ok strong")
         updated_title.wait_for()
@@ -3600,7 +3739,7 @@ def run():
         assert selected_browser_state(page) == {
             "selected": [fixture_ids["manual_id"]], "ozonIds": [],
         }
-        refresh_cta = refresh_ozon_button(page)
+        refresh_cta = page.locator("[data-supplier-refresh-ozon-followup]")
         assert refresh_cta.count() == 1
         posts_before_handoff = len(posts)
         refresh_cta.click()
@@ -3639,6 +3778,11 @@ def run():
         prepare = refresh_dialog.get_by_role("button", name="Подготовить черновики")
         assert prepare.is_enabled()
         assert len(posts) == posts_before_handoff, posts
+        manual_prepare_document_url = page.url
+        manual_prepare_navigations = len(main_frame_navigations)
+        manual_prepare_posts_before = sum(
+            post["path"] == LOCAL_OZON_PREPARE for post in posts
+        )
         with page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_OZON_PREPARE
                                   and response.request.method == "POST") as refreshed_prepare:
             prepare.click()
@@ -3651,18 +3795,45 @@ def run():
         assert prepared_from_refresh["body"]["imported_product_ids"] == [fixture_ids["local_id"]]
         assert prepared_from_refresh["body"]["account_id"] == fixture.FIXTURE["account_id"]
         assert re.fullmatch(r"[a-f0-9]{32}", prepared_from_refresh["body"]["request_key"])
-        assert prepared_from_refresh["body"]["request_key"] != posts[0]["body"]["request_key"]
+        manual_prepare_key = prepared_from_refresh["body"]["request_key"]
+        assert manual_prepare_key != posts[0]["body"]["request_key"]
+        assert manual_prepare_key != combined_prepare_key
         assert prepared_from_refresh["body"]["confirm_prepare"] is True
         assert "confirm_write" not in prepared_from_refresh["body"]
-        handoff_job_path = refreshed_prepare.value.headers["location"]
-        assert re.fullmatch(r"/marketplaces/ozon/uploads/ozon-upload-[0-9a-f]{32}", handoff_job_path)
-        page.wait_for_url(fixture.BASE + handoff_job_path, wait_until="domcontentloaded")
+        assert sum(post["path"] == LOCAL_OZON_PREPARE for post in posts) == manual_prepare_posts_before + 1
+        assert page.url == manual_prepare_document_url
+        assert len(main_frame_navigations) == manual_prepare_navigations
+        inline_prepare_receipt = page.locator("[data-ozon-local-prepare-receipt]")
+        inline_prepare_receipt.wait_for(state="visible")
+        handoff_job_href = inline_prepare_receipt.locator(
+            "[data-ozon-local-prepare-run]",
+        ).get_attribute("href")
+        handoff_job_path = urlsplit(handoff_job_href or "").path
+        assert re.fullmatch(
+            r"/marketplaces/ozon/uploads/ozon-upload-[0-9a-f]{32}",
+            handoff_job_path,
+        )
+        with page.expect_navigation(url=fixture.BASE + handoff_job_path, wait_until="domcontentloaded"):
+            inline_prepare_receipt.locator("[data-ozon-local-prepare-run]").click()
         with fixture.app.app_context():
             handoff_job = BackgroundJob.query.filter_by(
                 job_uid=handoff_job_path.rsplit("/", 1)[-1], seller_id=fixture.FIXTURE["seller_id"],
             ).one()
-            assert handoff_job.total == 1
-        checks.append("supplier_refresh_verified_update_handoff_posts_exact_local_ozon_prepare_key")
+            handoff_run = OzonBulkUploadRun.query.filter_by(job_id=handoff_job.id).one()
+            handoff_items = OzonBulkUploadItem.query.filter_by(run_id=handoff_run.id).all()
+            assert handoff_job.total == 1 and handoff_run.mode == "source_prepare"
+            assert len(handoff_items) == 1
+            assert handoff_items[0].imported_product_id == fixture_ids["local_id"]
+            assert handoff_items[0].operation_id is None
+        assert len(automatic_publication_posts) == 0
+        assert fixture.REPORT["provider_attempts"] == 0
+        supplier_refresh_combined_ozon_report.update({
+            "manual_prepare_posts": 1,
+            "distinct_manual_request_key": manual_prepare_key != combined_prepare_key,
+            "automatic_publication_posts": len(automatic_publication_posts),
+            "provider_attempts": fixture.REPORT["provider_attempts"],
+        })
+        checks.append("supplier_refresh_combined_and_manual_ozon_preparation_stay_local_and_scoped")
 
         # Ozon's local preparation result returns to the same signed supplier
         # receipt and preserves the WB handoff derived from that receipt.
@@ -4336,6 +4507,7 @@ def run():
         "checks": checks,
         "provider_attempts": 0,
         "wb_bulk_edit_handoff": wb_bulk_edit_handoff,
+        "supplier_refresh_combined_ozon": supplier_refresh_combined_ozon_report,
         "supplier_refresh_zero_update": supplier_refresh_zero_update_report,
         "catalog_selection_review": catalog_selection_review,
         "marketplace_filters": marketplace_filters,
