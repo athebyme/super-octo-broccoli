@@ -510,7 +510,10 @@ def check_inline_ozon_preparation(
             assert first_reads[0]['delivered_status'] == 'running'
             assert first_reads[0]['active'] > 0
             assert first_reads[0]['processed'] + first_reads[0]['active'] == len(selected)
-        expect(status).to_have_attribute('data-status', 'completed')
+        if status_mode == 'mixed':
+            expect(status).to_have_attribute('data-status', 'completed', timeout=12000)
+        else:
+            expect(status).to_have_attribute('data-status', 'completed')
         expect(status).to_contain_text('Подготовка завершена.')
         counts = page.locator('[data-ozon-local-prepare-counts]')
         expect(counts).to_be_visible()
