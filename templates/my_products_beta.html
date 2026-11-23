@@ -7,7 +7,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-inline-common-dialog-r1') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261123-supplier-refresh-prepare-r1') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='workspace/my-products-import.css', v='20261123-unified-catalog-prices-r63b') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='common-product-content.css', v='20261123-inline-common-editor-r1') }}">
 
@@ -234,6 +234,7 @@
             </button>
             <button v-if="ozonEnabled && ozonAccounts.length && supplierRefreshOzonIds.length"
                     type="button" class="sh-btn sh-btn--secondary mp-refresh-result-ozon"
+                    data-supplier-refresh-ozon-followup
                     :disabled="ozonPreparationDisabled"
                     aria-haspopup="dialog"
                     @click="prepareRefreshedForOzon($event)">
@@ -799,6 +800,40 @@
                 {{ supplierRefreshReview.phase === 'stale' ? 'Проверить снова' : 'Повторить проверку' }}
             </button>
         </div>
+        <div v-if="supplierRefreshReview &&
+                   (supplierRefreshOzonOptionAvailable || supplierRefreshReview.prepareOzon) &&
+                   supplierRefreshReview.phase === 'ready' && supplierRefreshReview.eligible > 0 &&
+                   (supplierRefreshReview.prepareOzon || supplierRefreshReview.changed > 0)"
+             class="mp-supplier-refresh-ozon-option">
+            <label class="mp-supplier-refresh-ozon-toggle">
+                <input type="checkbox" data-supplier-refresh-prepare-ozon
+                       v-model="supplierRefreshReview.prepareOzon"
+                       aria-describedby="mp-supplier-refresh-ozon-help"
+                       :disabled="supplierRefreshReview.phase === 'applying'">
+                <span>Подготовить обновлённые карточки для Ozon</span>
+            </label>
+            <p id="mp-supplier-refresh-ozon-help">Подготовим карточки с сохранёнными изменениями. Отправка на Ozon подтверждается отдельно.</p>
+            <div v-if="supplierRefreshReview.prepareOzon && ozonAccounts.length === 1"
+                 class="mp-supplier-refresh-ozon-account">
+                <span id="mp-supplier-refresh-ozon-account-label"
+                      class="mp-supplier-refresh-ozon-account-label">Магазин Ozon</span>
+                <output data-supplier-refresh-ozon-account
+                        aria-labelledby="mp-supplier-refresh-ozon-account-label">{{ ozonAccounts[0].label }}</output>
+            </div>
+            <div v-else-if="supplierRefreshReview.prepareOzon && ozonAccounts.length > 1"
+                 class="mp-supplier-refresh-ozon-account">
+                <label class="mp-supplier-refresh-ozon-account-label"
+                       for="mp-supplier-refresh-ozon-account">Магазин Ozon</label>
+                <select id="mp-supplier-refresh-ozon-account" class="sh-input"
+                        data-supplier-refresh-ozon-account
+                        v-model="supplierRefreshReview.prepareOzonAccountId"
+                        :disabled="supplierRefreshReview.phase === 'applying'">
+                    <option value="">Выберите магазин</option>
+                    <option v-for="account in ozonAccounts" :key="account.id"
+                            :value="String(account.id)">{{ account.label }}</option>
+                </select>
+            </div>
+        </div>
         <div v-if="supplierRefreshReview && supplierRefreshReview.items.length"
              class="mp-supplier-refresh-list" role="region"
              aria-label="Изменения по выбранным товарам" tabindex="0">
@@ -830,7 +865,11 @@
                     @click="cancelSupplierRefreshReview()">Вернуться</button>
             <button v-if="supplierRefreshReview && supplierRefreshReview.phase === 'ready' && supplierRefreshReview.eligible > 0"
                     type="button" class="sh-btn sh-btn--primary"
-                    @click="confirmSupplierRefreshReview()">Обновить</button>
+                    data-supplier-refresh-confirm
+                    :disabled="supplierRefreshReview.prepareOzon &&
+                               (!supplierRefreshOzonOptionAvailable || !supplierRefreshOzonChoiceValid ||
+                                supplierRefreshReview.changed <= 0)"
+                    @click="confirmSupplierRefreshReview()">{{ supplierRefreshReview.prepareOzon ? 'Обновить и подготовить' : 'Обновить' }}</button>
             <button v-else-if="supplierRefreshReview && supplierRefreshReview.phase === 'applying'"
                     type="button" class="sh-btn sh-btn--primary" disabled>Обновляем…</button>
         </div>
@@ -897,5 +936,5 @@
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261123-inline-common-editor-r1') }}"></script>
 <script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261123-unified-catalog-prices-r63b') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-inline-ozon-status-r1') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-supplier-refresh-prepare-r1') }}"></script>
 {% endblock %}

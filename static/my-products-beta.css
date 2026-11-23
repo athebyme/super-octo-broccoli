@@ -486,6 +486,16 @@
 .mp-supplier-refresh-error p { margin:0 0 5px; }
 .mp-supplier-refresh-retry { display:inline-flex; align-items:center; min-height:44px; padding:0 8px; border:0; background:transparent; color:var(--accent-text); font:inherit; font-weight:600; text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
 .mp-supplier-refresh-retry:disabled { color:var(--text-muted); cursor:wait; }
+.mp-supplier-refresh-ozon-option { flex:none; min-width:0; padding:8px 10px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--bg-hover); }
+.mp-supplier-refresh-ozon-toggle { display:flex; align-items:flex-start; gap:9px; min-height:44px; color:var(--text); font-size:13px; line-height:1.4; font-weight:600; cursor:pointer; }
+.mp-supplier-refresh-ozon-toggle:focus-within { outline:2px solid var(--focus-outline); outline-offset:2px; border-radius:2px; }
+.mp-supplier-refresh-ozon-toggle input { flex:none; width:18px; height:18px; margin:2px 0 0; accent-color:var(--accent); }
+.mp-supplier-refresh-ozon-toggle span { min-width:0; overflow-wrap:anywhere; }
+.mp-supplier-refresh-ozon-option > p { margin:0 0 0 27px; color:var(--text-secondary); font-size:12px; line-height:1.45; overflow-wrap:anywhere; }
+.mp-supplier-refresh-ozon-account { display:grid; gap:4px; min-width:0; margin:8px 0 0 27px; }
+.mp-supplier-refresh-ozon-account-label { color:var(--text-secondary); font-size:12px; line-height:1.35; }
+.mp-supplier-refresh-ozon-account output { min-width:0; color:var(--text); font-size:13px; line-height:1.4; overflow-wrap:anywhere; }
+.mp-supplier-refresh-ozon-account select { box-sizing:border-box; width:100%; min-width:0; min-height:44px; }
 .mp-supplier-refresh-list { min-height:0; max-height:min(38vh, 22rem); overflow:auto; overscroll-behavior:contain; border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
 .mp-supplier-refresh-list:focus-visible { outline:2px solid var(--focus-outline); outline-offset:2px; }
 .mp-supplier-refresh-list ul { margin:0; padding:0; list-style:none; }
@@ -504,6 +514,7 @@
 .mp-supplier-refresh-arrow { flex:none; color:var(--text-muted); }
 .mp-supplier-refresh-actions { position:sticky; bottom:0; display:flex; flex:none; flex-wrap:wrap; justify-content:flex-end; gap:8px; margin-top:auto; padding:8px 0 2px; background:var(--bg-card); }
 .mp-supplier-refresh-actions .sh-btn { min-width:112px; min-height:44px; }
+.mp-supplier-refresh-actions [data-supplier-refresh-confirm] { white-space:normal; line-height:1.25; }
 .mp-supplier-refresh-actions .sh-btn:disabled { cursor:wait; }
 
 /* Exact local supplier refresh has its own terminal result and item review. */
@@ -656,6 +667,8 @@
     .mp-supplier-refresh-dialog h2 { font-size:18px; }
     .mp-supplier-refresh-counts { grid-template-columns:repeat(2, minmax(0, 1fr)); }
     .mp-supplier-refresh-counts > div { padding:7px 8px; }
+    .mp-supplier-refresh-ozon-option { padding:8px; }
+    .mp-supplier-refresh-ozon-account { margin-left:0; }
     .mp-supplier-refresh-list { max-height:min(35vh, 18rem); }
     .mp-supplier-refresh-item-head { flex-direction:column; gap:3px; }
     .mp-supplier-refresh-item-head span { text-align:start; }
