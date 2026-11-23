@@ -125,6 +125,7 @@ class MyProductsFeedTest(unittest.TestCase):
         self.supplier_id = supplier.id
         self.published_id = published.id
         self.draft_id = draft_row.id
+        self.foreign_id = foreign.id
         self.user = SimpleNamespace(
             id=user.id,
             username=user.username,
@@ -551,6 +552,110 @@ class MyProductsFeedTest(unittest.TestCase):
         with self._auth():
             response = self.client.get('/api/my-products?per_page=500')
         self.assertEqual(response.status_code, 400)
+
+    def test_selection_review_returns_exact_owned_rows_in_request_order(self):
+        with self._auth():
+            response = self.client.post(
+                '/api/my-products/selection',
+                json={'ids': [self.draft_id, self.published_id]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json().keys(), {'success', 'items'})
+        payload = response.get_json()
+        self.assertTrue(payload['success'])
+        self.assertEqual(
+            [item['id'] for item in payload['items']],
+            [self.draft_id, self.published_id],
+        )
+        self.assertIn('private', response.headers['Cache-Control'])
+        self.assertIn('no-store', response.headers['Cache-Control'])
+        self.assertEqual(response.headers['Pragma'], 'no-cache')
+        self.assertEqual(response.headers['Expires'], '0')
+        self.assertFalse(self.db.session.new)
+        self.assertFalse(self.db.session.dirty)
+        self.assertFalse(self.db.session.deleted)
+
+    def test_selection_review_rejects_invalid_sets_as_a_whole(self):
+        cases = [
+            {},
+            {'ids': []},
+            {'ids': [True]},
+            {'ids': [1.0]},
+            {'ids': [str(self.draft_id)]},
+            {'ids': [self.draft_id, self.draft_id]},
+            {'ids': [(1 << 63)]},
+            {'ids': list(range(1, 202))},
+            {'ids': [self.draft_id], 'extra': True},
+        ]
+        with self._auth():
+            responses = [
+                self.client.post('/api/my-products/selection', json=body)
+                for body in cases
+            ]
+        for response in responses:
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.get_json(), {
+                'success': False,
+                'error': 'Выбранный список недействителен',
+            })
+            self.assertIn('private', response.headers['Cache-Control'])
+            self.assertIn('no-store', response.headers['Cache-Control'])
+
+        oversized = b'{"ids":[' + b'1,' * 9000 + b'1]}'
+        with self._auth():
+            response = self.client.post(
+                '/api/my-products/selection',
+                data=oversized,
+                content_type='application/json',
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.get_json()['error'], 'Выбранный список недействителен',
+        )
+
+    def test_selection_review_coalesces_missing_and_foreign_rows(self):
+        missing_id = 987654321
+        with self._auth():
+            foreign = self.client.post(
+                '/api/my-products/selection',
+                json={'ids': [self.foreign_id]},
+            )
+            mixed = self.client.post(
+                '/api/my-products/selection',
+                json={'ids': [self.draft_id, self.foreign_id]},
+            )
+            missing = self.client.post(
+                '/api/my-products/selection',
+                json={'ids': [missing_id]},
+            )
+
+        self.assertEqual(
+            [foreign.status_code, mixed.status_code, missing.status_code],
+            [404, 404, 404],
+        )
+        self.assertEqual(foreign.get_json(), mixed.get_json())
+        self.assertEqual(foreign.get_json(), missing.get_json())
+        self.assertEqual(foreign.get_json(), {
+            'success': False,
+            'error': 'Выбранный список недоступен',
+        })
+
+    def test_selection_review_requires_csrf_and_never_caches_framework_errors(self):
+        previous = self.app.config.get('WTF_CSRF_ENABLED')
+        self.app.config['WTF_CSRF_ENABLED'] = True
+        try:
+            with self._auth():
+                response = self.client.post(
+                    '/api/my-products/selection',
+                    json={'ids': [self.draft_id]},
+                )
+        finally:
+            self.app.config['WTF_CSRF_ENABLED'] = previous
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('private', response.headers['Cache-Control'])
+        self.assertIn('no-store', response.headers['Cache-Control'])
 
 
 if __name__ == '__main__':

@@ -17,6 +17,7 @@ from flask import (
 )
 from flask_login import login_required, current_user
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
@@ -33,6 +34,10 @@ from services.supplier_service import (
 logger = logging.getLogger(__name__)
 
 MAX_BULK_PRODUCTS = 200
+MY_PRODUCTS_SELECTION_MAX_IDS = 200
+MY_PRODUCTS_SELECTION_MAX_BODY_BYTES = 16 * 1024
+MY_PRODUCTS_SELECTION_INVALID_ERROR = 'Выбранный список недействителен'
+MY_PRODUCTS_SELECTION_UNAVAILABLE_ERROR = 'Выбранный список недоступен'
 WB_BULK_CREATE_REQUEST_KEY_RE = re.compile(r'^[0-9a-f]{32}$')
 WB_BULK_CREATE_REQUEST_KEY_HEADER = 'X-WB-Create-Key'
 WB_BULK_CREATE_PROGRESS_KEY = '_wb_bulk_create_v1'
@@ -247,6 +252,56 @@ def _bulk_product_ids(raw_ids, limit=MAX_BULK_PRODUCTS):
         normalized.append(value)
         seen.add(value)
     return normalized
+
+
+def _my_products_selection_json_ids():
+    """Parse a bounded, exact selected-items review request."""
+    if not request.is_json or request.args:
+        raise ValueError('invalid selection')
+    if (
+        request.content_length is not None
+        and request.content_length > MY_PRODUCTS_SELECTION_MAX_BODY_BYTES
+    ):
+        raise ValueError('invalid selection')
+    try:
+        raw = request.stream.read(MY_PRODUCTS_SELECTION_MAX_BODY_BYTES + 1)
+    except RequestEntityTooLarge:
+        raise ValueError('invalid selection') from None
+    if len(raw) > MY_PRODUCTS_SELECTION_MAX_BODY_BYTES:
+        raise ValueError('invalid selection')
+
+    def unique_pairs(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError('invalid selection')
+            value[key] = item
+        return value
+
+    try:
+        payload = json.loads(raw.decode('utf-8'), object_pairs_hook=unique_pairs)
+    except (ValueError, UnicodeError, TypeError):
+        raise ValueError('invalid selection') from None
+    if not isinstance(payload, dict) or set(payload) != {'ids'}:
+        raise ValueError('invalid selection')
+
+    ids = payload['ids']
+    if (
+        not isinstance(ids, list)
+        or not 1 <= len(ids) <= MY_PRODUCTS_SELECTION_MAX_IDS
+    ):
+        raise ValueError('invalid selection')
+    seen = set()
+    for value in ids:
+        if (
+            type(value) is not int
+            or value <= 0
+            or value > MAX_SIGNED_SQLITE_ID
+            or value in seen
+        ):
+            raise ValueError('invalid selection')
+        seen.add(value)
+    return ids
 
 
 def _wb_bulk_create_request_identity(*, user_id, seller_id, request_key):
@@ -2205,6 +2260,15 @@ def seller_required(f):
 
 def register_supplier_routes(app):
     """Регистрирует все маршруты поставщиков в приложении Flask"""
+
+    @app.after_request
+    def no_store_my_products_selection_response(response):
+        # Also cover framework-generated auth, CSRF and method errors.
+        if request.path == '/api/my-products/selection':
+            response.headers['Cache-Control'] = 'private, no-store'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+        return response
 
     # -------------------------------------------------------------------
     # Список поставщиков
@@ -4521,6 +4585,40 @@ def register_supplier_routes(app):
         return _no_store_supplier_import_batch_response(
             jsonify({'success': True, **payload})
         )
+
+    @app.route('/api/my-products/selection', methods=['POST'])
+    @login_required
+    @seller_required
+    def api_my_products_selection():
+        """Read back the exact seller-owned catalog selection for review."""
+        from services.my_products_feed import (
+            MyProductsFeed, MyProductsFeedError, MyProductsFeedNotFound,
+        )
+
+        try:
+            ids = _my_products_selection_json_ids()
+        except ValueError:
+            return jsonify({
+                'success': False,
+                'error': MY_PRODUCTS_SELECTION_INVALID_ERROR,
+            }), 400
+
+        try:
+            payload = MyProductsFeed.list_products_by_ids(
+                seller_id=current_user.seller.id,
+                imported_product_ids=ids,
+            )
+        except MyProductsFeedNotFound:
+            return jsonify({
+                'success': False,
+                'error': MY_PRODUCTS_SELECTION_UNAVAILABLE_ERROR,
+            }), 404
+        except MyProductsFeedError:
+            return jsonify({
+                'success': False,
+                'error': MY_PRODUCTS_SELECTION_INVALID_ERROR,
+            }), 400
+        return jsonify({'success': True, 'items': payload['items']})
 
     @app.route('/api/my-products/facets')
     @login_required
