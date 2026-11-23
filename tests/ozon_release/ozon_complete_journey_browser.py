@@ -1495,6 +1495,54 @@ try:
             assert prepared["status"] == 202, prepared
             prepare_uid = prepared["document"]["run"]["job_uid"]
             parent_result_path = f"/marketplaces/ozon/uploads/{prepare_uid}"
+            with app.app_context():
+                owner_seller = db.session.get(Seller, fixture["seller_id"])
+                workspace_owner = f"{owner_seller.user_id}:{owner_seller.id}"
+            # This journey accepts preparation directly from the drafts page,
+            # so seed the exact browser return capsule that the My Products
+            # flow normally stores and binds before opening the result.
+            page.add_script_tag(url=base + "/static/common-product-content.js")
+            workspace_product_ids = [source_id, retry_prepared_source_id]
+            workspace_return_seed = page.evaluate("""({owner,accountId,productIds,jobUid}) => {
+                const helper = window.SellerHubCommonContent;
+                if (!helper || typeof helper.storeWorkspaceReturn !== 'function' ||
+                    typeof helper.bindOzonPreparationWorkspaceResult !== 'function' ||
+                    typeof helper.ozonPreparationWorkspaceReturnHref !== 'function') {
+                    return null;
+                }
+                const payload = {
+                    owner,
+                    prepareTarget:{accountId,productIds},
+                    selectionIds:[],
+                    scope:{tab:'all',search:'крем',sort:'title',page:4},
+                    batch:null,
+                };
+                const nonce = helper.storeWorkspaceReturn(payload);
+                if (typeof nonce !== 'string' || !/^[a-f0-9]{32}$/.test(nonce)) return null;
+                const hash = '#workspace-return=' + nonce;
+                const bound = helper.bindOzonPreparationWorkspaceResult(hash, {
+                    owner,
+                    prepareTarget:{accountId,productIds},
+                    jobUid,
+                });
+                const href = helper.ozonPreparationWorkspaceReturnHref({
+                    workspaceUrl:'/my-products/beta',owner,accountId,productIds,jobUid,
+                });
+                return {nonce,bound,href};
+            }""", {
+                "owner": workspace_owner,
+                "accountId": account_id,
+                "productIds": workspace_product_ids,
+                "jobUid": prepare_uid,
+            })
+            assert isinstance(workspace_return_seed, dict), workspace_return_seed
+            workspace_return_nonce = workspace_return_seed["nonce"]
+            assert re.fullmatch(r"[a-f0-9]{32}", workspace_return_nonce), workspace_return_seed
+            assert workspace_return_seed == {
+                "nonce": workspace_return_nonce,
+                "bound": "#workspace-return=" + workspace_return_nonce,
+                "href": "/my-products/beta#workspace-return=" + workspace_return_nonce,
+            }, workspace_return_seed
             page.goto(base + parent_result_path)
             assert page.locator("[data-source-prepare-retry]").count() == 0
             initial_regions = page.locator("[data-source-prepare-region]")
@@ -1767,6 +1815,7 @@ try:
             assert provider.physical_writes == 0 and not provider.full_read_calls
             report["source_prepare_inline"] = {
                 "terminal_html_gets": len(deferred_state["fetches"]),
+                "workspace_capsule_seeded_and_bound": True,
                 "focused_region_deferred_swap": True,
                 "focused_fallback_deferred_swap": True,
                 "focus_preserved_on_global_search": True,
