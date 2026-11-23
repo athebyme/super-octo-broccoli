@@ -908,10 +908,10 @@
             Для всех {{ ozonChooserReview.total }} выбранных товаров доступны несколько магазинов. Выберите магазин, чтобы открыть сравнение; отправка изменения не начнётся.
         </p>
         <p id="mp-ozon-price-dialog-help" v-else-if="ozonAccountChooserKind === 'workspace_update'">
-            Выберите магазин, чтобы проверить связанные карточки. Переход к редактору не отправит изменения автоматически.
+            Выберите магазин, чтобы проверить связанные карточки. Отправку вы подтвердите отдельно.
         </p>
         <p id="mp-ozon-price-dialog-help" v-else>
-            Выберите магазин, чтобы открыть сравнение цен. Изменение цены не начнётся автоматически.
+            Выберите магазин, чтобы открыть сравнение цен. Отправку цены вы подтвердите отдельно.
         </p>
         <label class="mp-ozon-label" for="mp-ozon-price-account">Магазин Ozon</label>
         <select ref="ozonPriceAccount" id="mp-ozon-price-account" class="sh-input"
@@ -926,11 +926,11 @@
             </option>
         </select>
         <section v-if="ozonChooserIsPartial && ozonChooserActiveChoice"
-                 class="mp-ozon-scope-summary" data-ozon-scope-summary role="status" aria-live="polite">
+                 class="mp-ozon-scope-summary" data-ozon-scope-summary>
             <template v-if="ozonChooserActiveChoice.partial">
-                <h3>В это действие войдёт часть выбора</h3>
-                <p>В этом магазине есть карточки для <strong>{{ ozonChooserActiveChoice.eligible_count }} из {{ ozonChooserActiveChoice.total_count }} выбранных товаров.</strong></p>
-                <p>{{ ozonChooserActiveChoice.excluded_rows.length }} {{ $fmt.plural(ozonChooserActiveChoice.excluded_rows.length, 'товар не войдёт', 'товара не войдут', 'товаров не войдут') }} в это действие.</p>
+                <p data-ozon-scope-summary-count role="status" aria-live="polite">
+                    В этом магазине есть карточки для <strong>{{ ozonChooserActiveChoice.eligible_count }} из {{ ozonChooserActiveChoice.total_count }} выбранных товаров.</strong>
+                </p>
                 <div v-if="ozonChooserActiveChoice.excluded_rows.length" class="mp-ozon-scope-exclusions"
                      data-ozon-scope-exclusions>
                     <h4>Исключённые товары</h4>
