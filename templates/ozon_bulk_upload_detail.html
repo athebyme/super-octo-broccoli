@@ -110,23 +110,19 @@
         {% if run.mode == 'source_prepare' and run.status == 'completed' and prepare_retry_count > 0 and prepare_retry_request_key|default('', true) %}
         <form class="mt-5 border-t pt-4" style="border-color:var(--border)"
               data-source-prepare-retry
-              method="post" action="{{ url_for('ozon_bulk_uploads.retry', job_uid=run.job_uid) }}"
-              data-confirm="Создать новый локальный запуск подготовки для магазина «{{ run.account_label or ('#' ~ run.account_id) }}», охватить {{ prepare_retry_count }} позиций? Отправки в Ozon не будет."
-              onsubmit="return confirm(this.dataset.confirm)">
+              method="post" action="{{ url_for('ozon_bulk_uploads.retry', job_uid=run.job_uid) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="confirm_prepare" value="1">
             <input type="hidden" name="request_key" value="{{ prepare_retry_request_key }}">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p id="source-prepare-retry-help" class="text-sm" style="color:var(--text-secondary)">
-                    После изменения данных товара или обновления справочника можно повторить локальную подготовку для магазина
-                    <strong>{{ run.account_label or ('#' ~ run.account_id) }}</strong> · позиций:
-                    <strong data-source-prepare-retry-count>{{ prepare_retry_count }}</strong>.
-                    Результат откроется отдельным запуском; данные в Ozon не отправляются.
+                    <strong>Повторная подготовка · {{ run.account_label or ('Магазин #' ~ run.account_id) }} · карточек:
+                    <span data-source-prepare-retry-count>{{ prepare_retry_count }}</span></strong>
+                    <span class="block">Подготовка перечитает сохранённые данные.</span>
                 </p>
                 <button class="sh-btn sh-btn--primary sh-btn--md shrink-0" style="min-height:44px"
-                        type="submit" aria-describedby="source-prepare-retry-help"
-                        aria-label="Повторить локальную подготовку для {{ prepare_retry_count }} позиций магазина {{ run.account_label or ('#' ~ run.account_id) }}">
-                    Повторить локальную подготовку ({{ prepare_retry_count }})
+                        type="submit" aria-describedby="source-prepare-retry-help">
+                    Подготовить повторно
                 </button>
             </div>
         </form>
