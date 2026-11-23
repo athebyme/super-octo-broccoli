@@ -265,6 +265,8 @@ def run():
                 "returned_ids": product_ids,
                 "provider_attempt_delta": 0,
             }]
+            first_action_read = selection_reads[0].copy()
+            first_action_read_count = len(selection_reads)
             assert page.evaluate("window.__explicitSelectionReviewClicks") == 0
             assert page.locator(".mp-selection-review").count() == 0
             assert fixture.REPORT["provider_attempts"] == provider_attempts_before_action
@@ -292,9 +294,10 @@ def run():
             expect(dialog).to_be_hidden()
             catalog_settled(page, scope["search"])
             expect(workspace_action_launcher(page, "cards")).to_be_focused()
-            expect(row.locator("[data-common-content-row-link]")).to_have_text(NEW_TITLE)
+            expect(row).to_have_count(0)
             assert len(feed_requests) == feeds_before_close + 1
             assert feed_requests[-1]["search"] == [scope["search"]]
+            assert selection_reads == [first_action_read, first_action_read]
             after_save = fixture.beta_catalog_state(page)
             assert after_save["selected"] == [primary, secondary]
             assert after_save["itemIds"] == []
@@ -335,16 +338,17 @@ def run():
                               "busy_blocks_dismiss": True}
             REPORT["selection_on_action"] = {
                 "action_steps": direct_action_steps,
-                "selection_reads": len(selection_reads),
-                "requested_ids": selection_reads[0]["requested_ids"],
-                "returned_ids": selection_reads[0]["returned_ids"],
+                "selection_reads": first_action_read_count,
+                "post_save_selection_reads": len(selection_reads) - first_action_read_count,
+                "requested_ids": first_action_read["requested_ids"],
+                "returned_ids": first_action_read["returned_ids"],
                 "explicit_review_clicks_before_open": 0,
                 "review_panel_activated": False,
                 "selection_read_busy": True,
                 "focus_retained_while_pending": True,
                 "rapid_reactivation_ignored": True,
                 "editor_product_ids": product_ids,
-                "provider_attempt_delta": selection_reads[0]["provider_attempt_delta"],
+                "provider_attempt_delta": first_action_read["provider_attempt_delta"],
                 "filter_empty_after_rename": after_save["itemIds"] == [],
                 "retained_selected_ids": retained_marks["selected"],
                 "retained_usable_selected_item_ids": retained_marks["usableSelectedItems"],
