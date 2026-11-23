@@ -1357,7 +1357,8 @@ def run():
             assert before_review["ids"] == fixture_ids["bulk_ids"]
             assert before_review["filters"] == {
                 "search": "UX-BULK-OWNED", "supplier": "", "has_photos": "yes",
-                "stock": "", "sort": "title",
+                "stock": "", "sort": "title", "marketplace": "",
+                "marketplace_state": "",
             }
             provider_attempts_before_review = fixture.REPORT["provider_attempts"]
             external_before_review = len(fixture.REPORT["unexpected_external_requests"])
