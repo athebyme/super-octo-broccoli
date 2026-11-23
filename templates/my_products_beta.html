@@ -95,20 +95,29 @@
              class="mp-ozon-message mp-ozon-message--prepared" data-ozon-local-prepare-receipt
              role="region" aria-labelledby="ozon-local-prepare-title" tabindex="-1">
         <div class="mp-ozon-receipt-copy">
-            <strong id="ozon-local-prepare-title">Подготовка принята</strong>
+            <strong id="ozon-local-prepare-title">{{ ozonInlineStatus && ozonInlineStatus.state === 'completed' ? 'Подготовка завершена' : 'Подготовка принята' }}</strong>
             <p>Черновики сохраняются в Seller Hub. На Ozon ничего не отправлено; отправка потребует отдельного подтверждения.</p>
             <p data-ozon-local-prepare-scope>
                 Этот запуск · {{ ozonInlineReceipt.latest.product_ids.length }} товаров · {{ ozonInlineReceipt.latest.account_label }}.
             </p>
+            <div v-if="ozonInlineStatus" role="status" aria-live="polite" aria-atomic="true">
+                <p data-ozon-local-prepare-status :data-status="ozonInlineStatus.state">{{ ozonInlineStatus.message }}</p>
+                <p v-if="ozonInlineStatus.summary" data-ozon-local-prepare-counts>
+                    <span data-ozon-local-prepare-ready-count>Подготовлено: {{ ozonInlineStatus.summary.prepared }}</span> ·
+                    <span data-ozon-local-prepare-attention-count>Требуют внимания: {{ ozonInlineStatus.summary.needs_check }}</span>
+                </p>
+            </div>
             <p v-if="ozonInlineReceiptStorageProblem" role="status">
                 Браузер не сохранил квитанцию для этой вкладки. Откройте запуск или проверьте историю до закрытия страницы.
             </p>
         </div>
         <div class="mp-ozon-actions">
             <a v-if="ozonInlineReceiptUrl" class="sh-btn sh-btn--secondary"
-               data-ozon-local-prepare-run :href="ozonInlineReceiptUrl">Открыть подготовку</a>
+               data-ozon-local-prepare-run :href="ozonInlineReceiptUrl">Открыть итог подготовки</a>
             <a v-if="ozonInlineReceiptStorageProblem" class="sh-btn sh-btn--secondary"
                :href="urls.ozonUploads">История запусков</a>
+            <button type="button" class="sh-btn sh-btn--secondary" data-ozon-local-prepare-dismiss
+                    aria-label="Скрыть итог подготовки Ozon" @click="dismissOzonInlineReceipt">Скрыть</button>
         </div>
         <details v-if="ozonInlineReceiptHasScope" class="mp-ozon-receipt-scope">
             <summary>Состав последнего запуска</summary>
@@ -888,5 +897,5 @@
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261123-inline-common-editor-r1') }}"></script>
 <script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261123-unified-catalog-prices-r63b') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-selection-on-first-intent-r1') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-inline-ozon-status-r1') }}"></script>
 {% endblock %}

@@ -145,6 +145,19 @@
         try { sessionStorage.setItem(ozonInlineReceiptKey, JSON.stringify(value)); return true; }
         catch (_) { return false; }
     }
+    function clearOzonInlineReceipt(jobUid) {
+        try {
+            var raw = sessionStorage.getItem(ozonInlineReceiptKey);
+            if (raw === null) return true;
+            var current = JSON.parse(raw);
+            if (current && current.latest && current.latest.job_uid === jobUid) {
+                sessionStorage.removeItem(ozonInlineReceiptKey);
+            }
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
     function inlineImportMarkerToken() {
         var marker = window.history && window.history.state && window.history.state.sellerHubInlineImportBatch;
         return importBatchMode && importBatchKind === 'import' && marker && marker.v === 1 &&
@@ -161,6 +174,56 @@
                 target.search || target.hash || !target.pathname.endsWith('/')) return '';
             return target.pathname + jobUid;
         } catch (_) { return ''; }
+    }
+    function ozonRunApiLocation(base, jobUid) {
+        if (!ozonRunLocation(base, jobUid)) return '';
+        try {
+            var collection = new URL(base, window.location.origin);
+            return collection.pathname + 'api/' + jobUid;
+        } catch (_) {
+            return '';
+        }
+    }
+    function validOzonInlineRunResponse(body, expected) {
+        if (!body || typeof body !== 'object' || Array.isArray(body) || body.success !== true) return null;
+        var run = body.run;
+        var summary = run && run.summary;
+        if (!run || typeof run !== 'object' || Array.isArray(run) ||
+            run.job_uid !== expected.jobUid || run.mode !== 'source_prepare' ||
+            run.account_id !== expected.accountId || !['running', 'completed'].includes(run.status) ||
+            !summary || typeof summary !== 'object' || Array.isArray(summary) ||
+            summary.version !== 3 || summary.mode !== 'source_prepare' ||
+            summary.job_uid !== expected.jobUid || summary.account_id !== expected.accountId ||
+            summary.total !== expected.total) return null;
+        var total = summary.total;
+        var values = ['processed', 'active', 'prepared', 'needs_input', 'failed'];
+        if (!Number.isSafeInteger(total) || total < 1 ||
+            values.some(function (key) {
+                return !Number.isSafeInteger(summary[key]) || summary[key] < 0 || summary[key] > total;
+            }) || summary.processed + summary.active !== total ||
+            summary.prepared + summary.needs_input + summary.failed > summary.processed ||
+            (run.status === 'running') !== (summary.active > 0) ||
+            !['running', 'success', 'partial', 'attention'].includes(summary.outcome) ||
+            (run.status === 'running') !== (summary.outcome === 'running')) return null;
+        return {
+            state: run.status === 'running' ? 'running' : 'completed',
+            message: run.status === 'running'
+                ? 'Подготовка выполняется. Обработано ' + summary.processed + ' из ' + total + '.'
+                : summary.needs_input || summary.failed || summary.processed > summary.prepared
+                    ? 'Подготовка завершена. Проверьте строки, требующие внимания.'
+                    : 'Подготовка завершена.',
+            summary: {
+                prepared: summary.prepared,
+                needs_check: summary.processed - summary.prepared,
+            },
+        };
+    }
+    function unknownOzonInlineStatus() {
+        return {
+            state: 'unknown',
+            message: 'Статус не удалось подтвердить. Откройте итог по ссылке ниже.',
+            summary: null,
+        };
     }
     function readOzonPending() {
         try { return JSON.parse(sessionStorage.getItem(ozonPendingKey) || 'null'); }
@@ -1403,6 +1466,7 @@
                 ozonInlineReceipt: savedInlineOzon.receipt,
                 ozonInlineReceiptStorageProblem: savedInlineOzon.storageError,
                 ozonInlineReceiptFocusPending: false,
+                ozonInlineStatus: null,
                 ozonRetrySameKey: false,
                 ozonSessionEnded: false,
                 wbCreatePending: savedWbCreate.pending,
@@ -2009,6 +2073,13 @@
         },
 
         watch: {
+            ozonInlineReceipt: function () {
+                this.syncOzonInlineStatusTracking();
+            },
+            ozonInlineReceiptVisible: function (visible) {
+                if (!visible) this.stopOzonInlineStatusTracking({ clearStatus: true });
+                else this.syncOzonInlineStatusTracking();
+            },
             searchInput: function (value) {
                 var self = this;
                 var next = (value || '').trim().slice(0, 200);
@@ -2078,6 +2149,7 @@
             if (workspaceReturnCapsule && !workspaceReturnScopeSeed) {
                 this.consumeWorkspaceReturn(workspaceReturnCapsule.nonce);
             }
+            this.syncOzonInlineStatusTracking();
             this.load();
             if (!this.importBatchMode && !this.supplierRefreshBatchMode) {
                 this.loadFacets();
@@ -2086,6 +2158,7 @@
         },
         beforeUnmount: function () {
             this._mpUnmounted = true;
+            this.stopOzonInlineStatusTracking({ clearStatus: true });
             this.closeInlineCommonContent({ force: true, restoreFocus: false, refreshAfterAttempt: false });
             this._catalogCategoriesRequestId = (this._catalogCategoriesRequestId || 0) + 1;
             if (this._catalogCategoriesAbort) this._catalogCategoriesAbort.abort();
@@ -5890,6 +5963,185 @@
                 clearOzonPending(); this.ozonStorageProblem = false;
                 this.ozonError = 'Повреждённая запись снята после проверки истории. Выберите товары заново перед подготовкой.';
             },
+            stopOzonInlineStatusTracking: function (options) {
+                options = options || {};
+                var tracker = this._ozonInlineStatusTracker;
+                if (options.tracker && tracker !== options.tracker) return;
+                this._ozonInlineStatusTracker = null;
+                if (tracker) {
+                    if (tracker.timer) clearTimeout(tracker.timer);
+                    tracker.timer = null;
+                    if (tracker.requestTimeout) clearTimeout(tracker.requestTimeout);
+                    tracker.requestTimeout = null;
+                    if (tracker.controller) tracker.controller.abort();
+                    tracker.controller = null;
+                    if (tracker.visibility) document.removeEventListener('visibilitychange', tracker.visibility);
+                    tracker.visibility = null;
+                }
+                if (options.clearStatus) this.ozonInlineStatus = null;
+            },
+            syncOzonInlineStatusTracking: function () {
+                var receipt = this.ozonInlineReceipt;
+                if (!this.ozonInlineReceiptVisible || !receipt || !receipt.latest) {
+                    this.stopOzonInlineStatusTracking({ clearStatus: true });
+                    return;
+                }
+                var latest = receipt.latest;
+                var existing = this._ozonInlineStatusTracker;
+                if (existing && existing.jobUid === latest.job_uid) return;
+                this.stopOzonInlineStatusTracking({ clearStatus: true });
+
+                var apiUrl = ozonRunApiLocation(this.urls.ozonUploads, latest.job_uid);
+                this.ozonInlineStatus = {
+                    state: 'checking',
+                    message: 'Проверяем ход подготовки…',
+                    summary: null,
+                };
+                if (!apiUrl) {
+                    this.ozonInlineStatus = unknownOzonInlineStatus();
+                    return;
+                }
+
+                var self = this;
+                var expected = {
+                    jobUid: latest.job_uid,
+                    accountId: latest.account_id,
+                    total: latest.product_ids.length,
+                };
+                var tracker = {
+                    jobUid: expected.jobUid,
+                    apiUrl: apiUrl,
+                    startedAt: Date.now(),
+                    attempts: 0,
+                    inFlight: false,
+                    timer: null,
+                    requestTimeout: null,
+                    controller: null,
+                    visibility: null,
+                };
+                this._ozonInlineStatusTracker = tracker;
+                var isCurrent = function () {
+                    var current = self.ozonInlineReceipt;
+                    return self._ozonInlineStatusTracker === tracker &&
+                        !self._mpUnmounted && self.ozonInlineReceiptVisible && current &&
+                        current.owner === self.workspaceOwner && current.latest &&
+                        current.latest.job_uid === expected.jobUid &&
+                        current.latest.account_id === expected.accountId &&
+                        current.latest.product_ids.length === expected.total;
+                };
+                var stop = function (clearStatus) {
+                    self.stopOzonInlineStatusTracking({ tracker: tracker, clearStatus: !!clearStatus });
+                };
+                var markUnknown = function () {
+                    if (!isCurrent()) return;
+                    self.ozonInlineStatus = unknownOzonInlineStatus();
+                    stop(false);
+                };
+                var markLimit = function () {
+                    if (!isCurrent()) return;
+                    if (self.ozonInlineStatus?.state === 'running') {
+                        self.ozonInlineStatus = Object.assign({}, self.ozonInlineStatus, {
+                            state: 'limit',
+                            message: 'Подготовка ещё выполняется. Откройте итог, чтобы проверить результат.',
+                        });
+                        stop(false);
+                    } else {
+                        markUnknown();
+                    }
+                };
+                var schedule = function () {
+                    if (!isCurrent() || document.hidden || tracker.timer ||
+                        self.ozonInlineStatus?.state !== 'running') return;
+                    if (tracker.attempts >= 6 || Date.now() - tracker.startedAt >= 60000) {
+                        markLimit();
+                        return;
+                    }
+                    tracker.timer = setTimeout(function () {
+                        tracker.timer = null;
+                        poll();
+                    }, 5000);
+                };
+                var poll = async function () {
+                    if (!isCurrent() || tracker.inFlight || document.hidden) return;
+                    if (tracker.attempts >= 6 || Date.now() - tracker.startedAt >= 60000) {
+                        markLimit();
+                        return;
+                    }
+                    tracker.attempts += 1;
+                    tracker.inFlight = true;
+                    var controller = new AbortController();
+                    tracker.controller = controller;
+                    var remainingMs = 60000 - (Date.now() - tracker.startedAt);
+                    tracker.requestTimeout = setTimeout(function () { controller.abort(); },
+                        Math.max(1, Math.min(8000, remainingMs)));
+                    try {
+                        var response = await fetch(tracker.apiUrl, {
+                            method: 'GET',
+                            credentials: 'same-origin',
+                            cache: 'no-store',
+                            redirect: 'error',
+                            signal: controller.signal,
+                            headers: { Accept: 'application/json' },
+                        });
+                        if (!isCurrent()) return;
+                        if (response.status === 401 || response.redirected || response.type === 'opaqueredirect' ||
+                            !response.ok || !(response.headers.get('content-type') || '').includes('application/json')) {
+                            markUnknown();
+                            return;
+                        }
+                        var body = await response.json();
+                        if (!isCurrent()) return;
+                        var status = validOzonInlineRunResponse(body, expected);
+                        if (!status) {
+                            markUnknown();
+                            return;
+                        }
+                        self.ozonInlineStatus = status;
+                        if (status.state === 'completed') stop(false);
+                    } catch (_) {
+                        if (!isCurrent()) return;
+                        markUnknown();
+                    } finally {
+                        if (tracker.requestTimeout) clearTimeout(tracker.requestTimeout);
+                        tracker.requestTimeout = null;
+                        if (tracker.controller === controller) tracker.controller = null;
+                        tracker.inFlight = false;
+                        if (isCurrent()) schedule();
+                    }
+                };
+                tracker.visibility = function () {
+                    if (!isCurrent()) return;
+                    if (document.hidden) {
+                        if (tracker.timer) clearTimeout(tracker.timer);
+                        tracker.timer = null;
+                    } else if (!tracker.inFlight && !tracker.timer) {
+                        if (self.ozonInlineStatus?.state === 'checking') poll();
+                        else schedule();
+                    }
+                };
+                document.addEventListener('visibilitychange', tracker.visibility);
+                poll();
+            },
+            dismissOzonInlineReceipt: function () {
+                var receipt = this.ozonInlineReceipt;
+                var jobUid = receipt && receipt.latest ? receipt.latest.job_uid : '';
+                this.stopOzonInlineStatusTracking({ clearStatus: true });
+                if (jobUid) clearOzonInlineReceipt(jobUid);
+                this.ozonInlineReceipt = null;
+                this.ozonInlineReceiptStorageProblem = false;
+                this.$nextTick(function () {
+                    var returnFocus = document.querySelector('[data-supplier-import-next-action="ozon"]');
+                    if (returnFocus && !returnFocus.disabled) {
+                        returnFocus.focus();
+                        return;
+                    }
+                    var heading = document.querySelector('#my-products-app h1');
+                    if (heading && typeof heading.focus === 'function') {
+                        heading.setAttribute('tabindex', '-1');
+                        heading.focus();
+                    }
+                });
+            },
             buildInlineOzonContext: function (productIds) {
                 if (!this.inlineSupplierImportBatch || !Array.isArray(productIds) ||
                     !sameOrderedIds(productIds, this.selected) ||
@@ -5940,6 +6192,7 @@
                 this.ozonInlineReceipt = receipt;
                 this.ozonInlineReceiptStorageProblem = !saveOzonInlineReceipt(receipt);
                 this.ozonInlineReceiptFocusPending = true;
+                this.syncOzonInlineStatusTracking();
                 return true;
             },
             completeOzonPreparation: function (pending, run) {
