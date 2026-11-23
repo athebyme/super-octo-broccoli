@@ -23,8 +23,8 @@ def _write(root: Path, relative: str, body: str) -> Path:
 
 def test_new_schema_steps_are_appended_after_existing_plan():
     steps = migration_steps()
-    assert len(steps) == 83
-    assert [(step.key, step.script) for step in steps[-4:]] == [
+    assert len(steps) == 84
+    assert [(step.key, step.script) for step in steps[-5:-1]] == [
         ("migrate-add-imported-content-overrides", "migrations/migrate_add_imported_content_overrides.py"),
         ("migrate-add-wb-bulk-review-key", "migrations/migrate_add_wb_bulk_review_key.py"),
         (
@@ -36,7 +36,28 @@ def test_new_schema_steps_are_appended_after_existing_plan():
             "migrations/migrate_add_wb_price_review_receipt.py",
         ),
     ]
+    assert (steps[-1].key, steps[-1].script, steps[-1].args) == (
+        "migrate-add-supplier-catalog-schedule",
+        "migrations/migrate_add_supplier_catalog_schedule.py",
+        ("{database}",),
+    )
     assert len({step.key for step in steps}) == len(steps)
+
+
+def test_previous_83_startup_steps_keep_their_order():
+    steps = migration_steps()
+    assert [(step.key, step.script) for step in steps[:-1]][-4:] == [
+        ("migrate-add-imported-content-overrides", "migrations/migrate_add_imported_content_overrides.py"),
+        ("migrate-add-wb-bulk-review-key", "migrations/migrate_add_wb_bulk_review_key.py"),
+        (
+            "migrate-add-supplier-catalog-refresh-runs",
+            "migrations/migrate_add_supplier_catalog_refresh_runs.py",
+        ),
+        (
+            "migrate-add-wb-price-review-receipt",
+            "migrations/migrate_add_wb_price_review_receipt.py",
+        ),
+    ]
 
 
 def test_common_content_migration_preserves_populated_legacy_imported_products(tmp_path):

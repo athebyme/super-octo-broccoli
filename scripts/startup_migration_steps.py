@@ -152,6 +152,10 @@ def migration_steps() -> tuple[MigrationStep, ...]:
         "migrations/migrate_add_wb_price_review_receipt.py",
         "{database}",
     ))
+    steps.append(_python(
+        "migrations/migrate_add_supplier_catalog_schedule.py",
+        "{database}",
+    ))
 
     keys = [step.key for step in steps]
     if len(keys) != len(set(keys)):

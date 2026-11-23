@@ -8173,5 +8173,14 @@ if __name__ == '__main__':
         else:
             from services.supplier_catalog_refresh_models import SupplierCatalogRefreshRun
             SupplierCatalogRefreshRun.__table__.create(db.engine, checkfirst=True)
+        if db.engine.dialect.name == 'sqlite':
+            from migrations.migrate_add_supplier_catalog_schedule import migrate
+            migrate(db.engine.url.database)
+        else:
+            from services.supplier_catalog_schedule_models import (
+                SupplierCatalogSchedule, SupplierCatalogScheduledRun,
+            )
+            SupplierCatalogSchedule.__table__.create(db.engine, checkfirst=True)
+            SupplierCatalogScheduledRun.__table__.create(db.engine, checkfirst=True)
         _ensure_admin_from_env()
     app.run(debug=os.environ.get('FLASK_DEBUG', '').lower() in ('1', 'true'), host='0.0.0.0', port=int(os.environ.get('PORT', 5001)))
