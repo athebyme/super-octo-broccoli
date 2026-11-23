@@ -556,6 +556,21 @@ class OzonUploadQueueService:
             draft = MarketplaceDraftService.get_draft(
                 seller_id=run.seller_id, draft_id=draft.id,
             )
+            from services.ozon_brand_search import OzonBrandSearch
+            OzonBrandSearch.prepare_source_brand(
+                run=run,
+                item=item,
+                account=account,
+                product=product,
+                draft=draft,
+                lease_token=lease_token,
+                confirmed_queue_created_draft=queue_created_draft_lineage,
+                deadline_monotonic=deadline_monotonic,
+                now=datetime.utcnow(),
+            )
+            draft = MarketplaceDraftService.get_draft(
+                seller_id=run.seller_id, draft_id=draft.id,
+            )
             draft = MarketplaceDraftService.validate_draft(
                 seller_id=run.seller_id, draft_id=draft.id,
                 expected_version=draft.version,
