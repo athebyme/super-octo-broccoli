@@ -3511,6 +3511,73 @@ class OzonBulkUploadRoutesTest(OzonPublicationFixture, unittest.TestCase):
 
 
 class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCase):
+    def _seed_legacy_rrp_draft(self, *, seller_review=False):
+        self.source.recommended_retail_price = 1000.0
+        db.session.flush()
+        facts, provenance, fact_hash = MarketplaceDraftService._fact_snapshot(
+            self.source,
+        )
+        self.draft.source_fact_hash = fact_hash
+        self.draft.source_facts_json = json.dumps(facts)
+        self.draft.provenance_json = json.dumps(provenance)
+        self.draft.commercial_json = json.dumps({
+            "price": "1000",
+            "old_price": "1200",
+            "vat": "0.22",
+            "currency_code": "RUB",
+        })
+        db.session.commit()
+
+        if seller_review:
+            provenance = json.loads(self.draft.provenance_json)
+            review = MarketplaceDraftService._seller_price_review_record(
+                self.draft,
+                price="1000",
+                actor_user_id=self.user.id,
+                updated_from_version=self.draft.version,
+            )
+            self.assertIsInstance(review, dict)
+            provenance[
+                MarketplaceDraftService.SELLER_PRICE_REVIEW_PROVENANCE_KEY
+            ] = review
+            self.draft.provenance_json = json.dumps(provenance)
+            db.session.commit()
+
+    def _seed_legacy_rrp_operation(self, *, seller_review=False):
+        self._seed_legacy_rrp_draft(seller_review=seller_review)
+        return MarketplacePublicationService._create_operation(
+            draft=self.draft,
+            payload=self.desired_payload(),
+            idempotency_key=(
+                "publication-legacy-rrp-reviewed"
+                if seller_review else "publication-legacy-rrp-unreviewed"
+            ),
+            created_by_user_id=self.user.id,
+            now=datetime.utcnow(),
+        )
+
+    def _seed_legacy_rrp_update(self, *, live_price):
+        self._seed_legacy_rrp_draft()
+        prior = self.prior_payload()
+        item = prior["items"][0]
+        item["price"] = str(live_price)
+        item["old_price"] = str(live_price + 200)
+        listing = self.attach_listing(prior)
+        _documents, update_baseline = MarketplaceDraftService.publication_documents(
+            self.draft,
+        )
+        operation = MarketplacePublicationService._create_operation(
+            draft=self.draft,
+            payload=self.desired_payload(),
+            idempotency_key=f"publication-legacy-rrp-update-{live_price}",
+            created_by_user_id=self.user.id,
+            now=datetime.utcnow(),
+            operation_kind="product_update",
+            listing=listing,
+            expected_before_fingerprint=update_baseline["fingerprint"],
+        )
+        return operation, prior
+
     def test_injected_foreign_or_missing_account_id_rejects_before_operation(self):
         for index, external_account_id in enumerate(("", "another-client")):
             credentials = MarketplaceCredentials(
@@ -3942,6 +4009,161 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
         self.assertEqual(stopped.attempt_count, 0)
         self.assertEqual(stopped.quota_reserved, 0)
         self.assertEqual(json.loads(self.draft.dimensions_json)["weight"], "250")
+
+    def test_legacy_queued_rrp_create_stops_after_source_only_price_change(self):
+        operation = self._seed_legacy_rrp_operation()
+        frozen_payload = json.loads(operation.snapshot.submitted_state_json)
+        self.assertEqual(frozen_payload["items"][0]["price"], "1000")
+        self.assertEqual(operation.attempt_count, 0)
+
+        # A supplier price sync can change ImportedProduct without changing the
+        # queued draft version or the source facts saved with that old draft.
+        self.source.recommended_retail_price = 1250.0
+        db.session.commit()
+        self.assertEqual(self.draft.version, operation.draft_version)
+
+        adapter = SyntheticPublicationAdapter()
+        with (
+            patch.object(MarketplacePublicationService, "_prepare_media_assets") as media,
+            patch.object(adapter, "get_operation_limits") as quota,
+        ):
+            stopped = MarketplacePublicationService.poll_operation(
+                seller_id=self.seller.id,
+                operation_id=operation.id,
+                adapter=adapter,
+                credentials=SYNTHETIC_CREDENTIALS,
+                allow_submission=True,
+            )
+
+        media.assert_not_called()
+        quota.assert_not_called()
+        self.assertEqual(adapter.list_calls, [])
+        self.assertEqual(adapter.submitted_payloads, [])
+        self.assertEqual(stopped.status, "failed")
+        self.assertEqual(stopped.error_code, "ozon_supplier_rrp_price_unconfirmed")
+        self.assertIn("цену продажи", stopped.error_message)
+        self.assertEqual(stopped.attempt_count, 0)
+        self.assertEqual(stopped.quota_reserved, 0)
+
+    def test_reviewed_same_value_supplier_rrp_remains_publishable(self):
+        operation = self._seed_legacy_rrp_operation(seller_review=True)
+        adapter = SyntheticPublicationAdapter()
+
+        submitted = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=operation.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+            allow_submission=True,
+        )
+
+        self.assertEqual(submitted.status, "submitted")
+        self.assertEqual(submitted.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+    def test_legacy_rrp_update_stops_when_price_differs_from_live_ozon(self):
+        operation, prior = self._seed_legacy_rrp_update(live_price=900)
+        adapter = SyntheticFullStateAdapter(prior)
+
+        stopped = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=operation.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+            allow_submission=True,
+        )
+
+        self.assertEqual(stopped.status, "failed")
+        self.assertEqual(
+            stopped.error_code,
+            "ozon_supplier_rrp_price_live_mismatch",
+        )
+        self.assertEqual(stopped.attempt_count, 0)
+        self.assertEqual(stopped.quota_reserved, 0)
+        self.assertEqual(adapter.submitted_payloads, [])
+        before = json.loads(stopped.snapshot.before_state_json)
+        self.assertEqual(before["fingerprint"], stopped.snapshot.before_fingerprint)
+        self.assertEqual(before["payload"]["items"][0]["price"], "900")
+
+    def test_legacy_rrp_update_allows_matching_existing_live_price(self):
+        operation, prior = self._seed_legacy_rrp_update(live_price=1000)
+        adapter = SyntheticFullStateAdapter(prior)
+
+        submitted = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=operation.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+            allow_submission=True,
+        )
+
+        self.assertEqual(submitted.status, "submitted")
+        self.assertEqual(submitted.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+    def test_unconfirmed_rrp_is_rechecked_after_quota_before_write(self):
+        adapter = SyntheticPublicationAdapter()
+        with (
+            patch.object(
+                MarketplaceDraftService,
+                "has_unconfirmed_supplier_rrp_price",
+                side_effect=[False, False, True],
+            ) as price_check,
+            patch.object(
+                adapter,
+                "get_operation_limits",
+                wraps=adapter.get_operation_limits,
+            ) as quota,
+        ):
+            stopped = self.start(
+                adapter,
+                key="publication-rrp-final-preflight-check",
+            )
+
+        self.assertEqual(price_check.call_count, 3)
+        quota.assert_called_once_with(SYNTHETIC_CREDENTIALS)
+        self.assertTrue(adapter.list_calls)
+        self.assertEqual(adapter.submitted_payloads, [])
+        self.assertEqual(stopped.status, "failed")
+        self.assertEqual(stopped.error_code, "ozon_supplier_rrp_price_unconfirmed")
+        self.assertEqual(stopped.attempt_count, 0)
+        self.assertEqual(stopped.quota_reserved, 0)
+
+    def test_historical_uncertain_rrp_operation_reconciles_without_recreate(self):
+        operation = self._seed_legacy_rrp_operation()
+        adapter = SyntheticPublicationAdapter(ambiguous=True)
+        with patch.object(
+            MarketplaceDraftService,
+            "has_unconfirmed_supplier_rrp_price",
+            return_value=False,
+        ):
+            uncertain = MarketplacePublicationService.poll_operation(
+                seller_id=self.seller.id,
+                operation_id=operation.id,
+                adapter=adapter,
+                credentials=SYNTHETIC_CREDENTIALS,
+                allow_submission=True,
+            )
+        self.assertEqual(uncertain.status, "uncertain")
+        self.assertEqual(uncertain.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+        with patch.object(
+            MarketplaceDraftService,
+            "has_unconfirmed_supplier_rrp_price",
+            side_effect=AssertionError("attempted operations must only reconcile"),
+        ):
+            reconciled = MarketplacePublicationService.poll_operation(
+                seller_id=self.seller.id,
+                operation_id=operation.id,
+                adapter=adapter,
+                credentials=SYNTHETIC_CREDENTIALS,
+                allow_submission=True,
+            )
+
+        self.assertEqual(reconciled.status, "succeeded")
+        self.assertEqual(reconciled.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
 
     def test_queued_create_with_current_net_weight_stops_before_preflight(self):
         self.source.original_data = json.dumps({

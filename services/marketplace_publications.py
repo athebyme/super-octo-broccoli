@@ -2024,6 +2024,115 @@ class MarketplacePublicationService:
         return list(found.values())
 
     @classmethod
+    def _stop_unconfirmed_rrp_update_conflict(
+        cls,
+        operation: MarketplaceOperation,
+        *,
+        submitted_payload: dict,
+        live: dict,
+        now: datetime,
+    ) -> bool:
+        """Stop an untouched update that would replace a different live price with RRP."""
+        if (
+            operation.operation_kind != "product_update"
+            or operation.status != "queued"
+            or operation.attempt_count != 0
+        ):
+            return False
+
+        db.session.expire_all()
+        draft = operation.draft
+        if (
+            draft is None
+            or draft.id != operation.draft_id
+            or draft.seller_id != operation.seller_id
+            or draft.account_id != operation.account_id
+            or draft.marketplace_id != operation.marketplace_id
+            or draft.published_listing_id != operation.listing_id
+            or draft.version != operation.draft_version
+        ):
+            return False
+
+        try:
+            submitted_commercial = OzonProductStateContract.draft_documents(
+                submitted_payload
+            )["commercial"]
+        except (KeyError, MarketplaceDraftError, OzonProductStateError):
+            cls._mark_failed(
+                operation,
+                code="ozon_supplier_price_comparison_unavailable",
+                message=(
+                    "Не удалось сверить цену обновления с карточкой Ozon. "
+                    "Обновление остановлено до повторной проверки."
+                ),
+                now=now,
+            )
+            return True
+
+        if not MarketplaceDraftService.has_unconfirmed_supplier_rrp_price(
+            draft, commercial=submitted_commercial,
+        ):
+            return False
+
+        try:
+            live_commercial = OzonProductStateContract.draft_documents(
+                live["payload"]
+            )["commercial"]
+        except (KeyError, MarketplaceDraftError, OzonProductStateError):
+            cls._mark_failed(
+                operation,
+                code="ozon_supplier_price_comparison_unavailable",
+                message=(
+                    "Не удалось сверить цену обновления с карточкой Ozon. "
+                    "Обновление остановлено до повторной проверки."
+                ),
+                now=now,
+            )
+            return True
+
+        submitted_price = MarketplaceDraftService._decimal_from_fact(
+            submitted_commercial.get("price")
+        )
+        live_price = MarketplaceDraftService._decimal_from_fact(
+            live_commercial.get("price")
+        )
+        if submitted_price is None or live_price is None:
+            cls._mark_failed(
+                operation,
+                code="ozon_supplier_price_comparison_unavailable",
+                message=(
+                    "Не удалось сверить цену обновления с карточкой Ozon. "
+                    "Обновление остановлено до повторной проверки."
+                ),
+                now=now,
+            )
+            return True
+        if submitted_price == live_price:
+            return False
+
+        snapshot = operation.snapshot
+        if snapshot is not None:
+            snapshot.before_state_json = cls._json({
+                "checked_at": now.isoformat(),
+                "exists": True,
+                "identity": live["identity"],
+                "fingerprint": live["fingerprint"],
+                "payload": live["payload"],
+            }, dict)
+            snapshot.before_fingerprint = live["fingerprint"]
+            snapshot.rollback_status = "conflict"
+        cls._mark_failed(
+            operation,
+            code="ozon_supplier_rrp_price_live_mismatch",
+            message=(
+                "Сохранённая цена совпадает с РРЦ поставщика, но отличается "
+                "от цены в Ozon. Проверьте цену продажи в кабинете и черновике."
+            ),
+            now=now,
+        )
+        return True
+
+    @classmethod
     def _live_preflight(
         cls,
         operation: MarketplaceOperation,
@@ -2031,6 +2140,7 @@ class MarketplacePublicationService:
         adapter,
         credentials: MarketplaceCredentials,
         now: datetime,
+        submitted_payload: dict,
     ) -> bool:
         summary = cls._operation_summary(operation)
         offer_id = summary["offer_id"]
@@ -2107,6 +2217,13 @@ class MarketplacePublicationService:
                     now=now,
                 )
                 return False
+            if cls._stop_unconfirmed_rrp_update_conflict(
+                operation,
+                submitted_payload=submitted_payload,
+                live=live,
+                now=now,
+            ):
+                return False
             roundtrip_adjustments: Optional[dict] = {}
             if live["fingerprint"] != operation.request_fingerprint:
                 roundtrip_adjustments = (
@@ -2172,14 +2289,14 @@ class MarketplacePublicationService:
         return True
 
     @classmethod
-    def _stop_unconfirmed_package(
+    def _stop_unconfirmed_first_create(
         cls,
         operation: MarketplaceOperation,
         *,
         payload: dict,
         now: datetime,
     ) -> bool:
-        """Fence the complete frozen package before the first Ozon create."""
+        """Fence package and seller-price evidence before a first create."""
         if (
             operation.operation_kind != "product_import"
             or operation.status != "queued"
@@ -2202,7 +2319,8 @@ class MarketplacePublicationService:
             and draft.version == operation.draft_version
         ):
             try:
-                frozen = OzonProductStateContract.draft_documents(payload)["dimensions"]
+                documents = OzonProductStateContract.draft_documents(payload)
+                frozen = documents["dimensions"]
                 saved = MarketplaceDraftService._normalize_dimensions(
                     MarketplaceDraftService._stored_json(draft.dimensions_json, dict)
                 )
@@ -2215,12 +2333,23 @@ class MarketplacePublicationService:
                             draft, frozen,
                         )
                         if mismatch is None:
-                            return False
-                        code = "ozon_package_weight_attribute_mismatch"
-                        message = (
-                            "Сверьте вес упаковки в характеристиках с подтверждённым "
-                            "весом упаковки, затем заново проверьте карточку."
-                        )
+                            if MarketplaceDraftService.has_unconfirmed_supplier_rrp_price(
+                                draft,
+                                commercial=documents["commercial"],
+                            ):
+                                code = "ozon_supplier_rrp_price_unconfirmed"
+                                message = (
+                                    "РРЦ поставщика не подтверждает цену продажи. "
+                                    "Укажите цену продажи в черновике и проверьте карточку заново."
+                                )
+                            else:
+                                return False
+                        else:
+                            code = "ozon_package_weight_attribute_mismatch"
+                            message = (
+                                "Сверьте вес упаковки в характеристиках с подтверждённым "
+                                "весом упаковки, затем заново проверьте карточку."
+                            )
             except (MarketplaceDraftError, OzonProductStateError):
                 pass
         cls._mark_failed(operation, code=code, message=message, now=now)
@@ -2351,7 +2480,11 @@ class MarketplacePublicationService:
                 return False
 
         checked_at = datetime.utcnow()
-        if cls._stop_unconfirmed_package(operation, payload=payload, now=checked_at):
+        if cls._stop_unconfirmed_first_create(
+            operation,
+            payload=payload,
+            now=checked_at,
+        ):
             return False
 
         if uses_ozon_brand_search and cls._stop_stale_brand_search(
@@ -2465,7 +2598,11 @@ class MarketplacePublicationService:
                 seller_id=operation.seller_id,
                 operation_id=operation.id,
             )
-        if cls._stop_unconfirmed_package(operation, payload=payload, now=now):
+        if cls._stop_unconfirmed_first_create(
+            operation,
+            payload=payload,
+            now=now,
+        ):
             return cls._owned_operation(
                 seller_id=operation.seller_id, operation_id=operation.id,
             )
@@ -2512,6 +2649,7 @@ class MarketplacePublicationService:
                 adapter=adapter,
                 credentials=credentials,
                 now=now,
+                submitted_payload=payload,
             )
         except OzonAPIError as exc:
             cls._defer_prewrite(
