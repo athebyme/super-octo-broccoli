@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-24T01:57:09.225264+00:00",
+  "generated_at": "2026-11-24T02:30:13.583351+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "b7197ec0cf018e6adcf3908bb62952d76a1cc5636ab9a0179bb32c06267f57e5"
+      "sha256": "b9af78e937bdad6c894bf820dbb641f77e19fd2efa2d9d10ab2fc9fb41d47549"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -473,7 +473,7 @@
     },
     {
       "path": "docs/design/ozon-upload-v3-api.md",
-      "sha256": "cd73af04e4dd6fa5d6ff1fac8e7bc389bcd6f6c1fa6511517df29d039def79ba"
+      "sha256": "e63da4e1594de9a520dacc8680b6c6cd6a09ab7318983693490800b8c6865dfc"
     },
     {
       "path": "docs/design/ozon-ux-completion-plan-2026-10-01.md",
@@ -1569,7 +1569,7 @@
     },
     {
       "path": "routes/suppliers.py",
-      "sha256": "139a4e0417ab3b0384486eed241deb5810e13195e8e6572a5e81a5c758f33104"
+      "sha256": "ef8e0e7a9cd9ed70b6d12b4fec7a65f5f1caf6e7efdfc2d3251978938f8c16b8"
     },
     {
       "path": "routes/telegram_alerts.py",
@@ -2213,7 +2213,7 @@
     },
     {
       "path": "services/my_products_feed.py",
-      "sha256": "807db8a94dd218a19aeed2c3b672b8e021caeaf5f9980985253be46cab7eaa84"
+      "sha256": "7701125581b116d4fe07b41d1f01eec1dce95b05bdeb442b920bf39c587be291"
     },
     {
       "path": "services/openai_decisions.py",
@@ -2429,7 +2429,7 @@
     },
     {
       "path": "services/product_sync_scheduler.py",
-      "sha256": "e77d761ba63fa4b9dabd5ef1b9c2f433631a2d72881c36cf3e71bd3d710dfec8"
+      "sha256": "a5b297a8f5d0f20664fa0f5caffa17a3e7614ecd86aa2b8f4d99956e57106424"
     },
     {
       "path": "services/prohibited_brands_service.py",
@@ -2445,7 +2445,7 @@
     },
     {
       "path": "services/seller_attention.py",
-      "sha256": "87f268f97b1eed5d34da95e470f1cd485bf7f63cefdcb53d4f1566bc6cd5bee4"
+      "sha256": "d4e3560165a7686d461fe8c67f7786201b0fde0e76c8733cc668973c1bbf09c7"
     },
     {
       "path": "services/smart_category_mapper.py",
@@ -2505,7 +2505,7 @@
     },
     {
       "path": "services/supplier_field_observations.py",
-      "sha256": "9aaee28e65d1b71240f672d3a618f2b0d6f8b3cd4d389f5e045d77f5837ace18"
+      "sha256": "55c911c470e6e7f4ae347d4148d43c5fcff89cc88f7c792d3b751b2bbe396610"
     },
     {
       "path": "services/supplier_luna_enrichment.py",
@@ -2521,7 +2521,7 @@
     },
     {
       "path": "services/supplier_service.py",
-      "sha256": "630af4c4f4091534760308e6ebca7fe72e547378885d153e9d5ecb841afa9737"
+      "sha256": "a64950974514c981aadbaf2744137bf5e7e3abea0cc1efbbf9e8450d9b8dd933"
     },
     {
       "path": "services/supplier_update_hub.py",
@@ -4617,7 +4617,7 @@
     },
     {
       "path": "tests/test_my_products_feed.py",
-      "sha256": "b151ee7e7829a250d081ff4962e1db59efc463520a1d957ec603cf6154a11a94"
+      "sha256": "dd791fc591c577e88bc7f056d61518133a795da9d3bc93d0756abfe727e4529b"
     },
     {
       "path": "tests/test_my_products_filters.py",
@@ -4721,7 +4721,7 @@
     },
     {
       "path": "tests/test_ozon_bulk_supplier_source_comparison.py",
-      "sha256": "7129423d1c34de9617507c1e2d743dc93e3a213b4b167cebad7d570559a09248"
+      "sha256": "3b051d948addca066c3510f899eefcb01c3f2425fcbcfc6db69b5c666b2c314c"
     },
     {
       "path": "tests/test_ozon_catalog_checkpoints.py",
@@ -5153,7 +5153,7 @@
     },
     {
       "path": "tests/test_supplier_catalog_update_all.py",
-      "sha256": "86d496e7d3931c65bfebf6ab354c25c60a1b9948216c8a5cdbe7b2d437c1acc0"
+      "sha256": "5553cd6fb01f7240991b33d67fd0695cc4a2534e18b7f1c1202b8d389083356a"
     },
     {
       "path": "tests/test_supplier_color_observation_feed.py",
@@ -5508,5 +5508,5 @@
       "sha256": "260973076a516b81bba3cae3adcd6b652fdee5585e27fbd0b7401062b78aefb1"
     }
   ],
-  "aggregate_sha256": "24460e28e51e691e297bca867bc124f2e55ebde659c79426da7eba28854e81d4"
+  "aggregate_sha256": "31e0666f3a1814e97edd854987189d5072fa5707a71f93ae7b257bd28e5a1818"
 }
