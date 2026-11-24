@@ -4025,13 +4025,13 @@ class MarketplaceDraftService:
         facts_document: dict,
         *,
         account: SellerMarketplaceAccount,
-        provenance: Optional[dict] = None,
+        provenance: dict,
     ) -> dict:
         source = facts_document.get("facts", {}).get("commercial", {})
         result = cls._commercial_defaults(account)
         calculated_price = cls._verified_calculated_price(
             facts_document,
-            provenance or {},
+            provenance,
         )
         if calculated_price is not None:
             result["price"] = calculated_price
@@ -4109,34 +4109,38 @@ class MarketplaceDraftService:
         facts_document: Optional[dict] = None,
         provenance: Optional[dict] = None,
     ) -> Optional[str]:
-        """Return only an exact old supplier-RRP value copied into a draft.
-
-        A changed amount is treated as an independently reviewed seller value;
-        an exact same-value choice needs a seller-attributed transition record.
-        """
-        stored_commercial = (
-            commercial
-            if isinstance(commercial, dict)
-            else cls._stored_json(draft.commercial_json, dict)
-        )
-        stored_facts = (
-            facts_document
-            if isinstance(facts_document, dict)
-            else cls._stored_json(draft.source_facts_json, dict)
-        )
+        """Recognize a copied supplier RRP by its saved source and exact amount."""
         stored_provenance = (
-            provenance
-            if isinstance(provenance, dict)
+            provenance if provenance is not None
             else cls._stored_json(draft.provenance_json, dict)
         )
-        if not cls.has_unconfirmed_supplier_rrp_price(
-            draft,
-            commercial=stored_commercial,
-            facts_document=stored_facts,
-            provenance=stored_provenance,
+        evidence = stored_provenance.get("commercial.price")
+        if not isinstance(evidence, dict) or evidence.get("trust") != "observed":
+            return None
+        source = evidence.get("source")
+        if not isinstance(source, str) or source not in cls.SUPPLIER_RRP_PRICE_SOURCES:
+            return None
+
+        stored_commercial = (
+            commercial if commercial is not None
+            else cls._stored_json(draft.commercial_json, dict)
+        )
+        submitted_price = cls._decimal_from_fact(stored_commercial.get("price"))
+        if submitted_price is None:
+            return None
+        stored_facts = (
+            facts_document if facts_document is not None
+            else cls._stored_json(draft.source_facts_json, dict)
+        )
+        facts = stored_facts.get("facts")
+        fact_commercial = facts.get("commercial") if isinstance(facts, dict) else None
+        if not isinstance(fact_commercial, dict) or (
+            cls._decimal_from_fact(fact_commercial.get("price")) != submitted_price
         ):
             return None
-        return cls._decimal_from_fact(stored_commercial.get("price"))
+        if cls._seller_price_review_matches(draft, submitted_price, provenance=stored_provenance):
+            return None
+        return submitted_price
 
     @classmethod
     def has_unconfirmed_supplier_rrp_price(
@@ -4144,61 +4148,9 @@ class MarketplaceDraftService:
         draft: MarketplaceProductDraft,
         *,
         commercial: Optional[dict] = None,
-        facts_document: Optional[dict] = None,
-        provenance: Optional[dict] = None,
     ) -> bool:
-        """Whether an exact source-fact price lacks seller-price authority.
-
-        This is shared with publication preflight.  Callers may provide the
-        frozen commercial/source documents from a queued first-create; omitted
-        documents are read from the draft's saved snapshot.  Only the exact
-        known supplier-RRP provenance lanes are classified; other provenance
-        and unrelated equal amounts are left unchanged.
-        """
-        stored_commercial = (
-            commercial
-            if isinstance(commercial, dict)
-            else cls._stored_json(draft.commercial_json, dict)
-        )
-        stored_facts = (
-            facts_document
-            if isinstance(facts_document, dict)
-            else cls._stored_json(draft.source_facts_json, dict)
-        )
-        stored_provenance = (
-            provenance
-            if isinstance(provenance, dict)
-            else cls._stored_json(draft.provenance_json, dict)
-        )
-        submitted_price = cls._decimal_from_fact(stored_commercial.get("price"))
-        fact_commercial = stored_facts.get("facts", {}).get("commercial", {})
-        source_price = cls._decimal_from_fact(
-            fact_commercial.get("price")
-            if isinstance(fact_commercial, dict) else None
-        )
-        if submitted_price is None or source_price != submitted_price:
-            return False
-
-        evidence = stored_provenance.get("commercial.price")
-        if (
-            isinstance(evidence, dict)
-            and evidence.get("source") == "imported_product.calculated_price"
-            and evidence.get("trust") == "seller_calculation"
-        ):
-            return False
-        if (
-            not isinstance(evidence, dict)
-            or evidence.get("source") not in cls.SUPPLIER_RRP_PRICE_SOURCES
-            or evidence.get("trust") != "observed"
-        ):
-            return False
-        if cls._seller_price_review_matches(
-            draft,
-            submitted_price,
-            provenance=stored_provenance,
-        ):
-            return False
-        return True
+        """Check the draft or frozen commercial block against its saved evidence."""
+        return cls._legacy_supplier_rrp_price(draft, commercial=commercial) is not None
 
     @classmethod
     def _seller_price_review_record(
