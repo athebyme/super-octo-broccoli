@@ -422,7 +422,11 @@
                                 <button type="button" class="sc-category-edit sc-category-edit--set"
                                       title="Категория WB: {{ product.wb_category_name }} (ID: {{ product.wb_subject_id }}). Нажмите чтобы изменить"
                                       id="cat-label-{{ product.id }}"
-                                      onclick="openCategoryModal({{ product.id }}, {{ supplier.id }}, '{{ product.wb_category_name|e }}', {{ product.wb_subject_id or 0 }})">{{ product.wb_category_name[:30] }}</button>
+                                      data-category-open
+                                      data-product-id="{{ product.id }}"
+                                      data-supplier-id="{{ supplier.id }}"
+                                      data-current-name="{{ product.wb_category_name }}"
+                                      data-current-subject-id="{{ product.wb_subject_id or 0 }}">{{ product.wb_category_name[:30] }}</button>
                                 {% endif %}
                                 {% else %}
                                 {% if selection_review %}
@@ -430,7 +434,11 @@
                                 {% else %}
                                 <button type="button" class="sc-category-edit"
                                       id="cat-label-{{ product.id }}"
-                                      onclick="openCategoryModal({{ product.id }}, {{ supplier.id }}, '', 0)"
+                                      data-category-open
+                                      data-product-id="{{ product.id }}"
+                                      data-supplier-id="{{ supplier.id }}"
+                                      data-current-name=""
+                                      data-current-subject-id="0"
                                       title="Нажмите чтобы задать категорию WB">Задать категорию WB</button>
                                 {% endif %}
                                 {% endif %}
@@ -533,13 +541,12 @@
         <div class="bg-white rounded-lg shadow-xl w-full max-w-lg" onclick="event.stopPropagation()">
             <div class="flex items-center justify-between px-5 py-4 border-b border-gray-200">
                 <h3 class="text-sm font-semibold text-gray-900">Изменить категорию WB</h3>
-                <button onclick="closeCategoryModal()" class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+                <button type="button" data-category-close class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
             </div>
             <div class="px-5 py-4">
                 <input type="text" id="cat-search-input"
                        placeholder="Начните вводить название категории..."
-                       class="w-full rounded-md border-gray-300 text-sm border px-3 py-2"
-                       oninput="debouncedCatSearch()">
+                       class="w-full rounded-md border-gray-300 text-sm border px-3 py-2">
                 <div id="cat-search-results" class="mt-2 max-h-60 overflow-y-auto"></div>
                 <div id="cat-current" class="mt-3 text-xs text-gray-500"></div>
             </div>
@@ -556,23 +563,66 @@
     var timer;
     var activeProductId = null;
     var activeSupplierId = null;
+    var modalGeneration = 0;
+    var searchGeneration = 0;
+    var savingProductIds = new Set();
 
-    window.openCategoryModal = function(productId, supplierId, currentName, currentSubjectId) {
-        activeProductId = productId;
-        activeSupplierId = supplierId;
+    function sameModalTarget(target) {
+        return target.generation === modalGeneration
+            && target.productId === activeProductId
+            && target.supplierId === activeSupplierId
+            && !modal.classList.contains('hidden');
+    }
+
+    document.addEventListener('click', function(event) {
+        var trigger = event.target.closest('[data-category-open]');
+        if (!trigger) return;
+        openCategoryModal(
+            trigger.dataset.productId,
+            trigger.dataset.supplierId,
+            trigger.dataset.currentName || '',
+            trigger.dataset.currentSubjectId || '0'
+        );
+    });
+
+    searchInput.addEventListener('input', function() {
+        debouncedCatSearch();
+    });
+
+    modal.querySelector('[data-category-close]').addEventListener('click', function() {
+        closeCategoryModal();
+    });
+
+    function openCategoryModal(productId, supplierId, currentName, currentSubjectId) {
+        clearTimeout(timer);
+        timer = null;
+        modalGeneration += 1;
+        searchGeneration += 1;
+        var generation = modalGeneration;
+        activeProductId = String(productId);
+        activeSupplierId = String(supplierId);
         searchInput.value = '';
-        resultsDiv.innerHTML = '';
+        resultsDiv.replaceChildren();
         currentDiv.textContent = currentName
             ? 'Текущая: ' + currentName + ' (ID: ' + currentSubjectId + ')'
             : 'Категория не задана';
         modal.classList.remove('hidden');
-        setTimeout(function(){ searchInput.focus(); }, 100);
-    };
+        setTimeout(function(){
+            if (generation === modalGeneration && !modal.classList.contains('hidden')) {
+                searchInput.focus();
+            }
+        }, 100);
+    }
 
-    window.closeCategoryModal = function() {
+    function closeCategoryModal() {
+        clearTimeout(timer);
+        timer = null;
+        modalGeneration += 1;
+        searchGeneration += 1;
         modal.classList.add('hidden');
         activeProductId = null;
-    };
+        activeSupplierId = null;
+    }
 
     modal.addEventListener('click', function(e) {
         if (e.target === modal) closeCategoryModal();
@@ -582,38 +632,75 @@
         if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeCategoryModal();
     });
 
-    window.debouncedCatSearch = function() {
+    function debouncedCatSearch() {
         clearTimeout(timer);
         timer = setTimeout(doSearch, 300);
-    };
+    }
 
     function doSearch() {
         var q = searchInput.value.trim();
-        if (q.length < 2) { resultsDiv.innerHTML = ''; return; }
-        resultsDiv.innerHTML = '<div class="text-xs text-gray-400 py-2">Поиск...</div>';
+        var target = {
+            productId: activeProductId,
+            supplierId: activeSupplierId,
+            generation: modalGeneration,
+        };
+        var requestGeneration = ++searchGeneration;
+        if (q.length < 2) { resultsDiv.replaceChildren(); return; }
+        resultsDiv.replaceChildren();
+        var loading = document.createElement('div');
+        loading.className = 'text-xs text-gray-400 py-2';
+        loading.textContent = 'Поиск...';
+        resultsDiv.appendChild(loading);
         fetch('/api/wb-subjects/search?q=' + encodeURIComponent(q))
             .then(function(r){ return r.json(); })
             .then(function(data){
+                if (!sameModalTarget(target) || requestGeneration !== searchGeneration
+                    || searchInput.value.trim() !== q) return;
                 if (!data.subjects || data.subjects.length === 0) {
-                    resultsDiv.innerHTML = '<div class="text-xs text-gray-500 py-2">Ничего не найдено</div>';
+                    resultsDiv.replaceChildren();
+                    var empty = document.createElement('div');
+                    empty.className = 'text-xs text-gray-500 py-2';
+                    empty.textContent = 'Ничего не найдено';
+                    resultsDiv.appendChild(empty);
                     return;
                 }
-                var html = '';
+                resultsDiv.replaceChildren();
                 data.subjects.forEach(function(item) {
-                    html += '<button onclick="selectCat(' + item.subject_id + ',\'' + escHtml(item.subject_name) + '\',\'' + escHtml(item.display) + '\')" '
-                         + 'class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-100 flex justify-between items-center">'
-                         + '<span>' + escHtml(item.display) + '</span>'
-                         + '<span class="text-gray-400 text-xs ml-2 flex-shrink-0">ID: ' + item.subject_id + '</span>'
-                         + '</button>';
+                    var numericSubjectId = Number(item.subject_id);
+                    if (!Number.isSafeInteger(numericSubjectId) || numericSubjectId <= 0) return;
+                    var subjectId = String(numericSubjectId);
+                    var subjectName = String(item.subject_name || '');
+                    var display = String(item.display || subjectName);
+                    var button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-100 flex justify-between items-center';
+                    button.addEventListener('click', function() {
+                        selectCategory(numericSubjectId, subjectName, display, target);
+                    });
+                    var label = document.createElement('span');
+                    label.textContent = display;
+                    var idLabel = document.createElement('span');
+                    idLabel.className = 'text-gray-400 text-xs ml-2 flex-shrink-0';
+                    idLabel.textContent = 'ID: ' + subjectId;
+                    button.append(label, idLabel);
+                    resultsDiv.appendChild(button);
                 });
-                resultsDiv.innerHTML = html;
             })
-            .catch(function(){ resultsDiv.innerHTML = '<div class="text-xs text-red-500 py-2">Ошибка поиска</div>'; });
+            .catch(function(){
+                if (!sameModalTarget(target) || requestGeneration !== searchGeneration) return;
+                resultsDiv.replaceChildren();
+                var error = document.createElement('div');
+                error.className = 'text-xs text-red-500 py-2';
+                error.textContent = 'Ошибка поиска';
+                resultsDiv.appendChild(error);
+            });
     }
 
-    window.selectCat = function(subjectId, subjectName, display) {
-        if (!activeProductId) return;
-        fetch('/supplier-catalog/' + activeSupplierId + '/products/' + activeProductId + '/update-category', {
+    function selectCategory(subjectId, subjectName, display, target) {
+        if (!target || !sameModalTarget(target)
+            || savingProductIds.has(target.productId)) return;
+        savingProductIds.add(target.productId);
+        fetch('/supplier-catalog/' + target.supplierId + '/products/' + target.productId + '/update-category', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ subject_id: subjectId, subject_name: subjectName, display: display })
@@ -621,28 +708,30 @@
         .then(function(r){ return r.json(); })
         .then(function(data){
             if (data.success) {
-                var label = document.getElementById('cat-label-' + activeProductId);
+                var label = document.getElementById('cat-label-' + target.productId);
                 if (label) {
                     label.textContent = data.wb_category_name.substring(0, 30);
                     label.className = 'sc-category-edit sc-category-edit--set';
                     label.title = 'Категория WB: ' + data.wb_category_name + ' (ID: ' + data.wb_subject_id + '). Нажмите чтобы изменить';
-                    label.setAttribute('onclick',
-                        "openCategoryModal(" + activeProductId + "," + activeSupplierId + ",'" + escAttr(data.wb_category_name) + "'," + data.wb_subject_id + ")");
+                    label.dataset.categoryOpen = '';
+                    label.dataset.productId = target.productId;
+                    label.dataset.supplierId = target.supplierId;
+                    label.dataset.currentName = data.wb_category_name;
+                    label.dataset.currentSubjectId = String(data.wb_subject_id);
                 }
-                closeCategoryModal();
-            } else {
+                if (sameModalTarget(target)) closeCategoryModal();
+            } else if (sameModalTarget(target)) {
                 alert('Ошибка: ' + (data.error || ''));
             }
         })
-        .catch(function(){ alert('Ошибка сохранения'); });
-    };
+        .catch(function(){
+            if (sameModalTarget(target)) alert('Ошибка сохранения');
+        })
+        .finally(function(){
+            savingProductIds.delete(target.productId);
+        });
+    }
 
-    function escHtml(s) {
-        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-    }
-    function escAttr(s) {
-        return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-    }
 })();
 </script>
 <script defer src="{{ url_for('static', filename='supplier-catalog-update-review.js', v='20261122-r60-g2') }}"></script>

@@ -104,6 +104,18 @@ class WBContentProtocolException(WBAPIException):
     code = 'wb_content_protocol_error'
 
 
+class WBVendorCardNotFound(WBAPIException):
+    """Полный поиск не нашёл карточку с точным артикулом продавца."""
+
+    code = 'wb_vendor_card_not_found'
+
+
+class WBVendorCardLookupUncertain(WBContentProtocolException):
+    """Поиск не подтвердил однозначную карточку WB с точным артикулом."""
+
+    code = 'wb_vendor_card_lookup_uncertain'
+
+
 class WBAuthException(WBAPIException):
     """Ошибка аутентификации"""
     pass
@@ -740,20 +752,34 @@ class WildberriesAPIClient:
 
     def get_card_by_vendor_code(self, vendor_code: str) -> Dict[str, Any]:
         """
-        Получить карточку товара по артикулу поставщика
+        Получить карточку WB по точному артикулу продавца с учётом регистра.
 
         Args:
-            vendor_code: Артикул поставщика
+            vendor_code: Артикул продавца.
 
         Returns:
-            Данные карточки товара
-        """
-        endpoint = "/content/v2/get/cards/list"
+            Данные единственной найденной карточки.
 
+        Raises:
+            WBVendorCardNotFound: полный ответ не содержит точный vendorCode.
+            WBVendorCardLookupUncertain: ответ неполный, неоднозначный или
+                содержит недопустимую идентичность карточки.
+        """
+        if (
+            not isinstance(vendor_code, str)
+            or not vendor_code.strip()
+            or len(vendor_code) > 200
+        ):
+            raise WBVendorCardLookupUncertain(
+                'Не удалось проверить артикул карточки WB.'
+            )
+
+        limit = 20
+        endpoint = "/content/v2/get/cards/list"
         body = {
             "settings": {
                 "cursor": {
-                    "limit": 1
+                    "limit": limit
                 },
                 "filter": {
                     "textSearch": vendor_code,  # Поиск по артикулу
@@ -763,13 +789,70 @@ class WildberriesAPIClient:
         }
 
         response = self._make_request('POST', 'content', endpoint, json=body)
-        data = response.json()
+        try:
+            data = response.json()
+        except (TypeError, ValueError):
+            raise WBVendorCardLookupUncertain(
+                'WB вернул некорректный ответ поиска карточки.'
+            ) from None
 
-        cards = data.get('cards', [])
-        if not cards:
-            raise WBAPIException(f"Товар с артикулом {vendor_code} не найден")
+        if not isinstance(data, dict):
+            raise WBVendorCardLookupUncertain(
+                'WB вернул некорректный ответ поиска карточки.'
+            )
 
-        return cards[0]
+        if data.get('error') is True:
+            raise WBVendorCardLookupUncertain(
+                'WB вернул ошибку вместо страницы поиска карточек.'
+            )
+
+        cards = data.get('cards')
+        cursor = data.get('cursor')
+        if (
+            not isinstance(cards, list)
+            or any(not isinstance(card, dict) for card in cards)
+            or any(
+                not isinstance(card.get('vendorCode'), str)
+                or not card.get('vendorCode').strip()
+                for card in cards
+            )
+            or not isinstance(cursor, dict)
+        ):
+            raise WBVendorCardLookupUncertain(
+                'WB вернул некорректную страницу поиска карточки.'
+            )
+
+        total = cursor.get('total')
+        if (
+            type(total) is not int
+            or total < 0
+            or total != len(cards)
+            or total >= limit
+        ):
+            raise WBVendorCardLookupUncertain(
+                'Полноту страницы поиска карточки WB подтвердить нельзя.'
+            )
+
+        exact_cards = [
+            card for card in cards
+            if card.get('vendorCode') == vendor_code
+        ]
+        if not exact_cards:
+            raise WBVendorCardNotFound(
+                'WB не вернул карточку с точным артикулом продавца.'
+            )
+        if len(exact_cards) != 1:
+            raise WBVendorCardLookupUncertain(
+                'WB вернул несколько карточек с точным артикулом продавца.'
+            )
+
+        nm_id = exact_cards[0].get('nmID')
+        if type(nm_id) is not int or nm_id <= 0:
+            raise WBVendorCardLookupUncertain(
+                'У найденной карточки WB некорректный nmID.'
+            )
+
+        return exact_cards[0]
 
     def get_all_cards(
         self,

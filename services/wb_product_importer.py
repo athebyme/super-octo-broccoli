@@ -5,11 +5,16 @@
 import json
 import logging
 import re
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
 from models import db, ImportedProduct, Product, Seller, PricingSettings, Marketplace, MarketplaceDirectory
-from services.wb_api_client import MAX_WB_MEDIA_FILES, WildberriesAPIClient
+from services.wb_api_client import (
+    MAX_WB_MEDIA_FILES,
+    WBVendorCardNotFound,
+    WildberriesAPIClient,
+)
 from services.wb_content_payload import (
     build_dimensions,
     coerce_numeric_characteristic_value,
@@ -419,22 +424,28 @@ class WBProductImporter:
             logger.info(f"  - Баркоды: {barcodes}")
             logger.debug(f"Данные варианта: {json.dumps(variant, ensure_ascii=False, default=str)}")
 
-            # === Pre-check: проверяем, не существует ли карточка по артикулу или баркоду ===
+            # === Pre-check: проверяем, не существует ли карточка по точному артикулу ===
             try:
                 existing_card = self.api_client.get_card_by_vendor_code(vendor_code)
-                existing_nm_id = existing_card.get('nmID')
-                if existing_nm_id:
-                    logger.info(
-                        f"Карточка с артикулом '{vendor_code}' уже существует на WB "
-                        f"(nmID={existing_nm_id}). Привязываем..."
-                    )
-                    linked = self._link_existing_card(
-                        imported_product, vendor_code, existing_nm_id
-                    )
-                    if linked:
-                        return linked
+            except WBVendorCardNotFound:
+                # Только полный exact lookup вправе разрешить старый fallback
+                # на локальную проверку баркода и создание новой карточки.
+                existing_card = None
             except Exception:
-                pass  # Карточка не найдена — продолжаем создание
+                raise ValueError(
+                    "Не удалось подтвердить поиск карточки WB по точному "
+                    "артикулу. Создание остановлено, чтобы не создать дубль. "
+                    "Проверьте связь с WB и синхронизацию карточек, затем "
+                    "повторите импорт."
+                ) from None
+            else:
+                logger.info(
+                    f"Карточка с точным артикулом '{vendor_code}' уже "
+                    "существует на WB. Привязываем..."
+                )
+                return self._link_exact_vendor_card(
+                    imported_product, vendor_code, existing_card,
+                )
 
             # === Pre-check: проверяем уникальность баркодов в локальной БД ===
             if barcodes:
@@ -597,16 +608,38 @@ class WBProductImporter:
                     logger.info(f"Артикул '{vendor_code}' уже используется на WB. Пытаемся привязать существующую карточку...")
                     try:
                         existing_card = self.api_client.get_card_by_vendor_code(vendor_code)
-                        existing_nm_id = existing_card.get('nmID')
-                        if existing_nm_id:
-                            linked = self._link_existing_card(
-                                imported_product, vendor_code, existing_nm_id
-                            )
-                            if linked:
-                                return linked
+                    except WBVendorCardNotFound:
+                        existing_card = None
                     except Exception as link_err:
-                        logger.warning(f"Не удалось привязать существующую карточку: {link_err}")
-                    error_msg = f"Артикул '{vendor_code}' уже используется в другой карточке на WB. Синхронизируйте товары чтобы обновить базу."
+                        logger.warning(
+                            "Не удалось подтвердить точную карточку WB для уже "
+                            "использованного артикула: %s", link_err,
+                        )
+                        existing_card = None
+
+                    if existing_card is None:
+                        error_msg = (
+                            f"Артикул '{vendor_code}' уже используется на WB, "
+                            "но точную карточку подтвердить не удалось. "
+                            "Импорт остановлен. Синхронизируйте карточки WB "
+                            "и повторите попытку."
+                        )
+                    else:
+                        try:
+                            return self._link_exact_vendor_card(
+                                imported_product, vendor_code, existing_card,
+                            )
+                        except Exception as link_err:
+                            logger.warning(
+                                "Не удалось привязать точную карточку WB "
+                                "с использованным артикулом: %s", link_err,
+                            )
+                            error_msg = (
+                                f"Артикул '{vendor_code}' уже используется на WB, "
+                                "но точную карточку привязать не удалось. "
+                                "Импорт остановлен. Синхронизируйте карточки WB "
+                                "и проверьте связи товаров."
+                            )
 
                 full_error = f"Ошибка создания карточки WB: {error_msg}"
                 logger.error(full_error)
@@ -1158,6 +1191,43 @@ class WBProductImporter:
 
             _cb('preparing', {'current': idx + 1, 'total': len(imported_products)})
 
+        # The result/readback maps below are keyed by vendorCode. Reject every
+        # prepared row participating in an in-batch collision before sending
+        # any create request, so no selected product can silently replace
+        # another row in those maps.
+        vendor_code_counts = Counter(
+            card_data['vendor_code']
+            for _ip, card_data in prepared
+            if card_data['vendor_code']
+        )
+        duplicate_vendor_codes = {
+            code for code, count in vendor_code_counts.items() if count > 1
+        }
+        if duplicate_vendor_codes:
+            unique_prepared = []
+            for ip, card_data in prepared:
+                vendor_code = card_data['vendor_code']
+                if vendor_code not in duplicate_vendor_codes:
+                    unique_prepared.append((ip, card_data))
+                    continue
+
+                error = (
+                    f"Артикул продавца «{vendor_code}» повторяется среди "
+                    "выбранных товаров. Эти товары не отправлены, задайте "
+                    "разные артикулы и повторите импорт."
+                )
+                ip.import_status = 'failed'
+                ip.import_error = error
+                results.append({
+                    'product_id': ip.id,
+                    'title': (ip.title or '')[:50],
+                    'status': 'failed',
+                    'error': error,
+                    'nm_id': None,
+                    'warnings': [],
+                })
+            prepared = unique_prepared
+
         db.session.commit()
 
         if not prepared:
@@ -1492,6 +1562,50 @@ class WBProductImporter:
     # Helpers: привязка существующих карточек WB
     # ------------------------------------------------------------------
 
+    def _link_exact_vendor_card(
+        self,
+        imported_product: ImportedProduct,
+        vendor_code: str,
+        existing_card: Any,
+    ):
+        """Link only a validated exact-card response, without another WB read."""
+        existing_nm_id = (
+            existing_card.get('nmID') if isinstance(existing_card, dict) else None
+        )
+        if (
+            not isinstance(existing_card, dict)
+            or existing_card.get('vendorCode') != vendor_code
+            or type(existing_nm_id) is not int
+            or existing_nm_id <= 0
+        ):
+            raise ValueError(
+                "WB не подтвердил точную карточку по артикулу. "
+                "Создание остановлено. Обновите синхронизацию карточек и "
+                "повторите импорт."
+            )
+
+        try:
+            linked = self._link_existing_card(
+                imported_product,
+                vendor_code,
+                existing_nm_id,
+                existing_card=existing_card,
+                require_unlinked_import_source=True,
+            )
+        except Exception:
+            raise ValueError(
+                "Точная карточка WB найдена, но привязать её к этому товару "
+                "не удалось. Повторное создание остановлено. Проверьте "
+                "существующую связь товара и синхронизацию WB."
+            ) from None
+        if not linked:
+            raise ValueError(
+                "Точная карточка WB найдена, но привязка не завершена. "
+                "Повторное создание остановлено. Проверьте связь товаров и "
+                "синхронизацию WB."
+            )
+        return linked
+
     def _check_barcode_uniqueness(self, imported_product: ImportedProduct, barcodes: list) -> list:
         """
         Проверяет уникальность баркодов в локальной БД перед отправкой на WB.
@@ -1609,48 +1723,56 @@ class WBProductImporter:
         imported_product: ImportedProduct,
         vendor_code: str,
         existing_nm_id: int,
+        *,
+        existing_card: Optional[Dict[str, Any]] = None,
+        require_unlinked_import_source: bool = False,
     ):
         """
         Привязывает существующую карточку WB к импортированному товару.
-        Returns tuple (True, message, nm_id) при успехе, None при неудаче.
+        При успехе возвращает результат с локальным Product, иначе None.
         """
         if not existing_nm_id:
             return None
 
-        try:
-            existing_card = self.api_client.get_card_by_nm_id(existing_nm_id)
-        except Exception:
-            existing_card = None
+        # Preserve the existing barcode lane's read contract, but complete any
+        # provider read before taking the local writer lock. Exact vendor-code
+        # callers pass the already verified card and need no second read.
+        if existing_card is None:
+            try:
+                existing_card = self.api_client.get_card_by_nm_id(existing_nm_id)
+            except Exception:
+                existing_card = None
 
-        # Привязываем
-        imported_product.wb_nm_id = existing_nm_id
-        imported_product.import_status = 'imported'
-        imported_product.import_error = None
-        imported_product.imported_at = datetime.utcnow()
-        db.session.commit()
-
-        # Синхронизируем или создаём Product запись
-        product = Product.query.filter_by(
-            seller_id=self.seller.id,
-            nm_id=existing_nm_id
-        ).first()
-        if not product:
-            product = Product(
-                seller_id=self.seller.id,
-                nm_id=existing_nm_id,
-                vendor_code=vendor_code,
-                title=(existing_card or {}).get('title', imported_product.title or ''),
-                brand=(existing_card or {}).get('brand', ''),
+        if require_unlinked_import_source:
+            product = self._persist_exact_card_link(
+                imported_product, vendor_code, existing_nm_id, existing_card,
             )
-            db.session.add(product)
+        else:
+            # Preserve the established barcode reconciliation sequence.
+            product = Product.query.filter_by(
+                seller_id=self.seller.id,
+                nm_id=existing_nm_id
+            ).first()
+            imported_product.wb_nm_id = existing_nm_id
+            imported_product.import_status = 'imported'
+            imported_product.import_error = None
+            imported_product.imported_at = datetime.utcnow()
             db.session.commit()
-            logger.info(f"Создана Product запись для nmID={existing_nm_id}")
 
-        # The exact existing WB card is now the channel target for this
-        # seller-owned import. Persist the relationship before media planning
-        # so the shared enrichment journal has a stable local target.
-        imported_product.product_id = product.id
-        db.session.commit()
+            if product is None:
+                product = Product(
+                    seller_id=self.seller.id,
+                    nm_id=existing_nm_id,
+                    vendor_code=vendor_code,
+                    title=(existing_card or {}).get('title', imported_product.title or ''),
+                    brand=(existing_card or {}).get('brand', ''),
+                )
+                db.session.add(product)
+                db.session.commit()
+                logger.info(f"Создана Product запись для nmID={existing_nm_id}")
+
+            imported_product.product_id = product.id
+            db.session.commit()
 
         # Existing cards may contain seller-curated slots. Never call the
         # legacy post-create uploader here: it starts at slot 1 and can fall
@@ -1690,8 +1812,72 @@ class WBProductImporter:
         return (
             True,
             f"Карточка уже существовала на WB (nmID={existing_nm_id}). Привязана к импорту.",
-            existing_nm_id,
+            product,
         )
+
+    def _persist_exact_card_link(
+        self,
+        imported_product: ImportedProduct,
+        vendor_code: str,
+        existing_nm_id: int,
+        existing_card: Dict[str, Any],
+    ) -> Product:
+        """Atomically guard and persist an exact vendor-code association."""
+        seller_id, source_id = self.seller.id, imported_product.id
+        if not seller_id or not source_id:
+            raise ValueError("Не удалось определить продавца или источник импорта")
+
+        from services.supplier_service import SupplierService
+
+        SupplierService._begin_supplier_import_transaction()
+        try:
+            source = ImportedProduct.query.filter_by(
+                id=source_id, seller_id=seller_id,
+            ).with_for_update().first()
+            if source is None:
+                raise ValueError("Исходный товар импорта больше не найден")
+
+            product = Product.query.filter_by(
+                seller_id=seller_id, nm_id=existing_nm_id,
+            ).with_for_update().first()
+            source_ids = [ImportedProduct.wb_nm_id == existing_nm_id]
+            if product is not None:
+                source_ids.append(ImportedProduct.product_id == product.id)
+            other = ImportedProduct.query.filter(
+                ImportedProduct.seller_id == seller_id,
+                ImportedProduct.id != source_id,
+                db.or_(*source_ids),
+            ).with_for_update().first()
+            if other is not None or (
+                source.product_id is not None
+                and (product is None or source.product_id != product.id)
+            ) or (source.wb_nm_id and source.wb_nm_id != existing_nm_id):
+                raise ValueError(
+                    "Карточка WB уже связана с другим товаром этого продавца. "
+                    "Существующая связь сохранена."
+                )
+
+            if product is None:
+                product = Product(
+                    seller_id=seller_id,
+                    nm_id=existing_nm_id,
+                    vendor_code=vendor_code,
+                    title=existing_card.get('title', source.title or ''),
+                    brand=existing_card.get('brand', ''),
+                )
+                db.session.add(product)
+                db.session.flush()
+
+            source.wb_nm_id = existing_nm_id
+            source.import_status = 'imported'
+            source.import_error = None
+            source.imported_at = datetime.utcnow()
+            source.product_id = product.id
+            db.session.commit()
+            return product
+        except Exception:
+            db.session.rollback()
+            raise
 
     def _get_live_characteristics_config(self, wb_subject_id: int) -> List[Dict[str, Any]]:
         """Return one current schema from the shared admin reference cache.

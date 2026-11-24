@@ -33,6 +33,8 @@ from tests.ux01 import journey_browser as fixture
 from tests.ux01.bulk_action_controls import invoke_workspace_action, workspace_action_launcher
 from models import (
     ImportedProduct,
+    Marketplace,
+    MarketplaceCategory,
     PricingSettings,
     Seller,
     SellerSupplier,
@@ -102,6 +104,35 @@ def seed_supplier_products():
         supplier.last_price_sync_at = datetime(2026, 9, 22, 11, 45)
         supplier.last_price_sync_status = "success"
 
+        wb_marketplace = Marketplace.query.filter_by(code="wb").first()
+        if wb_marketplace is None:
+            wb_marketplace = Marketplace(
+                name="Wildberries",
+                code="wb",
+                adapter_code="wb",
+                is_active=True,
+            )
+            db.session.add(wb_marketplace)
+            db.session.flush()
+        db.session.add_all([
+            MarketplaceCategory(
+                marketplace_id=wb_marketplace.id,
+                subject_id=7901 + index,
+                subject_name=name,
+                parent_name="Women's Clothing",
+                is_enabled=True,
+                is_leaf=True,
+                is_available=True,
+            )
+            for index, name in enumerate((
+                "Women's Jackets",
+                "Women's Shoes",
+                "Women's Bags",
+                "Women's Tops",
+                "Women's Dresses",
+            ))
+        ])
+
         eligible = []
         for index in range(53):
             product = SupplierProduct(
@@ -115,7 +146,10 @@ def seed_supplier_products():
                 ),
                 brand="R28 Synthetic Brand",
                 category="Synthetic supplier category",
-                wb_category_name="Synthetic WB category",
+                wb_category_name=(
+                    "Women's Legacy Category" if index == 0
+                    else "Synthetic WB category"
+                ),
                 wb_subject_id=7000,
                 wb_subject_name="Synthetic WB subject",
                 supplier_price=100 + index,
@@ -206,6 +240,7 @@ def seed_supplier_products():
         imported_before = ImportedProduct.query.count()
         return {
             "supplier_id": supplier_id,
+            "category_source_id": str(eligible[0].id),
             "eligible_ids": [str(product.id) for product in eligible],
             "excluded_ids": [
                 str(out_of_stock.id), str(not_parsed.id), str(foreign_source.id),
@@ -469,6 +504,10 @@ def assert_supplier_warning_contrast(page, selector):
 
 def run():
     fixture_ids = seed_supplier_products()
+    category_update_path = (
+        f"/supplier-catalog/{fixture_ids['supplier_id']}/products/"
+        f"{fixture_ids['category_source_id']}/update-category"
+    )
     checks = []
     posts = []
     supplier_handoff_posts = []
@@ -484,6 +523,8 @@ def run():
     product_feed_reads = []
     facet_reads = []
     category_reads = []
+    category_search_reads = []
+    category_update_posts = []
     document_requests = []
     job_status_reads = []
     page_errors = []
@@ -503,6 +544,23 @@ def run():
                 # Exercise the server forms if just the inline enhancer is unavailable.
                 classic_fallback_documents.append(parsed.path)
                 route.fulfill(status=200, content_type="application/javascript", body="")
+                return
+            if parsed.path == "/api/wb-subjects/search":
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                assert query == {"q": ["Women's"]}
+                try:
+                    response = route.fetch(max_redirects=0)
+                    payload = response.json()
+                except Exception:
+                    raise AssertionError("local WB category search failed") from None
+                category_search_reads.append({
+                    "query": query,
+                    "status": response.status,
+                    "payload": payload,
+                })
+                assert response.status == 200 and payload.get("success") is True
+                assert len(payload.get("subjects", [])) == 5
+                route.fulfill(response=response)
                 return
             if parsed.path == "/api/my-products":
                 query = parse_qs(parsed.query, keep_blank_values=True)
@@ -615,6 +673,34 @@ def run():
                 route.fulfill(response=response)
                 return
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "POST":
+            if parsed.path == category_update_path:
+                assert "application/json" in (request.headers.get("content-type") or "")
+                assert request.headers.get("x-csrftoken")
+                try:
+                    body = request.post_data_json
+                except Exception:
+                    raise AssertionError("category assignment must carry JSON") from None
+                assert body == {
+                    "subject_id": 7901,
+                    "subject_name": "Women's Jackets",
+                    "display": "Women's Clothing > Women's Jackets",
+                }
+                category_update_posts.append({"path": parsed.path, "body": body})
+                response = route.fetch(max_redirects=0)
+                payload = response.json()
+                category_update_posts[-1].update({
+                    "status": response.status,
+                    "payload": payload,
+                })
+                if response.status != 200 or payload.get("success") is not True:
+                    fixture.REPORT["unexpected_http"].append({
+                        "path": parsed.path, "status": response.status,
+                    })
+                fixture.REPORT["writes"].append({
+                    "method": "POST", "path": parsed.path,
+                })
+                route.fulfill(response=response)
+                return
             assert parsed.path in {
                 IMPORT_PATH,
                 SUPPLIER_REVIEW_PATH,
@@ -850,6 +936,7 @@ def run():
         assert freshness_geometry["top"] < freshness_geometry["viewportHeight"]
         assert freshness_geometry["bottom"] > 0
         assert posts == [] and fixture.REPORT["writes"] == []
+
         freshness_screenshot = "supplier-feed-freshness-dark-320.png"
         page_freshness.screenshot(
             path=REPORT_PATH.parent / freshness_screenshot,
@@ -860,6 +947,103 @@ def run():
         assert not page_freshness.is_visible()
         checks.append(
             "supplier_feed_freshness_details_open_and_close_by_keyboard_without_writes",
+        )
+
+        category_source_id = fixture_ids["category_source_id"]
+        category_label = page.locator(f"#cat-label-{category_source_id}")
+        assert category_label.inner_text() == "Women's Legacy Category"
+        category_label.click()
+        category_modal = page.locator("#category-modal")
+        category_modal.wait_for(state="visible")
+        assert page.locator("#cat-current").inner_text() == (
+            "Текущая: Women's Legacy Category (ID: 7000)"
+        )
+        with page.expect_response(
+            lambda response: urlsplit(response.url).path == "/api/wb-subjects/search"
+            and parse_qs(urlsplit(response.url).query, keep_blank_values=True)
+            == {"q": ["Women's"]},
+        ) as category_search_response:
+            page.locator("#cat-search-input").fill("Women's")
+        assert category_search_response.value.status == 200
+        assert len(category_search_reads) == 1
+        category_choice = category_modal.locator("#cat-search-results button").filter(
+            has_text="Women's Clothing > Women's Jackets",
+        )
+        category_choice.wait_for(state="visible")
+        assert category_choice.count() == 1
+        page.evaluate("""() => {
+            const nativeFetch = window.fetch.bind(window);
+            window.__categorySaveGate = {pending: false, release: null};
+            window.fetch = function(url, options) {
+                const response = nativeFetch(url, options);
+                if (!String(url).endsWith('/update-category')) return response;
+                return response.then(value => new Promise(resolve => {
+                    window.__categorySaveGate.pending = true;
+                    window.__categorySaveGate.release = () => resolve(value);
+                }));
+            };
+        }""")
+        with page.expect_response(
+            lambda response: urlsplit(response.url).path == category_update_path
+            and response.request.method == "POST",
+        ) as category_update_response:
+            category_choice.click()
+        assert category_update_response.value.status == 200
+        assert len(category_update_posts) == 1
+        assert category_update_posts[0]["payload"] == {
+            "success": True,
+            "wb_subject_id": 7901,
+            "wb_category_name": "Women's Clothing > Women's Jackets",
+        }
+        page.wait_for_function("window.__categorySaveGate.pending === true")
+        other_category_label = page.locator(
+            f"#cat-label-{fixture_ids['eligible_ids'][1]}",
+        )
+        page.keyboard.press("Escape")
+        assert category_modal.is_hidden()
+        other_category_label.click()
+        assert category_modal.is_visible()
+        assert page.locator("#cat-current").inner_text() == (
+            "Текущая: Synthetic WB category (ID: 7000)"
+        )
+        page.evaluate("window.__categorySaveGate.release()")
+        page.wait_for_function(
+            """id => document.getElementById('cat-label-' + id).textContent
+                === "Women's Clothing > Women's Jackets".substring(0, 30)""",
+            category_source_id,
+        )
+        assert category_modal.is_visible(), "late save for the previous product closed the active modal"
+        assert page.locator("#cat-current").inner_text() == (
+            "Текущая: Synthetic WB category (ID: 7000)"
+        )
+        assert other_category_label.inner_text() == "Synthetic WB category"
+        page.keyboard.press("Escape")
+        assert category_modal.is_hidden()
+        with fixture.app.app_context():
+            category_source = db.session.get(
+                SupplierProduct, int(category_source_id),
+            )
+            assert category_source.wb_subject_id == 7901
+            assert category_source.wb_category_name == (
+                "Women's Clothing > Women's Jackets"
+            )
+            category_source.wb_subject_id = 7000
+            category_source.wb_subject_name = "Synthetic WB subject"
+            category_source.wb_category_name = "Women's Legacy Category"
+            db.session.commit()
+        category_label.click()
+        category_modal.wait_for(state="visible")
+        assert category_label.get_attribute("data-current-name") == (
+            "Women's Clothing > Women's Jackets"
+        )
+        assert category_label.get_attribute("data-current-subject-id") == "7901"
+        assert page.locator("#cat-current").inner_text() == (
+            "Текущая: Women's Clothing > Women's Jackets (ID: 7901)"
+        )
+        page.keyboard.press("Escape")
+        assert category_modal.is_hidden()
+        checks.append(
+            "supplier_category_editor_handles_apostrophes_and_reopens_exact_saved_label",
         )
         cards = page.locator(".sc-product-grid > .sc-product-tile")
         assert cards.count() == 50, cards.count()
@@ -2804,6 +2988,7 @@ def run():
         assert fixture.REPORT["unexpected_http"] == []
         assert classic_fallback_documents, "Classic form fallback needs a missing inline enhancer"
         assert fixture.REPORT["writes"] == [
+            {"method": "POST", "path": category_update_path},
             {"method": "POST", "path": IMPORT_PATH},
             {"method": "POST", "path": WB_CREATE_PATH},
             {"method": "POST", "path": SUPPLIER_CONFIRM_PATH},
@@ -2823,6 +3008,11 @@ def run():
         "status": "passed",
         "scope": "synthetic_filtered_supplier_update_selection_review_and_classic_beta_handoff",
         "checks": checks,
+        "category_editor": {
+            "search_reads": len(category_search_reads),
+            "local_updates": len(category_update_posts),
+            "saved_label": category_update_posts[0]["payload"]["wb_category_name"],
+        },
         "provider_attempts": fixture.REPORT["provider_attempts"],
         "selected_count": len(selected_ids),
         "imported_count": imported_count,
