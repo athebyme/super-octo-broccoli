@@ -270,10 +270,75 @@
 {# Global search / navigation overlay triggered by Cmd+K #}
 {% macro command_palette(id='cmdPalette', placeholder='Поиск по разделам...') %}
 <template x-teleport="body">
-    {# The focus trap must capture the opener before it focuses the search field. #}
-    <div x-show="{{ id }}" x-cloak class="sh-cmdpal"
+    <div x-data="{
+             returnFocusTarget: null,
+             returnFocusEpoch: 0,
+             returnFocusToken: 0,
+             init() {
+                 const dialog = this.$el;
+                 const visible = element => {
+                     if (!(element instanceof HTMLElement) || !element.isConnected) return false;
+                     const style = getComputedStyle(element);
+                     return element.getClientRects().length > 0
+                         && style.display !== 'none'
+                         && style.visibility !== 'hidden'
+                         && style.visibility !== 'collapse';
+                 };
+                 this.$watch('{{ id }}', open => {
+                     if (open) {
+                         this.returnFocusToken += 1;
+                         const candidate = document.activeElement;
+                         if (candidate instanceof HTMLElement && candidate !== document.body
+                             && !dialog.contains(candidate) && visible(candidate)) {
+                             this.returnFocusTarget = candidate;
+                         } else if (!dialog.contains(candidate)) {
+                             this.returnFocusTarget = null;
+                         }
+                         return;
+                     }
+                     const target = this.returnFocusTarget;
+                     const focusEpoch = this.returnFocusEpoch;
+                     const token = ++this.returnFocusToken;
+                     const discardTarget = () => {
+                         if (token === this.returnFocusToken && this.returnFocusTarget === target) {
+                             this.returnFocusTarget = null;
+                         }
+                     };
+                     if (!visible(target)) {
+                         discardTarget();
+                         return;
+                     }
+                     let frameCount = 0;
+                     const restoreAfterRelease = () => {
+                         if (token !== this.returnFocusToken) return;
+                         if (this.returnFocusEpoch !== focusEpoch) {
+                             discardTarget();
+                             return;
+                         }
+                         const active = document.activeElement;
+                         if (active !== document.body && !dialog.contains(active)) {
+                             discardTarget();
+                             return;
+                         }
+                         const stillVisible = dialog.isConnected
+                             && dialog.getClientRects().length > 0
+                             && getComputedStyle(dialog).display !== 'none';
+                         if (stillVisible) {
+                             if (frameCount++ < 120) requestAnimationFrame(restoreAfterRelease);
+                             else discardTarget();
+                             return;
+                         }
+                         if (visible(target)) target.focus({preventScroll: true});
+                         discardTarget();
+                     };
+                     this.$nextTick(() => requestAnimationFrame(restoreAfterRelease));
+                 });
+             }
+         }"
+         @focusin.window="if ($event.target !== document.body) returnFocusEpoch++"
+         x-show="{{ id }}" x-cloak class="sh-cmdpal"
          @keydown.escape.window="{{ id }} = false"
-         x-trap.noscroll.inert="{{ id }}"
+         x-trap.noscroll.inert.noreturn="{{ id }}"
          role="dialog" aria-modal="true" aria-label="Поиск">
         <div class="sh-backdrop"
              x-show="{{ id }}"
@@ -292,8 +357,8 @@
             <div class="sh-cmdpal-input-wrap">
                 {{ icon('search') }}
                 <input type="text" class="sh-cmdpal-input" placeholder="{{ placeholder }}"
-                       autofocus x-model="query" @input="filter()" aria-label="{{ placeholder }}"
-                       x-init="$watch('{{ id }}', open => { if (open) refresh(); })">
+                       x-ref="cmdInput" x-model="query" @input="filter()" aria-label="{{ placeholder }}"
+                       x-init="$watch('{{ id }}', v => { if(v) { refresh(); $nextTick(() => { const panel = $refs.cmdInput.closest('.sh-cmdpal-panel'); if({{ id }} && panel && panel.getClientRects().length && !panel.contains(document.activeElement)) $refs.cmdInput.focus(); }) } })">
                 <span class="sh-cmdpal-kbd">Esc</span>
             </div>
             <div class="sh-cmdpal-list">
