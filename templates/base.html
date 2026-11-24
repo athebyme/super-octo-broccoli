@@ -21,26 +21,28 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="{{ url_for('static', filename='vendor/tailwindcss-3.4.17-play-cdn.js') }}"></script>
     <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    fontFamily: {
-                        display: ["'Instrument Serif'", 'Georgia', 'serif'],
-                        body: ["'Inter'", '-apple-system', 'sans-serif'],
-                    },
-                    colors: {
-                        brand: { DEFAULT: '#c45d3e', light: '#f0e0da', dark: '#a34a2f' },
-                    },
+        if (window.tailwind) {
+            window.tailwind.config = {
+                theme: {
+                    extend: {
+                        fontFamily: {
+                            display: ["'Instrument Serif'", 'Georgia', 'serif'],
+                            body: ["'Inter'", '-apple-system', 'sans-serif'],
+                        },
+                        colors: {
+                            brand: { DEFAULT: '#c45d3e', light: '#f0e0da', dark: '#a34a2f' },
+                        },
+                    }
                 }
-            }
+            };
         }
     </script>
-    <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.x.x/dist/cdn.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/focus@3.x.x/dist/cdn.min.js"></script>
+    <script defer src="{{ url_for('static', filename='vendor/alpine-collapse-3.17.4.min.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='vendor/alpine-focus-3.17.4.min.js') }}"></script>
     <script defer src="{{ url_for('static', filename='sh-ui.js', v='20260721-1') }}"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script defer src="{{ url_for('static', filename='vendor/alpine-3.17.4.global.min.js') }}"></script>
     <style>
         [x-cloak] { display: none !important; }
 
