@@ -236,6 +236,11 @@ with app.app_context():
         description=update_listing.description,
         category=update_type.category.name,
     )
+    # Give the linked update exact calculated values that the seller will
+    # explicitly review before the ordinary preparation run.  The preparation
+    # rebase must preserve these signed local decisions.
+    update_source.calculated_price = 1300.0
+    update_source.calculated_price_before_discount = 1500.0
 
     blocked_source = _make_source(
         seller_id=fixture["seller_id"],
@@ -285,6 +290,36 @@ with app.app_context():
     update_listing.link_evidence_json = "{}"
 
     db.session.commit()
+
+    # Seed the price edits through the real seller-owned service contract so
+    # the browser comparison reflects reviewed outgoing values, rather than
+    # unreviewed source calculations that the linked-update mapper omits.
+    update_draft = MarketplaceDraftService.create_draft(
+        seller_id=fixture["seller_id"],
+        account_id=account_id,
+        imported_product_id=update_source.id,
+        corrected_by_user_id=account.seller.user.id,
+        source_link_preflight=False,
+        observed_mapping_preflight=False,
+    )
+    MarketplaceDraftService.update_draft(
+        seller_id=fixture["seller_id"],
+        draft_id=update_draft.id,
+        expected_version=update_draft.version,
+        patch={
+            "commercial": {
+                "price": "1300",
+                "old_price": "1500",
+                "vat": "0.22",
+                "currency_code": "RUB",
+            },
+            "use_calculated_price": True,
+            "confirm_old_price_edit": True,
+        },
+        corrected_by_user_id=account.seller.user.id,
+        category_review_required=False,
+    )
+
     source_ids = {
         "create": create_source.id,
         "update": update_source.id,
@@ -4068,6 +4103,17 @@ def run_browser_journey():
         excluded_row = rows_by_source[source_ids["excluded"]]
         assert create_row["action"] == "create" and create_row["selectable"] is True
         assert update_row["action"] == "update" and update_row["selectable"] is True
+        price_context = update_row.get("price_context")
+        assert price_context == {
+            "current": "1000",
+            "calculated": "1300",
+            "after_send": "1300",
+            "current_old_price": "1200",
+            "after_send_old_price": "1500",
+            "currency_code": "RUB",
+            "will_change": True,
+            "old_price_will_change": True,
+        }, price_context
         assert blocked_row["selectable"] is False
         assert "source_facts_stale" in {issue["code"] for issue in blocked_row["errors"]}
         page.get_by_text(
@@ -4077,6 +4123,58 @@ def run_browser_journey():
         assert excluded_row["action"] == "create" and excluded_row["selectable"] is True
         blocked_checkbox = page.locator(f"#our-select-{blocked_row['draft_id']}")
         assert blocked_checkbox.is_disabled()
+
+        update_card = page.locator(".our-card").filter(
+            has_text=source_titles["update"],
+        )
+        update_price = update_card.locator(
+            '.our-price-fact[data-price-kind="seller"]'
+        )
+        assert update_price.get_attribute("data-price-mode") == "compare"
+        assert update_price.inner_text().replace("\u202f", " ") == (
+            "В Ozon: 1 000 ₽\nПосле отправки: 1 300 ₽"
+        )
+        update_old_price = update_card.locator(
+            '.our-price-fact[data-price-kind="old"]'
+        )
+        assert update_old_price.get_attribute("data-price-mode") == "compare"
+        assert update_old_price.inner_text().replace("\u202f", " ") == (
+            "Цена до скидки в Ozon: 1 200 ₽\n"
+            "Цена до скидки после отправки: 1 500 ₽"
+        )
+        create_card = page.locator(".our-card").filter(
+            has_text=source_titles["create"],
+        )
+        assert create_card.locator(
+            '.our-price-fact[data-price-mode="compare"]'
+        ).count() == 0
+
+        no_script_context = browser.new_context(
+            java_script_enabled=False,
+            storage_state=context.storage_state(),
+            viewport={"width": 320, "height": 780},
+        )
+        no_script_context.route("**/*", bridge)
+        no_script_page = no_script_context.new_page()
+        no_script_page.goto(base + return_review_href)
+        no_script_page.locator(".our-noscript").wait_for(state="visible")
+        no_script_price = no_script_page.locator(".our-noscript .our-card").filter(
+            has_text=source_titles["update"],
+        ).locator(".our-noscript-price-pair")
+        assert no_script_price.inner_text().replace("\u202f", " ") == (
+            "В Ozon: 1000 ₽\nПосле отправки: 1300 ₽"
+        )
+        no_script_old_price = no_script_page.locator(
+            ".our-noscript .our-card"
+        ).filter(has_text=source_titles["update"]).locator(
+            ".our-noscript-old-price-pair"
+        )
+        assert no_script_old_price.inner_text() == (
+            "Цена до скидки в Ozon: 1200 ₽\n"
+            "Цена до скидки после отправки: 1500 ₽"
+        )
+        no_script_page.close()
+        no_script_context.close()
 
         page.set_viewport_size({"width": 320, "height": 780})
         batch_button = page.get_by_role("button", name="Проверить все готовые", exact=True)
@@ -4098,6 +4196,30 @@ def run_browser_journey():
         assert source_titles["blocked"] not in review_dialog.inner_text()
         assert "Создание" in review_dialog.inner_text()
         assert "Обновление" in review_dialog.inner_text()
+        update_modal_row = review_dialog.locator(".our-dialog-list li").filter(
+            has_text=source_titles["update"],
+        )
+        update_modal_price = update_modal_row.locator(
+            '.our-dialog-price-fact[data-price-kind="seller"]'
+        )
+        assert update_modal_price.get_attribute("data-price-mode") == "compare"
+        assert update_modal_price.inner_text().replace("\u202f", " ") == (
+            "В Ozon: 1 000 ₽\nПосле отправки: 1 300 ₽"
+        )
+        update_modal_old_price = update_modal_row.locator(
+            '.our-dialog-price-fact[data-price-kind="old"]'
+        )
+        assert update_modal_old_price.inner_text().replace("\u202f", " ") == (
+            "Цена до скидки в Ozon: 1 200 ₽\n"
+            "Цена до скидки после отправки: 1 500 ₽"
+        )
+        assert not review_dialog.locator(".our-confirm input").is_checked()
+
+        price_box = update_price.bounding_box()
+        card_box = update_card.bounding_box()
+        assert price_box and card_box
+        assert price_box["x"] >= card_box["x"]
+        assert price_box["x"] + price_box["width"] <= card_box["x"] + card_box["width"]
 
         ready_draft_ids = [create_row["draft_id"], update_row["draft_id"]]
         excluded_checkbox = review_dialog.get_by_role(
@@ -4132,6 +4254,20 @@ def run_browser_journey():
             "review_versions": {str(key): value for key, value in review_versions.items()},
             "operation_count_before_confirmation": 0,
             "business_write_count_during_review": 0,
+            "price_context": {
+                "linked_current": price_context["current"],
+                "after_send": price_context["after_send"],
+                "current_old_price": price_context["current_old_price"],
+                "after_send_old_price": price_context["after_send_old_price"],
+                "will_change": price_context["will_change"],
+                "old_price_will_change": price_context["old_price_will_change"],
+                "comparison_visible_in_card_and_confirmation": True,
+                "old_price_comparison_visible_in_card_confirmation_and_no_script": True,
+                "calculated_intermediate_not_shown": True,
+                "mobile_pair_kept_inside_card": True,
+                "no_script_pair_matches": True,
+                "confirmation_left_unchecked": True,
+            },
             "mobile_viewport": {"width": 320, "height": 780, "batch_button_visible": True,
                                 "modal_visible": review_dialog.is_visible(),
                                 "screenshot": mobile_screenshot.name},

@@ -13,6 +13,17 @@
     const invalidResultContext = Boolean(resultJobUid && !runPattern.test(resultJobUid));
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     const positive = value => Number.isSafeInteger(value) && value > 0;
+    function formatReviewPrice(value, currencyCode) {
+        if (typeof value !== 'string' || value.length > 48 ||
+            !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value) ||
+            !/[1-9]/.test(value.replace('.', '')) ||
+            typeof currencyCode !== 'string' || !/^[A-Z]{3}$/.test(currencyCode))
+            return '';
+        const [integer, fraction] = value.split('.');
+        const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, '\u202f');
+        const amount = fraction ? grouped + ',' + fraction : grouped;
+        return amount + ' ' + (currencyCode === 'RUB' ? '₽' : currencyCode);
+    }
     const workspaceReturns = global.OzonWorkspaceReturn;
     const workspaceScope = workspaceReturns?.reviewWorkspaceScope?.(initial) || null;
     const workspaceReturnHref = workspaceScope
@@ -134,15 +145,106 @@
                 if (local) return String(row.imported_product_id) === local[1] ? value + '?deferred=1' : '';
                 return global.ozonDraftEditor?.safeImage(value) || '';
             },
-            sellerPrice(row) {
-                const price = row.commercial?.price;
-                return row.commercial?.currency_code === 'RUB' && Number(price) > 0
-                    ? String(price) + ' ₽' : 'не указана или валюта не подтверждена';
+            priceView(row) {
+                const context = row.price_context;
+                const commercial = row.commercial || {};
+                const current = formatReviewPrice(
+                    context?.current,
+                    context?.currency_code,
+                );
+                const afterSend = formatReviewPrice(
+                    context?.after_send,
+                    context?.currency_code,
+                );
+                const outgoing = afterSend || formatReviewPrice(
+                    commercial.price,
+                    commercial.currency_code,
+                );
+                if (row.action === 'update') {
+                    if (context?.will_change === true) {
+                        if (current && afterSend &&
+                            context.current !== context.after_send) {
+                            return {mode:'compare', current, afterSend};
+                        }
+                        if (outgoing) {
+                            return {
+                                mode:'outgoing', label:'К отправке', amount:outgoing,
+                                currentUnknown:!current,
+                            };
+                        }
+                        return {
+                            mode:'unknown', label:'Цена продавца',
+                            amount:'не указана или валюта не подтверждена',
+                            currentUnknown:true,
+                        };
+                    }
+                    if (context?.will_change === false && current) {
+                        return {
+                            mode:'single', label:'Цена продавца', amount:current,
+                        };
+                    }
+                    if (outgoing) {
+                        return {
+                            mode:'outgoing', label:'К отправке', amount:outgoing,
+                            currentUnknown:!current,
+                        };
+                    }
+                    return {
+                        mode:'unknown', label:'Цена продавца',
+                        amount:'не указана или валюта не подтверждена',
+                        currentUnknown:true,
+                    };
+                }
+                const createPrice = formatReviewPrice(
+                    commercial.price,
+                    commercial.currency_code,
+                ) || afterSend;
+                return createPrice
+                    ? {mode:'single', label:'Цена продавца', amount:createPrice}
+                    : {
+                        mode:'unknown', label:'Цена продавца',
+                        amount:'не указана или валюта не подтверждена',
+                    };
             },
-            oldPrice(row) {
-                const price = row.commercial?.old_price;
-                return row.commercial?.currency_code === 'RUB' && Number(price) > 0
-                    ? String(price) + ' ₽' : '';
+            oldPriceView(row) {
+                const context = row.price_context;
+                const commercial = row.commercial || {};
+                const current = formatReviewPrice(
+                    context?.current_old_price,
+                    context?.currency_code,
+                );
+                const afterSend = formatReviewPrice(
+                    context?.after_send_old_price,
+                    context?.currency_code,
+                );
+                const outgoing = afterSend || formatReviewPrice(
+                    commercial.old_price,
+                    commercial.currency_code,
+                );
+                if (row.action !== 'update') {
+                    const createOldPrice = formatReviewPrice(
+                        commercial.old_price,
+                        commercial.currency_code,
+                    ) || afterSend;
+                    return createOldPrice
+                        ? {mode:'single', amount:createOldPrice}
+                        : null;
+                }
+                if (context?.old_price_will_change === true && current && afterSend &&
+                    context.current_old_price !== context.after_send_old_price) {
+                    return {mode:'compare', current, afterSend};
+                }
+                if (context?.old_price_will_change === false && current &&
+                    context.current_old_price === context.after_send_old_price) {
+                    return {mode:'single', amount:current};
+                }
+                if (outgoing) {
+                    return {
+                        mode:'outgoing', amount:outgoing,
+                        currentUnknown:!current,
+                    };
+                }
+                return null;
             },
             packageLabel(row) {
                 const d = row.dimensions || {}, unit = {MILLIMETERS:'мм', CENTIMETERS:'см', INCHES:'дюйм'}[d.dimension_unit];
