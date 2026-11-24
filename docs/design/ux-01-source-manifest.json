@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-24T04:40:08.677432+00:00",
+  "generated_at": "2026-11-24T04:42:48.034554+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -2909,7 +2909,7 @@
     },
     {
       "path": "static/ozon-upload-review.css",
-      "sha256": "d116544d91280eb889809b25ae241f189581cdd9e49229d1265f7c37229fabe3"
+      "sha256": "e99617b0557b2327e56d6011f765a075d51174db84c79d742548a2acad5d408a"
     },
     {
       "path": "static/ozon-upload-review.js",
@@ -3481,7 +3481,7 @@
     },
     {
       "path": "templates/ozon_upload_review.html",
-      "sha256": "13d1b977bfcdc0ea1b0eb1efd8c0019487d7fc980e2e97a5d499a4d4530fbdc9"
+      "sha256": "0d99d27ff8dd26af9b80b3d8d8757b326a6d212d54d6f363a09975d8967bc51f"
     },
     {
       "path": "templates/partials/ai_assistant.html",
@@ -3893,7 +3893,7 @@
     },
     {
       "path": "tests/ozon_release/ozon_bulk_ready_review_browser.py",
-      "sha256": "18abb963bcba4dd9de40f0de11aaadd5853bf2526ef3740d9866edb2a1ecd9f6"
+      "sha256": "10fa33ab49c6c496bdd5f665ae96308c6a2face4f9bb1721cc522c35165275b3"
     },
     {
       "path": "tests/ozon_release/ozon_complete_journey_browser.py",
@@ -4981,7 +4981,7 @@
     },
     {
       "path": "tests/test_ozon_upload_review_return_ui.py",
-      "sha256": "2c9ac350cd357e0e27cbfbd3163a80ee0c64bcb74f00279da19ba0da7245fb3f"
+      "sha256": "9f667d6a5e021fddeaceaf1fdcdeec147d9ee4abf148cdc6ea27a46b09d1f0a1"
     },
     {
       "path": "tests/test_ozon_upload_v3_routes.py",
@@ -5512,5 +5512,5 @@
       "sha256": "260973076a516b81bba3cae3adcd6b652fdee5585e27fbd0b7401062b78aefb1"
     }
   ],
-  "aggregate_sha256": "f53ffeed7f55d3726b1d227ba8926a6e42031b11826f13e5a808eac034a932a7"
+  "aggregate_sha256": "32072aadd89a5ddd1b43ba87612467343d5b978f6efbe4af765966dd97a8fbbf"
 }
