@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-24T02:30:13.583351+00:00",
+  "generated_at": "2026-11-24T03:07:09.249603+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "b9af78e937bdad6c894bf820dbb641f77e19fd2efa2d9d10ab2fc9fb41d47549"
+      "sha256": "fdd6ddc3dca06f1563d8c43238b66f83dbd999b138e27f50b6c1aa8fdc1fb486"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -2541,7 +2541,7 @@
     },
     {
       "path": "services/wb_api_client.py",
-      "sha256": "f81917562c33baaaca1475944a5a65a6d2184292b7045bf1554aeef5c9886379"
+      "sha256": "07e5cff66dfac92697a0f16d6bbd9eca11d5388234d59f089b2bf75df527061e"
     },
     {
       "path": "services/wb_card_audit.py",
@@ -2597,7 +2597,7 @@
     },
     {
       "path": "services/wb_product_importer.py",
-      "sha256": "bafcade9ac572c51adcdebd2e7ea9b0e1b5777194c1c1bd9ad74eefa720358a7"
+      "sha256": "e3984b605c406e5dacaad8535e3f421bd5ed95d4e6cd048a22e65f2f62283f25"
     },
     {
       "path": "services/wb_stock_contracts.py",
@@ -3725,7 +3725,7 @@
     },
     {
       "path": "templates/supplier_catalog_products.html",
-      "sha256": "a6e8db071dc1c4fa64a7e8b31ddcfa19131be4d9a5cb605a3daa1e98cfc7bea3"
+      "sha256": "75eaeeb5d2f75c3a554aa6e8421dee17eeb2f9196e61c1fb4ee05ed15af19a6d"
     },
     {
       "path": "templates/supplier_catalog_update_review.html",
@@ -5329,7 +5329,7 @@
     },
     {
       "path": "tests/test_wb_api_client_payloads.py",
-      "sha256": "75b475748e110d360b8799d18742e2ce37b3895df125d397227e07dc0476092f"
+      "sha256": "177d392769e47f9f09768d013a3a7a21c5607723c57da6dc00e58fdf630c2d3d"
     },
     {
       "path": "tests/test_wb_batch_update.py",
@@ -5398,6 +5398,10 @@
     {
       "path": "tests/test_wb_price_selection_handoff.py",
       "sha256": "7a8bc7029ae4c1043268ab3897fe10304a09ae4cc37fa7d233867e72e409bd24"
+    },
+    {
+      "path": "tests/test_wb_product_importer_identity_preflight.py",
+      "sha256": "c442763e5606af599e4803a1d116ddb0003819d3fd6b7e79cf44e9aef842dac9"
     },
     {
       "path": "tests/test_wb_product_importer_strict_matching.py",
@@ -5477,7 +5481,7 @@
     },
     {
       "path": "tests/ux01/supplier_filtered_import_browser.py",
-      "sha256": "1cf2250d61e3ecfb8901548017eb7f01ab64b1595687c1c329be09ab08f28308"
+      "sha256": "6a582ca86cee005db52910a47ef3294e9065ca72bf272accec7d014f437ba3f2"
     },
     {
       "path": "tests/ux01/test_local_shell_asset_pins.py",
@@ -5508,5 +5512,5 @@
       "sha256": "260973076a516b81bba3cae3adcd6b652fdee5585e27fbd0b7401062b78aefb1"
     }
   ],
-  "aggregate_sha256": "31e0666f3a1814e97edd854987189d5072fa5707a71f93ae7b257bd28e5a1818"
+  "aggregate_sha256": "2ec1c727468c597bf3114b5a634d2484991c55edf930f3152c662d5e74ee4e32"
 }
