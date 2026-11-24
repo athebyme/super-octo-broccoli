@@ -535,6 +535,27 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         }
         return product, listing, expected
 
+    def _linked_calculated_price_draft(self, *, external_id):
+        product, listing, _expected = self._existing_listing_precondition(
+            external_id=external_id,
+        )
+        listing.price_summary_json = json.dumps({
+            "values": {
+                "price": "1500",
+                "old_price": "1700",
+                "currency_code": "RUB",
+                "vat": "0.22",
+            },
+        })
+        db.session.commit()
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        return product, listing, draft
+
     def _automatic_cleanup_fixture(
         self,
         *,
@@ -2679,6 +2700,456 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         )
         self.assertIsNotNone(baseline)
         self.assertEqual(effective["commercial"]["price"], "1000")
+
+    def test_linked_shared_calculation_is_previewed_but_keeps_live_price(self):
+        _product, _listing, draft = self._linked_calculated_price_draft(
+            external_id="linked-calculated-preview",
+        )
+
+        effective, baseline = MarketplaceDraftService.publication_documents(
+            draft,
+            now=self.now,
+            include_price_context=True,
+        )
+
+        self.assertEqual(effective["commercial"]["price"], "1500")
+        self.assertEqual(effective["commercial"]["old_price"], "1700")
+        self.assertEqual(
+            baseline["commercial"],
+            {
+                "price": "1500",
+                "old_price": "1700",
+                "currency_code": "RUB",
+            },
+        )
+        self.assertEqual(
+            baseline["calculated_commercial"],
+            {
+                "price": "1000",
+                "old_price": "1200",
+                "currency_code": "RUB",
+            },
+        )
+
+    def test_price_context_failure_does_not_hide_linked_price_baseline(self):
+        _product, _listing, draft = self._linked_calculated_price_draft(
+            external_id="linked-price-context-failure",
+        )
+
+        with patch.object(
+            MarketplaceDraftService,
+            "_fact_snapshot",
+            side_effect=MarketplaceDraftValidationError(
+                "Source price context unavailable"
+            ),
+        ):
+            effective, baseline = MarketplaceDraftService.publication_documents(
+                draft,
+                now=self.now,
+                include_price_context=True,
+            )
+
+        self.assertEqual(effective["commercial"]["price"], "1500")
+        self.assertEqual(
+            baseline["commercial"]["price"],
+            "1500",
+        )
+        self.assertEqual(baseline["calculated_commercial"], {})
+        self.assertEqual(
+            MarketplaceDraftService.unreviewed_calculated_commercial_fields(
+                draft,
+                commercial={"price": "1000", "old_price": "1200"},
+            ),
+            {"price", "old_price"},
+        )
+        self.assertEqual(
+            MarketplaceDraftService.unreviewed_calculated_commercial_fields(
+                draft,
+                commercial=effective["commercial"],
+            ),
+            set(),
+        )
+
+    def test_linked_calculated_full_form_echo_does_not_attest_price_or_old_price(self):
+        _product, _listing, draft = self._linked_calculated_price_draft(
+            external_id="linked-calculated-echo",
+        )
+        actor_user_id = db.session.get(Seller, self.seller1_id).user_id
+
+        effective_before, _baseline = MarketplaceDraftService.publication_documents(
+            draft,
+            now=self.now,
+        )
+        echoed = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            corrected_by_user_id=actor_user_id,
+            patch={
+                "content": {
+                    "name": "Обновлённое название",
+                    "description": "Подробное описание товара",
+                },
+                # The current editor echoes live values for a linked update.
+                "commercial": effective_before["commercial"],
+            },
+        )
+
+        self.assertNotIn(
+            MarketplaceDraftService.SELLER_PRICE_REVIEW_PROVENANCE_KEY,
+            json.loads(echoed.provenance_json),
+        )
+        self.assertEqual(json.loads(echoed.commercial_json)["price"], "1000")
+        self.assertEqual(json.loads(echoed.commercial_json)["old_price"], "1200")
+        effective, _baseline = MarketplaceDraftService.publication_documents(
+            echoed,
+            now=self.now,
+        )
+        self.assertEqual(effective["commercial"]["price"], "1500")
+        self.assertEqual(effective["commercial"]["old_price"], "1700")
+
+        # An older open page may still echo the inherited calculation. Equal
+        # source values alone cannot be treated as a seller choice either.
+        legacy_echo = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=echoed.id,
+            expected_version=echoed.version,
+            corrected_by_user_id=actor_user_id,
+            patch={"commercial": {
+                "price": "1000",
+                "old_price": "1200",
+                "vat": "0.22",
+                "currency_code": "RUB",
+            }},
+        )
+        self.assertNotIn(
+            MarketplaceDraftService.SELLER_PRICE_REVIEW_PROVENANCE_KEY,
+            json.loads(legacy_echo.provenance_json),
+        )
+        legacy_effective, _baseline = MarketplaceDraftService.publication_documents(
+            legacy_echo,
+            now=self.now,
+        )
+        self.assertEqual(legacy_effective["commercial"]["price"], "1500")
+        self.assertEqual(legacy_effective["commercial"]["old_price"], "1700")
+
+    def test_linked_manual_distinct_price_is_reviewed_and_keeps_live_old_price(self):
+        _product, _listing, draft = self._linked_calculated_price_draft(
+            external_id="linked-calculated-manual-price",
+        )
+        actor_user_id = db.session.get(Seller, self.seller1_id).user_id
+
+        changed = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            corrected_by_user_id=actor_user_id,
+            patch={"commercial": {
+                "price": "1450",
+                "old_price": "1700",
+                "vat": "0.22",
+                "currency_code": "RUB",
+            }},
+        )
+
+        self.assertTrue(
+            MarketplaceDraftService._seller_price_review_matches(
+                changed,
+                "1450",
+            )
+        )
+        effective, _baseline = MarketplaceDraftService.publication_documents(
+            changed,
+            now=self.now,
+        )
+        self.assertEqual(effective["commercial"]["price"], "1450")
+        self.assertEqual(effective["commercial"]["old_price"], "1700")
+
+    def test_linked_distinct_manual_old_price_does_not_adopt_calculated_pair(self):
+        _product, _listing, draft = self._linked_calculated_price_draft(
+            external_id="linked-calculated-manual-old-price",
+        )
+        effective_before, _baseline = MarketplaceDraftService.publication_documents(
+            draft,
+            now=self.now,
+        )
+        actor_user_id = db.session.get(Seller, self.seller1_id).user_id
+
+        changed = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            corrected_by_user_id=actor_user_id,
+            patch={"commercial": {
+                **effective_before["commercial"],
+                "old_price": "1800",
+            }},
+        )
+
+        effective, _baseline = MarketplaceDraftService.publication_documents(
+            changed,
+            now=self.now,
+        )
+        self.assertEqual(effective["commercial"]["price"], "1500")
+        self.assertEqual(effective["commercial"]["old_price"], "1800")
+
+    def test_linked_exact_calculated_old_price_requires_explicit_review_and_survives_rebase(self):
+        product, _listing, draft = self._linked_calculated_price_draft(
+            external_id="linked-calculated-explicit-old-price",
+        )
+        actor_user_id = db.session.get(Seller, self.seller1_id).user_id
+        expected_version = draft.version
+
+        confirmed = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=expected_version,
+            corrected_by_user_id=actor_user_id,
+            patch={
+                "confirm_old_price_edit": True,
+                "commercial": {
+                    "price": "1500",
+                    "old_price": "1200",
+                    "vat": "0.22",
+                    "currency_code": "RUB",
+                },
+            },
+        )
+
+        old_review = json.loads(confirmed.provenance_json)[
+            MarketplaceDraftService.SELLER_OLD_PRICE_REVIEW_PROVENANCE_KEY
+        ]
+        self.assertEqual(old_review["old_price"], "1200")
+        self.assertEqual(old_review["updated_from_version"], expected_version)
+        self.assertTrue(
+            MarketplaceDraftService._seller_old_price_review_matches(
+                confirmed,
+                "1200",
+            )
+        )
+        self.assertEqual(
+            MarketplaceDraftService.unreviewed_calculated_commercial_fields(
+                confirmed,
+                commercial={"price": "1500", "old_price": "1200"},
+            ),
+            set(),
+        )
+        effective, _baseline = MarketplaceDraftService.publication_documents(
+            confirmed,
+            now=self.now,
+        )
+        self.assertEqual(effective["commercial"]["price"], "1500")
+        self.assertEqual(effective["commercial"]["old_price"], "1200")
+
+        product.calculated_price = 1100
+        product.calculated_price_before_discount = 1300
+        product.title = "Обновлённый источник"
+        db.session.commit()
+        rebased = MarketplaceDraftService.rebase_source_defaults(
+            seller_id=self.seller1_id,
+            draft_id=confirmed.id,
+            expected_version=confirmed.version,
+        )
+        self.assertEqual(
+            json.loads(rebased.commercial_json)["old_price"],
+            "1200",
+        )
+        self.assertTrue(
+            MarketplaceDraftService._seller_old_price_review_matches(
+                rebased,
+                "1200",
+            )
+        )
+        effective, _baseline = MarketplaceDraftService.publication_documents(
+            rebased,
+            now=self.now,
+        )
+        self.assertEqual(effective["commercial"]["old_price"], "1200")
+
+    def test_old_price_confirmation_rejects_unchanged_value_or_missing_seller(self):
+        _product, _listing, draft = self._linked_calculated_price_draft(
+            external_id="linked-calculated-old-price-invalid",
+        )
+        current_echo = {
+            "price": "1500",
+            "old_price": "1700",
+            "vat": "0.22",
+            "currency_code": "RUB",
+        }
+        actor_user_id = db.session.get(Seller, self.seller1_id).user_id
+
+        with self.assertRaises(MarketplaceDraftValidationError):
+            MarketplaceDraftService.update_draft(
+                seller_id=self.seller1_id,
+                draft_id=draft.id,
+                expected_version=draft.version,
+                corrected_by_user_id=actor_user_id,
+                patch={
+                    "confirm_old_price_edit": True,
+                    "commercial": current_echo,
+                },
+            )
+        with self.assertRaises(MarketplaceDraftValidationError):
+            MarketplaceDraftService.update_draft(
+                seller_id=self.seller1_id,
+                draft_id=draft.id,
+                expected_version=draft.version,
+                corrected_by_user_id=None,
+                patch={
+                    "confirm_old_price_edit": True,
+                    "commercial": {
+                        **current_echo,
+                        "old_price": "1200",
+                    },
+                },
+            )
+        self.assertNotIn(
+            MarketplaceDraftService.SELLER_OLD_PRICE_REVIEW_PROVENANCE_KEY,
+            json.loads(draft.provenance_json),
+        )
+
+    def test_calculated_price_choice_requires_exact_candidate_and_seller(self):
+        _product, _listing, draft = self._linked_calculated_price_draft(
+            external_id="linked-calculated-choice-validation",
+        )
+        patch = {
+            "use_calculated_price": True,
+            "commercial": {
+                "price": "999",
+                "old_price": "1700",
+                "vat": "0.22",
+                "currency_code": "RUB",
+            },
+        }
+        with self.assertRaises(MarketplaceDraftValidationError):
+            MarketplaceDraftService.update_draft(
+                seller_id=self.seller1_id,
+                draft_id=draft.id,
+                expected_version=draft.version,
+                corrected_by_user_id=db.session.get(
+                    Seller,
+                    self.seller1_id,
+                ).user_id,
+                patch=patch,
+            )
+
+        patch["commercial"]["price"] = "1000"
+        with self.assertRaises(MarketplaceDraftValidationError):
+            MarketplaceDraftService.update_draft(
+                seller_id=self.seller1_id,
+                draft_id=draft.id,
+                expected_version=draft.version,
+                corrected_by_user_id=None,
+                patch=patch,
+            )
+        self.assertNotIn(
+            MarketplaceDraftService.SELLER_PRICE_REVIEW_PROVENANCE_KEY,
+            json.loads(draft.provenance_json),
+        )
+
+    def test_linked_calculated_price_requires_explicit_versioned_choice(self):
+        _product, _listing, draft = self._linked_calculated_price_draft(
+            external_id="linked-calculated-explicit-choice",
+        )
+        actor_user_id = db.session.get(Seller, self.seller1_id).user_id
+        expected_version = draft.version
+
+        confirmed = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=expected_version,
+            corrected_by_user_id=actor_user_id,
+            patch={
+                "use_calculated_price": True,
+                "commercial": {
+                    "price": "1000",
+                    "old_price": "1700",
+                    "vat": "0.22",
+                    "currency_code": "RUB",
+                },
+            },
+        )
+
+        provenance = json.loads(confirmed.provenance_json)
+        self.assertEqual(
+            provenance[
+                MarketplaceDraftService.SELLER_PRICE_REVIEW_PROVENANCE_KEY
+            ]["price"],
+            "1000",
+        )
+        self.assertEqual(
+            provenance[
+                MarketplaceDraftService.SELLER_PRICE_REVIEW_PROVENANCE_KEY
+            ]["updated_from_version"],
+            expected_version,
+        )
+        effective, _baseline = MarketplaceDraftService.publication_documents(
+            confirmed,
+            now=self.now,
+        )
+        self.assertEqual(effective["commercial"]["price"], "1000")
+        self.assertEqual(effective["commercial"]["old_price"], "1700")
+
+    def test_calculated_price_choice_fails_when_source_changed_or_baseline_stale(self):
+        product, _listing, draft = self._linked_calculated_price_draft(
+            external_id="linked-calculated-stale-source",
+        )
+        actor_user_id = db.session.get(Seller, self.seller1_id).user_id
+        product.calculated_price = 1100
+        db.session.commit()
+
+        with self.assertRaises(MarketplaceDraftConflict):
+            MarketplaceDraftService.update_draft(
+                seller_id=self.seller1_id,
+                draft_id=draft.id,
+                expected_version=draft.version,
+                corrected_by_user_id=actor_user_id,
+                patch={
+                    "use_calculated_price": True,
+                    "commercial": {
+                        "price": "1000",
+                        "old_price": "1200",
+                        "vat": "0.22",
+                        "currency_code": "RUB",
+                    },
+                },
+            )
+        self.assertNotIn(
+            MarketplaceDraftService.SELLER_PRICE_REVIEW_PROVENANCE_KEY,
+            json.loads(draft.provenance_json),
+        )
+
+        # Rebase the updated fact snapshot, then stale only the exact Ozon
+        # price snapshot. The explicit choice still cannot bypass the live
+        # baseline requirement.
+        draft = MarketplaceDraftService.rebase_source_defaults(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+        listing = draft.published_listing
+        listing.prices_synced_at = self.now - timedelta(days=3)
+        db.session.commit()
+        with self.assertRaises(MarketplaceDraftConflict) as raised:
+            MarketplaceDraftService.update_draft(
+                seller_id=self.seller1_id,
+                draft_id=draft.id,
+                expected_version=draft.version,
+                corrected_by_user_id=actor_user_id,
+                patch={
+                    "use_calculated_price": True,
+                    "commercial": {
+                        "price": "1100",
+                        "old_price": "1200",
+                        "vat": "0.22",
+                        "currency_code": "RUB",
+                    },
+                },
+            )
+        self.assertEqual(
+            getattr(raised.exception, "code", None),
+            "ozon_listing_snapshot_stale",
+        )
 
     def test_generic_product_measurements_are_not_package_dimensions(self):
         product = self._product(

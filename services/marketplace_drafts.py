@@ -142,6 +142,7 @@ class MarketplaceDraftService:
     PACKAGE_CONFIRMATION_PROVENANCE_KEY = "physical.package_confirmation"
     LEGACY_WB_PACKAGE_PROVENANCE_KEY = "physical.legacy_wb_package_dimensions"
     SELLER_PRICE_REVIEW_PROVENANCE_KEY = "commercial.price.seller_review"
+    SELLER_OLD_PRICE_REVIEW_PROVENANCE_KEY = "commercial.old_price.seller_review"
     SUPPLIER_RRP_PRICE_SOURCES = frozenset({
         "imported_product.recommended_retail_price",
         "imported_product.original_data.recommended_retail_price",
@@ -4046,6 +4047,8 @@ class MarketplaceDraftService:
         facts_document: dict,
         provenance: dict,
     ) -> Optional[str]:
+        if not isinstance(facts_document, dict) or not isinstance(provenance, dict):
+            return None
         evidence = provenance.get("commercial.price")
         if (
             not isinstance(evidence, dict)
@@ -4053,10 +4056,101 @@ class MarketplaceDraftService:
             or evidence.get("trust") != "seller_calculation"
         ):
             return None
-        commercial = facts_document.get("facts", {}).get("commercial", {})
+        facts = facts_document.get("facts")
+        commercial = facts.get("commercial", {}) if isinstance(facts, dict) else {}
         return cls._decimal_from_fact(
             commercial.get("price") if isinstance(commercial, dict) else None
         )
+
+    @classmethod
+    def _verified_calculated_commercial(
+        cls,
+        facts_document: dict,
+        provenance: dict,
+    ) -> dict:
+        """Return only the exact seller-calculated commercial candidates."""
+        if not isinstance(facts_document, dict) or not isinstance(provenance, dict):
+            return {}
+        facts = facts_document.get("facts")
+        commercial = facts.get("commercial", {}) if isinstance(facts, dict) else {}
+        if not isinstance(commercial, dict):
+            return {}
+        result = {}
+        price = cls._verified_calculated_price(facts_document, provenance)
+        if price is not None:
+            result["price"] = price
+        old_evidence = provenance.get("commercial.old_price")
+        if (
+            isinstance(old_evidence, dict)
+            and old_evidence.get("source")
+            == "imported_product.calculated_price_before_discount"
+            and old_evidence.get("trust") == "seller_calculation"
+        ):
+            old_price = cls._decimal_from_fact(commercial.get("old_price"))
+            if old_price is not None:
+                result["old_price"] = old_price
+        return result
+
+    @classmethod
+    def unreviewed_calculated_commercial_fields(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        commercial: Optional[dict] = None,
+        facts_document: Optional[dict] = None,
+        provenance: Optional[dict] = None,
+        include_absent: bool = False,
+    ) -> set:
+        """Find linked fields still equal to their shared source defaults.
+
+        A seller calculation is a useful candidate for a new Ozon card, but
+        the shared price engine does not prove that the seller chose to change
+        an already linked Ozon price.  Keep exact inherited values separate
+        from seller-reviewed overrides for the full-state update path. Frozen
+        publication guards use the default exact-match behavior; the edit path
+        may include absent source candidates so baseline echoes cannot attest
+        or replace them.
+        """
+        if draft.published_listing_id is None:
+            return set()
+        stored_provenance = (
+            provenance if isinstance(provenance, dict)
+            else cls._stored_json(draft.provenance_json, dict)
+        )
+        stored_commercial = (
+            commercial if isinstance(commercial, dict)
+            else cls._stored_json(draft.commercial_json, dict)
+        )
+        stored_facts = (
+            facts_document if isinstance(facts_document, dict)
+            else cls._stored_json(draft.source_facts_json, dict)
+        )
+        candidates = cls._verified_calculated_commercial(
+            stored_facts,
+            stored_provenance,
+        )
+        result = set()
+        for field, candidate in candidates.items():
+            stored_value = stored_commercial.get(field)
+            if stored_value in (None, ""):
+                if not include_absent:
+                    continue
+            elif cls._decimal_from_fact(stored_value) != candidate:
+                continue
+            if field == "price" and cls._seller_price_review_matches(
+                draft,
+                candidate,
+                provenance=stored_provenance,
+            ):
+                continue
+            if field == "old_price" and cls._seller_old_price_review_matches(
+                draft,
+                candidate,
+                provenance=stored_provenance,
+            ):
+                continue
+            result.add(field)
+        return result
 
     @classmethod
     def _seller_price_review_matches(
@@ -4066,15 +4160,53 @@ class MarketplaceDraftService:
         *,
         provenance: Optional[dict] = None,
     ) -> bool:
-        normalized_price = cls._decimal_from_fact(price)
-        if normalized_price is None:
-            return False
-        evidence_map = (
-            provenance
-            if isinstance(provenance, dict)
-            else cls._stored_json(draft.provenance_json, dict)
+        return cls._seller_commercial_review_matches(
+            draft,
+            field="price",
+            value=price,
+            provenance=provenance,
         )
-        evidence = evidence_map.get(cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY)
+
+    @classmethod
+    def _seller_old_price_review_matches(
+        cls,
+        draft: MarketplaceProductDraft,
+        old_price: Any,
+        *,
+        provenance: Optional[dict] = None,
+    ) -> bool:
+        return cls._seller_commercial_review_matches(
+            draft,
+            field="old_price",
+            value=old_price,
+            provenance=provenance,
+        )
+
+    @classmethod
+    def _seller_commercial_review_matches(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        field: str,
+        value: Any,
+        provenance: Optional[dict] = None,
+    ) -> bool:
+        normalized_value = cls._decimal_from_fact(value)
+        if field == "price":
+            provenance_key = cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY
+            value_key = "price"
+        elif field == "old_price":
+            provenance_key = cls.SELLER_OLD_PRICE_REVIEW_PROVENANCE_KEY
+            value_key = "old_price"
+        else:
+            return False
+        if normalized_value is None:
+            return False
+        evidence_map = provenance if isinstance(provenance, dict) else cls._stored_json(
+            draft.provenance_json,
+            dict,
+        )
+        evidence = evidence_map.get(provenance_key)
         if (
             not isinstance(evidence, dict)
             or type(evidence.get("version")) is not int
@@ -4085,7 +4217,7 @@ class MarketplaceDraftService:
             or evidence.get("imported_product_id") != draft.imported_product_id
             or evidence.get("source") != "seller_edit"
             or evidence.get("trust") != "seller_override"
-            or evidence.get("price") != normalized_price
+            or evidence.get(value_key) != normalized_value
             or type(evidence.get("actor_user_id")) is not int
             or evidence.get("actor_user_id") <= 0
             or type(evidence.get("updated_from_version")) is not int
@@ -4161,9 +4293,45 @@ class MarketplaceDraftService:
         actor_user_id: Optional[int],
         updated_from_version: int,
     ) -> Optional[dict]:
-        normalized_price = cls._decimal_from_fact(price)
+        return cls._seller_commercial_review_record(
+            draft,
+            field="price",
+            value=price,
+            actor_user_id=actor_user_id,
+            updated_from_version=updated_from_version,
+        )
+
+    @classmethod
+    def _seller_old_price_review_record(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        old_price: Any,
+        actor_user_id: Optional[int],
+        updated_from_version: int,
+    ) -> Optional[dict]:
+        return cls._seller_commercial_review_record(
+            draft,
+            field="old_price",
+            value=old_price,
+            actor_user_id=actor_user_id,
+            updated_from_version=updated_from_version,
+        )
+
+    @classmethod
+    def _seller_commercial_review_record(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        field: str,
+        value: Any,
+        actor_user_id: Optional[int],
+        updated_from_version: int,
+    ) -> Optional[dict]:
+        normalized_value = cls._decimal_from_fact(value)
         if (
-            normalized_price is None
+            field not in {"price", "old_price"}
+            or normalized_value is None
             or type(actor_user_id) is not int
             or actor_user_id <= 0
             or Seller.query.filter_by(
@@ -4180,7 +4348,7 @@ class MarketplaceDraftService:
             "imported_product_id": draft.imported_product_id,
             "source": "seller_edit",
             "trust": "seller_override",
-            "price": normalized_price,
+            field: normalized_value,
             "actor_user_id": actor_user_id,
             "updated_from_version": updated_from_version,
             "confirmed_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
@@ -6011,6 +6179,16 @@ class MarketplaceDraftService:
             merged[cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY] = current_provenance[
                 cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY
             ]
+        if cls._seller_old_price_review_matches(
+            draft,
+            current_commercial.get("old_price"),
+            provenance=current_provenance,
+        ):
+            merged[cls.SELLER_OLD_PRICE_REVIEW_PROVENANCE_KEY] = (
+                current_provenance[
+                    cls.SELLER_OLD_PRICE_REVIEW_PROVENANCE_KEY
+                ]
+            )
         return merged
 
     @classmethod
@@ -7006,6 +7184,7 @@ class MarketplaceDraftService:
         *,
         now: Optional[datetime] = None,
         include_baseline_editor_data: bool = False,
+        include_price_context: bool = False,
     ) -> Tuple[dict, Optional[dict]]:
         """Return effective normalized blocks and an exact update baseline.
 
@@ -7027,6 +7206,12 @@ class MarketplaceDraftService:
             # old default mapper.  For updates, omit only that draft overlay
             # so the fresh observed Ozon listing price remains authoritative.
             stored["commercial"].pop("price", None)
+        unreviewed_calculated = cls.unreviewed_calculated_commercial_fields(
+            draft,
+            commercial=stored["commercial"],
+        )
+        for field in unreviewed_calculated:
+            stored["commercial"].pop(field, None)
         try:
             attribute_removals = cls._normalize_attribute_removals(
                 cls._stored_json(
@@ -7114,6 +7299,33 @@ class MarketplaceDraftService:
                 {'attribute_id': item[0], 'complex_id': item[1]}
                 for item in sorted(exact_identities)
             ]
+        baseline_commercial = {}
+        for field in ("price", "old_price"):
+            value = cls._decimal_from_fact(
+                baseline_documents["commercial"].get(field)
+            )
+            if value is not None:
+                baseline_commercial[field] = value
+        currency_code = baseline_documents["commercial"].get("currency_code")
+        if isinstance(currency_code, str) and currency_code in cls.CURRENCY_CODES:
+            baseline_commercial["currency_code"] = currency_code
+
+        calculated_commercial = {}
+        if include_price_context:
+            try:
+                current_facts, current_provenance, current_fact_hash = (
+                    cls._fact_snapshot(draft.imported_product)
+                )
+            except MarketplaceDraftError:
+                current_fact_hash = None
+            if current_fact_hash == draft.source_fact_hash:
+                calculated_commercial = cls._verified_calculated_commercial(
+                    current_facts,
+                    current_provenance,
+                )
+        if calculated_commercial:
+            calculated_commercial["currency_code"] = "RUB"
+
         return (
             effective_documents,
             {
@@ -7122,6 +7334,8 @@ class MarketplaceDraftService:
                 "fingerprint": state["fingerprint"],
                 "synced_at": min(freshness).isoformat(),
                 "contract_version": OzonProductStateContract.CONTRACT_VERSION,
+                "commercial": baseline_commercial,
+                "calculated_commercial": calculated_commercial,
                 **({'attribute_identities': baseline_identities,
                     'preserved_media': baseline_documents['media'],
                     'preserved_barcodes': baseline_documents['barcodes'][:1]}
@@ -8704,7 +8918,8 @@ class MarketplaceDraftService:
             "offer_id", "product_type_id", "save_mapping", "content",
             "attributes", "complex_attributes", "media", "dimensions",
             "attribute_removals", "barcodes", "commercial",
-            "confirm_package",
+            "confirm_package", "use_calculated_price",
+            "confirm_old_price_edit",
         }
         unknown = set(patch) - allowed
         if unknown:
@@ -8722,6 +8937,137 @@ class MarketplaceDraftService:
             )
         cls._assert_no_active_publication(draft)
 
+        use_calculated_price = False
+        if "use_calculated_price" in patch:
+            use_calculated_price = cls._strict_boolean(
+                patch["use_calculated_price"], "use_calculated_price",
+            )
+        confirm_old_price_edit = False
+        if "confirm_old_price_edit" in patch:
+            confirm_old_price_edit = cls._strict_boolean(
+                patch["confirm_old_price_edit"], "confirm_old_price_edit",
+            )
+        submitted_commercial = (
+            cls._normalize_commercial(patch["commercial"])
+            if "commercial" in patch
+            else None
+        )
+        calculated_price_review = None
+        old_price_review = None
+        if use_calculated_price:
+            if (
+                draft.published_listing_id is None
+                or getattr(draft.marketplace, "code", None) != "ozon"
+            ):
+                raise MarketplaceDraftValidationError(
+                    "Расчётную цену можно отдельно подтвердить только для связанной карточки Ozon"
+                )
+            if "commercial" not in patch:
+                raise MarketplaceDraftValidationError(
+                    "Для подтверждения расчётной цены укажите её в поле «Цена продавца»"
+                )
+            current_facts, current_provenance, current_fact_hash = (
+                cls._fact_snapshot(draft.imported_product)
+            )
+            if current_fact_hash != draft.source_fact_hash:
+                raise MarketplaceDraftConflict(
+                    "Данные источника изменились; обновите черновик и проверьте расчётную цену заново"
+                )
+            candidate_price = cls._verified_calculated_price(
+                current_facts,
+                current_provenance,
+            )
+            if (
+                candidate_price is None
+                or submitted_commercial.get("price") != candidate_price
+            ):
+                raise MarketplaceDraftValidationError(
+                    "Подтверждаемая цена должна точно совпадать с текущим расчётом продавца"
+                )
+            calculated_price_review = cls._seller_price_review_record(
+                draft,
+                price=candidate_price,
+                actor_user_id=corrected_by_user_id,
+                updated_from_version=expected_version,
+            )
+            if calculated_price_review is None:
+                raise MarketplaceDraftValidationError(
+                    "Подтверждение расчётной цены требует текущего продавца"
+                )
+        if confirm_old_price_edit:
+            if (
+                draft.published_listing_id is None
+                or getattr(draft.marketplace, "code", None) != "ozon"
+            ):
+                raise MarketplaceDraftValidationError(
+                    "Изменить цену до скидки можно только у связанной карточки Ozon"
+                )
+            if "commercial" not in patch:
+                raise MarketplaceDraftValidationError(
+                    "Для изменения цены до скидки укажите цену и другие коммерческие данные"
+                )
+            submitted_old_price = submitted_commercial.get("old_price")
+            if submitted_old_price is None:
+                raise MarketplaceDraftValidationError(
+                    "Укажите положительную цену до скидки"
+                )
+            old_price_review = cls._seller_old_price_review_record(
+                draft,
+                old_price=submitted_old_price,
+                actor_user_id=corrected_by_user_id,
+                updated_from_version=expected_version,
+            )
+            if old_price_review is None:
+                raise MarketplaceDraftValidationError(
+                    "Изменение цены до скидки требует текущего продавца"
+                )
+
+        previous_commercial = cls._stored_json(draft.commercial_json, dict)
+        inherited_calculated_fields = (
+            cls.unreviewed_calculated_commercial_fields(
+                draft,
+                commercial=previous_commercial,
+                include_absent=True,
+            )
+            if draft.published_listing_id is not None
+            and ("commercial" in patch or use_calculated_price or confirm_old_price_edit)
+            else set()
+        )
+        effective_before = None
+        baseline_before = None
+        if draft.published_listing_id is not None and (
+            "commercial" in patch
+            or use_calculated_price
+            or confirm_old_price_edit
+        ):
+            try:
+                effective_before, baseline_before = cls.publication_documents(
+                    draft,
+                )
+            except MarketplaceDraftError:
+                if use_calculated_price or confirm_old_price_edit:
+                    raise
+            if (use_calculated_price or confirm_old_price_edit) and (
+                baseline_before is None
+            ):
+                raise cls._listing_state_error(
+                    "ozon_listing_price_baseline_unavailable",
+                    "Текущую цену Ozon нельзя проверить; синхронизируйте каталог перед подтверждением цены",
+                )
+        if confirm_old_price_edit:
+            baseline_commercial = baseline_before.get("commercial")
+            current_old_price = (
+                cls._decimal_from_fact(baseline_commercial.get("old_price"))
+                if isinstance(baseline_commercial, dict)
+                else None
+            )
+            submitted_old_price = cls._decimal_from_fact(
+                submitted_commercial.get("old_price")
+            )
+            if submitted_old_price == current_old_price:
+                raise MarketplaceDraftValidationError(
+                    "Цена до скидки должна отличаться от текущей цены Ozon"
+                )
         confirm_package = False
         if "confirm_package" in patch:
             confirm_package = cls._strict_boolean(
@@ -8923,10 +9269,36 @@ class MarketplaceDraftService:
             "barcodes": (cls._normalize_barcodes, "barcodes_json", list),
             "commercial": (cls._normalize_commercial, "commercial_json", dict),
         }
-        previous_commercial = cls._stored_json(draft.commercial_json, dict)
         for patch_name, (normalizer, column_name, expected_type) in field_normalizers.items():
             if patch_name in patch:
-                normalized = normalizer(patch[patch_name])
+                normalized = (
+                    submitted_commercial
+                    if patch_name == "commercial"
+                    else normalizer(patch[patch_name])
+                )
+                if patch_name == "commercial" and inherited_calculated_fields:
+                    baseline_commercial = (
+                        baseline_before.get("commercial")
+                        if isinstance(baseline_before, dict)
+                        else None
+                    )
+                    if isinstance(baseline_commercial, dict):
+                        for field in inherited_calculated_fields:
+                            if field == "price" and use_calculated_price:
+                                continue
+                            if field == "old_price" and confirm_old_price_edit:
+                                continue
+                            submitted_value = cls._decimal_from_fact(
+                                normalized.get(field)
+                            )
+                            baseline_value = cls._decimal_from_fact(
+                                baseline_commercial.get(field)
+                            )
+                            if submitted_value == baseline_value:
+                                if field in previous_commercial:
+                                    normalized[field] = previous_commercial[field]
+                                else:
+                                    normalized.pop(field, None)
                 setattr(
                     draft,
                     column_name,
@@ -8938,8 +9310,14 @@ class MarketplaceDraftService:
             previous_price = cls._decimal_from_fact(
                 previous_commercial.get("price")
             )
+            previous_old_price = cls._decimal_from_fact(
+                previous_commercial.get("old_price")
+            )
             current_price = cls._decimal_from_fact(
                 current_commercial.get("price")
+            )
+            current_old_price = cls._decimal_from_fact(
+                current_commercial.get("old_price")
             )
             current_provenance = cls._stored_json(
                 draft.provenance_json, dict,
@@ -8949,6 +9327,10 @@ class MarketplaceDraftService:
                     cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY,
                     None,
                 )
+            elif calculated_price_review is not None:
+                current_provenance[
+                    cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY
+                ] = calculated_price_review
             elif current_price != previous_price:
                 current_provenance.pop(
                     cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY,
@@ -8971,6 +9353,29 @@ class MarketplaceDraftService:
             ):
                 current_provenance.pop(
                     cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY,
+                    None,
+                )
+            if current_old_price is None:
+                current_provenance.pop(
+                    cls.SELLER_OLD_PRICE_REVIEW_PROVENANCE_KEY,
+                    None,
+                )
+            elif old_price_review is not None:
+                current_provenance[
+                    cls.SELLER_OLD_PRICE_REVIEW_PROVENANCE_KEY
+                ] = old_price_review
+            elif current_old_price != previous_old_price:
+                current_provenance.pop(
+                    cls.SELLER_OLD_PRICE_REVIEW_PROVENANCE_KEY,
+                    None,
+                )
+            elif not cls._seller_old_price_review_matches(
+                draft,
+                current_old_price,
+                provenance=current_provenance,
+            ):
+                current_provenance.pop(
+                    cls.SELLER_OLD_PRICE_REVIEW_PROVENANCE_KEY,
                     None,
                 )
             draft.provenance_json = cls._canonical_json(
@@ -9312,6 +9717,14 @@ class MarketplaceDraftService:
                 provenance=previous_provenance,
             ) else None
         )
+        seller_reviewed_old_price = (
+            cls._decimal_from_fact(current_commercial.get("old_price"))
+            if cls._seller_old_price_review_matches(
+                draft,
+                current_commercial.get("old_price"),
+                provenance=previous_provenance,
+            ) else None
+        )
         rebased_commercial = merge_mapping(
             current_commercial,
             cls._commercial_from_facts(
@@ -9330,6 +9743,8 @@ class MarketplaceDraftService:
             # to equal a prior calculated default; numeric equality alone
             # must not reclassify that reviewed price as source-derived.
             rebased_commercial["price"] = seller_reviewed_price
+        if seller_reviewed_old_price is not None:
+            rebased_commercial["old_price"] = seller_reviewed_old_price
         elif inherited_rrp_price is not None:
             current_calculated_price = cls._verified_calculated_price(
                 current_facts,
@@ -10456,12 +10871,12 @@ class MarketplaceDraftService:
                 if price is not None and old_price <= price:
                     errors.append(cls._validation_item(
                         "old_price_not_greater", "commercial.old_price",
-                        "old_price должен быть больше price",
+                        "Цена до скидки должна быть больше цены продавца",
                     ))
             except MarketplaceDraftValidationError:
                 errors.append(cls._validation_item(
                     "old_price_invalid", "commercial.old_price",
-                    "old_price должен быть положительным числом",
+                    "Цена до скидки должна быть положительным числом",
                 ))
         if commercial.get("vat") not in cls.VAT_VALUES:
             errors.append(cls._validation_item(
