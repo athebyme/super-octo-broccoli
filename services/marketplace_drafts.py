@@ -141,6 +141,12 @@ class MarketplaceDraftService:
     AUTOMATIC_CLEANUP_REASON = "unchanged_optional_attribute_exceeds_schema_max"
     PACKAGE_CONFIRMATION_PROVENANCE_KEY = "physical.package_confirmation"
     LEGACY_WB_PACKAGE_PROVENANCE_KEY = "physical.legacy_wb_package_dimensions"
+    SELLER_PRICE_REVIEW_PROVENANCE_KEY = "commercial.price.seller_review"
+    SUPPLIER_RRP_PRICE_SOURCES = frozenset({
+        "imported_product.recommended_retail_price",
+        "imported_product.original_data.recommended_retail_price",
+        "supplier_product.original_data_json.recommended_retail_price",
+    })
     PACKAGE_DIMENSION_FIELDS = (
         "width", "height", "depth", "weight",
         "dimension_unit", "weight_unit",
@@ -4019,14 +4025,214 @@ class MarketplaceDraftService:
         facts_document: dict,
         *,
         account: SellerMarketplaceAccount,
+        provenance: Optional[dict] = None,
     ) -> dict:
         source = facts_document.get("facts", {}).get("commercial", {})
         result = cls._commercial_defaults(account)
-        for key in ("price", "old_price"):
-            value = cls._decimal_from_fact(source.get(key))
-            if value:
-                result[key] = value
+        calculated_price = cls._verified_calculated_price(
+            facts_document,
+            provenance or {},
+        )
+        if calculated_price is not None:
+            result["price"] = calculated_price
+        old_price = cls._decimal_from_fact(source.get("old_price"))
+        if old_price:
+            result["old_price"] = old_price
         return result
+
+    @classmethod
+    def _verified_calculated_price(
+        cls,
+        facts_document: dict,
+        provenance: dict,
+    ) -> Optional[str]:
+        evidence = provenance.get("commercial.price")
+        if (
+            not isinstance(evidence, dict)
+            or evidence.get("source") != "imported_product.calculated_price"
+            or evidence.get("trust") != "seller_calculation"
+        ):
+            return None
+        commercial = facts_document.get("facts", {}).get("commercial", {})
+        return cls._decimal_from_fact(
+            commercial.get("price") if isinstance(commercial, dict) else None
+        )
+
+    @classmethod
+    def _seller_price_review_matches(
+        cls,
+        draft: MarketplaceProductDraft,
+        price: Any,
+        *,
+        provenance: Optional[dict] = None,
+    ) -> bool:
+        normalized_price = cls._decimal_from_fact(price)
+        if normalized_price is None:
+            return False
+        evidence_map = (
+            provenance
+            if isinstance(provenance, dict)
+            else cls._stored_json(draft.provenance_json, dict)
+        )
+        evidence = evidence_map.get(cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY)
+        if (
+            not isinstance(evidence, dict)
+            or type(evidence.get("version")) is not int
+            or evidence.get("version") != 1
+            or evidence.get("seller_id") != draft.seller_id
+            or evidence.get("account_id") != draft.account_id
+            or evidence.get("draft_id") != draft.id
+            or evidence.get("imported_product_id") != draft.imported_product_id
+            or evidence.get("source") != "seller_edit"
+            or evidence.get("trust") != "seller_override"
+            or evidence.get("price") != normalized_price
+            or type(evidence.get("actor_user_id")) is not int
+            or evidence.get("actor_user_id") <= 0
+            or type(evidence.get("updated_from_version")) is not int
+            or evidence.get("updated_from_version") <= 0
+            or evidence.get("updated_from_version") > draft.version
+            or not isinstance(evidence.get("confirmed_at"), str)
+            or not evidence.get("confirmed_at")
+        ):
+            return False
+        return Seller.query.filter_by(
+            id=draft.seller_id,
+            user_id=evidence["actor_user_id"],
+        ).first() is not None
+
+    @classmethod
+    def _legacy_supplier_rrp_price(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        commercial: Optional[dict] = None,
+        facts_document: Optional[dict] = None,
+        provenance: Optional[dict] = None,
+    ) -> Optional[str]:
+        """Return only an exact old supplier-RRP value copied into a draft.
+
+        A changed amount is treated as an independently reviewed seller value;
+        an exact same-value choice needs a seller-attributed transition record.
+        """
+        stored_commercial = (
+            commercial
+            if isinstance(commercial, dict)
+            else cls._stored_json(draft.commercial_json, dict)
+        )
+        stored_facts = (
+            facts_document
+            if isinstance(facts_document, dict)
+            else cls._stored_json(draft.source_facts_json, dict)
+        )
+        stored_provenance = (
+            provenance
+            if isinstance(provenance, dict)
+            else cls._stored_json(draft.provenance_json, dict)
+        )
+        if not cls.has_unconfirmed_supplier_rrp_price(
+            draft,
+            commercial=stored_commercial,
+            facts_document=stored_facts,
+            provenance=stored_provenance,
+        ):
+            return None
+        return cls._decimal_from_fact(stored_commercial.get("price"))
+
+    @classmethod
+    def has_unconfirmed_supplier_rrp_price(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        commercial: Optional[dict] = None,
+        facts_document: Optional[dict] = None,
+        provenance: Optional[dict] = None,
+    ) -> bool:
+        """Whether an exact source-fact price lacks seller-price authority.
+
+        This is shared with publication preflight.  Callers may provide the
+        frozen commercial/source documents from a queued first-create; omitted
+        documents are read from the draft's saved snapshot.  Only the exact
+        known supplier-RRP provenance lanes are classified; other provenance
+        and unrelated equal amounts are left unchanged.
+        """
+        stored_commercial = (
+            commercial
+            if isinstance(commercial, dict)
+            else cls._stored_json(draft.commercial_json, dict)
+        )
+        stored_facts = (
+            facts_document
+            if isinstance(facts_document, dict)
+            else cls._stored_json(draft.source_facts_json, dict)
+        )
+        stored_provenance = (
+            provenance
+            if isinstance(provenance, dict)
+            else cls._stored_json(draft.provenance_json, dict)
+        )
+        submitted_price = cls._decimal_from_fact(stored_commercial.get("price"))
+        fact_commercial = stored_facts.get("facts", {}).get("commercial", {})
+        source_price = cls._decimal_from_fact(
+            fact_commercial.get("price")
+            if isinstance(fact_commercial, dict) else None
+        )
+        if submitted_price is None or source_price != submitted_price:
+            return False
+
+        evidence = stored_provenance.get("commercial.price")
+        if (
+            isinstance(evidence, dict)
+            and evidence.get("source") == "imported_product.calculated_price"
+            and evidence.get("trust") == "seller_calculation"
+        ):
+            return False
+        if (
+            not isinstance(evidence, dict)
+            or evidence.get("source") not in cls.SUPPLIER_RRP_PRICE_SOURCES
+            or evidence.get("trust") != "observed"
+        ):
+            return False
+        if cls._seller_price_review_matches(
+            draft,
+            submitted_price,
+            provenance=stored_provenance,
+        ):
+            return False
+        return True
+
+    @classmethod
+    def _seller_price_review_record(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        price: Any,
+        actor_user_id: Optional[int],
+        updated_from_version: int,
+    ) -> Optional[dict]:
+        normalized_price = cls._decimal_from_fact(price)
+        if (
+            normalized_price is None
+            or type(actor_user_id) is not int
+            or actor_user_id <= 0
+            or Seller.query.filter_by(
+                id=draft.seller_id,
+                user_id=actor_user_id,
+            ).first() is None
+        ):
+            return None
+        return {
+            "version": 1,
+            "seller_id": draft.seller_id,
+            "account_id": draft.account_id,
+            "draft_id": draft.id,
+            "imported_product_id": draft.imported_product_id,
+            "source": "seller_edit",
+            "trust": "seller_override",
+            "price": normalized_price,
+            "actor_user_id": actor_user_id,
+            "updated_from_version": updated_from_version,
+            "confirmed_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        }
 
     @staticmethod
     def _positive_fact_decimal(value: Any) -> Optional[Decimal]:
@@ -5844,6 +6050,15 @@ class MarketplaceDraftService:
         merged = dict(fresh_provenance)
         merged.update(preserved_compliance)
         merged.update(preserved_automatic_cleanup)
+        current_commercial = cls._stored_json(draft.commercial_json, dict)
+        if cls._seller_price_review_matches(
+            draft,
+            current_commercial.get("price"),
+            provenance=current_provenance,
+        ):
+            merged[cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY] = current_provenance[
+                cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY
+            ]
         return merged
 
     @classmethod
@@ -6799,6 +7014,14 @@ class MarketplaceDraftService:
                 "MarketplaceProductDraft обязателен"
             )
         stored = cls._stored_draft_documents(draft)
+        if cls.has_unconfirmed_supplier_rrp_price(
+            draft,
+            commercial=stored["commercial"],
+        ):
+            # A legacy draft may still contain a supplier RRP copied by the
+            # old default mapper.  For updates, omit only that draft overlay
+            # so the fresh observed Ozon listing price remains authoritative.
+            stored["commercial"].pop("price", None)
         try:
             attribute_removals = cls._normalize_attribute_removals(
                 cls._stored_json(
@@ -7638,7 +7861,11 @@ class MarketplaceDraftService:
                 cls._barcodes_from_facts(facts_document), list
             ),
             commercial_json=cls._canonical_json(
-                cls._commercial_from_facts(facts_document, account=account),
+                cls._commercial_from_facts(
+                    facts_document,
+                    account=account,
+                    provenance=provenance,
+                ),
                 dict,
             ),
             attributes_json="[]",
@@ -8691,6 +8918,7 @@ class MarketplaceDraftService:
             "barcodes": (cls._normalize_barcodes, "barcodes_json", list),
             "commercial": (cls._normalize_commercial, "commercial_json", dict),
         }
+        previous_commercial = cls._stored_json(draft.commercial_json, dict)
         for patch_name, (normalizer, column_name, expected_type) in field_normalizers.items():
             if patch_name in patch:
                 normalized = normalizer(patch[patch_name])
@@ -8699,6 +8927,50 @@ class MarketplaceDraftService:
                     column_name,
                     cls._canonical_json(normalized, expected_type),
                 )
+
+        if "commercial" in patch:
+            current_commercial = cls._stored_json(draft.commercial_json, dict)
+            previous_price = cls._decimal_from_fact(
+                previous_commercial.get("price")
+            )
+            current_price = cls._decimal_from_fact(
+                current_commercial.get("price")
+            )
+            current_provenance = cls._stored_json(
+                draft.provenance_json, dict,
+            )
+            if current_price is None:
+                current_provenance.pop(
+                    cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY,
+                    None,
+                )
+            elif current_price != previous_price:
+                current_provenance.pop(
+                    cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY,
+                    None,
+                )
+                price_review = cls._seller_price_review_record(
+                    draft,
+                    price=current_price,
+                    actor_user_id=corrected_by_user_id,
+                    updated_from_version=expected_version,
+                )
+                if price_review is not None:
+                    current_provenance[
+                        cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY
+                    ] = price_review
+            elif not cls._seller_price_review_matches(
+                draft,
+                current_price,
+                provenance=current_provenance,
+            ):
+                current_provenance.pop(
+                    cls.SELLER_PRICE_REVIEW_PROVENANCE_KEY,
+                    None,
+                )
+            draft.provenance_json = cls._canonical_json(
+                current_provenance, dict,
+            )
 
         if "dimensions" in patch or confirm_package:
             current_provenance = cls._stored_json(draft.provenance_json, dict)
@@ -8818,9 +9090,20 @@ class MarketplaceDraftService:
             )
         cls._assert_no_active_publication(draft)
         legacy_wb_metadata = cls._legacy_wb_metadata_from_draft(draft)
+        inherited_rrp_price = cls._legacy_supplier_rrp_price(draft)
         facts_document, provenance, fact_hash = cls._fact_snapshot(
             draft.imported_product
         )
+        if (
+            inherited_rrp_price is not None
+            and cls._verified_calculated_price(facts_document, provenance)
+            != inherited_rrp_price
+        ):
+            current_commercial = cls._stored_json(draft.commercial_json, dict)
+            current_commercial.pop("price", None)
+            draft.commercial_json = cls._canonical_json(
+                current_commercial, dict,
+            )
         draft.source_facts_json = cls._canonical_json(facts_document, dict)
         draft.provenance_json = cls._canonical_json(
             cls._provenance_with_package_state(
@@ -8893,11 +9176,16 @@ class MarketplaceDraftService:
         previous_provenance = cls._stored_json(
             draft.provenance_json, dict,
         )
+        inherited_rrp_price = cls._legacy_supplier_rrp_price(
+            draft,
+            facts_document=previous_facts,
+            provenance=previous_provenance,
+        )
         legacy_wb_metadata = cls._legacy_wb_metadata_from_draft(draft)
         current_facts, provenance, fact_hash = cls._fact_snapshot(
             draft.imported_product
         )
-        if fact_hash == draft.source_fact_hash:
+        if fact_hash == draft.source_fact_hash and inherited_rrp_price is None:
             return draft
 
         def merge_mapping(
@@ -9011,18 +9299,43 @@ class MarketplaceDraftService:
             draft.commercial_json,
             dict,
         )
-        draft.commercial_json = cls._canonical_json(
-            merge_mapping(
-                current_commercial,
-                cls._commercial_from_facts(
-                    previous_facts,
-                    account=draft.account,
-                ),
-                cls._commercial_from_facts(
-                    current_facts,
-                    account=draft.account,
-                ),
+        seller_reviewed_price = (
+            cls._decimal_from_fact(current_commercial.get("price"))
+            if cls._seller_price_review_matches(
+                draft,
+                current_commercial.get("price"),
+                provenance=previous_provenance,
+            ) else None
+        )
+        rebased_commercial = merge_mapping(
+            current_commercial,
+            cls._commercial_from_facts(
+                previous_facts,
+                account=draft.account,
+                provenance=previous_provenance,
             ),
+            cls._commercial_from_facts(
+                current_facts,
+                account=draft.account,
+                provenance=provenance,
+            ),
+        )
+        if seller_reviewed_price is not None:
+            # An explicit seller transition wins even when its amount happens
+            # to equal a prior calculated default; numeric equality alone
+            # must not reclassify that reviewed price as source-derived.
+            rebased_commercial["price"] = seller_reviewed_price
+        elif inherited_rrp_price is not None:
+            current_calculated_price = cls._verified_calculated_price(
+                current_facts,
+                provenance,
+            )
+            if current_calculated_price is None:
+                rebased_commercial.pop("price", None)
+            else:
+                rebased_commercial["price"] = current_calculated_price
+        draft.commercial_json = cls._canonical_json(
+            rebased_commercial,
             dict,
         )
 
@@ -10110,15 +10423,26 @@ class MarketplaceDraftService:
 
         commercial = effective_documents["commercial"]
         price = None
+        unconfirmed_supplier_rrp = (
+            draft.published_listing_id is None
+            and cls.has_unconfirmed_supplier_rrp_price(draft)
+        )
+        if unconfirmed_supplier_rrp:
+            errors.append(cls._validation_item(
+                "supplier_rrp_not_seller_price",
+                "commercial.price",
+                "В черновике сохранена рекомендованная розничная цена поставщика. Обновите данные товара и введите цену продавца, если она не указана в расчёте.",
+            ))
         try:
             price = Decimal(cls._decimal(
                 commercial.get("price"), "commercial.price", positive=True
             ))
         except MarketplaceDraftValidationError:
-            errors.append(cls._validation_item(
-                "price_required", "commercial.price",
-                "Цена продажи должна быть явно рассчитана и положительна",
-            ))
+            if not unconfirmed_supplier_rrp:
+                errors.append(cls._validation_item(
+                    "price_required", "commercial.price",
+                    "Цена продажи должна быть явно рассчитана и положительна",
+                ))
         if commercial.get("old_price") not in (None, ""):
             try:
                 old_price = Decimal(cls._decimal(

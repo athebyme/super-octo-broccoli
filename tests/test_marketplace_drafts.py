@@ -315,6 +315,37 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         )
         return product, draft
 
+    def _legacy_supplier_rrp_draft(
+        self,
+        *,
+        external_id="legacy-rrp",
+        amount=1050,
+    ):
+        self.account1.settings_json = json.dumps({"default_vat": "0.22"})
+        product = self._product(external_id=external_id)
+        original = json.loads(product.original_data)
+        original["recommended_retail_price"] = amount
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.calculated_price = None
+        product.calculated_price_before_discount = None
+        product.recommended_retail_price = None
+        db.session.commit()
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        # Recreate the exact old mapper output to exercise persisted drafts
+        # written before the seller-price source guard.
+        draft.commercial_json = json.dumps({
+            "currency_code": "RUB",
+            "price": str(amount),
+            "vat": "0.22",
+        })
+        db.session.commit()
+        return product, draft
+
     def test_create_draft_receipt_distinguishes_insert_from_existing_return(self):
         product = self._product(external_id="creation-receipt")
         receipt = DraftCreationReceipt(created_draft_id=999)
@@ -2352,7 +2383,7 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         self.assertEqual(commercial["price"], "1000")
         self.assertEqual(commercial["old_price"], "1200")
 
-    def test_observed_rrp_and_russian_dimensions_build_complete_defaults(self):
+    def test_observed_rrp_stays_informational_and_russian_dimensions_are_preserved(self):
         self.account1.settings_json = json.dumps({"default_vat": "0.22"})
         product = self._product(
             external_id="russian-dimensions",
@@ -2401,9 +2432,248 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         })
         self.assertEqual(detail["commercial"], {
             "currency_code": "RUB",
-            "price": "1050",
             "vat": "0.22",
         })
+        self.assertIn(
+            "price_required",
+            {
+                item["code"]
+                for item in MarketplaceDraftService.validate_draft(
+                    seller_id=self.seller1_id,
+                    draft_id=draft.id,
+                    expected_version=draft.version,
+                ).to_public_dict(detail=True)["validation"]["errors"]
+            },
+        )
+
+    def test_legacy_rrp_requires_a_seller_price_transition(self):
+        _product, draft = self._legacy_supplier_rrp_draft()
+        actor_user_id = db.session.get(Seller, self.seller1_id).user_id
+
+        invalid = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+        errors = invalid.to_public_dict(detail=True)["validation"]["errors"]
+        self.assertIn(
+            "supplier_rrp_not_seller_price",
+            {item["code"] for item in errors},
+        )
+        self.assertTrue(
+            MarketplaceDraftService.has_unconfirmed_supplier_rrp_price(invalid)
+        )
+
+        echoed = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=invalid.id,
+            expected_version=invalid.version,
+            corrected_by_user_id=actor_user_id,
+            patch={"commercial": invalid.to_public_dict(detail=True)["commercial"]},
+        )
+        self.assertNotIn(
+            MarketplaceDraftService.SELLER_PRICE_REVIEW_PROVENANCE_KEY,
+            json.loads(echoed.provenance_json),
+        )
+        self.assertTrue(
+            MarketplaceDraftService.has_unconfirmed_supplier_rrp_price(echoed)
+        )
+
+        cleared = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=echoed.id,
+            expected_version=echoed.version,
+            corrected_by_user_id=actor_user_id,
+            patch={"commercial": {
+                "currency_code": "RUB",
+                "vat": "0.22",
+            }},
+        )
+        self.assertNotIn("price", json.loads(cleared.commercial_json))
+        self.assertNotIn(
+            MarketplaceDraftService.SELLER_PRICE_REVIEW_PROVENANCE_KEY,
+            json.loads(cleared.provenance_json),
+        )
+
+        confirmed = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=cleared.id,
+            expected_version=cleared.version,
+            corrected_by_user_id=actor_user_id,
+            patch={"commercial": {
+                "price": "1050",
+                "currency_code": "RUB",
+                "vat": "0.22",
+            }},
+        )
+        provenance = json.loads(confirmed.provenance_json)
+        self.assertEqual(
+            provenance[
+                MarketplaceDraftService.SELLER_PRICE_REVIEW_PROVENANCE_KEY
+            ]["price"],
+            "1050",
+        )
+        self.assertFalse(
+            MarketplaceDraftService.has_unconfirmed_supplier_rrp_price(confirmed)
+        )
+        checked = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=confirmed.id,
+            expected_version=confirmed.version,
+        )
+        checked_codes = {
+            item["code"]
+            for item in checked.to_public_dict(detail=True)["validation"]["errors"]
+        }
+        self.assertNotIn("supplier_rrp_not_seller_price", checked_codes)
+        self.assertNotIn("price_required", checked_codes)
+
+    def test_supplier_raw_rrp_fallback_does_not_enter_new_ozon_draft_price(self):
+        product = self._product(external_id="supplier-raw-rrp")
+        supplier_product = product.supplier_product
+        source = json.loads(supplier_product.original_data_json)
+        source["recommended_retail_price"] = 875
+        supplier_product.original_data_json = json.dumps(
+            source,
+            ensure_ascii=False,
+        )
+        supplier_product.content_revision = 1
+        product.original_data = "{}"
+        product.source_type = self.supplier.code
+        product.supplier_content_revision = 1
+        product.calculated_price = None
+        product.calculated_price_before_discount = None
+        product.recommended_retail_price = None
+        db.session.commit()
+
+        pack = MarketplaceFactPackBuilder.build(product)
+        self.assertEqual(
+            pack["provenance"]["commercial.price"]["source"],
+            "supplier_product.original_data_json.recommended_retail_price",
+        )
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        self.assertNotIn(
+            "price",
+            draft.to_public_dict(detail=True)["commercial"],
+        )
+
+    def test_rrp_refresh_clears_legacy_value_and_rebase_uses_real_calculation(self):
+        product, draft = self._legacy_supplier_rrp_draft(
+            external_id="legacy-rrp-refresh",
+        )
+        refreshed = MarketplaceDraftService.refresh_facts(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+        self.assertNotIn("price", json.loads(refreshed.commercial_json))
+        self.assertEqual(
+            json.loads(refreshed.commercial_json)["vat"],
+            "0.22",
+        )
+
+        rebased_product, rebased_legacy = self._legacy_supplier_rrp_draft(
+            external_id="legacy-rrp-rebase",
+        )
+        rebased_product.calculated_price = 1175
+        db.session.commit()
+        rebased = MarketplaceDraftService.rebase_source_defaults(
+            seller_id=self.seller1_id,
+            draft_id=rebased_legacy.id,
+            expected_version=rebased_legacy.version,
+        )
+        self.assertEqual(
+            json.loads(rebased.commercial_json)["price"],
+            "1175",
+        )
+
+    def test_seller_reviewed_price_survives_rebase_when_equal_to_old_default(self):
+        product = self._product(external_id="seller-reviewed-price")
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        actor_user_id = db.session.get(Seller, self.seller1_id).user_id
+        changed = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            corrected_by_user_id=actor_user_id,
+            patch={"commercial": {
+                "price": "900",
+                "old_price": "1200",
+                "currency_code": "RUB",
+                "vat": "0.22",
+            }},
+        )
+        reviewed_to_old_default = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=changed.id,
+            expected_version=changed.version,
+            corrected_by_user_id=actor_user_id,
+            patch={"commercial": {
+                "price": "1000",
+                "old_price": "1200",
+                "currency_code": "RUB",
+                "vat": "0.22",
+            }},
+        )
+        product.calculated_price = 1250
+        product.title = "Обновлённое название"
+        db.session.commit()
+
+        rebased = MarketplaceDraftService.rebase_source_defaults(
+            seller_id=self.seller1_id,
+            draft_id=reviewed_to_old_default.id,
+            expected_version=reviewed_to_old_default.version,
+        )
+        self.assertEqual(
+            json.loads(rebased.commercial_json)["price"],
+            "1000",
+        )
+        self.assertTrue(
+            MarketplaceDraftService._seller_price_review_matches(
+                rebased,
+                "1000",
+            )
+        )
+
+    def test_legacy_rrp_overlay_does_not_replace_live_ozon_price(self):
+        product, _listing, _expected = self._existing_listing_precondition(
+            external_id="live-price-baseline",
+        )
+        original = json.loads(product.original_data)
+        original["recommended_retail_price"] = 999
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.calculated_price = None
+        product.calculated_price_before_discount = None
+        product.recommended_retail_price = None
+        db.session.commit()
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+        )
+        draft.commercial_json = json.dumps({
+            "currency_code": "RUB",
+            "price": "999",
+            "vat": "0.22",
+        })
+        db.session.commit()
+
+        effective, baseline = MarketplaceDraftService.publication_documents(
+            draft,
+            now=self.now,
+        )
+        self.assertIsNotNone(baseline)
+        self.assertEqual(effective["commercial"]["price"], "1000")
 
     def test_generic_product_measurements_are_not_package_dimensions(self):
         product = self._product(
