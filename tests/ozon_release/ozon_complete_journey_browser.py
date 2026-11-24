@@ -1504,6 +1504,21 @@ def seller_price_source_separation_check(context):
     assert price_input.input_value() == ""
     send_button = page.locator(".ode-savebar button.sh-btn--primary")
     assert send_button.count() == 1 and send_button.is_disabled()
+    for width in (320, 390):
+        page.set_viewport_size({"width": width, "height": 844})
+        currency = page.locator("#ode-currency").evaluate("""select => {
+            const option = select.selectedOptions[0];
+            const style = getComputedStyle(select);
+            const canvas = document.createElement('canvas').getContext('2d');
+            canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+            const label = option.textContent.trim();
+            const nativeArrowSpace = 20;
+            const available = select.clientWidth - parseFloat(style.paddingLeft)
+                - parseFloat(style.paddingRight) - nativeArrowSpace;
+            return {value: option.value, label, fits: canvas.measureText(label).width <= available};
+        }""")
+        assert currency == {"value": "RUB", "label": "Рубль (₽)", "fits": True}, (width, currency)
+    passed("seller_draft_currency_label_fits_at_320_and_390")
     assert page.evaluate("document.documentElement.scrollWidth === window.innerWidth")
     price_input.scroll_into_view_if_needed()
     page.screenshot(path=str(OUT / "ozon-seller-price-required-390.png"))
