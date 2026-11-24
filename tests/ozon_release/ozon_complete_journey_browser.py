@@ -256,6 +256,30 @@ def configure_fixture():
             }, ensure_ascii=False),
             photo_urls=json.dumps([photo_url]),
         )
+        supplier_rrp_source = ImportedProduct(
+            seller_id=fixture["seller_id"],
+            external_id="journey-supplier-rrp-only-source",
+            external_vendor_code="journey-supplier-rrp-only-offer",
+            source_type="synthetic",
+            title="Товар с рекомендованной ценой поставщика",
+            description="Синтетическая проверка отдельной цены продавца.",
+            category="Посуда",
+            original_data=json.dumps({
+                "title": "Товар с рекомендованной ценой поставщика",
+                "description": "Синтетическая проверка отдельной цены продавца.",
+                "dimensions": {
+                    "Ширина упаковки, мм": 200,
+                    "Высота упаковки, мм": 30,
+                    "Длина упаковки, мм": 300,
+                    "Вес упаковки, г": 250,
+                },
+                "recommended_retail_price": 1050,
+            }, ensure_ascii=False),
+            photo_urls=json.dumps([photo_url]),
+            recommended_retail_price=None,
+            calculated_price=None,
+            calculated_price_before_discount=None,
+        )
         legacy_wb_product = Product(
             seller_id=fixture["seller_id"],
             nm_id=90990001,
@@ -286,9 +310,41 @@ def configure_fixture():
         )
         db.session.add_all([
             new_source, stale_source, retry_prepared_source,
-            legacy_package_source,
+            supplier_rrp_source, legacy_package_source,
         ])
         db.session.flush()
+        supplier_rrp_draft = MarketplaceDraftService.create_draft(
+            seller_id=fixture["seller_id"],
+            account_id=account_id,
+            imported_product_id=supplier_rrp_source.id,
+            product_type_id=product_type.id,
+        )
+        supplier_rrp_commercial = json.loads(
+            supplier_rrp_draft.commercial_json or "{}"
+        )
+        assert supplier_rrp_commercial.get("price") in (None, ""), {
+            "created_seller_price": supplier_rrp_commercial.get("price"),
+            "supplier_rrp": json.loads(supplier_rrp_source.original_data).get(
+                "recommended_retail_price"
+            ),
+        }
+        supplier_rrp_draft.content_json = json.dumps({
+            "name": supplier_rrp_source.title,
+            "description": supplier_rrp_source.description,
+        }, ensure_ascii=False)
+        supplier_rrp_draft.media_json = json.dumps({
+            "primary_image": photo_url,
+            "images": [],
+        })
+        supplier_rrp_draft.dimensions_json = json.dumps({
+            "width": "200", "height": "30", "depth": "300",
+            "dimension_unit": "MILLIMETERS", "weight": "250",
+            "weight_unit": "GRAMS",
+        })
+        supplier_rrp_draft.barcodes_json = json.dumps(["4600000000004"])
+        supplier_rrp_draft.commercial_json = json.dumps({
+            "vat": "0.22", "currency_code": "RUB",
+        })
         legacy_package_draft = MarketplaceDraftService.create_draft(
             seller_id=fixture["seller_id"],
             account_id=account_id,
@@ -413,12 +469,14 @@ def configure_fixture():
         return (
             foreign_draft.id, new_source.id, product_type.id, stale_draft.id,
             retry_prepared_source.id, legacy_package_draft.id,
+            supplier_rrp_source.id, supplier_rrp_draft.id,
         )
 
 
 (
     foreign_draft_id, source_id, product_type_id, stale_ready_draft_id,
     retry_prepared_source_id, legacy_package_confirmation_draft_id,
+    supplier_rrp_source_id, supplier_rrp_draft_id,
 ) = configure_fixture()
 
 
@@ -1406,6 +1464,124 @@ def legacy_package_confirmation_editor_check(context):
     page.close()
 
 
+def seller_price_source_separation_check(context):
+    page = context.new_page()
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.set_default_timeout(20000)
+    page.on("pageerror", lambda error: report["js_errors"].append(str(error)))
+    page.on("response", track_browser_response)
+    with app.app_context():
+        source = db.session.get(ImportedProduct, supplier_rrp_source_id)
+        raw_source = json.loads(source.original_data)
+        assert raw_source.get("recommended_retail_price") == 1050
+        assert source.calculated_price is None
+        assert source.recommended_retail_price is None
+        draft = db.session.get(MarketplaceProductDraft, supplier_rrp_draft_id)
+        assert json.loads(draft.commercial_json).get("price") in (None, "")
+        assert draft.status != "ready"
+    writes_before = provider.physical_writes
+    reads_before = len(provider.full_read_calls)
+
+    page.goto(base + f"/marketplaces/drafts/{supplier_rrp_draft_id}")
+    page.locator("#ozon-draft-editor:not([v-cloak])").wait_for()
+    config = bootstrap(page, "#ode-bootstrap")
+    response = api_call_from_page(page, config["urls"]["editor"])
+    assert response["status"] == 200, response
+    document = response["document"]
+    assert document["draft"]["id"] == supplier_rrp_draft_id
+    assert document["documents"]["commercial"].get("price") in (None, "")
+    current = document["current_validation"]
+    assert current["publishable"] is False, current
+    price_errors = [
+        item for item in current["errors"]
+        if item.get("field") == "commercial.price"
+    ]
+    assert len(price_errors) == 1 and price_errors[0].get("code") == "price_required", current
+    assert [item.get("code") for item in current["errors"]] == ["price_required"], current
+
+    page.get_by_role("button", name="Цена и упаковка", exact=True).click()
+    price_input = page.locator("#ode-price")
+    assert price_input.input_value() == ""
+    send_button = page.locator(".ode-savebar button.sh-btn--primary")
+    assert send_button.count() == 1 and send_button.is_disabled()
+    assert page.evaluate("document.documentElement.scrollWidth === window.innerWidth")
+    price_input.scroll_into_view_if_needed()
+    page.screenshot(path=str(OUT / "ozon-seller-price-required-390.png"))
+
+    price_input.fill("1050")
+    save_button = page.get_by_role("button", name="Сохранить", exact=True)
+    assert save_button.is_enabled()
+    with page.expect_response(lambda item: (
+        item.request.method in {"POST", "PATCH"}
+        and urlsplit(item.url).path == config["urls"]["save"]
+    )) as save_info:
+        save_button.click()
+    saved_response = save_info.value
+    assert saved_response.status == 200, saved_response.status
+    save_payload = saved_response.request.post_data_json
+    assert save_payload["patch"]["commercial"]["price"] == "1050", save_payload
+    page.get_by_text("Все изменения сохранены", exact=True).wait_for()
+
+    saved = api_call_from_page(page, config["urls"]["editor"])
+    assert saved["status"] == 200, saved
+    assert saved["document"]["documents"]["commercial"]["price"] == "1050", saved
+    with app.app_context():
+        saved_draft = db.session.get(MarketplaceProductDraft, supplier_rrp_draft_id)
+        assert json.loads(saved_draft.commercial_json)["price"] == "1050"
+        saved_source = db.session.get(ImportedProduct, supplier_rrp_source_id)
+        assert json.loads(saved_source.original_data)["recommended_retail_price"] == 1050
+        assert saved_source.calculated_price is None
+
+    page.reload()
+    page.locator("#ozon-draft-editor:not([v-cloak])").wait_for()
+    reopened_config = bootstrap(page, "#ode-bootstrap")
+    assert page.locator("#ode-price").input_value() == "1050"
+    reopened = api_call_from_page(page, reopened_config["urls"]["editor"])
+    assert reopened["status"] == 200, reopened
+    reopened_document = reopened["document"]
+    assert reopened_document["documents"]["commercial"]["price"] == "1050"
+    reopened_validation = reopened_document["current_validation"]
+    assert not [
+        item for item in reopened_validation["errors"]
+        if item.get("field") == "commercial.price"
+    ], reopened_validation
+    page.get_by_role("button", name="Проверить карточку", exact=True).click()
+    page.get_by_text(
+        "Текущие поля проходят локальную проверку. При отправке данные будут проверены повторно.",
+        exact=True,
+    ).wait_for()
+    validated = api_call_from_page(page, reopened_config["urls"]["editor"])
+    assert validated["status"] == 200, validated
+    assert validated["document"]["current_validation"]["publishable"] is True
+    assert validated["document"]["current_validation"]["errors"] == []
+    assert page.locator(".ode-savebar button.sh-btn--primary").is_enabled()
+    page.get_by_role("button", name="Цена и упаковка", exact=True).click()
+    assert page.evaluate("document.documentElement.scrollWidth === window.innerWidth")
+    page.locator("#ode-price").scroll_into_view_if_needed()
+    page.screenshot(path=str(OUT / "ozon-seller-price-saved-390.png"))
+    with app.app_context():
+        local_operations = MarketplaceOperation.query.filter_by(
+            seller_id=fixture["seller_id"], account_id=account_id,
+            draft_id=supplier_rrp_draft_id,
+        ).count()
+    assert local_operations == 0, local_operations
+    assert provider.physical_writes == writes_before
+    assert len(provider.full_read_calls) == reads_before
+    report["seller_price_source_separation"] = {
+        "supplier_rrp": 1050,
+        "calculated_price": None,
+        "initial_editor_price": "",
+        "initial_only_blocker": "price_required",
+        "publish_enabled_before_seller_price": False,
+        "seller_price_after_save_and_reopen": "1050",
+        "local_publication_operations": local_operations,
+        "provider_writes": 0,
+        "provider_readbacks": 0,
+    }
+    passed("supplier_rrp_does_not_prefill_seller_price_and_manual_price_persists")
+    page.close()
+
+
 def stale_ready_editor_check(page):
     assert provider.physical_writes == 0 and not provider.full_read_calls
     console_messages = []
@@ -1660,6 +1836,7 @@ try:
             page.locator("#ozon-drafts-list:not([v-cloak])").wait_for()
             passed("real_login_and_draft_workspace")
             stale_ready_editor_check(page)
+            seller_price_source_separation_check(context)
             legacy_package_confirmation_editor_check(context)
 
             csrf = list_config["csrf"]
