@@ -5856,6 +5856,204 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             ).first()
         )
 
+    def test_legacy_heterogeneous_stale_mapping_refreshes_only_from_exact_scan(self):
+        categories = {
+            "Старая неоднородная категория": "refresh",
+            "Ручная защищенная категория": "manual",
+            "Исправленная защищенная категория": "corrected",
+            "Отклоненная защищенная категория": "rejected",
+            "Категория с отличающимся raw": "raw_mismatch",
+            "Категория с разными raw": "mixed_raw",
+            "Категория с чужим listing": "foreign_link",
+        }
+        mappings = {}
+        for category, state in categories.items():
+            if state == "foreign_link":
+                own_anchor = self._product(
+                    external_id="legacy-category-foreign-own-anchor",
+                    category=category,
+                )
+                own_anchor.wb_subject_id = 2607
+                self._linked_listing(
+                    own_anchor,
+                    product_type=self.product_type,
+                )
+                own_unlinked = self._product(
+                    external_id="legacy-category-foreign-own-unlinked",
+                    category=category,
+                )
+                own_unlinked.wb_subject_id = 5071
+                db.session.commit()
+
+                foreign_product = self._product(
+                    seller_id=self.seller2_id,
+                    external_id="legacy-category-foreign-product",
+                    category=category,
+                )
+                db.session.add(MarketplaceListing(
+                    seller_id=self.seller1_id,
+                    marketplace_id=self.marketplace.id,
+                    account_id=self.account1.id,
+                    imported_product_id=foreign_product.id,
+                    product_type_id=self.product_type.id,
+                    offer_id=foreign_product.external_vendor_code,
+                    external_product_id="legacy-category-foreign-listing",
+                    title=foreign_product.title,
+                    normalized_status="active",
+                    link_status="linked",
+                    link_source="exact_source_identity",
+                    is_available=True,
+                    is_archived=False,
+                    sync_fingerprint="f" * 64,
+                ))
+                db.session.commit()
+                continue
+            for suffix, subject_id in (("first", 2607), ("second", 5071)):
+                product_category = category
+                if state == "mixed_raw" and suffix == "second":
+                    product_category = category.replace(
+                        "Категория ",
+                        "Категория  ",
+                        1,
+                    )
+                product = self._product(
+                    external_id=(
+                        f"legacy-category-{state}-{category}-{suffix}"
+                    ),
+                    category=product_category,
+                )
+                product.wb_subject_id = subject_id
+                if state == "refresh" and suffix == "second":
+                    # The second raw product proves source heterogeneity, but
+                    # only one current exact listing anchors the stale row.
+                    continue
+                self._linked_listing(
+                    product,
+                    product_type=(
+                        None if state == "refresh" else self.product_type
+                    ),
+                )
+
+        corrected_by_user_id = db.session.get(
+            Seller,
+            self.seller1_id,
+        ).user_id
+        for category, state in categories.items():
+            source_category = (
+                category + " " if state == "raw_mismatch" else category
+            )
+            mapping_source = "manual" if state == "manual" else "deterministic"
+            mapping_status = "rejected" if state == "rejected" else "stale"
+            mapping = MarketplaceCategoryMapping(
+                seller_id=self.seller1_id,
+                marketplace_id=self.marketplace.id,
+                supplier_id=self.supplier.id,
+                product_type_id=self.product_type.id,
+                scope_key=f"supplier:{self.supplier.id}",
+                source_type="synthetic",
+                source_category=source_category,
+                source_category_normalized=(
+                    MarketplaceDraftService._normalized_text(category)
+                ),
+                external_category_id=self.category.external_category_id,
+                external_type_id=self.product_type.external_type_id,
+                mapping_source=mapping_source,
+                mapping_status=mapping_status,
+                confidence=0.81,
+                evidence_json=json.dumps({
+                    "algorithm": "ozon-exact-linked-category-consensus-v2",
+                    "state": "stale",
+                    "reason": "heterogeneous_source_category",
+                }, ensure_ascii=False, sort_keys=True),
+                corrected_by_user_id=(
+                    corrected_by_user_id if state == "corrected" else None
+                ),
+            )
+            db.session.add(mapping)
+            mappings[state] = mapping
+        db.session.commit()
+
+        def snapshot_mapping(mapping):
+            return {
+                "mapping_source": mapping.mapping_source,
+                "mapping_status": mapping.mapping_status,
+                "product_type_id": mapping.product_type_id,
+                "external_category_id": mapping.external_category_id,
+                "external_type_id": mapping.external_type_id,
+                "source_category": mapping.source_category,
+                "source_category_normalized": (
+                    mapping.source_category_normalized
+                ),
+                "confidence": mapping.confidence,
+                "evidence_json": mapping.evidence_json,
+                "corrected_by_user_id": mapping.corrected_by_user_id,
+                "updated_at": mapping.updated_at,
+            }
+
+        protected_before = {
+            state: snapshot_mapping(mapping)
+            for state, mapping in mappings.items()
+            if state != "refresh"
+        }
+        refresh_mapping = mappings["refresh"]
+        target_before = {
+            key: value
+            for key, value in snapshot_mapping(refresh_mapping).items()
+            if key not in {"evidence_json", "updated_at"}
+        }
+
+        result = MarketplaceDraftService.reconcile_observed_category_mappings(
+            seller_id=self.seller1_id,
+            marketplace_id=self.marketplace.id,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["refreshed"], 1)
+        self.assertEqual(result["staled"], 0)
+        self.assertEqual(result["unsafe_groups"], len(categories))
+        db.session.refresh(refresh_mapping)
+        evidence = json.loads(refresh_mapping.evidence_json)
+        self.assertEqual(
+            evidence["algorithm"],
+            MarketplaceDraftService.OBSERVED_MAPPING_ALGORITHM,
+        )
+        self.assertEqual(evidence["state"], "stale")
+        self.assertEqual(evidence["reason"], "heterogeneous_source_category")
+        self.assertEqual(evidence["observations"], 1)
+        self.assertEqual(evidence["distinct_products"], 1)
+        self.assertEqual(evidence["structured_subtype_count"], 2)
+        self.assertRegex(evidence["evidence_fingerprint"], r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            {
+                key: value
+                for key, value in snapshot_mapping(refresh_mapping).items()
+                if key not in {"evidence_json", "updated_at"}
+            },
+            target_before,
+        )
+
+        for state, mapping in mappings.items():
+            if state == "refresh":
+                continue
+            db.session.refresh(mapping)
+            self.assertEqual(
+                snapshot_mapping(mapping),
+                protected_before[state],
+                msg=f"{state} mapping must remain unchanged",
+            )
+
+        refreshed_evidence = refresh_mapping.evidence_json
+        refreshed_at = refresh_mapping.updated_at
+        second_result = MarketplaceDraftService.reconcile_observed_category_mappings(
+            seller_id=self.seller1_id,
+            marketplace_id=self.marketplace.id,
+        )
+        db.session.refresh(refresh_mapping)
+        self.assertEqual(second_result["refreshed"], 0)
+        self.assertEqual(second_result["staled"], 0)
+        self.assertEqual(refresh_mapping.evidence_json, refreshed_evidence)
+        self.assertEqual(refresh_mapping.updated_at, refreshed_at)
+
     def test_manual_category_mapping_is_never_replaced_by_observed_consensus(self):
         manual_source = self._product(
             external_id="manual-category-source",

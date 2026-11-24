@@ -992,6 +992,61 @@ def test_alias_fallback_can_replace_only_stale_v3_supplier_conflict(case, reason
     ) == before
 
 
+def test_reconcile_refreshes_legacy_heterogeneity_before_normal_candidate(case):
+    set_target_source_category(case, OBSERVED_SOURCE_CATEGORY)
+    _types, evidence = add_observed_evidence(case)
+    for row, subject_id in zip(
+        evidence,
+        (2607, 2607, 5071, 5071),
+    ):
+        row.product.wb_subject_id = subject_id
+    db.session.commit()
+    mapping = add_stale_supplier_mapping(
+        case,
+        "heterogeneous_source_category",
+        algorithm="ozon-exact-linked-category-consensus-v2",
+    )
+    target_before = (
+        mapping.mapping_source,
+        mapping.mapping_status,
+        mapping.product_type_id,
+        mapping.external_category_id,
+        mapping.external_type_id,
+        mapping.confidence,
+    )
+
+    result = MarketplaceDraftService.reconcile_observed_category_mappings(
+        seller_id=case.seller.id,
+        marketplace_id=case.marketplace.id,
+    )
+
+    assert result["success"] is True
+    assert result["refreshed"] == 1
+    assert result["staled"] == 0
+    db.session.refresh(mapping)
+    refreshed = json.loads(mapping.evidence_json)
+    assert refreshed["algorithm"] == OBSERVED_MAPPING_ALGORITHM
+    assert refreshed["state"] == "stale"
+    assert refreshed["reason"] == "heterogeneous_source_category"
+    assert refreshed["structured_subtype_count"] == 2
+    assert (
+        mapping.mapping_source,
+        mapping.mapping_status,
+        mapping.product_type_id,
+        mapping.external_category_id,
+        mapping.external_type_id,
+        mapping.confidence,
+    ) == target_before
+
+    candidate = build_candidate(case)
+
+    assert candidate is not None
+    assert [choice.type_id for choice in candidate.context.choices] == [
+        case.type_a.external_type_id,
+        case.type_b.external_type_id,
+    ]
+
+
 @pytest.mark.parametrize("mapping_kwargs", [
     {"mapping_source": "manual", "mapping_status": "stale"},
     {"mapping_source": "deterministic", "mapping_status": "active"},
@@ -999,6 +1054,9 @@ def test_alias_fallback_can_replace_only_stale_v3_supplier_conflict(case, reason
     {"mapping_source": "deterministic", "mapping_status": "stale",
      "reason": "not_enough_exact_listings"},
     {"mapping_source": "deterministic", "mapping_status": "stale",
+     "algorithm": "ozon-exact-linked-category-consensus-v2"},
+    {"mapping_source": "deterministic", "mapping_status": "stale",
+     "reason": "heterogeneous_source_category",
      "algorithm": "ozon-exact-linked-category-consensus-v2"},
     {"mapping_source": "deterministic", "mapping_status": "stale",
      "corrected_by_user_id": "seller"},

@@ -1799,6 +1799,7 @@ class MarketplaceDraftService:
             current_time = datetime.utcnow()
             evidence = defaultdict(lambda: {
                 "identity": None,
+                "source_identities": set(),
                 "types": Counter(),
                 "product_types": {},
                 "unknown": 0,
@@ -1836,6 +1837,13 @@ class MarketplaceDraftService:
                             item["structured_subtypes"] = set(
                                 structured_subtypes.get(key, set())
                             )
+                    if identity["scope_key"] != "wb_subject":
+                        item["source_identities"].add((
+                            product.seller_id,
+                            identity["supplier_id"],
+                            identity["source_type"],
+                            identity["source_category"],
+                        ))
                     observed_type_id = (
                         product_type.id
                         if type_is_fresh and product_type is not None
@@ -1959,6 +1967,46 @@ class MarketplaceDraftService:
                     separators=(",", ":"),
                 )
 
+            def can_refresh_legacy_heterogeneous_evidence(
+                *,
+                mapping: Optional[MarketplaceCategoryMapping],
+                item: dict,
+            ) -> bool:
+                if (
+                    mapping is None
+                    or mapping.mapping_source != "deterministic"
+                    or mapping.mapping_status != "stale"
+                    or mapping.corrected_by_user_id is not None
+                ):
+                    return False
+                legacy_evidence = cls._stored_json(
+                    mapping.evidence_json,
+                    dict,
+                )
+                if not (
+                    legacy_evidence.get("algorithm")
+                    == "ozon-exact-linked-category-consensus-v2"
+                    and legacy_evidence.get("state") == "stale"
+                    and legacy_evidence.get("reason")
+                    == "heterogeneous_source_category"
+                ):
+                    return False
+                supplier_id = mapping.supplier_id
+                return (
+                    type(supplier_id) is int and supplier_id > 0
+                    and mapping.scope_key == f"supplier:{supplier_id}"
+                    and mapping.source_category_normalized
+                    == cls._normalized_text(mapping.source_category)
+                    and item["source_identities"] == {
+                        (
+                            seller_id,
+                            supplier_id,
+                            mapping.source_type,
+                            mapping.source_category,
+                        )
+                    }
+                )
+
             for key in sorted(evidence):
                 item = evidence[key]
                 mapping = existing.get(key)
@@ -2011,6 +2059,23 @@ class MarketplaceDraftService:
                         mapping.updated_at = datetime.utcnow()
                         staled += 1
                         changed = True
+                    elif (
+                        reason == "heterogeneous_source_category"
+                        and can_refresh_legacy_heterogeneous_evidence(
+                            mapping=mapping,
+                            item=item,
+                        )
+                    ):
+                        next_evidence = encoded_evidence(
+                            item=item,
+                            state="stale",
+                            reason=reason,
+                        )
+                        if mapping.evidence_json != next_evidence:
+                            mapping.evidence_json = next_evidence
+                            mapping.updated_at = datetime.utcnow()
+                            refreshed += 1
+                            changed = True
                     continue
 
                 safe_groups += 1
