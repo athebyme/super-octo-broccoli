@@ -1470,8 +1470,8 @@ def run():
         checks.append("import_batch_mobile_screenshot_saved")
 
         # Reopen the signed receipt after the R31 53 → 50 → 49 Ozon review.
-        # This terminal WB create proof selects only two retained rows, so one
-        # actual partial result does not depend on the whole import batch.
+        # Use one retained row for each create outcome without sending the
+        # rest of the signed import batch.
         batch_query = urlencode({"import_batch": batch_token})
         batch_response = page.goto(
             fixture.BASE + "/my-products/beta?" + batch_query,
@@ -1498,17 +1498,21 @@ def run():
                 f'.mp-row .mp-check input[type="checkbox"][value="{product_id}"]',
             ).check()
         page.mouse.move(100, 450)
-        page.mouse.wheel(0, 600)
         page.wait_for_function("""() => {
             const rail = document.querySelector('.mp-bulkbar');
             const selected = Array.from(document.querySelectorAll('.mp-row.is-selected'));
-            if (!rail || selected.length !== 3) return false;
-            const railTop = rail.getBoundingClientRect().top;
-            const rowRects = selected.map(row => row.getBoundingClientRect());
-            return window.scrollY + window.innerHeight >=
-                    document.documentElement.scrollHeight - 1 &&
-                rowRects.every(rect => rect.top >= 0 && rect.bottom <= railTop);
+            return rail && selected.length === 3;
         }""")
+        for _ in range(3):
+            remaining_scroll = page.evaluate(
+                """() => document.documentElement.scrollHeight
+                         - (window.scrollY + window.innerHeight)"""
+            )
+            if remaining_scroll <= 1:
+                break
+            page.mouse.wheel(0, remaining_scroll + 100)
+            page.evaluate("""() => new Promise(resolve =>
+                requestAnimationFrame(() => requestAnimationFrame(resolve)))""")
         before_confirmation_position = page.evaluate("""() => {
             const selectedRows = Array.from(document.querySelectorAll('.mp-row.is-selected'));
             const rects = selectedRows.map(row => row.getBoundingClientRect());
