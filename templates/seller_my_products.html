@@ -608,18 +608,24 @@ function scheduleProductPhotoRetry(image) {
                                 <div class="batch-item-row batch-item-enter flex items-center justify-between px-2 py-1 rounded text-xs">
                                     <div class="flex items-center gap-2 min-w-0">
                                         <span class="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                                              :class="it.status === 'success' ? 'myp-dot-ok' : it.status === 'failed' ? 'myp-dot-bad' : 'myp-dot-idle'"></span>
+                                              :class="batchItemConfirmed(it) ? 'myp-dot-ok' : batchItemPendingSync(it) || batchItemUnconfirmed(it) ? 'myp-dot-info' : (it.status === 'failed' || it.status === 'skipped') ? 'myp-dot-bad' : 'myp-dot-idle'"></span>
                                         <span class="myp-ts truncate" x-text="it.title || ('ID ' + it.product_id)"></span>
                                     </div>
                                     <div class="flex items-center gap-2 flex-shrink-0 ml-2">
-                                        <template x-if="it.nm_id">
+                                        <template x-if="batchItemConfirmed(it)">
                                             <span class="myp-tm" x-text="'nmID ' + it.nm_id"></span>
                                         </template>
                                         <template x-if="it.error">
                                             <span class="myp-danger truncate max-w-[200px]" x-text="it.error"></span>
                                         </template>
-                                        <template x-if="it.status === 'success' && !it.error">
-                                            <span class="myp-ok">OK</span>
+                                        <template x-if="batchItemConfirmed(it) && !it.error">
+                                            <span class="myp-ok">Подтверждена</span>
+                                        </template>
+                                        <template x-if="batchItemPendingSync(it)">
+                                            <span class="myp-link-muted">Ожидает синхронизации</span>
+                                        </template>
+                                        <template x-if="batchItemUnconfirmed(it)">
+                                            <span class="myp-link-muted">Не подтверждена</span>
                                         </template>
                                     </div>
                                 </div>
@@ -639,7 +645,7 @@ function scheduleProductPhotoRetry(image) {
                     </div>
                     <div class="flex-1 text-sm">
                         <span class="myp-warn font-medium">Импорт отменён</span>
-                        <span class="myp-tm ml-3" x-text="'Отправлено ' + (activeJob.succeeded || 0) + ' из ' + activeJob.total"></span>
+                        <span class="myp-tm ml-3" x-text="batchOutcomeCounts() ? 'Подтверждены: ' + batchOutcomeCounts().succeeded + ' · Ожидают синхронизации: ' + batchOutcomeCounts().pending_sync + ' · Не созданы: ' + batchOutcomeCounts().failed : 'Точные подтверждённые счётчики недоступны.'"></span>
                     </div>
                     <button @click="dismissJob()" class="text-xs myp-link-muted">Скрыть</button>
                 </div>
@@ -651,12 +657,18 @@ function scheduleProductPhotoRetry(image) {
                     <!-- Summary cards -->
                     <div class="flex items-center gap-3 mb-3">
                         <div class="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
-                             :class="activeJob.succeeded > 0 ? 'myp-bg-ok' : 'myp-bg-bad'">
-                            <template x-if="activeJob.succeeded > 0">
+                             :class="batchOutcomeCounts()?.succeeded ? 'myp-bg-ok' : batchOutcomeCounts()?.failed ? 'myp-bg-bad' : 'myp-bg-soft'">
+                            <template x-if="batchOutcomeCounts() && batchOutcomeCounts().succeeded > 0">
                                 <svg class="w-4 h-4 myp-ok" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                             </template>
-                            <template x-if="!activeJob.succeeded">
+                            <template x-if="batchOutcomeCounts()?.succeeded === 0 && batchOutcomeCounts().failed > 0">
                                 <svg class="w-4 h-4 myp-danger" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                            </template>
+                            <template x-if="batchOutcomeCounts()?.succeeded === 0 && batchOutcomeCounts().failed === 0">
+                                <svg class="w-4 h-4 myp-tm" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path stroke-linecap="round" d="M12 7v5l3 2"/></svg>
+                            </template>
+                            <template x-if="!batchOutcomeCounts()">
+                                <span class="myp-ts text-sm" aria-hidden="true">?</span>
                             </template>
                         </div>
                         <div class="flex-1">
@@ -667,69 +679,115 @@ function scheduleProductPhotoRetry(image) {
                     </div>
 
                     <!-- Stats row -->
-                    <div class="grid grid-cols-3 gap-2 mb-3">
-                        <div class="myp-bg-ok rounded-lg px-3 py-2 text-center">
-                            <p class="text-lg font-semibold myp-ok batch-speed" x-text="activeJob.succeeded || 0"></p>
-                            <p class="text-[10px] myp-ok uppercase tracking-wider">Отправлено</p>
+                    <template x-if="batchOutcomeCounts()">
+                        <div class="mb-3">
+                            <p class="text-xs myp-tm mb-2" x-text="'Обработано: ' + batchOutcomeCounts().processed + ' из ' + activeJob.total"></p>
+                            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                <div class="myp-bg-ok rounded-lg px-2 py-2 text-center">
+                                    <p class="text-lg font-semibold myp-ok batch-speed" x-text="batchOutcomeCounts().succeeded"></p>
+                                    <p class="text-[10px] myp-ok uppercase tracking-wider">Подтверждены</p>
+                                </div>
+                                <div class="myp-bg-soft rounded-lg px-2 py-2 text-center">
+                                    <p class="text-lg font-semibold myp-ts batch-speed" x-text="batchOutcomeCounts().pending_sync"></p>
+                                    <p class="text-[10px] myp-tm uppercase tracking-wider">Ожидают синхронизации</p>
+                                </div>
+                                <div class="myp-bg-bad rounded-lg px-2 py-2 text-center">
+                                    <p class="text-lg font-semibold myp-danger batch-speed" x-text="batchOutcomeCounts().failed"></p>
+                                    <p class="text-[10px] myp-danger uppercase tracking-wider">Не созданы</p>
+                                </div>
+                                <div class="myp-bg-soft rounded-lg px-2 py-2 text-center">
+                                    <p class="text-lg font-semibold myp-ts batch-speed" x-text="activeJob.total"></p>
+                                    <p class="text-[10px] myp-tm uppercase tracking-wider">Всего</p>
+                                </div>
+                            </div>
                         </div>
-                        <div class="myp-bg-bad rounded-lg px-3 py-2 text-center">
-                            <p class="text-lg font-semibold myp-danger batch-speed" x-text="activeJob.failed_count || 0"></p>
-                            <p class="text-[10px] myp-danger uppercase tracking-wider">Ошибки</p>
-                        </div>
-                        <div class="myp-bg-soft rounded-lg px-3 py-2 text-center">
-                            <p class="text-lg font-semibold myp-ts batch-speed" x-text="activeJob.total || 0"></p>
-                            <p class="text-[10px] myp-tm uppercase tracking-wider">Всего</p>
-                        </div>
-                    </div>
+                    </template>
+                    <template x-if="!batchOutcomeCounts()">
+                        <p class="text-xs myp-tm mb-3">Точные подтверждённые счётчики недоступны.</p>
+                    </template>
 
                     <!-- Per-item results -->
                     <template x-if="batchItems().length > 0">
-                        <div x-data="{tab: 'errors'}">
+                        <div x-data="{tab: batchItemsFailed().length ? 'errors' : batchItemsPendingSync().length ? 'pending_sync' : batchItemsUnconfirmed().length ? 'unconfirmed' : 'success'}">
                             <!-- Tabs -->
-                            <div class="flex gap-1 mb-2 border-b myp-b">
+                            <div class="flex flex-wrap gap-1 mb-2 border-b myp-b">
                                 <button @click="tab = 'errors'"
                                         class="px-3 py-1.5 text-xs font-medium rounded-t transition-colors"
                                         :class="tab === 'errors' ? 'myp-tab-bad' : 'myp-tab-idle'">
-                                    <span x-text="'Ошибки (' + batchItems().filter(i => i.status !== 'success').length + ')'"></span>
+                                    <span x-text="'Ошибки (' + batchItemsFailed().length + ')'"></span>
                                 </button>
                                 <button @click="tab = 'success'"
                                         class="px-3 py-1.5 text-xs font-medium rounded-t transition-colors"
                                         :class="tab === 'success' ? 'myp-tab-ok' : 'myp-tab-idle'">
-                                    <span x-text="'Успешные (' + batchItems().filter(i => i.status === 'success').length + ')'"></span>
+                                    <span x-text="'Подтверждены (' + batchItemsConfirmed().length + ')'"></span>
                                 </button>
+                                <template x-if="batchItemsPendingSync().length > 0">
+                                    <button @click="tab = 'pending_sync'"
+                                            class="px-3 py-1.5 text-xs font-medium rounded-t transition-colors myp-tab-idle">
+                                        <span x-text="'Ожидают синхронизации (' + batchItemsPendingSync().length + ')'"></span>
+                                    </button>
+                                </template>
+                                <template x-if="batchItemsUnconfirmed().length > 0">
+                                    <button @click="tab = 'unconfirmed'"
+                                            class="px-3 py-1.5 text-xs font-medium rounded-t transition-colors myp-tab-idle">
+                                        <span x-text="'Не подтверждены (' + batchItemsUnconfirmed().length + ')'"></span>
+                                    </button>
+                                </template>
                             </div>
 
                             <!-- Error items -->
                             <div x-show="tab === 'errors'" class="space-y-1 max-h-60 overflow-y-auto">
-                                <template x-for="it in batchItems().filter(i => i.status !== 'success')" :key="it.product_id">
+                                <template x-for="it in batchItemsFailed()" :key="it.product_id">
                                     <div class="flex items-start gap-2 px-3 py-2 rounded-lg myp-bg-bad text-xs">
                                         <svg class="w-3.5 h-3.5 myp-danger mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
                                         <div class="min-w-0 flex-1">
                                             <a :href="'/my-products/' + it.product_id + '/edit'"
                                                class="font-medium myp-t hover:underline block truncate"
                                                x-text="it.title || ('ID ' + it.product_id)"></a>
-                                            <p class="myp-danger mt-0.5" x-text="it.error"></p>
+                                            <p class="myp-danger mt-0.5" x-text="it.error || (it.status === 'skipped' ? 'Товар пропущен. Новая карточка не создана.' : 'Импорт не подтверждён.')"></p>
                                         </div>
                                     </div>
                                 </template>
-                                <template x-if="batchItems().filter(i => i.status !== 'success').length === 0">
+                                <template x-if="batchItemsFailed().length === 0">
                                     <p class="text-xs myp-tm py-2 text-center">Ошибок нет</p>
                                 </template>
                             </div>
 
                             <!-- Success items -->
                             <div x-show="tab === 'success'" class="space-y-1 max-h-60 overflow-y-auto">
-                                <template x-for="it in batchItems().filter(i => i.status === 'success')" :key="it.product_id">
+                                <template x-for="it in batchItemsConfirmed()" :key="it.product_id">
                                     <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg myp-bg-ok text-xs">
                                         <svg class="w-3.5 h-3.5 myp-ok flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
                                         <span class="myp-ts truncate" x-text="it.title || ('ID ' + it.product_id)"></span>
-                                        <template x-if="it.nm_id">
+                                        <template x-if="batchItemConfirmed(it)">
                                             <span class="myp-tm ml-auto flex-shrink-0" x-text="'nmID ' + it.nm_id"></span>
                                         </template>
                                     </div>
                                 </template>
-                                <template x-if="batchItems().filter(i => i.status === 'success').length === 0">
-                                    <p class="text-xs myp-tm py-2 text-center">Нет успешных</p>
+                                <template x-if="batchItemsConfirmed().length === 0">
+                                    <p class="text-xs myp-tm py-2 text-center">Нет подтверждённых карточек</p>
+                                </template>
+                            </div>
+                            <div x-show="tab === 'pending_sync'" class="space-y-1 max-h-60 overflow-y-auto">
+                                <template x-for="it in batchItemsPendingSync()" :key="it.product_id">
+                                    <div class="flex items-start gap-2 px-3 py-2 rounded-lg myp-bg-soft text-xs">
+                                        <span class="w-2 h-2 rounded-full myp-dot-info mt-1 flex-shrink-0"></span>
+                                        <div class="min-w-0 flex-1">
+                                            <a :href="'/my-products/' + it.product_id + '/edit'" class="font-medium myp-t hover:underline block truncate" x-text="it.title || ('ID ' + it.product_id)"></a>
+                                            <p class="myp-tm mt-0.5" x-text="it.message || 'WB принял запрос. Ожидаем подтверждения после синхронизации.'"></p>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                            <div x-show="tab === 'unconfirmed'" class="space-y-1 max-h-60 overflow-y-auto">
+                                <template x-for="it in batchItemsUnconfirmed()" :key="it.product_id">
+                                    <div class="flex items-start gap-2 px-3 py-2 rounded-lg myp-bg-soft text-xs">
+                                        <span class="w-2 h-2 rounded-full myp-dot-info mt-1 flex-shrink-0"></span>
+                                        <div class="min-w-0 flex-1">
+                                            <a :href="'/my-products/' + it.product_id + '/edit'" class="font-medium myp-t hover:underline block truncate" x-text="it.title || ('ID ' + it.product_id)"></a>
+                                            <p class="myp-tm mt-0.5" x-text="batchItemUnconfirmedText(it)"></p>
+                                        </div>
+                                    </div>
                                 </template>
                             </div>
                         </div>
@@ -1386,7 +1444,65 @@ function myProductsPage() {
         },
 
         batchItems() {
-            return this.activeJob?.progress?.items || [];
+            const items = this.activeJob?.progress?.items;
+            return Array.isArray(items) ? items : [];
+        },
+
+        batchItemHasPositiveNmId(item) {
+            return Number.isSafeInteger(item?.nm_id) && item.nm_id > 0;
+        },
+
+        batchItemConfirmed(item) {
+            return item?.status === 'success' && this.batchItemHasPositiveNmId(item);
+        },
+
+        batchItemPendingSync(item) {
+            return item?.status === 'pending_sync' && !this.batchItemHasPositiveNmId(item);
+        },
+
+        batchItemUnconfirmed(item) {
+            if (item?.status === 'failed' || item?.status === 'skipped') return false;
+            return !this.batchItemConfirmed(item) && !this.batchItemPendingSync(item);
+        },
+
+        batchItemUnconfirmedText(item) {
+            if (item?.status === 'success' && !this.batchItemHasPositiveNmId(item)) {
+                return 'В сохранённой задаче нет подтверждённого nmID. Проверьте состояние в WB перед повтором.';
+            }
+            return 'Результат карточки не подтверждён. Проверьте состояние в WB перед повтором.';
+        },
+
+        batchItemsConfirmed() {
+            return this.batchItems().filter(item => this.batchItemConfirmed(item));
+        },
+
+        batchItemsPendingSync() {
+            return this.batchItems().filter(item => this.batchItemPendingSync(item));
+        },
+
+        batchItemsUnconfirmed() {
+            return this.batchItems().filter(item => this.batchItemUnconfirmed(item));
+        },
+
+        batchItemsFailed() {
+            return this.batchItems().filter(item => item?.status === 'failed' || item?.status === 'skipped');
+        },
+
+        batchOutcomeCounts() {
+            const result = this.activeJob?.result;
+            const counts = result?.result_counts;
+            if (!result || result.outcomes_version !== 2 || !counts ||
+                typeof counts !== 'object' || Array.isArray(counts) ||
+                Object.keys(counts).length !== 4 ||
+                !['processed', 'succeeded', 'pending_sync', 'failed'].every(
+                    key => Object.prototype.hasOwnProperty.call(counts, key),
+                )) return null;
+            const total = this.activeJob?.total;
+            const values = [counts.processed, counts.succeeded, counts.pending_sync, counts.failed];
+            if (!values.every(value => Number.isSafeInteger(value) && value >= 0) ||
+                !Number.isSafeInteger(total) || total < 0 || counts.processed !== total ||
+                counts.succeeded + counts.pending_sync + counts.failed !== counts.processed) return null;
+            return counts;
         },
 
         batchSubDetail() {

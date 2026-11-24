@@ -800,13 +800,18 @@ def check_wb_create_selection_continuity(
         assert terminal['product_ids'] == selected and terminal['total'] == len(selected)
         assert terminal['status'] == 'completed' and terminal['worker_exited'] is True
         assert terminal['replayed'] is True and terminal['cancel_requested'] is False
-        assert terminal['result_counts'] == {'processed': 1, 'succeeded': 0, 'failed': 1}
+        assert terminal['outcomes_version'] == 2
+        assert terminal['result_counts'] == {
+            'processed': 1, 'succeeded': 0, 'pending_sync': 0, 'failed': 1,
+        }
         assert terminal_payload['job_uid'] == terminal['job_uid']
         terminal_result = page.locator(
             '[data-wb-create-receipt][data-wb-create-state="terminal_result"]',
         )
         expect(terminal_result).to_be_visible()
-        expect(terminal_result).to_contain_text('не созданы: 1')
+        expect(terminal_result).to_contain_text('Подтверждены: 0')
+        expect(terminal_result).to_contain_text('Ожидают синхронизации: 0')
+        expect(terminal_result).to_contain_text('Не созданы: 1')
         terminal_copy = terminal_result.inner_text()
         assert not re.search(r'успешно:\s*[1-9]\d*', terminal_copy, flags=re.IGNORECASE)
         assert 'Готово' not in terminal_copy
@@ -817,7 +822,7 @@ def check_wb_create_selection_continuity(
         }""")
         assert terminal_view == {
             'status': 'completed', 'total': 1,
-            'counts': {'processed': 1, 'succeeded': 0, 'failed': 1},
+            'counts': {'processed': 1, 'succeeded': 0, 'pending_sync': 0, 'failed': 1},
         }
         assert state['wb_worker_errors'] == []
         assert state['wb_worker_product_ids'] == [selected]

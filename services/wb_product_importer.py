@@ -1395,14 +1395,17 @@ class WBProductImporter:
             )
 
         # Оставшиеся без nmID — не удалось получить
+        pending_message = (
+            "WB принял запрос. Карточка ожидает подтверждения после синхронизации."
+        )
         for vc in remaining:
             ip, cd = vendor_to_product[vc]
             item = {'product_id': ip.id, 'title': (ip.title or '')[:50],
-                    'status': 'success', 'error': None, 'nm_id': None,
-                    'warnings': ['nmID не получен — будет при синхронизации']}
+                    'status': 'pending_sync', 'error': None, 'nm_id': None,
+                    'message': pending_message, 'warnings': []}
             ip.import_status = 'imported_pending_sync'
             ip.imported_at = datetime.utcnow()
-            ip.import_error = 'nmID не получен, ждём синхронизации'
+            ip.import_error = pending_message
             results.append(item)
 
         db.session.commit()
@@ -3832,6 +3835,9 @@ def import_products_batch(seller_id: int, product_ids: List[int]) -> Dict:
         'total': len(product_ids),
         'imported': sum(1 for item in batch_results if item.get('status') == 'success'),
         'failed': sum(1 for item in batch_results if item.get('status') == 'failed'),
+        'pending_sync': sum(
+            1 for item in batch_results if item.get('status') == 'pending_sync'
+        ),
         'skipped': len(product_ids) - len(ordered_products) + sum(
             1 for item in batch_results if item.get('status') == 'skipped'
         ),

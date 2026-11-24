@@ -285,7 +285,7 @@
             <strong v-else-if="wbCreatePending && wbCreatePending.state === 'accepted'">Создание карточек поставлено в очередь Seller Hub</strong>
             <strong v-else>Результат локальной задачи WB пока неизвестен</strong>
             <span v-if="wbCreatePending">В запросе WB: {{ wbCreatePending.product_ids.length }} {{ $fmt.plural(wbCreatePending.product_ids.length, 'карточка', 'карточки', 'карточек') }} · общий выбор сохранён.</span>
-            <span v-if="wbCreateTerminalResult && wbCreateTerminalResult.counts">В Seller Hub обработано: {{ wbCreateTerminalResult.counts.processed }} из {{ wbCreateTerminalResult.total }}<template v-if="wbCreateTerminalResult.counts.succeeded"> · успешно: {{ wbCreateTerminalResult.counts.succeeded }}</template><template v-if="wbCreateTerminalResult.counts.failed"> · не созданы: {{ wbCreateTerminalResult.counts.failed }}</template>.</span>
+            <span v-if="wbCreateTerminalResult && wbCreateTerminalResult.counts">В Seller Hub обработано: {{ wbCreateTerminalResult.counts.processed }} из {{ wbCreateTerminalResult.total }}. Подтверждены: {{ wbCreateTerminalResult.counts.succeeded }} · Ожидают синхронизации: {{ wbCreateTerminalResult.counts.pending_sync }} · Не созданы: {{ wbCreateTerminalResult.counts.failed }}.</span>
             <span v-else-if="wbCreateTerminalResult">Точные локальные счётчики недоступны.</span>
             <span v-if="wbCreateError || wbCreateReadError">{{ wbCreateError || wbCreateReadError }}</span>
         </div>
@@ -986,5 +986,5 @@
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261121-wb-create-terminal-r33-kit') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js', v='20261123-ozon-mixed-scope-r1') }}"></script>
 <script src="{{ url_for('static', filename='workspace/my-products-import.iife.js', v='20261123-unified-catalog-prices-r63b') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261123-ozon-mixed-scope-r1') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261124-wb-confirmed-outcomes-r109') }}"></script>
 {% endblock %}

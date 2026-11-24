@@ -464,16 +464,27 @@
     }
 
     function wbCreateReceiptCounts(data, total) {
-        var counts = data && data.result_counts;
-        if (!counts || typeof counts !== 'object' || Array.isArray(counts)) return null;
+        if (!data || data.outcomes_version !== 2) return null;
+        var counts = data.result_counts;
+        if (!counts || typeof counts !== 'object' || Array.isArray(counts) ||
+            Object.keys(counts).length !== 4 ||
+            !['processed', 'succeeded', 'pending_sync', 'failed'].every(function (key) {
+                return Object.prototype.hasOwnProperty.call(counts, key);
+            })) return null;
         var processed = counts.processed;
         var succeeded = counts.succeeded;
+        var pendingSync = counts.pending_sync;
         var failed = counts.failed;
-        if (![processed, succeeded, failed].every(function (value) {
+        if (![processed, succeeded, pendingSync, failed].every(function (value) {
             return Number.isSafeInteger(value) && value >= 0;
-        }) || processed > total || succeeded > processed || failed > processed ||
-            succeeded + failed > processed) return null;
-        return { processed: processed, succeeded: succeeded, failed: failed };
+        }) || processed !== total || succeeded > processed || pendingSync > processed ||
+            failed > processed || succeeded + pendingSync + failed !== processed) return null;
+        return {
+            processed: processed,
+            succeeded: succeeded,
+            pending_sync: pendingSync,
+            failed: failed,
+        };
     }
 
     function knownWbCreateNotAccepted(response, data) {

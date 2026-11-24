@@ -11,7 +11,7 @@ from flask import Flask
 from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect
 
-from models import BackgroundJob, ImportedProduct, Seller, User, db
+from models import BackgroundJob, ImportedProduct, Notification, Seller, User, db
 from routes.suppliers import register_supplier_routes
 
 
@@ -128,7 +128,7 @@ class WBBulkCreateReceiptTest(unittest.TestCase):
         return response
 
     @staticmethod
-    def _run_thread_target(thread, *, cancel_before_work=False):
+    def _run_thread_target(thread, *, cancel_before_work=False, outcomes=None):
         db.session.remove()
         target = thread.call_args.kwargs['target']
         args = thread.call_args.kwargs['args']
@@ -144,14 +144,16 @@ class WBBulkCreateReceiptTest(unittest.TestCase):
             def batch_import_products_to_wb(products, progress_callback=None):
                 if progress_callback:
                     progress_callback('preparing', {'items': []})
+                default_outcomes = (
+                    {'status': 'success', 'error': None, 'nm_id': 710001, 'warnings': []},
+                    {'status': 'skipped', 'error': 'not ready', 'nm_id': None, 'warnings': []},
+                )
+                result_outcomes = outcomes or default_outcomes
                 return [
                     {
                         'product_id': product.id,
                         'title': product.title,
-                        'status': 'success' if index == 0 else 'skipped',
-                        'error': None if index == 0 else 'not ready',
-                        'nm_id': None,
-                        'warnings': [],
+                        **result_outcomes[index],
                     }
                     for index, product in enumerate(products)
                 ]
@@ -178,6 +180,7 @@ class WBBulkCreateReceiptTest(unittest.TestCase):
         self.assertFalse(first['replayed'])
         self.assertFalse(first['worker_exited'])
         self.assertIsNone(first['result_counts'])
+        self.assertNotIn('outcomes_version', first)
         self.assertEqual(thread.call_count, 1)
         thread.return_value.start.assert_called_once()
 
@@ -190,9 +193,10 @@ class WBBulkCreateReceiptTest(unittest.TestCase):
         self.assertEqual(completed.status_code, 200)
         self.assertEqual(completed.get_json()['status'], 'completed')
         self.assertTrue(completed.get_json()['worker_exited'])
+        self.assertEqual(completed.get_json()['outcomes_version'], 2)
         self.assertEqual(
             completed.get_json()['result_counts'],
-            {'processed': 2, 'succeeded': 1, 'failed': 1},
+            {'processed': 2, 'succeeded': 1, 'pending_sync': 0, 'failed': 1},
         )
 
         renewed_client = self._client(self.user_id, csrf_secret='renewed-session-secret')
@@ -215,6 +219,7 @@ class WBBulkCreateReceiptTest(unittest.TestCase):
         self.assertEqual(readback.get_json()['job_uid'], first['job_uid'])
         self.assertTrue(readback.get_json()['replayed'])
         self.assertTrue(readback.get_json()['worker_exited'])
+        self.assertEqual(readback.get_json()['outcomes_version'], 2)
         self.assertIn('no-store', readback.headers['Cache-Control'])
 
         other_client = self._client(self.other_user_id)
@@ -223,6 +228,299 @@ class WBBulkCreateReceiptTest(unittest.TestCase):
         self.assertEqual(
             foreign_read.get_json()['code'], 'wb_create_receipt_not_found',
         )
+
+    def test_terminal_receipt_separates_verified_and_pending_sync_outcomes(self):
+        request_key = '7' * 32
+        response, thread = self._post(
+            self.client, self.user_id,
+            {'product_ids': self.product_ids, 'request_key': request_key},
+        )
+        self._run_thread_target(thread, outcomes=[
+            {'status': 'success', 'error': None, 'nm_id': 710010, 'warnings': []},
+            {'status': 'pending_sync', 'error': None, 'nm_id': None, 'warnings': []},
+        ])
+
+        terminal = self._get_result(self.client, self.user_id, request_key).get_json()
+        self.assertEqual(terminal['status'], 'completed')
+        self.assertEqual(terminal['outcomes_version'], 2)
+        self.assertEqual(terminal['result_counts'], {
+            'processed': 2, 'succeeded': 1, 'pending_sync': 1, 'failed': 0,
+        })
+        job = BackgroundJob.query.filter_by(job_uid=terminal['job_uid']).one()
+        self.assertEqual(job.succeeded, 1)
+        self.assertEqual(job.processed, 2)
+        self.assertEqual(job.get_result()['outcomes_version'], 2)
+        self.assertEqual(job.get_result()['result_counts'], terminal['result_counts'])
+        self.assertEqual(
+            [item['status'] for item in job.get_progress()['items']],
+            ['success', 'pending_sync'],
+        )
+        notification = Notification.query.filter_by(seller_id=self.seller_id).one()
+        self.assertEqual(notification.category, 'warning')
+        self.assertIn('Подтверждение получено для 1', notification.message)
+        self.assertIn('Ещё 1 ожидают синхронизации', notification.message)
+
+    def test_pending_only_notification_and_receipt_do_not_claim_verified_import(self):
+        request_key = '8' * 32
+        response, thread = self._post(
+            self.client, self.user_id,
+            {'product_ids': self.product_ids, 'request_key': request_key},
+        )
+        self._run_thread_target(thread, outcomes=[
+            {'status': 'pending_sync', 'error': None, 'nm_id': None, 'warnings': []},
+            {'status': 'pending_sync', 'error': None, 'nm_id': None, 'warnings': []},
+        ])
+
+        terminal = self._get_result(self.client, self.user_id, request_key).get_json()
+        self.assertEqual(terminal['result_counts'], {
+            'processed': 2, 'succeeded': 0, 'pending_sync': 2, 'failed': 0,
+        })
+        self.assertEqual(
+            BackgroundJob.query.filter_by(job_uid=terminal['job_uid']).one().succeeded,
+            0,
+        )
+        notification = Notification.query.filter_by(seller_id=self.seller_id).one()
+        self.assertEqual(notification.category, 'warning')
+        self.assertIn('WB принял запросы на создание для 2 карточек', notification.message)
+        self.assertIn('Они ожидают синхронизации', notification.message)
+        self.assertNotIn('не был импортирован', notification.message)
+        self.assertNotIn('Импортировано 2', notification.message)
+
+    def test_skipped_existing_card_nm_id_stays_in_non_created_bucket(self):
+        request_key = 'b' * 32
+        response, thread = self._post(
+            self.client, self.user_id,
+            {'product_ids': self.product_ids, 'request_key': request_key},
+        )
+        self._run_thread_target(thread, outcomes=[
+            {'status': 'success', 'error': None, 'nm_id': 710040, 'warnings': []},
+            {'status': 'skipped', 'error': 'already exists', 'nm_id': 710041, 'warnings': []},
+        ])
+
+        terminal = self._get_result(self.client, self.user_id, request_key).get_json()
+        self.assertEqual(terminal['result_counts'], {
+            'processed': 2, 'succeeded': 1, 'pending_sync': 0, 'failed': 1,
+        })
+        job = BackgroundJob.query.filter_by(job_uid=response.get_json()['job_uid']).one()
+        skipped = job.get_result()['outcomes'][1]
+        self.assertEqual(skipped, {
+            'product_id': self.product_ids[1], 'status': 'skipped', 'nm_id': 710041,
+        })
+
+    def test_legacy_success_without_nm_id_key_is_not_recovered_as_pending(self):
+        request_key = 'c' * 32
+        response, thread = self._post(
+            self.client, self.user_id,
+            {'product_ids': self.product_ids, 'request_key': request_key},
+        )
+        self._run_thread_target(thread)
+        job = BackgroundJob.query.filter_by(
+            job_uid=response.get_json()['job_uid'],
+        ).one()
+        progress = job.get_progress()
+        progress['items'] = [
+            {
+                'product_id': self.product_ids[0], 'status': 'success',
+                'nm_id': 710050,
+            },
+            {
+                'product_id': self.product_ids[1], 'status': 'success',
+                # An absent key in old progress does not prove explicit null.
+            },
+        ]
+        job.set_progress(progress)
+        job.processed = 2
+        job.succeeded = 2
+        job.failed_count = 0
+        job.set_result({'imported': 2, 'failed': 0, 'total': 2})
+        db.session.commit()
+
+        terminal = self._get_result(self.client, self.user_id, request_key).get_json()
+        self.assertIsNone(terminal['result_counts'])
+        self.assertNotIn('outcomes_version', terminal)
+
+        result = job.get_result()
+        result['outcomes_version'] = None
+        result['result_counts'] = {
+            'processed': 2, 'succeeded': 1, 'pending_sync': 1, 'failed': 0,
+        }
+        job.set_result(result)
+        db.session.commit()
+        explicit_unknown_version = self._get_result(
+            self.client, self.user_id, request_key,
+        ).get_json()
+        self.assertIsNone(explicit_unknown_version['result_counts'])
+        self.assertNotIn('outcomes_version', explicit_unknown_version)
+
+    def test_unexpected_batch_rows_are_removed_from_visible_progress(self):
+        request_key = 'd' * 32
+        response, thread = self._post(
+            self.client, self.user_id,
+            {'product_ids': self.product_ids, 'request_key': request_key},
+        )
+        self._run_thread_target(thread, outcomes=[
+            {
+                'product_id': self.foreign_product_id,
+                'title': 'foreign secret title',
+                'status': 'success', 'error': None, 'nm_id': 710060, 'warnings': [],
+            },
+            {
+                'product_id': self.product_ids[1],
+                'status': 'success', 'error': None, 'nm_id': 710061, 'warnings': [],
+            },
+        ])
+
+        job = BackgroundJob.query.filter_by(job_uid=response.get_json()['job_uid']).one()
+        visible_items = job.get_progress()['items']
+        self.assertEqual([item['product_id'] for item in visible_items], [self.product_ids[1]])
+        self.assertNotIn('foreign secret title', str(visible_items))
+
+    def test_duplicate_batch_rows_are_removed_from_visible_progress(self):
+        request_key = 'e' * 32
+        response, thread = self._post(
+            self.client, self.user_id,
+            {'product_ids': self.product_ids, 'request_key': request_key},
+        )
+        self._run_thread_target(thread, outcomes=[
+            {'status': 'success', 'error': None, 'nm_id': 710070, 'warnings': []},
+            {
+                'product_id': self.product_ids[0],
+                'title': 'duplicate title',
+                'status': 'success', 'error': None, 'nm_id': 710071, 'warnings': [],
+            },
+        ])
+
+        job = BackgroundJob.query.filter_by(job_uid=response.get_json()['job_uid']).one()
+        visible_items = job.get_progress()['items']
+        self.assertEqual([item['product_id'] for item in visible_items], [self.product_ids[0]])
+        self.assertNotIn('duplicate title', str(visible_items))
+
+    def test_legacy_counts_recover_only_from_complete_exact_saved_rows(self):
+        request_key = '9' * 32
+        response, thread = self._post(
+            self.client, self.user_id,
+            {'product_ids': self.product_ids, 'request_key': request_key},
+        )
+        self._run_thread_target(thread)
+        job = BackgroundJob.query.filter_by(
+            job_uid=response.get_json()['job_uid'],
+        ).one()
+        progress = job.get_progress()
+        progress['items'] = [
+            {
+                'product_id': self.product_ids[0], 'title': 'Confirmed',
+                'status': 'success', 'nm_id': 710020, 'error': None,
+                'warnings': [],
+            },
+            {
+                'product_id': self.product_ids[1], 'title': 'Legacy pending',
+                'status': 'success', 'nm_id': None, 'error': None,
+                'warnings': ['nmID не получен — будет при синхронизации'],
+            },
+        ]
+        job.set_progress(progress)
+        job.processed = 2
+        job.succeeded = 2  # Old counter included accepted-pending items.
+        job.failed_count = 0
+        job.set_result({'imported': 2, 'failed': 0, 'total': 2})
+        db.session.commit()
+
+        recovered = self._get_result(self.client, self.user_id, request_key).get_json()
+        self.assertEqual(recovered['outcomes_version'], 2)
+        self.assertEqual(recovered['result_counts'], {
+            'processed': 2, 'succeeded': 1, 'pending_sync': 1, 'failed': 0,
+        })
+
+        progress['items'].pop()
+        job.set_progress(progress)
+        job.processed = 1
+        job.succeeded = 1
+        db.session.commit()
+        partial = self._get_result(self.client, self.user_id, request_key).get_json()
+        self.assertIsNone(partial['result_counts'])
+        self.assertNotIn('outcomes_version', partial)
+
+    def test_corrupt_versioned_counts_are_not_recovered_as_legacy(self):
+        request_key = 'a' * 32
+        response, thread = self._post(
+            self.client, self.user_id,
+            {'product_ids': self.product_ids, 'request_key': request_key},
+        )
+        self._run_thread_target(thread, outcomes=[
+            {'status': 'success', 'error': None, 'nm_id': 710030, 'warnings': []},
+            {'status': 'pending_sync', 'error': None, 'nm_id': None, 'warnings': []},
+        ])
+        job = BackgroundJob.query.filter_by(
+            job_uid=response.get_json()['job_uid'],
+        ).one()
+        result = job.get_result()
+        result['result_counts']['pending_sync'] = 0
+        job.set_result(result)
+        db.session.commit()
+
+        terminal = self._get_result(self.client, self.user_id, request_key).get_json()
+        self.assertIsNone(terminal['result_counts'])
+        self.assertNotIn('outcomes_version', terminal)
+
+    def test_single_pending_sync_notification_does_not_claim_card_created(self):
+        product = ImportedProduct.query.get(self.product_ids[0])
+        product.import_status = 'validated'
+        db.session.commit()
+
+        class FakeImporter:
+            def __init__(self, _seller):
+                pass
+
+            @staticmethod
+            def import_product_to_wb(_product):
+                return True, None, None
+
+        user_patch, login_patch = self._auth_patches(self.user_id)
+        with user_patch, login_patch, patch(
+            'services.wb_product_importer.WBProductImporter', FakeImporter,
+        ):
+            response = self.client.post(
+                f'/my-products/{product.id}/push-to-wb',
+                headers={'X-Requested-With': 'XMLHttpRequest'},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {
+            'success': True, 'error': None, 'product_id': None,
+            'pending_sync': True,
+        })
+        notification = Notification.query.filter_by(seller_id=self.seller_id).one()
+        self.assertEqual(notification.category, 'warning')
+        self.assertEqual(notification.title, 'Запрос на создание принят WB')
+        self.assertIn('ожидает подтверждения синхронизацией', notification.message)
+        self.assertNotIn('карточка создана', notification.message)
+
+    def test_single_confirmed_ajax_response_keeps_legacy_shape(self):
+        product = ImportedProduct.query.get(self.product_ids[0])
+        product.import_status = 'validated'
+        db.session.commit()
+
+        class FakeImporter:
+            def __init__(self, _seller):
+                pass
+
+            @staticmethod
+            def import_product_to_wb(_product):
+                return True, None, SimpleNamespace(id=710080)
+
+        user_patch, login_patch = self._auth_patches(self.user_id)
+        with user_patch, login_patch, patch(
+            'services.wb_product_importer.WBProductImporter', FakeImporter,
+        ):
+            response = self.client.post(
+                f'/my-products/{product.id}/push-to-wb',
+                headers={'X-Requested-With': 'XMLHttpRequest'},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {
+            'success': True, 'error': None, 'product_id': 710080,
+        })
 
     def test_stale_unexited_managed_job_stays_unknown_and_blocks_same_set(self):
         request_key = '4' * 32

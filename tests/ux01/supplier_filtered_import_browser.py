@@ -1490,8 +1490,8 @@ def run():
             return proxy ? proxy.items.map(item => item.id) : null;
         }""")
         assert isinstance(batch_item_ids, list) and len(batch_item_ids) == 50
-        wb_selected_ids = batch_item_ids[-2:]
-        assert len(wb_selected_ids) == 2 and len(set(wb_selected_ids)) == 2
+        wb_selected_ids = batch_item_ids[-3:]
+        assert len(wb_selected_ids) == 3 and len(set(wb_selected_ids)) == 3
         assert set(wb_selected_ids) <= persisted_product_ids
         for product_id in wb_selected_ids:
             page.locator(
@@ -1502,7 +1502,7 @@ def run():
         page.wait_for_function("""() => {
             const rail = document.querySelector('.mp-bulkbar');
             const selected = Array.from(document.querySelectorAll('.mp-row.is-selected'));
-            if (!rail || selected.length !== 2) return false;
+            if (!rail || selected.length !== 3) return false;
             const railTop = rail.getBoundingClientRect().top;
             const rowRects = selected.map(row => row.getBoundingClientRect());
             return window.scrollY + window.innerHeight >=
@@ -1523,7 +1523,7 @@ def run():
                 railTop: railRect && railRect.top,
                 railBottom: railRect && railRect.bottom,
                 railVisible: !!railRect && railRect.top < window.innerHeight && railRect.bottom > 0,
-                selectedRowsVisible: rects.length === 2 && rects.every(rect =>
+                selectedRowsVisible: rects.length === 3 && rects.every(rect =>
                     rect.top >= 0 && rect.bottom <= window.innerHeight &&
                     !!railRect && rect.bottom <= railRect.top
                 ),
@@ -1536,11 +1536,11 @@ def run():
             before_confirmation_position,
         )
         assert before_confirmation_position["pageHeight"] > before_confirmation_position["viewportHeight"]
-        assert before_confirmation_position["selectedCount"] == 2
+        assert before_confirmation_position["selectedCount"] == 3
         assert before_confirmation_position["selectedIds"] == [str(value) for value in wb_selected_ids]
         assert before_confirmation_position["railVisible"]
         assert before_confirmation_position["selectedRowsVisible"], before_confirmation_position
-        checks.append("last_two_signed_batch_rows_are_selected_from_a_measured_scrolled_position")
+        checks.append("last_three_signed_batch_rows_are_selected_from_a_measured_scrolled_position")
         selected_before_create = page.evaluate("""() => {
             const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
             return proxy ? proxy.selected.slice() : null;
@@ -1560,7 +1560,7 @@ def run():
             ).inner_text() == "Создать карточки WB"
             assert wb_create_choice.locator(
                 ".mp-bulk-intent-option-hint",
-            ).inner_text() == "для 2 товаров, ещё не связанных с WB"
+            ).inner_text() == "для 3 товаров, ещё не связанных с WB"
             create_launcher.click()
             assert not wb_create_choice.is_visible()
         invoke_workspace_action(page, "push_wb")
@@ -1605,13 +1605,24 @@ def run():
 
             outcomes = []
             for index, product in enumerate(imported_products):
-                success = index == 0
+                if index == 0:
+                    status = "success"
+                    error = None
+                    nm_id = 700000 + index
+                elif index == 1:
+                    status = "pending_sync"
+                    error = None
+                    nm_id = None
+                else:
+                    status = "failed"
+                    error = "Synthetic WB rejected this fixture card"
+                    nm_id = None
                 outcomes.append({
                     "product_id": product.id,
                     "title": (product.title or "")[:50],
-                    "status": "success" if success else "failed",
-                    "error": None if success else "Synthetic WB rejected this fixture card",
-                    "nm_id": 700000 + index if success else None,
+                    "status": status,
+                    "error": error,
+                    "nm_id": nm_id,
                     "warnings": [],
                 })
             fake_wb_calls.append({
@@ -1658,7 +1669,7 @@ def run():
             assert isinstance(job_uid, str) and re.fullmatch(
                 r"bulk_wb_[0-9a-f]{56}", job_uid,
             ), "WB create response must identify the actual durable job"
-            assert create_payload["total"] == len(wb_selected_ids) == 2
+            assert create_payload["total"] == len(wb_selected_ids) == 3
             assert create_payload["product_ids"] == wb_selected_ids
             assert create_payload["status"] in {"pending", "running"}
             assert create_payload["replayed"] is False
@@ -1679,7 +1690,7 @@ def run():
             assert set(create_post["body"]["product_ids"]) <= persisted_product_ids
             request_key = create_post["body"]["request_key"]
             assert isinstance(request_key, str) and re.fullmatch(r"[a-f0-9]{32}", request_key)
-            checks.append("signed_import_batch_posts_one_exact_two_product_wb_create_request")
+            checks.append("signed_import_batch_posts_one_exact_three_product_wb_create_request")
 
             receipt = page.locator("[data-wb-create-receipt]")
             receipt.wait_for(state="visible")
@@ -1699,7 +1710,7 @@ def run():
                     seller_id=fixture.FIXTURE["seller_id"],
                 ).one()
                 assert accepted_job.status == "running"
-                assert accepted_job.total == 2 and accepted_job.processed == 0
+                assert accepted_job.total == 3 and accepted_job.processed == 0
                 assert accepted_job.get_progress()["product_ids"] == wb_selected_ids
 
             with page.expect_response(
@@ -1716,7 +1727,7 @@ def run():
             }
             assert active_payload["success"] is True
             assert active_payload["job_uid"] == job_uid
-            assert active_payload["total"] == 2 and active_payload["product_ids"] == wb_selected_ids
+            assert active_payload["total"] == 3 and active_payload["product_ids"] == wb_selected_ids
             assert active_payload["status"] == "running" and active_payload["replayed"] is True
             assert active_payload["worker_exited"] is False
             assert active_payload["cancel_requested"] is False
@@ -1758,15 +1769,16 @@ def run():
             terminal_payload = terminal_receipt_read["payload"]
             assert set(terminal_payload) == {
                 "success", "job_uid", "total", "product_ids", "status", "replayed",
-                "worker_exited", "cancel_requested", "result_counts",
+                "worker_exited", "cancel_requested", "outcomes_version", "result_counts",
             }
             assert terminal_payload["job_uid"] == job_uid
-            assert terminal_payload["total"] == 2 and terminal_payload["product_ids"] == wb_selected_ids
+            assert terminal_payload["total"] == 3 and terminal_payload["product_ids"] == wb_selected_ids
             assert terminal_payload["status"] == "completed"
             assert terminal_payload["replayed"] is True and terminal_payload["worker_exited"] is True
             assert terminal_payload["cancel_requested"] is False
+            assert terminal_payload["outcomes_version"] == 2
             assert terminal_payload["result_counts"] == {
-                "processed": 2, "succeeded": 1, "failed": 1,
+                "processed": 3, "succeeded": 1, "pending_sync": 1, "failed": 1,
             }
             assert terminal_receipt_read["query_keys"] == ()
             assert terminal_receipt_read["sequence"] > active_read["sequence"]
@@ -1780,11 +1792,13 @@ def run():
                     seller_id=fixture.FIXTURE["seller_id"],
                 ).one()
                 assert job.status == "completed"
-                assert job.total == 2 and job.processed == 2
+                assert job.total == 3 and job.processed == 3
                 assert job.succeeded == 1 and job.failed_count == 1
                 assert job.get_progress()["product_ids"] == wb_selected_ids
                 assert [row["product_id"] for row in job.get_progress()["items"]] == wb_selected_ids
-                assert job.get_result()["imported"] == 1 and job.get_result()["failed"] == 1
+                assert job.get_result()["imported"] == 1
+                assert job.get_result()["pending_sync"] == 1
+                assert job.get_result()["failed"] == 1
 
             page.evaluate("""() => new Promise(resolve =>
                 requestAnimationFrame(() => requestAnimationFrame(resolve)))""")
@@ -1798,9 +1812,10 @@ def run():
             assert receipt.get_attribute("aria-live") == "polite"
             receipt_text = receipt.inner_text()
             assert "Локальная задача создания карточек завершилась" in receipt_text
-            assert "В Seller Hub обработано: 2 из 2" in receipt_text
-            assert "успешно: 1" in receipt_text
-            assert "не созданы: 1" in receipt_text
+            assert "В Seller Hub обработано: 3 из 3" in receipt_text
+            assert "Подтверждены: 1" in receipt_text
+            assert "Ожидают синхронизации: 1" in receipt_text
+            assert "Не созданы: 1" in receipt_text
             receipt_position = receipt.evaluate("""element => {
                 const rect = element.getBoundingClientRect();
                 const header = document.querySelector('.mobile-header');
@@ -1835,7 +1850,7 @@ def run():
                 receipt_position,
             )
             checks.append("accepted_create_reveals_live_receipt_below_fixed_mobile_header")
-            checks.append("typed_terminal_receipt_renders_one_success_and_one_distinct_failure")
+            checks.append("typed_terminal_receipt_separates_confirmed_pending_and_failed_outcomes")
 
             viewport_geometry = page.evaluate("""() => ({
                 width: document.documentElement.clientWidth,
@@ -1910,6 +1925,7 @@ def run():
                 "selected_count": len(wb_selected_ids),
                 "terminal_status": terminal_payload["status"],
                 "succeeded_count": terminal_payload["result_counts"]["succeeded"],
+                "pending_sync_count": terminal_payload["result_counts"]["pending_sync"],
                 "failed_count": terminal_payload["result_counts"]["failed"],
                 "screenshot": terminal_screenshot,
                 "physical_post_count": len(wb_create_posts),
@@ -2973,6 +2989,59 @@ def run():
             "sort": ["title"],
         }
         assert "supplier_refresh_batch" not in parse_qs(returned_location.query)
+
+        page.evaluate("uid => localStorage.setItem('bulk_wb_job_uid', uid)", job_uid)
+        classic_response = page.goto(fixture.BASE + "/my-products", wait_until="domcontentloaded")
+        assert classic_response and classic_response.status == 200
+        page.get_by_role("button", name="Подтверждены (1)", exact=True).wait_for(state="visible")
+        pending_tab = page.get_by_role(
+            "button", name="Ожидают синхронизации (1)", exact=True,
+        )
+        pending_tab.wait_for(state="visible")
+        pending_tab.click()
+        pending_panel = page.locator('div[x-show="tab === \'pending_sync\'"]')
+        assert pending_panel.is_visible()
+        assert "ожидается синхронизация каталога" in pending_panel.inner_text()
+        page.get_by_role("button", name="Подтверждены (1)", exact=True).click()
+        assert page.get_by_text("nmID 700000", exact=True).is_visible()
+        checks.append("classic_batch_results_distinguish_confirmed_pending_and_failed_rows")
+
+        with fixture.app.app_context():
+            legacy_job = BackgroundJob.query.filter_by(
+                job_uid=job_uid,
+                seller_id=fixture.FIXTURE["seller_id"],
+            ).one()
+            legacy_job.set_progress({
+                "product_ids": wb_selected_ids,
+                "items": [{
+                    "product_id": wb_selected_ids[0],
+                    "title": "Legacy success without WB ID",
+                    "status": "success",
+                    "nm_id": None,
+                    "error": None,
+                }],
+            })
+            legacy_job.set_result({"imported": 1, "failed": 0, "total": 3})
+            db.session.commit()
+        page.reload(wait_until="domcontentloaded")
+        page.get_by_text("Точные подтверждённые счётчики недоступны.", exact=True).wait_for(
+            state="visible",
+        )
+        page.get_by_role("button", name="Подтверждены (0)", exact=True).wait_for(
+            state="visible",
+        )
+        unconfirmed_tab = page.get_by_role(
+            "button", name="Не подтверждены (1)", exact=True,
+        )
+        unconfirmed_tab.wait_for(state="visible")
+        unconfirmed_tab.click()
+        assert page.get_by_text(
+            "В сохранённой задаче нет подтверждённого nmID. Проверьте состояние в WB перед повтором.",
+            exact=True,
+        ).is_visible()
+        assert len(wb_create_posts) == 1, "opening classic job history must not resubmit WB create"
+        checks.append("legacy_success_without_positive_nm_id_is_not_presented_as_confirmed")
+
         assert len(supplier_refresh_preview_posts) == len(supplier_refresh_apply_posts) == 1
         checks.append("classic_refresh_handoff_keeps_exact_order_until_explicit_beta_review_and_filtered_return")
         supplier_refresh_handoff_report = {

@@ -46,6 +46,7 @@ WB_BULK_CREATE_PROGRESS_KEY = '_wb_bulk_create_v1'
 WB_BULK_CREATE_STALE_AFTER = timedelta(minutes=30)
 WB_BULK_CREATE_ACTIVE_QUERY_LIMIT = 200
 WB_BULK_CREATE_MAX_BODY_BYTES = 65536
+WB_BULK_CREATE_OUTCOMES_VERSION = 2
 WB_BULK_CREATE_TERMINAL_STATUSES = frozenset({
     'completed', 'failed', 'cancelled',
 })
@@ -672,6 +673,233 @@ def _wb_bulk_create_progress(progress, state):
     return result
 
 
+def _wb_bulk_create_normalize_outcomes(items, expected_product_ids, *, complete):
+    """Normalize item outcomes without promoting an unconfirmed card to success."""
+    if not isinstance(items, list) or not isinstance(expected_product_ids, list):
+        return [], None
+
+    expected = set(expected_product_ids)
+    seen = set()
+    normalized = []
+    counts = {
+        'processed': 0,
+        'succeeded': 0,
+        'pending_sync': 0,
+        'failed': 0,
+    }
+    valid = True
+
+    for item in items:
+        if not isinstance(item, dict):
+            valid = False
+            continue
+
+        product_id = item.get('product_id')
+        if (
+            type(product_id) is not int
+            or product_id <= 0
+            or product_id not in expected
+            or product_id in seen
+        ):
+            # Do not echo an out-of-scope or duplicate row (including its
+            # supplier title/error text) into progress visible to this seller.
+            valid = False
+            continue
+        seen.add(product_id)
+
+        status = item.get('status')
+        nm_id = item.get('nm_id')
+        row = {'product_id': product_id, 'nm_id': None}
+        if isinstance(item.get('title'), str):
+            row['title'] = item['title']
+        if isinstance(item.get('error'), str) or item.get('error') is None:
+            row['error'] = item.get('error')
+        if isinstance(item.get('warnings'), list):
+            row['warnings'] = item['warnings']
+
+        if 'nm_id' not in item:
+            normalized_status = 'unknown'
+            row['nm_id'] = None
+            valid = False
+        elif status == 'success':
+            if type(nm_id) is int and nm_id > 0:
+                normalized_status = 'success'
+                row['nm_id'] = nm_id
+                counts['succeeded'] += 1
+            elif nm_id is None:
+                # Legacy worker receipts used success for the accepted upload
+                # while waiting for the next WB catalog synchronization.
+                normalized_status = 'pending_sync'
+                row['nm_id'] = None
+                counts['pending_sync'] += 1
+            else:
+                normalized_status = 'unknown'
+                row['nm_id'] = None
+                valid = False
+        elif status == 'pending_sync' and nm_id is None:
+            normalized_status = 'pending_sync'
+            counts['pending_sync'] += 1
+        elif status == 'failed' and nm_id is None:
+            normalized_status = status
+            counts['failed'] += 1
+        elif status == 'skipped' and (
+            nm_id is None or (type(nm_id) is int and nm_id > 0)
+        ):
+            # Existing WB cards are reported as skipped, with their known
+            # nmID when available. They stay in the existing non-created
+            # bucket and never count as newly confirmed successes.
+            normalized_status = status
+            row['nm_id'] = nm_id
+            counts['failed'] += 1
+        else:
+            normalized_status = 'unknown'
+            row['nm_id'] = None
+            valid = False
+
+        row['status'] = normalized_status
+        normalized.append(row)
+        counts['processed'] += 1
+
+    if complete and seen != expected:
+        valid = False
+    if counts['processed'] != counts['succeeded'] + counts['pending_sync'] + counts['failed']:
+        valid = False
+    return normalized, counts if valid else None
+
+
+def _wb_bulk_create_counts_are_valid(raw_counts, expected_total):
+    """Validate versioned terminal counts as one complete item partition."""
+    expected_keys = {'processed', 'succeeded', 'pending_sync', 'failed'}
+    if not isinstance(raw_counts, dict) or set(raw_counts) != expected_keys:
+        return False
+    if any(type(value) is not int or value < 0 for value in raw_counts.values()):
+        return False
+    return bool(
+        raw_counts['processed'] == expected_total
+        and raw_counts['succeeded'] + raw_counts['pending_sync'] + raw_counts['failed']
+        == raw_counts['processed']
+    )
+
+
+def _wb_bulk_create_terminal_outcomes(job, product_ids):
+    """Read exact v2 outcomes or recover an exact legacy per-row receipt."""
+    progress = job.get_progress()
+    result = job.get_result()
+    if not isinstance(result, dict):
+        return None
+
+    if 'outcomes_version' in result:
+        version = result.get('outcomes_version')
+        if type(version) is not int or version != WB_BULK_CREATE_OUTCOMES_VERSION:
+            return None
+        raw_items = result.get('outcomes')
+        if (
+            not isinstance(raw_items, list)
+            or any(
+                not isinstance(item, dict)
+                or set(item) != {'product_id', 'status', 'nm_id'}
+                for item in raw_items
+            )
+        ):
+            return None
+        items, derived_counts = _wb_bulk_create_normalize_outcomes(
+            raw_items, product_ids, complete=True,
+        )
+        raw_counts = result.get('result_counts')
+        if (
+            derived_counts is None
+            or not _wb_bulk_create_counts_are_valid(raw_counts, len(product_ids))
+            or raw_counts != derived_counts
+            or type(job.processed) is not int
+            or type(job.succeeded) is not int
+            or type(job.failed_count) is not int
+            or job.processed != derived_counts['processed']
+            or job.succeeded != derived_counts['succeeded']
+            or job.failed_count != derived_counts['failed']
+        ):
+            return None
+        return derived_counts
+
+    # Old job.result had only aggregate success/failure counts. Recover them
+    # only from a complete, exact, duplicate-free saved row set. In those rows
+    # success with nm_id=None is pending_sync, never a confirmed success.
+    raw_items = progress.get('items') if isinstance(progress, dict) else None
+    _items, derived_counts = _wb_bulk_create_normalize_outcomes(
+        raw_items, product_ids, complete=True,
+    )
+    if derived_counts is None:
+        return None
+    if (
+        type(job.processed) is not int
+        or type(job.succeeded) is not int
+        or type(job.failed_count) is not int
+        or job.processed != derived_counts['processed']
+        or job.succeeded != derived_counts['succeeded'] + derived_counts['pending_sync']
+        or job.failed_count != derived_counts['failed']
+    ):
+        return None
+    return derived_counts
+
+
+def _wb_bulk_create_store_outcomes(job, product_ids, items, auto_validated, *, phase='done'):
+    """Persist versioned rows and exact counters in existing JSON columns."""
+    normalized, counts = _wb_bulk_create_normalize_outcomes(
+        items, product_ids, complete=True,
+    )
+    outcome_rows = [
+        {
+            'product_id': item.get('product_id'),
+            'status': item.get('status'),
+            'nm_id': (
+                item.get('nm_id')
+                if item.get('status') == 'success'
+                or (item.get('status') == 'skipped' and type(item.get('nm_id')) is int)
+                else None
+            ),
+        }
+        for item in normalized
+    ]
+    succeeded = counts['succeeded'] if counts else 0
+    pending_sync = counts['pending_sync'] if counts else 0
+    failed = counts['failed'] if counts else 0
+    processed = counts['processed'] if counts else 0
+
+    current_progress = job.get_progress()
+    progress_update = {
+        **(current_progress if isinstance(current_progress, dict) else {}),
+        'product_ids': product_ids,
+        'phase': phase,
+        'items': normalized,
+        'outcomes_version': WB_BULK_CREATE_OUTCOMES_VERSION,
+        'result_counts': counts,
+    }
+    state = _wb_bulk_create_state(current_progress)
+    if state is not None:
+        state['worker_started'] = True
+        progress_update = _wb_bulk_create_progress(progress_update, state)
+    job.set_progress(progress_update)
+    job.succeeded = succeeded
+    job.failed_count = failed
+    job.processed = processed
+    job.set_result({
+        'outcomes_version': WB_BULK_CREATE_OUTCOMES_VERSION,
+        'outcomes': outcome_rows,
+        'result_counts': counts,
+        'imported': succeeded if counts is not None else None,
+        'accepted': succeeded + pending_sync if counts is not None else None,
+        'pending_sync': pending_sync if counts is not None else None,
+        'failed': failed if counts is not None else None,
+        'total': job.total,
+        'auto_validated': auto_validated,
+        'errors': [
+            f"{item.get('title', '')}: {item.get('error', '')}"
+            for item in normalized
+            if item.get('status') in ('failed', 'skipped') and item.get('error')
+        ],
+    })
+    return normalized, counts
+
+
 def _wb_bulk_create_document(job, *, expected_product_ids=None, keyed=None,
                              replayed=False):
     """Return a typed exact-scope receipt, or None for corrupt receipt state."""
@@ -698,19 +926,8 @@ def _wb_bulk_create_document(job, *, expected_product_ids=None, keyed=None,
     result_counts = None
     if worker_exited and raw_status in WB_BULK_CREATE_TERMINAL_STATUSES:
         status = raw_status
-        counts = (job.processed, job.succeeded, job.failed_count)
-        if status != 'cancelled' and (
-            all(type(value) is int and value >= 0 for value in counts)
-            and counts[0] <= len(product_ids)
-            and counts[1] <= counts[0]
-            and counts[2] <= counts[0]
-            and counts[1] + counts[2] <= counts[0]
-        ):
-            result_counts = {
-                'processed': counts[0],
-                'succeeded': counts[1],
-                'failed': counts[2],
-            }
+        if status != 'cancelled':
+            result_counts = _wb_bulk_create_terminal_outcomes(job, product_ids)
     else:
         worker_exited = False
         status = raw_status if raw_status in ('pending', 'running') else 'unknown'
@@ -722,7 +939,7 @@ def _wb_bulk_create_document(job, *, expected_product_ids=None, keyed=None,
         if state['cancel_requested'] or stale:
             status = 'unknown'
 
-    return {
+    document = {
         'success': True,
         'job_uid': job.job_uid,
         'total': len(product_ids),
@@ -733,6 +950,9 @@ def _wb_bulk_create_document(job, *, expected_product_ids=None, keyed=None,
         'cancel_requested': state['cancel_requested'],
         'result_counts': result_counts,
     }
+    if result_counts is not None:
+        document['outcomes_version'] = WB_BULK_CREATE_OUTCOMES_VERSION
+    return document
 
 
 def _wb_bulk_create_json(payload, status=200):
@@ -5797,9 +6017,24 @@ def register_supplier_routes(app):
         from services.wb_product_importer import WBProductImporter
         importer = WBProductImporter(seller)
         success, error, created = importer.import_product_to_wb(product)
+        accepted_pending_sync = success and created is None
 
         # Создаём уведомление
-        if success:
+        if accepted_pending_sync:
+            n = Notification(
+                seller_id=seller.id,
+                category='warning',
+                title='Запрос на создание принят WB',
+                message=(
+                    f'Запрос для товара «{(product.title or "")[:60]}» принят WB. '
+                    'Карточка ожидает '
+                    'подтверждения синхронизацией.'
+                ),
+                link=f'/my-products/{product.id}/wb-preview',
+            )
+            db.session.add(n)
+            db.session.commit()
+        elif success:
             n = Notification(
                 seller_id=seller.id,
                 category='success',
@@ -5821,13 +6056,22 @@ def register_supplier_routes(app):
             db.session.commit()
 
         if is_ajax:
-            return jsonify({
+            response = {
                 'success': success,
                 'error': error,
                 'product_id': created.id if hasattr(created, 'id') else created,
-            })
+            }
+            if accepted_pending_sync:
+                response['pending_sync'] = True
+            return jsonify(response)
 
-        if success:
+        if accepted_pending_sync:
+            flash(
+                f'Запрос на создание товара "{product.title}" принят WB. '
+                'Карточка ожидает подтверждения синхронизацией.',
+                'warning',
+            )
+        elif success:
             flash(f'Товар "{product.title}" отправлен на WB', 'success')
         else:
             flash(f'Ошибка: {error}', 'danger')
@@ -6052,6 +6296,7 @@ def register_supplier_routes(app):
             with app.app_context():
                 validated_count = 0
                 items_progress = []
+                outcome_counts = None
                 cancelled = [False]
                 terminal_status = [None]
                 try:
@@ -6132,10 +6377,15 @@ def register_supplier_routes(app):
                                 cancelled[0] = True
                                 raise Exception('__cancelled__')
 
-                            batch_items = detail.get('items', [])
-                            succeeded = sum(1 for it in batch_items if it.get('status') == 'success')
-                            failed = sum(1 for it in batch_items if it.get('status') in ('failed', 'skipped'))
-                            processed = succeeded + failed
+                            batch_items, outcome_counts = _wb_bulk_create_normalize_outcomes(
+                                detail.get('items', []), product_ids, complete=False,
+                            )
+                            if outcome_counts is None:
+                                processed = succeeded = failed = 0
+                            else:
+                                processed = outcome_counts['processed']
+                                succeeded = outcome_counts['succeeded']
+                                failed = outcome_counts['failed']
 
                             j.processed = processed
                             j.succeeded = succeeded
@@ -6144,6 +6394,8 @@ def register_supplier_routes(app):
                                 'product_ids': product_ids,
                                 'phase': phase,
                                 'items': batch_items,
+                                'outcomes_version': WB_BULK_CREATE_OUTCOMES_VERSION,
+                                'result_counts': outcome_counts,
                             }
                             current_state = _wb_bulk_create_state(j.get_progress())
                             if current_state is not None:
@@ -6174,7 +6426,6 @@ def register_supplier_routes(app):
                         else:
                             raise
 
-                    items_progress = batch_results
                     terminal_status[0] = (
                         'cancelled' if cancelled[0] else 'completed'
                     )
@@ -6192,41 +6443,62 @@ def register_supplier_routes(app):
                             if job.status != 'cancelled':
                                 job.status = 'completed'
 
-                    succeeded = sum(1 for it in items_progress if it.get('status') == 'success')
-                    failed_cnt = sum(1 for it in items_progress if it.get('status') in ('failed', 'skipped'))
                     if job:
-                        job.succeeded = succeeded
-                        job.failed_count = failed_cnt
-                        job.processed = len(items_progress)
-                        job.set_result({
-                            'imported': succeeded,
-                            'failed': failed_cnt,
-                            'total': job.total,
-                            'auto_validated': validated_count,
-                            'errors': [
-                                f"{it.get('title', '')}: {it.get('error', '')}"
-                                for it in items_progress
-                                if it.get('status') != 'success' and it.get('error')
-                            ],
-                        })
+                        items_progress, outcome_counts = _wb_bulk_create_store_outcomes(
+                            job, product_ids, batch_results, validated_count,
+                        )
+                    succeeded = outcome_counts['succeeded'] if outcome_counts else 0
+                    pending_sync = outcome_counts['pending_sync'] if outcome_counts else 0
+                    failed_cnt = outcome_counts['failed'] if outcome_counts else 0
+                    if job:
                         db.session.commit()
 
                     # Уведомление
                     if job and terminal_status[0] != 'cancelled':
-                        if succeeded > 0:
-                            cat = 'success' if failed_cnt == 0 else 'warning'
+                        if outcome_counts is None:
+                            n = Notification(
+                                seller_id=seller_id, category='warning',
+                                title='Результат массового импорта WB не подтверждён',
+                                message=(
+                                    'Локальная задача завершилась, но точный исход '
+                                    'карточек не подтверждён. Проверьте каталог WB '
+                                    'после синхронизации.'
+                                ),
+                                link='/my-products',
+                            )
+                        elif succeeded or pending_sync:
+                            if pending_sync and succeeded:
+                                outcome_text = (
+                                    f'Подтверждение получено для {succeeded} '
+                                    f'карточек WB. Ещё {pending_sync} '
+                                    'ожидают синхронизации'
+                                )
+                            elif pending_sync:
+                                outcome_text = (
+                                    f'WB принял запросы на создание для {pending_sync} '
+                                    'карточек. Они ожидают синхронизации'
+                                )
+                            else:
+                                outcome_text = f'Подтверждено карточек WB {succeeded}'
+                            if failed_cnt:
+                                outcome_text += (
+                                    f'. Не созданы или пропущены {failed_cnt}'
+                                )
+                            cat = 'warning' if pending_sync or failed_cnt else 'success'
                             n = Notification(
                                 seller_id=seller_id, category=cat,
-                                title='Массовый импорт на WB завершён',
-                                message=f'Импортировано {succeeded} из {job.total} товаров'
-                                        + (f', ошибок: {failed_cnt}' if failed_cnt else ''),
+                                title='Результат массового импорта WB',
+                                message=f'{outcome_text}. Всего выбрано {job.total}.',
                                 link='/my-products?status=imported',
                             )
                         else:
                             n = Notification(
                                 seller_id=seller_id, category='error',
                                 title='Массовый импорт на WB не удался',
-                                message=f'Ни один из {job.total} товаров не был импортирован',
+                                message=(
+                                    f'Карточки не подтверждены. Ошибки или пропуски '
+                                    f'есть для {failed_cnt} из {job.total}.'
+                                ),
                                 link='/my-products',
                             )
                         db.session.add(n)
@@ -6280,32 +6552,37 @@ def register_supplier_routes(app):
                                 current_progress, state,
                             ))
                             if not job.get_result():
-                                job.set_result({
-                                    'imported': job.succeeded or 0,
-                                    'failed': job.failed_count or 0,
-                                    'total': job.total or 0,
-                                    'auto_validated': validated_count,
-                                    'errors': [
-                                        f"{it.get('title', '')}: {it.get('error', '')}"
-                                        for it in items_progress
-                                        if it.get('status') != 'success' and it.get('error')
-                                    ],
-                                })
+                                saved_items = (
+                                    current_progress.get('items')
+                                    if isinstance(current_progress, dict)
+                                    else None
+                                )
+                                if not isinstance(saved_items, list):
+                                    saved_items = items_progress
+                                _wb_bulk_create_store_outcomes(
+                                    job, product_ids, saved_items, validated_count,
+                                    phase=(current_progress.get('phase', 'unknown')
+                                           if isinstance(current_progress, dict)
+                                           else 'unknown'),
+                                )
                             db.session.commit()
                         elif job and job.status in ('running', 'pending'):
                             job.status = 'failed'
                             job.error_message = (job.error_message or 'Процесс прерван неожиданно')[:500]
-                            job.set_result({
-                                'imported': job.succeeded or 0,
-                                'failed': job.failed_count or 0,
-                                'total': job.total or 0,
-                                'auto_validated': validated_count,
-                                'errors': [
-                                    f"{it.get('title', '')}: {it.get('error', '')}"
-                                    for it in items_progress
-                                    if it.get('status') != 'success' and it.get('error')
-                                ],
-                            })
+                            current_progress = job.get_progress()
+                            saved_items = (
+                                current_progress.get('items')
+                                if isinstance(current_progress, dict)
+                                else None
+                            )
+                            if not isinstance(saved_items, list):
+                                saved_items = items_progress
+                            _wb_bulk_create_store_outcomes(
+                                job, product_ids, saved_items, validated_count,
+                                phase=(current_progress.get('phase', 'unknown')
+                                       if isinstance(current_progress, dict)
+                                       else 'unknown'),
+                            )
                             db.session.commit()
                     except Exception:
                         db.session.rollback()

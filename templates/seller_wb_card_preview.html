@@ -92,8 +92,8 @@
                 <!-- Inline result -->
                 <template x-if="pushResult">
                     <span class="px-3 py-2 rounded-md text-sm"
-                          :class="pushResult.success ? 'bg-green-500/20 text-green-200' : 'bg-red-500/20 text-red-200'"
-                          x-text="pushResult.success ? 'Отправлено!' : pushResult.error"></span>
+                          :class="pushResult.success ? (pushResult.pending_sync ? 'bg-yellow-500/20 text-yellow-200' : 'bg-green-500/20 text-green-200') : 'bg-red-500/20 text-red-200'"
+                          x-text="pushResult.success ? (pushResult.pending_sync ? 'Принято WB. Ожидаем подтверждения' : 'Отправлено!') : pushResult.error"></span>
                 </template>
             </div>
         </div>

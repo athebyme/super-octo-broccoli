@@ -369,6 +369,95 @@ class WBImporterIdentityPreflightTests(unittest.TestCase):
         self.assertTrue(all('повторяется' in item['error'] for item in duplicate_results))
         self.importer.api_client.get_card_by_vendor_code.assert_not_called()
 
+    def test_accepted_batch_without_confirmed_nmid_stays_pending_without_resubmit(self):
+        class AcceptedButUnresolvedWB:
+            def __init__(self):
+                self.create_calls = []
+                self.lookup_calls = 0
+                self.errors_calls = 0
+
+            def create_product_cards_batch(self, **kwargs):
+                self.create_calls.append(kwargs['cards'])
+                return {'accepted': True}
+
+            def get_card_by_vendor_code(self, _vendor_code):
+                self.lookup_calls += 1
+                raise WBVendorCardNotFound('complete exact-page miss')
+
+            def get_cards_errors_list(self, **_kwargs):
+                self.errors_calls += 1
+                return {'data': []}
+
+        self.imported.wb_subject_id = None
+        self.imported.import_status = 'validated'
+        db.session.commit()
+        fake_wb = AcceptedButUnresolvedWB()
+        self.importer.api_client = fake_wb
+        self.importer._prepare_card_data = MagicMock(return_value={
+            'vendor_code': 'VC-ACCEPTED-1',
+            'subject_id': 777,
+            'variant': {'vendorCode': 'VC-ACCEPTED-1'},
+            'wb_sizes': [],
+            'characteristics': [],
+            'media_urls': [],
+            'dimensions': {},
+        })
+
+        with (
+            patch(
+                'services.prohibited_brands_service.check_brand_for_import',
+                return_value=(True, None),
+            ),
+            patch('time.sleep'),
+        ):
+            results = self.importer.batch_import_products_to_wb([self.imported])
+
+        self.assertEqual(len(fake_wb.create_calls), 1)
+        self.assertEqual(fake_wb.lookup_calls, 11)
+        self.assertEqual(fake_wb.errors_calls, 1)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['status'], 'pending_sync')
+        self.assertIsNone(results[0]['nm_id'])
+        self.assertEqual(
+            results[0]['message'],
+            'WB принял запрос. Карточка ожидает подтверждения после синхронизации.',
+        )
+        self.assertIsNone(results[0]['error'])
+
+        db.session.expire_all()
+        source = db.session.get(ImportedProduct, self.imported.id)
+        self.assertEqual(source.import_status, 'imported_pending_sync')
+        self.assertEqual(source.import_error, results[0]['message'])
+        self.assertIsNone(source.product_id)
+        self.assertIsNone(source.wb_nm_id)
+        self.assertEqual(
+            Product.query.filter_by(seller_id=self.seller.id).count(), 0,
+        )
+
+    def test_legacy_batch_stats_separate_pending_from_imported_and_failed(self):
+        from services.wb_product_importer import import_products_batch
+
+        pending_result = {
+            'product_id': self.imported.id,
+            'status': 'pending_sync',
+            'error': None,
+            'nm_id': None,
+            'message': 'WB принял запрос. Карточка ожидает подтверждения после синхронизации.',
+            'warnings': [],
+        }
+        with patch('services.wb_product_importer.WBProductImporter') as importer_cls:
+            importer_cls.return_value.batch_import_products_to_wb.return_value = [
+                pending_result,
+            ]
+
+            stats = import_products_batch(self.seller.id, [self.imported.id])
+
+        self.assertEqual(stats['imported'], 0)
+        self.assertEqual(stats['failed'], 0)
+        self.assertEqual(stats['pending_sync'], 1)
+        self.assertEqual(stats['skipped'], 0)
+        self.assertEqual(stats['errors'], [])
+
 
 if __name__ == '__main__':
     unittest.main()
