@@ -4203,16 +4203,18 @@ def run_browser_journey():
             '.our-dialog-price-fact[data-price-kind="seller"]'
         )
         assert update_modal_price.get_attribute("data-price-mode") == "compare"
-        assert update_modal_price.inner_text().replace("\u202f", " ") == (
+        actual_price_comparison = update_modal_price.inner_text().replace("\u202f", " ")
+        assert actual_price_comparison == (
             "В Ozon: 1 000 ₽\nПосле отправки: 1 300 ₽"
-        )
+        ), actual_price_comparison
         update_modal_old_price = update_modal_row.locator(
             '.our-dialog-price-fact[data-price-kind="old"]'
         )
-        assert update_modal_old_price.inner_text().replace("\u202f", " ") == (
+        actual_old_price_comparison = update_modal_old_price.inner_text().replace("\u202f", " ")
+        assert actual_old_price_comparison == (
             "Цена до скидки в Ozon: 1 200 ₽\n"
             "Цена до скидки после отправки: 1 500 ₽"
-        )
+        ), actual_old_price_comparison
         assert not review_dialog.locator(".our-confirm input").is_checked()
 
         price_box = update_price.bounding_box()

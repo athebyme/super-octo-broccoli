@@ -89,7 +89,7 @@ body:has(#our-noscript-title) #our-boot-fallback { display:none; }
 .our-dialog-row-copy > span { display:block; min-width:0; margin-top:3px; color:var(--our-muted); overflow-wrap:anywhere; }
 .our-dialog-row-copy small { display:block; margin-top:4px; font-size:10px; line-height:1.4; }
 .our-dialog-price-fact { display:block; min-width:0; margin-top:5px; color:var(--our-muted); font-size:11px; line-height:1.45; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
-.our-dialog-price-fact strong { color:var(--our-ink); font-weight:600; }
+.our-dialog-price-fact strong { display:inline; color:var(--our-ink); font-weight:600; }
 .our-dialog-price-pair { display:grid; gap:3px; }
 .our-dialog-price-pair > span { display:block; min-width:0; }
 .our-noscript-price-pair { display:grid; gap:3px; font-variant-numeric:tabular-nums; }

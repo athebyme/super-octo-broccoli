@@ -121,7 +121,7 @@ console.log('scoped Ozon review workspace return and compact navigation: passed'
     assert "workspace_selection=review.workspace_selection" in template
     assert "filename='ozon-workspace-return.js', v='20261122-ozon-workspace-review-return-r57'" in template
     assert "filename='ozon-upload-review.js', v='20261124-linked-price-context-r1'" in template
-    assert "filename='ozon-upload-review.css', v='20261124-linked-price-context-r1'" in template
+    assert "filename='ozon-upload-review.css', v='20261124-linked-price-context-r2'" in template
     assert template.count('class="our-cleanup-note"') >= 4
     noscript = template.split("<noscript>", 1)[1].split("</noscript>", 1)[0]
     assert "row.automatic_attribute_cleanup.attribute_name" in noscript
