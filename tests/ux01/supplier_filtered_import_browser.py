@@ -1010,7 +1010,7 @@ def run():
         page.wait_for_function(
             """id => document.getElementById('cat-label-' + id).textContent
                 === "Women's Clothing > Women's Jackets".substring(0, 30)""",
-            category_source_id,
+            arg=category_source_id,
         )
         assert category_modal.is_visible(), "late save for the previous product closed the active modal"
         assert page.locator("#cat-current").inner_text() == (
