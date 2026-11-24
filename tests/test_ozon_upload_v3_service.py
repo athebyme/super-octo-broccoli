@@ -717,6 +717,12 @@ class OzonUploadV3ServiceTest(OzonPublicationFixture, unittest.TestCase):
         self.assertIs(validate_draft.call_args.kwargs["stage_automatic_cleanup"], True)
 
     def test_normal_preparation_stages_and_reviews_exact_4543_cleanup(self):
+        self._assert_preparation_reviews_exact_4543_cleanup(local_row=True)
+
+    def test_normal_preparation_stages_and_reviews_inherited_4543_cleanup(self):
+        self._assert_preparation_reviews_exact_4543_cleanup(local_row=False)
+
+    def _assert_preparation_reviews_exact_4543_cleanup(self, *, local_row):
         now = datetime.utcnow()
         values = [(str(4543000 + index), f"Назначение {index}") for index in range(1, 6)]
         definition = MarketplaceAttributeDefinition(
@@ -761,19 +767,21 @@ class OzonUploadV3ServiceTest(OzonPublicationFixture, unittest.TestCase):
             } for value_id, label in values],
         })
         listing = self.attach_listing(payload)
+        before_listing_attributes = listing.attributes_json
         try:
             MarketplaceDraftService._listing_projection_state(listing)
         except Exception as exc:
             self.fail(f"synthetic listing projection failed: {exc!r}; cause={exc.__cause__!r}")
         self.product_type.attributes_count += 1
-        self.draft.attributes_json = json.dumps([{
+        draft_attributes = [{
             "attribute_id": "4543",
             "complex_id": "0",
             "values": [{
                 "dictionary_value_id": value_id,
                 "value": label,
             } for value_id, label in values],
-        }], ensure_ascii=False)
+        }] if local_row else []
+        self.draft.attributes_json = json.dumps(draft_attributes, ensure_ascii=False)
         db.session.commit()
 
         accepted = self._source(key="a" * 24)
@@ -805,6 +813,7 @@ class OzonUploadV3ServiceTest(OzonPublicationFixture, unittest.TestCase):
         self.assertEqual(summary["before_count"], 5)
         self.assertEqual(summary["max_value_count"], 4)
         self.assertEqual(summary["action"], "omit_entire_attribute")
+        self.assertEqual(listing.attributes_json, before_listing_attributes)
         self.assertEqual(MarketplaceOperation.query.count(), 0)
 
         review = OzonUploadReviewService.document(
