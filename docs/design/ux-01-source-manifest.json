@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-24T01:19:32.353112+00:00",
+  "generated_at": "2026-11-24T01:57:09.225264+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "a466178970358a48956163942fc27ca3a91851e045d2b97b850c67256c80e154"
+      "sha256": "b7197ec0cf018e6adcf3908bb62952d76a1cc5636ab9a0179bb32c06267f57e5"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -473,7 +473,7 @@
     },
     {
       "path": "docs/design/ozon-upload-v3-api.md",
-      "sha256": "599aa07defbd17a0dcd11d2405e95e15992ba33c48ca114b0578f7237f21873e"
+      "sha256": "cd73af04e4dd6fa5d6ff1fac8e7bc389bcd6f6c1fa6511517df29d039def79ba"
     },
     {
       "path": "docs/design/ozon-ux-completion-plan-2026-10-01.md",
@@ -2085,7 +2085,7 @@
     },
     {
       "path": "services/marketplace_drafts.py",
-      "sha256": "47f47218d7bb8dd1422c43f1f100d4ca1d63d49c70e60d7ad8f0f481490b511d"
+      "sha256": "0e94cec5a358dc40c166960293020d5e943e4c5f46583a923aa30082007031b3"
     },
     {
       "path": "services/marketplace_fact_pack.py",
@@ -4425,7 +4425,7 @@
     },
     {
       "path": "tests/test_marketplace_drafts.py",
-      "sha256": "0711953e603b8318b315e8a48ba2b5e6bbc92fbef48d25ad3415ca8eb9099b6e"
+      "sha256": "da3f87cab9acc144332390f954ed7fad9babdebee5568ecfed1f9dcdf3082798"
     },
     {
       "path": "tests/test_marketplace_drafts_migration.py",
@@ -4877,7 +4877,7 @@
     },
     {
       "path": "tests/test_ozon_prepare_category_decisions.py",
-      "sha256": "c7abca802e5e9b0bcf559f2bb5fc5c55708d64da5a4bb332c07565846618e78d"
+      "sha256": "778733128ff3d557b1951bcbe4e8dac2f23cfd018cd81797590c044b45d3f0b5"
     },
     {
       "path": "tests/test_ozon_prepare_decisions.py",
@@ -5508,5 +5508,5 @@
       "sha256": "260973076a516b81bba3cae3adcd6b652fdee5585e27fbd0b7401062b78aefb1"
     }
   ],
-  "aggregate_sha256": "348adc37d94a2e6b80a8df35d29395e3a327cb2d28d034352c6acaef8715f789"
+  "aggregate_sha256": "24460e28e51e691e297bca867bc124f2e55ebde659c79426da7eba28854e81d4"
 }
