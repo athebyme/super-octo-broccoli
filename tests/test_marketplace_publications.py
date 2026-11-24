@@ -3578,6 +3578,95 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
         )
         return operation, prior
 
+    def _seed_legacy_calculated_price_update(
+        self,
+        *,
+        live_price,
+        live_old_price,
+        submitted_price="1000",
+        submitted_old_price="1200",
+        seller_review=False,
+        old_price_review=False,
+        known_provenance=True,
+        key="legacy-calculated-price-update",
+    ):
+        """Persist an old queued payload containing calculated source prices."""
+        self.source.calculated_price = 1000.0
+        self.source.calculated_price_before_discount = 1200.0
+        facts, provenance, fact_hash = MarketplaceDraftService._fact_snapshot(
+            self.source,
+        )
+        if not known_provenance:
+            provenance.pop("commercial.price", None)
+            provenance.pop("commercial.old_price", None)
+        self.draft.source_fact_hash = fact_hash
+        self.draft.source_facts_json = json.dumps(facts)
+        self.draft.provenance_json = json.dumps(provenance)
+        self.draft.commercial_json = json.dumps({
+            "price": submitted_price,
+            "old_price": submitted_old_price,
+            "vat": "0.22",
+            "currency_code": "RUB",
+        })
+        db.session.commit()
+
+        # Freeze the payload in the shape produced before the linked price
+        # fence existed, then attach an exact seller-owned live baseline.
+        submitted = self.desired_payload()
+        submitted_item = submitted["items"][0]
+        submitted_item["price"] = submitted_price
+        submitted_item["old_price"] = submitted_old_price
+        prior = deepcopy(submitted)
+        prior_item = prior["items"][0]
+        prior_item.update({
+            "name": "Предыдущее название",
+            "price": live_price,
+            "old_price": live_old_price,
+        })
+        listing = self.attach_listing(prior)
+
+        if old_price_review:
+            self.draft = MarketplaceDraftService.update_draft(
+                seller_id=self.seller.id,
+                draft_id=self.draft.id,
+                expected_version=self.draft.version,
+                corrected_by_user_id=self.user.id,
+                patch={
+                    "confirm_old_price_edit": True,
+                    "commercial": json.loads(self.draft.commercial_json),
+                },
+            )
+
+        if seller_review:
+            reviewed_provenance = json.loads(self.draft.provenance_json)
+            review = MarketplaceDraftService._seller_price_review_record(
+                self.draft,
+                price=submitted_price,
+                actor_user_id=self.user.id,
+                updated_from_version=self.draft.version,
+            )
+            self.assertIsInstance(review, dict)
+            reviewed_provenance[
+                MarketplaceDraftService.SELLER_PRICE_REVIEW_PROVENANCE_KEY
+            ] = review
+            self.draft.provenance_json = json.dumps(reviewed_provenance)
+            db.session.commit()
+
+        _documents, update_baseline = MarketplaceDraftService.publication_documents(
+            self.draft,
+        )
+        operation = MarketplacePublicationService._create_operation(
+            draft=self.draft,
+            payload=submitted,
+            idempotency_key=key,
+            created_by_user_id=self.user.id,
+            now=datetime.utcnow(),
+            operation_kind="product_update",
+            listing=listing,
+            expected_before_fingerprint=update_baseline["fingerprint"],
+        )
+        return operation, prior
+
     def test_injected_foreign_or_missing_account_id_rejects_before_operation(self):
         for index, external_account_id in enumerate(("", "another-client")):
             credentials = MarketplaceCredentials(
@@ -4101,6 +4190,179 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
         self.assertEqual(submitted.attempt_count, 1)
         self.assertEqual(len(adapter.submitted_payloads), 1)
 
+    def test_legacy_queued_calculated_price_update_stops_on_live_price_mismatch(self):
+        operation, prior = self._seed_legacy_calculated_price_update(
+            live_price="900",
+            live_old_price="1200",
+        )
+        adapter = SyntheticFullStateAdapter(prior)
+
+        stopped = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=operation.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+            allow_submission=True,
+        )
+
+        self.assertEqual(stopped.status, "failed")
+        self.assertEqual(
+            stopped.error_code,
+            "ozon_calculated_price_live_mismatch",
+        )
+        self.assertIn("сохраните нужные значения", stopped.error_message)
+        self.assertEqual(stopped.attempt_count, 0)
+        self.assertEqual(stopped.quota_reserved, 0)
+        self.assertEqual(adapter.submitted_payloads, [])
+        before = json.loads(stopped.snapshot.before_state_json)
+        self.assertEqual(before["payload"]["items"][0]["price"], "900")
+        self.assertEqual(before["payload"]["items"][0]["old_price"], "1200")
+
+    def test_legacy_queued_calculated_old_price_update_stops_on_live_mismatch(self):
+        operation, prior = self._seed_legacy_calculated_price_update(
+            live_price="1000",
+            live_old_price="1100",
+        )
+        adapter = SyntheticFullStateAdapter(prior)
+
+        stopped = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=operation.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+            allow_submission=True,
+        )
+
+        self.assertEqual(stopped.status, "failed")
+        self.assertEqual(
+            stopped.error_code,
+            "ozon_calculated_price_live_mismatch",
+        )
+        self.assertIn("цена до скидки", stopped.error_message)
+        self.assertEqual(stopped.attempt_count, 0)
+        self.assertEqual(stopped.quota_reserved, 0)
+        self.assertEqual(adapter.submitted_payloads, [])
+        before = json.loads(stopped.snapshot.before_state_json)
+        self.assertEqual(before["payload"]["items"][0]["price"], "1000")
+        self.assertEqual(before["payload"]["items"][0]["old_price"], "1100")
+
+    def test_legacy_queued_calculated_prices_matching_live_can_submit(self):
+        operation, prior = self._seed_legacy_calculated_price_update(
+            live_price="1000",
+            live_old_price="1200",
+        )
+        adapter = SyntheticFullStateAdapter(prior)
+
+        submitted = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=operation.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+            allow_submission=True,
+        )
+
+        self.assertEqual(submitted.status, "submitted")
+        self.assertEqual(submitted.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+    def test_legacy_queued_seller_reviewed_primary_price_can_submit(self):
+        operation, prior = self._seed_legacy_calculated_price_update(
+            live_price="900",
+            live_old_price="1200",
+            seller_review=True,
+        )
+        adapter = SyntheticFullStateAdapter(prior)
+
+        submitted = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=operation.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+            allow_submission=True,
+        )
+
+        self.assertEqual(submitted.status, "submitted")
+        self.assertEqual(submitted.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+    def test_legacy_equal_old_price_with_exact_seller_attestation_can_submit(self):
+        operation, prior = self._seed_legacy_calculated_price_update(
+            live_price="1000",
+            live_old_price="1700",
+            old_price_review=True,
+            key="legacy-reviewed-calculated-old-price",
+        )
+        commercial = json.loads(self.draft.commercial_json)
+        self.assertTrue(
+            MarketplaceDraftService._seller_old_price_review_matches(
+                self.draft,
+                commercial["old_price"],
+            )
+        )
+        self.assertNotIn(
+            "old_price",
+            MarketplaceDraftService.unreviewed_calculated_commercial_fields(
+                self.draft,
+                commercial=commercial,
+            ),
+        )
+        adapter = SyntheticFullStateAdapter(prior)
+
+        submitted = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=operation.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+            allow_submission=True,
+        )
+
+        self.assertEqual(submitted.status, "submitted")
+        self.assertEqual(submitted.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+    def test_legacy_queued_manual_calculated_prices_keep_existing_path(self):
+        operation, prior = self._seed_legacy_calculated_price_update(
+            live_price="900",
+            live_old_price="1100",
+            submitted_price="1400",
+            submitted_old_price="1600",
+            key="legacy-manual-calculated-price",
+        )
+        adapter = SyntheticFullStateAdapter(prior)
+
+        submitted = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=operation.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+            allow_submission=True,
+        )
+
+        self.assertEqual(submitted.status, "submitted")
+        self.assertEqual(submitted.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+    def test_legacy_queued_unknown_price_provenance_keeps_existing_path(self):
+        operation, prior = self._seed_legacy_calculated_price_update(
+            live_price="900",
+            live_old_price="1100",
+            known_provenance=False,
+            key="legacy-unknown-calculated-price-provenance",
+        )
+        adapter = SyntheticFullStateAdapter(prior)
+
+        submitted = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=operation.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+            allow_submission=True,
+        )
+
+        self.assertEqual(submitted.status, "submitted")
+        self.assertEqual(submitted.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
     def test_unconfirmed_rrp_is_rechecked_after_quota_before_write(self):
         adapter = SyntheticPublicationAdapter()
         with (
@@ -4136,6 +4398,10 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
             MarketplaceDraftService,
             "has_unconfirmed_supplier_rrp_price",
             return_value=False,
+        ), patch.object(
+            MarketplaceDraftService,
+            "unreviewed_calculated_commercial_fields",
+            return_value=set(),
         ):
             uncertain = MarketplacePublicationService.poll_operation(
                 seller_id=self.seller.id,
@@ -4148,10 +4414,17 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
         self.assertEqual(uncertain.attempt_count, 1)
         self.assertEqual(len(adapter.submitted_payloads), 1)
 
-        with patch.object(
-            MarketplaceDraftService,
-            "has_unconfirmed_supplier_rrp_price",
-            side_effect=AssertionError("attempted operations must only reconcile"),
+        with (
+            patch.object(
+                MarketplaceDraftService,
+                "has_unconfirmed_supplier_rrp_price",
+                side_effect=AssertionError("attempted operations must only reconcile"),
+            ),
+            patch.object(
+                MarketplaceDraftService,
+                "unreviewed_calculated_commercial_fields",
+                side_effect=AssertionError("attempted operations must only reconcile"),
+            ),
         ):
             reconciled = MarketplacePublicationService.poll_operation(
                 seller_id=self.seller.id,

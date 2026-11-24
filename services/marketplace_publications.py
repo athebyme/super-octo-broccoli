@@ -2024,7 +2024,7 @@ class MarketplacePublicationService:
         return list(found.values())
 
     @classmethod
-    def _stop_unconfirmed_rrp_update_conflict(
+    def _stop_unreviewed_calculated_price_update_conflict(
         cls,
         operation: MarketplaceOperation,
         *,
@@ -2032,7 +2032,7 @@ class MarketplacePublicationService:
         live: dict,
         now: datetime,
     ) -> bool:
-        """Stop an untouched update that would replace a different live price with RRP."""
+        """Stop an untouched update that changes live prices via inherited defaults."""
         if (
             operation.operation_kind != "product_update"
             or operation.status != "queued"
@@ -2054,9 +2054,10 @@ class MarketplacePublicationService:
             return False
 
         try:
-            submitted_commercial = OzonProductStateContract.draft_documents(
+            submitted_documents = OzonProductStateContract.draft_documents(
                 submitted_payload
-            )["commercial"]
+            )
+            submitted_commercial = submitted_documents["commercial"]
         except (KeyError, MarketplaceDraftError, OzonProductStateError):
             cls._mark_failed(
                 operation,
@@ -2069,9 +2070,22 @@ class MarketplacePublicationService:
             )
             return True
 
-        if not MarketplaceDraftService.has_unconfirmed_supplier_rrp_price(
-            draft, commercial=submitted_commercial,
-        ):
+        unconfirmed_rrp = (
+            MarketplaceDraftService.has_unconfirmed_supplier_rrp_price(
+                draft,
+                commercial=submitted_commercial,
+            )
+        )
+        unreviewed_calculated_fields = (
+            MarketplaceDraftService.unreviewed_calculated_commercial_fields(
+                draft,
+                commercial=submitted_commercial,
+            )
+        )
+        fields_to_compare = set(unreviewed_calculated_fields)
+        if unconfirmed_rrp:
+            fields_to_compare.add("price")
+        if not fields_to_compare:
             return False
 
         try:
@@ -2081,33 +2095,60 @@ class MarketplacePublicationService:
         except (KeyError, MarketplaceDraftError, OzonProductStateError):
             cls._mark_failed(
                 operation,
-                code="ozon_supplier_price_comparison_unavailable",
+                code=(
+                    "ozon_supplier_price_comparison_unavailable"
+                    if unconfirmed_rrp
+                    else "ozon_calculated_price_comparison_unavailable"
+                ),
                 message=(
-                    "Не удалось сверить цену обновления с карточкой Ozon. "
-                    "Обновление остановлено до повторной проверки."
+                    "Не удалось сверить цену или цену до скидки с карточкой Ozon. "
+                    "Синхронизируйте карточку и проверьте черновик заново."
                 ),
                 now=now,
             )
             return True
 
-        submitted_price = MarketplaceDraftService._decimal_from_fact(
-            submitted_commercial.get("price")
-        )
-        live_price = MarketplaceDraftService._decimal_from_fact(
-            live_commercial.get("price")
-        )
-        if submitted_price is None or live_price is None:
+        mismatched_fields = set()
+        unavailable = False
+        for field in fields_to_compare:
+            submitted_value = MarketplaceDraftService._decimal_from_fact(
+                submitted_commercial.get(field)
+            )
+            live_raw_value = live_commercial.get(field)
+            live_value = MarketplaceDraftService._decimal_from_fact(
+                live_raw_value
+            )
+            if submitted_value is None:
+                unavailable = True
+                break
+            if field == "old_price" and live_raw_value in (None, ""):
+                # A saved inherited old price would add a live field that is
+                # currently absent. That is a change, so it needs seller
+                # confirmation just like replacing an existing amount.
+                mismatched_fields.add(field)
+                continue
+            if live_value is None:
+                unavailable = True
+                break
+            if submitted_value != live_value:
+                mismatched_fields.add(field)
+
+        if unavailable:
             cls._mark_failed(
                 operation,
-                code="ozon_supplier_price_comparison_unavailable",
+                code=(
+                    "ozon_supplier_price_comparison_unavailable"
+                    if unconfirmed_rrp
+                    else "ozon_calculated_price_comparison_unavailable"
+                ),
                 message=(
-                    "Не удалось сверить цену обновления с карточкой Ozon. "
-                    "Обновление остановлено до повторной проверки."
+                    "Не удалось сверить цену или цену до скидки с карточкой Ozon. "
+                    "Синхронизируйте карточку и проверьте черновик заново."
                 ),
                 now=now,
             )
             return True
-        if submitted_price == live_price:
+        if not mismatched_fields:
             return False
 
         snapshot = operation.snapshot
@@ -2121,15 +2162,20 @@ class MarketplacePublicationService:
             }, dict)
             snapshot.before_fingerprint = live["fingerprint"]
             snapshot.rollback_status = "conflict"
-        cls._mark_failed(
-            operation,
-            code="ozon_supplier_rrp_price_live_mismatch",
-            message=(
+        if unconfirmed_rrp and "price" in mismatched_fields:
+            code = "ozon_supplier_rrp_price_live_mismatch"
+            message = (
                 "Сохранённая цена совпадает с РРЦ поставщика, но отличается "
                 "от цены в Ozon. Проверьте цену продажи в кабинете и черновике."
-            ),
-            now=now,
-        )
+            )
+        else:
+            code = "ozon_calculated_price_live_mismatch"
+            message = (
+                "Расчётная цена или цена до скидки в черновике отличается от "
+                "карточки Ozon. Сверьте эти значения в кабинете и черновике, "
+                "сохраните нужные значения и проверьте карточку заново."
+            )
+        cls._mark_failed(operation, code=code, message=message, now=now)
         return True
 
     @classmethod
@@ -2217,7 +2263,7 @@ class MarketplacePublicationService:
                     now=now,
                 )
                 return False
-            if cls._stop_unconfirmed_rrp_update_conflict(
+            if cls._stop_unreviewed_calculated_price_update_conflict(
                 operation,
                 submitted_payload=submitted_payload,
                 live=live,
