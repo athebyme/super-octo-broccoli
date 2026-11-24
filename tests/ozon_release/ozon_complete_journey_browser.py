@@ -85,8 +85,10 @@ from seller_platform import app
 from models import (
     ImportedProduct,
     MarketplaceAttributeDefinition,
+    MarketplaceOperation,
     MarketplaceProductDraft,
     MarketplaceProductType,
+    Product,
     Seller,
     SellerMarketplaceAccount,
     db,
@@ -146,6 +148,7 @@ draft_id = fixture["draft_id"]
 account_id = fixture["account_id"]
 source_id = fixture["source_id"]
 product_type_id = None
+legacy_package_confirmation_draft_id = None
 
 
 def configure_fixture():
@@ -244,11 +247,93 @@ def configure_fixture():
             original_data=json.dumps({
                 "title": "Полностью заполненная тестовая карточка",
                 "description": "Сохранённые синтетические сведения для проверки повтора.",
+                "dimensions": {
+                    "Ширина упаковки, мм": 200,
+                    "Высота упаковки, мм": 30,
+                    "Длина упаковки, мм": 300,
+                    "Вес упаковки, г": 250,
+                },
             }, ensure_ascii=False),
             photo_urls=json.dumps([photo_url]),
         )
-        db.session.add_all([new_source, stale_source, retry_prepared_source])
+        legacy_wb_product = Product(
+            seller_id=fixture["seller_id"],
+            nm_id=90990001,
+            vendor_code="journey-legacy-package-offer",
+            title="Синтетический WB источник упаковки",
+            dimensions_json=json.dumps({
+                "isValid": True,
+                "width": 20,
+                "height": 3,
+                "length": 30,
+                "weightBrutto": 0.25,
+            }),
+        )
+        legacy_package_source = ImportedProduct(
+            seller_id=fixture["seller_id"],
+            product=legacy_wb_product,
+            external_id="journey-legacy-package-source",
+            external_vendor_code="journey-legacy-package-offer",
+            source_type="synthetic",
+            title="Синтетический товар со старым WB набором упаковки",
+            description="Сохранённый черновик для явного подтверждения упаковки.",
+            category="Посуда",
+            original_data=json.dumps({
+                "title": "Синтетический товар со старым WB набором упаковки",
+                "description": "Сохранённый черновик для явного подтверждения упаковки.",
+            }, ensure_ascii=False),
+            photo_urls="[]",
+        )
+        db.session.add_all([
+            new_source, stale_source, retry_prepared_source,
+            legacy_package_source,
+        ])
         db.session.flush()
+        legacy_package_draft = MarketplaceDraftService.create_draft(
+            seller_id=fixture["seller_id"],
+            account_id=account_id,
+            imported_product_id=legacy_package_source.id,
+            product_type_id=product_type.id,
+        )
+        legacy_facts, legacy_provenance, _legacy_fact_hash = (
+            MarketplaceDraftService._fact_snapshot(legacy_package_source)
+        )
+        wb_suggestion = legacy_facts["unverified_suggestions"][
+            "wb_package_dimensions"
+        ]
+        legacy_dimensions = MarketplaceDraftService._wb_package_dimensions_to_ozon(
+            wb_suggestion
+        )
+        assert legacy_dimensions == {
+            "width": "200", "height": "30", "depth": "300",
+            "weight": "250", "dimension_unit": "MILLIMETERS",
+            "weight_unit": "GRAMS",
+        }
+        # Recreate the saved fact/provenance shape from before WB cache values
+        # were demoted to suggestions. The production resolver must identify
+        # this exact tuple as legacy and still require seller confirmation.
+        legacy_facts["facts"].setdefault("physical", {})[
+            "wb_package_dimensions"
+        ] = wb_suggestion
+        legacy_provenance["physical.wb_package_dimensions"] = {
+            "source": "product.dimensions_json",
+            "trust": "marketplace_observed",
+        }
+        legacy_package_draft.source_facts_json = (
+            MarketplaceDraftService._canonical_json(legacy_facts, dict)
+        )
+        legacy_package_draft.provenance_json = (
+            MarketplaceDraftService._canonical_json(legacy_provenance, dict)
+        )
+        legacy_package_draft.dimensions_json = (
+            MarketplaceDraftService._canonical_json(legacy_dimensions, dict)
+        )
+        assert MarketplaceDraftService.package_confirmation(
+            legacy_package_draft,
+        )["source"] == "legacy_wb_unverified"
+        assert MarketplaceDraftService.package_confirmation(
+            legacy_package_draft,
+        )["required"] is True
         retry_prepared_draft = MarketplaceDraftService.create_draft(
             seller_id=fixture["seller_id"],
             account_id=account_id,
@@ -327,13 +412,13 @@ def configure_fixture():
         assert current_codes >= {"physical_fact_required", "vat_required"}, current
         return (
             foreign_draft.id, new_source.id, product_type.id, stale_draft.id,
-            retry_prepared_source.id,
+            retry_prepared_source.id, legacy_package_draft.id,
         )
 
 
 (
     foreign_draft_id, source_id, product_type_id, stale_ready_draft_id,
-    retry_prepared_source_id,
+    retry_prepared_source_id, legacy_package_confirmation_draft_id,
 ) = configure_fixture()
 
 
@@ -1230,6 +1315,97 @@ def api_call_from_page(page, path, method="GET", body=None, csrf=None):
     )
 
 
+def legacy_package_confirmation_editor_check(context):
+    page = context.new_page()
+    page.set_default_timeout(20000)
+    page.on("pageerror", lambda error: report["js_errors"].append(str(error)))
+    page.on("response", track_browser_response)
+    page.goto(base + f"/marketplaces/drafts/{legacy_package_confirmation_draft_id}")
+    page.locator("#ozon-draft-editor:not([v-cloak])").wait_for()
+    config = bootstrap(page, "#ode-bootstrap")
+    response = api_call_from_page(page, config["urls"]["editor"])
+    assert response["status"] == 200, response
+    document = response["document"]
+    assert document["package_confirmation"]["required"] is True
+    assert document["package_confirmation"]["source"] == "legacy_wb_unverified"
+    expected_dimensions = {
+        "width": "200", "height": "30", "depth": "300",
+        "weight": "250", "dimension_unit": "MILLIMETERS",
+        "weight_unit": "GRAMS",
+    }
+    assert document["documents"]["dimensions"] == expected_dimensions
+    page.get_by_role("button", name="Цена и упаковка", exact=True).click()
+    page.locator("[data-package-confirmation-needed]").wait_for(state="visible")
+    confirmation = page.locator("#ode-package-confirm")
+    assert confirmation.is_visible() and confirmation.is_enabled()
+    assert not confirmation.is_checked()
+    assert page.locator("#ode-width").input_value() == "200"
+    assert page.locator("#ode-height").input_value() == "30"
+    assert page.locator("#ode-depth").input_value() == "300"
+    assert page.locator("#ode-weight").input_value() == "250"
+
+    with app.app_context():
+        draft = db.session.get(
+            MarketplaceProductDraft, legacy_package_confirmation_draft_id,
+        )
+        version_before = draft.version
+        dimensions_before = json.loads(draft.dimensions_json)
+        operations_before = MarketplaceOperation.query.filter_by(
+            seller_id=fixture["seller_id"], account_id=account_id,
+            draft_id=legacy_package_confirmation_draft_id,
+        ).count()
+    provider_writes_before = provider.physical_writes
+    confirmation.click()
+    assert confirmation.is_checked()
+    page.get_by_text("Изменения не сохранены", exact=True).wait_for()
+    save_button = page.get_by_role("button", name="Сохранить", exact=True)
+    assert save_button.is_enabled()
+    with page.expect_response(lambda item: (
+        item.request.method == "POST"
+        and urlsplit(item.url).path == config["urls"]["save"]
+    )) as saved_response_info:
+        save_button.click()
+    saved_response = saved_response_info.value
+    assert saved_response.status == 200
+    save_payload = saved_response.request.post_data_json
+    assert save_payload["expected_version"] == version_before
+    assert save_payload["patch"]["confirm_package"] is True
+    assert save_payload["patch"]["dimensions"] == expected_dimensions
+    page.get_by_text("Все изменения сохранены", exact=True).wait_for()
+
+    with app.app_context():
+        saved_draft = db.session.get(
+            MarketplaceProductDraft, legacy_package_confirmation_draft_id,
+        )
+        assert saved_draft.version > version_before
+        assert json.loads(saved_draft.dimensions_json) == dimensions_before
+        assert MarketplaceOperation.query.filter_by(
+            seller_id=fixture["seller_id"], account_id=account_id,
+            draft_id=legacy_package_confirmation_draft_id,
+        ).count() == operations_before
+
+    page.reload()
+    page.locator("#ozon-draft-editor:not([v-cloak])").wait_for()
+    reopened_config = bootstrap(page, "#ode-bootstrap")
+    reopened = api_call_from_page(page, reopened_config["urls"]["editor"])
+    assert reopened["status"] == 200, reopened
+    reopened_document = reopened["document"]
+    assert reopened_document["package_confirmation"]["required"] is False
+    assert reopened_document["package_confirmation"]["source"] == "seller_confirmed"
+    assert reopened_document["documents"]["dimensions"] == expected_dimensions
+    with app.app_context():
+        assert MarketplaceOperation.query.filter_by(
+            seller_id=fixture["seller_id"], account_id=account_id,
+            draft_id=legacy_package_confirmation_draft_id,
+        ).count() == operations_before
+    assert provider.physical_writes == provider_writes_before == 0
+    assert not provider.full_read_calls
+    passed(
+        "legacy_package_confirmation_saves_exact_tuple_and_reopens_seller_confirmed_without_operations"
+    )
+    page.close()
+
+
 def stale_ready_editor_check(page):
     assert provider.physical_writes == 0 and not provider.full_read_calls
     console_messages = []
@@ -1484,6 +1660,7 @@ try:
             page.locator("#ozon-drafts-list:not([v-cloak])").wait_for()
             passed("real_login_and_draft_workspace")
             stale_ready_editor_check(page)
+            legacy_package_confirmation_editor_check(context)
 
             csrf = list_config["csrf"]
             prepared = post_json(page, "/marketplaces/ozon/uploads/", {
@@ -1921,6 +2098,7 @@ try:
                             "dimension_unit": "MILLIMETERS", "weight": "250",
                             "weight_unit": "GRAMS",
                         },
+                        "confirm_package": True,
                         "barcodes": ["4600000000003"],
                         "commercial": {
                             "price": "1000", "old_price": "1200",
@@ -2223,6 +2401,8 @@ try:
             page.locator("#ode-currency").select_option("RUB")
             page.locator("#ode-dimension-unit").select_option("MILLIMETERS")
             page.locator("#ode-weight-unit").select_option("GRAMS")
+            page.locator("[data-package-confirmation-needed]").wait_for(state="visible")
+            page.locator("#ode-package-confirm").check()
             if page.get_by_role("textbox", name="Штрихкод 1").count() == 0:
                 page.get_by_role("button", name="+ Добавить штрихкод", exact=True).click()
             page.get_by_role("textbox", name="Штрихкод 1").fill("4600000000001")
@@ -2243,6 +2423,7 @@ try:
                 "code": (fresh_editor_response.get("document") or {}).get("code"),
             }
             fresh_editor = fresh_editor_response["document"]
+            assert fresh_editor.get("package_confirmation", {}).get("source") == "seller_confirmed"
             fresh_validation = fresh_editor.get("current_validation") or {}
             fresh_draft = fresh_editor.get("draft") or {}
             fresh_errors = fresh_validation.get("errors")

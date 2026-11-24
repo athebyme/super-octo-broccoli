@@ -119,6 +119,10 @@ class MarketplaceDraftEditor:
             'linked_category': MarketplaceDraftService.linked_category_state(draft),
             'title': draft.imported_product.title or draft.offer_id,
             'documents': documents,
+            'package_confirmation': MarketplaceDraftService.package_confirmation(
+                draft,
+                dimensions=documents['dimensions'],
+            ),
             'photo_previews': imported_photo_previews(draft.imported_product),
             'baseline_error': baseline_error,
             'baseline_synced_at': baseline.get('synced_at') if baseline else None,

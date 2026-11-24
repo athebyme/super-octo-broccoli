@@ -154,6 +154,12 @@ class OzonCompleteJourneyTest(OzonPublicationFixture, unittest.TestCase):
         self.source.original_data = json.dumps({
             "title": "Безопасный товар янтарного цвета",
             "description": "Цвет: янтарный. Поверхность: гладкая.",
+            "dimensions": {
+                "Ширина упаковки, мм": 200,
+                "Высота упаковки, мм": 30,
+                "Длина упаковки, мм": 300,
+                "Вес упаковки, г": 250,
+            },
         }, ensure_ascii=False)
         self._add_ai_attributes()
         db.session.commit()
@@ -551,6 +557,7 @@ class OzonCompleteJourneyTest(OzonPublicationFixture, unittest.TestCase):
                     "dimension_unit": "MILLIMETERS", "weight": "250",
                     "weight_unit": "GRAMS",
                 },
+                "confirm_package": True,
                 "barcodes": ["4600000000001"],
                 "commercial": {
                     "price": "1000", "old_price": "1200",

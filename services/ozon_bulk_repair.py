@@ -2447,6 +2447,10 @@ class OzonBulkRepairService:
                 "price_rub": commercial.get("price", ""),
                 "description": content.get("description", ""),
                 **cls._physical_export_values(draft),
+                "package_confirmation": MarketplaceDraftService.package_confirmation(
+                    draft,
+                    dimensions=cls._stored_json(draft.dimensions_json, {}),
+                ),
                 "attributes": attribute_fields,
                 **({"source_comparisons": source_comparisons}
                    if source_prepare or draft_selection else {}),
@@ -3458,8 +3462,13 @@ class OzonBulkRepairService:
         attribute_keys: Sequence[str],
         schema_cleanup: Optional[bool] = None,
         cleanup_candidates: Sequence[dict] = (),
+        confirm_package: bool = False,
     ) -> dict:
         patch = {}
+        if not isinstance(confirm_package, bool):
+            raise MarketplaceDraftValidationError(
+                "confirm_package должен быть boolean"
+            )
         if schema_cleanup is not None and not isinstance(
             schema_cleanup,
             bool,
@@ -3534,6 +3543,12 @@ class OzonBulkRepairService:
             "package_depth_mm",
             "package_weight_g",
         )
+        if confirm_package and not all(
+            values.get(key) not in (None, "") for key in physical_keys
+        ):
+            raise MarketplaceDraftValidationError(
+                "Для подтверждения упаковки укажите ширину, высоту, длину и вес"
+            )
         if any(values.get(key) not in (None, "") for key in physical_keys):
             if any(values.get(key) in (None, "") for key in physical_keys):
                 raise MarketplaceDraftValidationError(
@@ -3564,8 +3579,10 @@ class OzonBulkRepairService:
                 "dimension_unit": "MILLIMETERS",
                 "weight_unit": "GRAMS",
             }
-            if dimensions != cls._stored_json(draft.dimensions_json, {}):
+            if confirm_package or dimensions != cls._stored_json(draft.dimensions_json, {}):
                 patch["dimensions"] = dimensions
+                if confirm_package:
+                    patch["confirm_package"] = True
 
         current_attributes = cls._stored_json(draft.attributes_json, [])
         next_attributes = [
@@ -4086,6 +4103,7 @@ class OzonBulkRepairService:
                         draft=draft,
                         values=row["values"],
                         attribute_keys=attribute_keys,
+                        confirm_package=row.get("confirm_package", False),
                         schema_cleanup=row.get(
                             "schema_cleanup",
                         ),
@@ -4289,6 +4307,7 @@ class OzonBulkRepairService:
                 "product_type_id",
                 "save_mapping",
                 "schema_cleanup",
+                "confirm_package",
                 "values",
             }
             if source_review_enabled:
@@ -4367,6 +4386,11 @@ class OzonBulkRepairService:
                 raise OzonBulkUploadValidationError(
                     f"Строка {index}: schema_cleanup должен быть boolean"
                 )
+            confirm_package = row.get("confirm_package", False)
+            if not isinstance(confirm_package, bool):
+                raise OzonBulkUploadValidationError(
+                    f"Строка {index}: confirm_package должен быть boolean"
+                )
             if schema_cleanup and not expected["cleanup_candidates"]:
                 raise OzonBulkUploadValidationError(
                     f"Строка {index}: для карточки нет атрибутов на очистку"
@@ -4418,6 +4442,7 @@ class OzonBulkRepairService:
                     attribute_keys,
                     key=lambda key: int(key.split(":", 1)[1]),
                 ),
+                "confirm_package": confirm_package,
             }
             if source_review_enabled and source_review_json not in (None, ""):
                 parsed_row["source_review_json"] = source_review_json

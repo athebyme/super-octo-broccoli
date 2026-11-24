@@ -34,6 +34,12 @@ def test_editor_reads_exact_scope_without_provider_and_preserves_documents(draft
     with patch('requests.sessions.Session.request', side_effect=AssertionError('No network')):
         doc = MarketplaceDraftEditor.document(seller_id=f.seller1_id, draft_id=f.draft.id)
         assert doc['documents']['content']['name'] == f.draft.to_public_dict(detail=True)['content']['name']
+        assert isinstance(doc['package_confirmation']['required'], bool)
+        assert isinstance(doc['package_confirmation']['complete'], bool)
+        assert doc['package_confirmation']['source'] in {
+            'linked_listing', 'explicit_source', 'seller_confirmed',
+            'legacy_wb_unverified', 'unverified', 'incomplete',
+        }
         assert {row['id'] for row in doc['definitions']} == {'31', '32', '4191'}
         assert doc['baseline_attribute_identities'] == []
         with pytest.raises(MarketplaceDraftNotFound):
@@ -322,6 +328,47 @@ global.confirm=()=>true;page.removeAttribute(page.data.definitions[0]);assert.de
 page.setValues(page.data.definitions[0],[{value:'Вернули бренд'}]);assert.equal(page.form.attribute_removals.length,0);
 let changed;const field={values:[],definition:{data_type:'Boolean'},$emit:(_event,values)=>changed=values};definition.components['attribute-field'].methods.change.call(field,0,'false');assert.deepEqual(changed,[{value:'false'}]);field.definition.data_type='Decimal';definition.components['attribute-field'].methods.change.call(field,0,'12,5');assert.deepEqual(changed,[{value:'12.5'}]);
 assert.equal(ozonDraftEditor.safeImage('javascript:alert(1)'),'');assert.equal(ozonDraftEditor.safeImage('https://user:secret@test/1.jpg'),'');
+''')
+
+
+def test_same_value_package_confirmation_is_dirty_and_bound_to_complete_tuple():
+    run_node(r'''
+page.data.package_confirmation={required:true,complete:true,source:'legacy_wb_unverified'};
+assert.equal(page.packageConfirmationNeeded,true);
+assert.equal(page.packageConfirmationComplete,true);
+assert.equal(page.dirty,false,'unverified cached numbers remain unchanged until the seller acts');
+page.data.package_confirmation.suggested_dimensions={width:'11',height:'20',depth:'30',weight:'200',dimension_unit:'MILLIMETERS',weight_unit:'GRAMS'};
+assert.equal(page.showPackageConfirmationSuggestion,true);
+assert.equal(page.packageConfirmationSuggestionText,'Подсказка из WB: 11 × 20 × 30 мм; 200 г');
+page.form.confirm_package=true;
+assert.equal(page.dirty,true,'explicit confirmation is a local change even when all dimensions are the same');
+assert.deepEqual(page.patch(),{confirm_package:true,dimensions:{width:'10',height:'20',depth:'30',weight:'200',dimension_unit:'MILLIMETERS',weight_unit:'GRAMS'}});
+page.usePackageSuggestion();
+assert.equal(page.form.dimensions.width,'11','candidate is copied only after the seller chooses the local action');
+assert.equal(page.form.confirm_package,false,'copying a candidate cannot preserve staged confirmation');
+assert.equal(page.showPackageConfirmationSuggestion,false,'the same suggestion is not repeated beside the filled values');
+page.form.dimensions.width='10';
+page.form.dimensions.width='11';page.packageDimensionsChanged();
+assert.equal(page.form.confirm_package,false,'editing any dimension clears the staged confirmation');
+assert.equal(page.packageConfirmationNeeded,true,'changed measurements still need a full confirmation');
+assert.deepEqual(page.patch(),{dimensions:{width:'11',height:'20',depth:'30',weight:'200',dimension_unit:'MILLIMETERS',weight_unit:'GRAMS'}});
+page.form.dimensions.weight='200.5';
+assert.equal(page.packageConfirmationComplete,false,'fractional physical value cannot be confirmed');
+page.form.dimensions.weight='2147483648';
+assert.equal(page.packageConfirmationComplete,false,'physical value above the API bound cannot be confirmed');
+const packageIssue={code:'package_confirmation_required',field:'dimensions',message:'Подтвердите упаковку'};
+assert.equal(ozonDraftEditor.isNavigableIssue(packageIssue),true);
+assert.match(page.issueLabel(packageIssue),/Подтвердите габариты и вес упаковки/);
+const focused=[];
+global.document.getElementById=id=>id==='ode-package-confirm'?{id,disabled:false,focus(){focused.push(id)},scrollIntoView(){}}:null;
+page.goToIssue(packageIssue);
+assert.deepEqual(focused,['ode-package-confirm'],'complete unverified tuple issue focuses its explicit confirmation');
+focused.length=0;
+global.document.getElementById=id=>id==='ode-package-confirm'?{id,disabled:true,focus(){focused.push(id)}}:id==='ode-delivery-heading'?{id,focus(){focused.push(id)},scrollIntoView(){}}:null;
+page.goToIssue(packageIssue);
+assert.deepEqual(focused,['ode-delivery-heading'],'when confirmation control is unavailable, navigation returns to packaging section');
+page.draft.published_listing_id=99;
+assert.equal(page.packageConfirmationNeeded,false,'linked listing behavior stays outside this confirmation flow');
 ''')
 
 

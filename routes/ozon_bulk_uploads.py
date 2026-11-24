@@ -305,6 +305,7 @@ def _parse_editor_rows(editor: dict, *, mode: str = "job") -> list[dict]:
             prefix + "action",
             prefix + "product_type_id",
             prefix + "save_mapping",
+            prefix + "confirm_package",
             *(prefix + field for field in fixed_fields),
         })
         if native_source_review:
@@ -374,6 +375,11 @@ def _parse_editor_rows(editor: dict, *, mode: str = "job") -> list[dict]:
             field: _single_form_value(prefix + field)
             for field in fixed_fields
         }
+        confirm_package_raw = _single_form_value(prefix + "confirm_package")
+        if confirm_package_raw not in {"", "1"}:
+            raise OzonBulkUploadValidationError(
+                "confirm_package должен быть 1 или отсутствовать"
+            )
         source_review_json = (
             _single_form_value(prefix + "source_review_json")
             if native_source_review else ""
@@ -426,6 +432,7 @@ def _parse_editor_rows(editor: dict, *, mode: str = "job") -> list[dict]:
             "product_type_id": product_type_id,
             "save_mapping": save_mapping_raw == "1",
             "schema_cleanup": schema_cleanup_raw == "1",
+            "confirm_package": confirm_package_raw == "1",
             "values": values,
         }
         if native_source_review and source_review_json:

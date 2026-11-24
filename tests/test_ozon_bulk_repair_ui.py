@@ -210,12 +210,91 @@ const response=data=>({status:200,ok:true,redirected:false,json:async()=>({...da
     assert 'v-text="urls.catalog_return_label || \'К каталогу Ozon\'"' in template
     assert "filename='ozon-workspace-return.js', v='20261122-ozon-workspace-review-return-r57'" in template
     assert "filename='ozon-bulk-repair-vue.css', v='20261123-ozon-source-review-r1'" in template
-    assert "filename='ozon-bulk-repair-vue.js', v='20261123-ozon-source-refresh-r1'" in template
+    assert "filename='ozon-bulk-repair-vue.js', v='20261124-package-confirmation-r103'" in template
     assert 'data-source-facts-refresh' in template
     assert 'data-source-facts-refresh-dialog' in template
     assert 'data-source-facts-refresh-count' in template
     assert 'data-source-facts-refresh-confirm' in template
     assert 'data-source-facts-refresh-result' in template
+
+
+def test_mass_package_confirmation_is_per_row_dirty_and_requires_full_tuple():
+    source=Path(__file__).parents[1]/'static/ozon-bulk-repair-vue.js'
+    script=r"""
+const assert=require('node:assert/strict');global.window=global;global.ozonDraftEditor={fieldComponent:{},photoComponent:{}};
+global.document={activeElement:{focus(){}},getElementById(){return null}};
+global.location={href:'https://app.test/repair',origin:'https://app.test',pathname:'/repair',search:''};
+global.history={replaceState(){}};global.sessionStorage={setItem(){},getItem(){return null}};
+require('./static/ozon-workspace-return.js');require('./static/ozon-bulk-repair-vue.js');
+const core=ozonBulkRepair;
+const sourceRow={draft_id:51,draft_version:2,imported_product_id:81,offer_id:'offer-51',title:'Товар 51',action:'ИСПРАВИТЬ',
+ product_type_id:1,product_type_name:'Тип',price_rub:'100',description:'Описание',package_width_mm:'100',package_height_mm:'200',
+ package_depth_mm:'300',package_weight_g:'400',package_confirmation:{required:true,complete:true,source:'legacy_wb_unverified',suggested_dimensions:{width:'101',height:'200',depth:'300',weight:'400'}},attributes:[],cleanup_candidates:[],
+ schema_cleanup:false,status:'needs_input',validation_errors:[],type_change_impact:{attributes:0,complex_groups:0,removals:0}};
+const config={editor:{mode:'draft_selection',job_uid:null,account_id:1,scope_key:'a'.repeat(64),review_draft_ids:[51],blocked_review_items:[],
+ groups:[{id:'g',source_category:'Категория',rows:[sourceRow]}],bulk_fields:[{key:'package_width_mm',label:'Ширина упаковки'},{key:'price_rub',label:'Цена продавца'}]},enabled:true,csrf:'csrf',
+ urls:{read:'/read',apply:'/apply',types:'/types',dictionaries:'/dict/'}};
+function state(){const options=core.createOptions(config),s=options.data();
+ for(const [key,value] of Object.entries(options.methods))s[key]=value.bind(s);
+ for(const [key,value] of Object.entries(options.computed))Object.defineProperty(s,key,{get:()=>value.call(s)});
+ s.$nextTick=fn=>fn();s.$refs={modal:{showModal(){},close(){}},error:{focus(){}}};return s;}
+let s=state(),row=s.rows[0];
+assert.equal(s.packageConfirmationNeeded(row),true);
+assert.equal(s.packageConfirmationComplete(row),true);
+assert.equal(s.showPackageConfirmationSuggestion(row),true);
+assert.equal(s.packageConfirmationSuggestionText(row),'Подсказка из WB: 101 × 200 × 300 мм; 400 г');
+assert.equal(core.changes(row).length,0,'cached values alone do not create an edit');
+row.confirm_package=true;row.selected=true;
+assert.equal(core.changes(row).find(change=>change.key==='confirm_package').afterLabel,'Да');
+s.reviewSave();
+assert.equal(s.dialog,'review');
+assert.equal(s.review[0].changes.some(change=>change.key==='confirm_package'),true,'review names the explicit confirmation even though measurements did not change');
+const body=core.serialize([row],'csrf',false,true);
+assert.equal(body.get('row_51_confirm_package'),'1');
+
+s=state();row=s.rows[0];row.selected=true;row.package_width_mm='101';s.packageDimensionsChanged(row);
+assert.equal(row.confirm_package,false,'measurement edits revoke a staged confirmation');
+assert.equal(s.packageConfirmationNeeded(row),true,'the new tuple requires its own confirmation');
+assert.equal(s.showPackageConfirmationSuggestion(row),false,'do not repeat the candidate after local values match it');
+row.package_confirmation.suggested_dimensions.width='102';
+assert.equal(s.showPackageConfirmationSuggestion(row),true);
+s.usePackageSuggestion(row);
+assert.equal(row.package_width_mm,'102','the candidate fill is local and explicit');
+assert.equal(row.confirm_package,false,'candidate fill never carries confirmation');
+assert.equal(s.checkRows(),'','all four complete values remain eligible for review');
+row.package_width_mm='';
+assert.equal(s.packageConfirmationComplete(row),false);
+assert.match(s.checkRows(),/все четыре значения упаковки/,'partial tuple remains blocked');
+row.package_width_mm='2147483648';row.package_height_mm='200';row.package_depth_mm='300';row.package_weight_g='400';
+assert.equal(s.packageConfirmationComplete(row),false,'value above the API bound cannot be confirmed');
+row.package_width_mm='100.5';
+assert.equal(s.packageConfirmationComplete(row),false,'fractional value cannot be confirmed');
+
+s=state();row=s.rows[0];row.selected=true;row.confirm_package=true;
+s.bulkKey='package_width_mm';s.bulkValue='105';s.previewBulk();
+assert.equal(s.bulkPlan.items.length,1);
+s.applyBulk();
+assert.equal(row.package_width_mm,'105');
+assert.equal(row.confirm_package,false,'bulk measurement edits clear an earlier confirmation');
+assert.equal(core.serialize([row],'csrf',false,true).has('row_51_confirm_package'),false,'edited dimensions cannot silently carry confirmation');
+row.confirm_package=true;s.bulkKey='price_rub';s.bulkValue='110';s.previewBulk();s.applyBulk();
+assert.equal(row.confirm_package,true,'unrelated bulk edits preserve an explicit package confirmation');
+
+s=state();row=s.rows[0];row.package_confirmation={required:false,complete:true,source:'explicit_source'};
+assert.equal(s.packageConfirmationNeeded(row),false,'an exact explicit source match needs no extra acknowledgement');
+row.package_width_mm='101';assert.equal(s.packageConfirmationNeeded(row),true,'editing the source-matched tuple reopens confirmation');
+row.package_confirmation={required:false,complete:true,source:'linked_listing'};
+assert.equal(s.packageConfirmationNeeded(row),false,'linked listings retain their existing contract');
+console.log('mass package confirmation state and exact row transport: passed');
+"""
+    result=subprocess.run(['node','-e',script,str(source)],capture_output=True,text=True,timeout=15)
+    assert result.returncode==0,result.stdout+result.stderr
+    template=(Path(__file__).parents[1]/'templates/ozon_bulk_repair.html').read_text()
+    assert ':data-package-confirm="row.draft_id"' in template
+    assert 'packageConfirmationNeeded(row)' in template
+    assert 'data-package-suggestion-fill' in template
+    assert 'data-package-suggestion-state' in template
+    assert 'Подтверждаю габариты и вес упаковки' in template
 
 
 def test_native_supplier_comparisons_use_exact_sets_and_bound_local_decisions():

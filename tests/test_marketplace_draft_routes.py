@@ -193,6 +193,60 @@ class MarketplaceDraftRoutesTest(unittest.TestCase):
         self.assertEqual(html.status_code, 200)
         self.assertEqual(render.call_args.args[0], 'marketplace_draft_detail.html')
 
+    def test_single_editor_requires_explicit_same_value_package_confirmation(self):
+        dimensions = {
+            'width': '100', 'height': '200', 'depth': '300', 'weight': '400',
+            'dimension_unit': 'MILLIMETERS', 'weight_unit': 'GRAMS',
+        }
+        with self.app.app_context():
+            draft = db.session.get(MarketplaceProductDraft, self.own_id)
+            draft.dimensions_json = json.dumps(dimensions)
+            db.session.commit()
+            version = draft.version
+
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch:
+            before = self.client.get(f'/marketplaces/drafts/{self.own_id}/editor')
+            self.assertEqual(before.status_code, 200)
+            self.assertTrue(before.get_json()['package_confirmation']['required'])
+            confirmed = self.client.patch(
+                f'/marketplaces/drafts/{self.own_id}',
+                json={
+                    'expected_version': version,
+                    'patch': {'dimensions': dimensions, 'confirm_package': True},
+                },
+            )
+            self.assertEqual(confirmed.status_code, 200, confirmed.get_json())
+            after_confirmation = self.client.get(
+                f'/marketplaces/drafts/{self.own_id}/editor',
+            )
+            self.assertEqual(after_confirmation.status_code, 200)
+            self.assertFalse(
+                after_confirmation.get_json()['package_confirmation']['required'],
+            )
+            self.assertEqual(
+                after_confirmation.get_json()['documents']['dimensions'],
+                dimensions,
+            )
+            self.assertGreater(
+                after_confirmation.get_json()['draft']['version'], version,
+            )
+            changed = dict(dimensions, width='101')
+            changed_response = self.client.patch(
+                f'/marketplaces/drafts/{self.own_id}',
+                json={
+                    'expected_version': after_confirmation.get_json()['draft']['version'],
+                    'patch': {'dimensions': changed},
+                },
+            )
+            self.assertEqual(changed_response.status_code, 200, changed_response.get_json())
+            after_change = self.client.get(
+                f'/marketplaces/drafts/{self.own_id}/editor',
+            )
+
+        self.assertTrue(after_change.get_json()['package_confirmation']['required'])
+        self.assertEqual(after_change.get_json()['documents']['dimensions']['width'], '101')
+
     def test_editor_get_recomputes_legacy_ready_without_persisting_or_network(self):
         with self.app.app_context():
             draft = db.session.get(MarketplaceProductDraft, self.own_id)

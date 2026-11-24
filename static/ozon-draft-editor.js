@@ -12,12 +12,18 @@
     const empty = value => value === '' || value === null || value === undefined;
     const decimal = value => typeof value === 'string' && /^\d+,\d+$/.test(value.trim()) ? value.trim().replace(',', '.') : value;
     function cleanObject(value) { return Object.fromEntries(Object.entries(value || {}).filter(([, v]) => !empty(v))); }
+    function normalizedDimensions(value) {
+        const dimensions = cleanObject(value);
+        for (const key of ['width', 'height', 'depth', 'weight']) {
+            if (key in dimensions) dimensions[key] = decimal(dimensions[key]);
+        }
+        return dimensions;
+    }
     function attributes(rows) {
         return (rows || []).map(row => ({...row, values: (row.values || []).filter(v => !empty(v.value))})).filter(row => row.values.length);
     }
     function serialize(form) {
-        const dimensions = cleanObject(form.dimensions), commercial = cleanObject(form.commercial);
-        for (const key of ['width', 'height', 'depth', 'weight']) if (key in dimensions) dimensions[key] = decimal(dimensions[key]);
+        const dimensions = normalizedDimensions(form.dimensions), commercial = cleanObject(form.commercial);
         for (const key of ['price', 'old_price']) if (key in commercial) commercial[key] = decimal(commercial[key]);
         return {
             offer_id: form.offer_id,
@@ -27,6 +33,7 @@
             attribute_removals: clone(form.attribute_removals),
             media: {...cleanObject(form.media), images: (form.media.images || []).filter(Boolean)},
             dimensions,
+            confirm_package: form.confirm_package === true,
             commercial,
             barcodes: (form.barcodes || []).filter(Boolean),
         };
@@ -40,7 +47,7 @@
         'commercial.price':'ode-price', 'commercial.old_price':'ode-old-price', 'commercial.vat':'ode-vat',
         'commercial.currency_code':'ode-currency', 'dimensions.width':'ode-width', 'dimensions.height':'ode-height',
         'dimensions.depth':'ode-depth', 'dimensions.weight':'ode-weight', 'dimensions.dimension_unit':'ode-dimension-unit',
-        'dimensions.weight_unit':'ode-weight-unit', 'media':'ode-photo-url', 'media.images':'ode-photo-url',
+        'dimensions.weight_unit':'ode-weight-unit', 'dimensions':'ode-package-confirm', 'media':'ode-photo-url', 'media.images':'ode-photo-url',
         'media.primary_image':'ode-photo-url', 'media.color_image':'ode-color-url',
     };
     const reviewFocusValue = /^[A-Za-z0-9_.:\-\[\]]+$/;
@@ -51,6 +58,7 @@
             offer_id_required:'Укажите артикул продавца.',
             offer_id_too_long:'Артикул слишком длинный. Сократите его до 50 символов.',
             offer_id_already_published:'Этот артикул уже занят другой карточкой в магазине.',
+            package_confirmation_required:'Подтвердите габариты и вес упаковки после сверки с фактической упаковкой.',
             dimension_unit_required:'Выберите единицу измерения габаритов упаковки.',
             weight_unit_required:'Выберите единицу измерения веса с упаковкой.',
             price_required:'Укажите рассчитанную цену продажи больше нуля.',
@@ -79,7 +87,7 @@
             'content.name', 'content.description', 'offer_id', 'product_type_id',
             'product_type', 'type_id', 'category', 'category_id', 'commercial.price', 'commercial.old_price',
             'commercial.vat', 'commercial.currency_code', 'dimensions.width',
-            'dimensions.height', 'dimensions.depth', 'dimensions.weight',
+            'dimensions', 'dimensions.height', 'dimensions.depth', 'dimensions.weight',
             'dimensions.dimension_unit', 'dimensions.weight_unit',
         ].includes(field)) return true;
         return /^(?:attributes(?:\.\d+|\[\d+\])|complex_attributes\[\d+\](?:\.attributes\[\d+\])?)(?:\.|$)/.test(field) ||
@@ -305,6 +313,44 @@
             }; },
             computed: {
                 dirty() { return !!this.form && !equal(serialize(this.form), this.original); },
+                packageConfirmationNeeded() {
+                    if (!this.data?.package_confirmation || this.draft?.published_listing_id) return false;
+                    return this.data.package_confirmation.required === true ||
+                        !!this.original && !equal(normalizedDimensions(this.form?.dimensions), this.original.dimensions);
+                },
+                packageConfirmationComplete() {
+                    const dimensions = this.form?.dimensions || {};
+                    const positive = value => {
+                        if (value === '' || value === null || value === undefined) return false;
+                        const normalized = decimal(String(value).trim());
+                        if (!/^\d+$/.test(normalized)) return false;
+                        const parsed = Number(normalized);
+                        return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= 2147483647;
+                    };
+                    return ['width', 'height', 'depth', 'weight'].every(key => positive(dimensions[key])) &&
+                        ['MILLIMETERS', 'CENTIMETERS', 'INCHES'].includes(dimensions.dimension_unit) &&
+                        ['GRAMS', 'KILOGRAMS', 'POUNDS'].includes(dimensions.weight_unit);
+                },
+                packageConfirmationSourceLabel() {
+                    const source = this.data?.package_confirmation?.source;
+                    if (source === 'legacy_wb_unverified') {
+                        return 'Значения из карточки WB. Сверьте с фактической упаковкой.';
+                    }
+                    if (source === 'unverified') return 'Сверьте текущие значения с фактической упаковкой.';
+                    return '';
+                },
+                packageConfirmationSuggestionText() {
+                    const value = this.data?.package_confirmation?.suggested_dimensions;
+                    if (!value) return '';
+                    return `Подсказка из WB: ${value.width} × ${value.height} × ${value.depth} мм; ${value.weight} г`;
+                },
+                showPackageConfirmationSuggestion() {
+                    const suggested = this.data?.package_confirmation?.suggested_dimensions;
+                    return !!suggested && !equal(
+                        normalizedDimensions(this.form?.dimensions),
+                        normalizedDimensions(suggested),
+                    );
+                },
                 locked() { return !config.enabled || !!this.busy || this.conflict || this.uncertain || !this.draft || this.draft.status === 'archived' || !!this.data.active_operation_id; },
                 schemaFresh() { return !!this.data?.readiness?.schema?.fresh; },
                 currentValidationAvailable() {
@@ -432,7 +478,7 @@
                 },
                 hydrate(data) {
                     this.closeDictionary(); this.cancelTypeSearch(); this.data = data; this.draft = data.draft;
-                    this.form = {...clone(data.documents), offer_id:data.draft.offer_id, attribute_removals:clone(data.draft.attribute_removals || [])};
+                    this.form = {...clone(data.documents), offer_id:data.draft.offer_id, attribute_removals:clone(data.draft.attribute_removals || []), confirm_package:false};
                     this.form.media.images ||= []; this.form.content.name ||= ''; this.form.content.description ||= '';
                     this.original = serialize(this.form); this.typeOptions = this.initialTypeOptions(); this.typeQuery = ''; this.selectedType = null;
                     this.conflict = false; this.uncertain = false; this.photoIndex = 0;
@@ -492,7 +538,12 @@
                     }
                 },
                 readableError(error) { return error instanceof TypeError ? 'Нет ответа от сервера. Проверьте соединение; введённые данные остаются на экране.' : error.message; },
-                patch() { const current = serialize(this.form); return Object.fromEntries(Object.entries(current).filter(([key, value]) => !equal(value, this.original[key]))); },
+                patch() {
+                    const current = serialize(this.form);
+                    const patch = Object.fromEntries(Object.entries(current).filter(([key, value]) => !equal(value, this.original[key])));
+                    if (patch.confirm_package === true) patch.dimensions = current.dimensions;
+                    return patch;
+                },
                 focusActionErrorAfterFailure(originFocus, restoredFocus = null) {
                     this.$nextTick(() => {
                         if (!alive || !this.error) return;
@@ -542,6 +593,15 @@
                     await this.mutate('refresh', {expected_version:this.draft.version}, 'Исходные сведения обновлены. Проверьте карточку ещё раз.');
                 },
                 setSection(section) { this.section = section; },
+                packageDimensionsChanged() {
+                    if (this.form?.confirm_package) this.form.confirm_package = false;
+                },
+                usePackageSuggestion() {
+                    const suggested = this.data?.package_confirmation?.suggested_dimensions;
+                    if (!suggested || this.locked) return;
+                    this.form.dimensions = clone(suggested);
+                    this.packageDimensionsChanged();
+                },
                 initialTypeOptions() {
                     // Path-only lexical matches (25/30) are too broad to present
                     // as a suggestion. Explicit search still lists every match.

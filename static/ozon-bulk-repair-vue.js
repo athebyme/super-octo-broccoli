@@ -7,7 +7,7 @@
     const SOURCE_REVIEW_FIELDS = ['10096','4389'];
     const SOURCE_REVIEW_LABELS = {'10096':'Цвет товара','4389':'Страна-изготовитель'};
     const fixed = ['price_rub','package_width_mm','package_height_mm','package_depth_mm','package_weight_g','description'];
-    const labels = {price_rub:'Цена продавца, ₽',package_width_mm:'Ширина упаковки, мм',package_height_mm:'Высота упаковки, мм',package_depth_mm:'Длина упаковки, мм',package_weight_g:'Вес с упаковкой, г',description:'Описание',action:'Действие',product_type_id:'Тип товара',save_mapping:'Запомнить категорию',schema_cleanup:'Очистка несовместимых характеристик'};
+    const labels = {price_rub:'Цена продавца, ₽',package_width_mm:'Ширина упаковки, мм',package_height_mm:'Высота упаковки, мм',package_depth_mm:'Длина упаковки, мм',package_weight_g:'Вес с упаковкой, г',confirm_package:'Подтверждение упаковки',description:'Описание',action:'Действие',product_type_id:'Тип товара',save_mapping:'Запомнить категорию',schema_cleanup:'Очистка несовместимых характеристик'};
     const asText = value => value == null ? '' : String(value);
     const valuesOf = field => {
         const values=asText(field.value).split('\n').filter(Boolean);
@@ -21,7 +21,7 @@
     function snapshot(row) {
         const result = Object.fromEntries(fixed.map(key => [key, asText(row[key])]));
         for (const field of row.attributes) result['attribute:'+field.external_id] = clone(field.values);
-        return {...result,action:row.action,product_type_id:row.product_type_id,save_mapping:!!row.save_mapping,schema_cleanup:!!row.schema_cleanup};
+        return {...result,action:row.action,product_type_id:row.product_type_id,save_mapping:!!row.save_mapping,schema_cleanup:!!row.schema_cleanup,confirm_package:row.confirm_package===true};
     }
     function makeRows(editor) {
         const sourcePrepare = editor.mode === 'source_prepare';
@@ -29,7 +29,7 @@
         const requested = new Set(draftSelection && Array.isArray(editor.review_draft_ids) ? editor.review_draft_ids : []);
         return editor.groups.flatMap(group => group.rows.map(source => {
             const row = {...clone(source),...(sourcePrepare ? {action:'ИСПРАВИТЬ'} : {}),group_id:group.id,group_name:group.source_category,selected:false,
-                expanded:false,save_mapping:false,error:'',server:null,dictionaryCopied:false,baseTypeName:source.product_type_name};
+                expanded:false,save_mapping:false,confirm_package:false,error:'',server:null,dictionaryCopied:false,baseTypeName:source.product_type_name};
             row.source_review_decisions={};
             if (draftSelection && requested.has(row.draft_id)) row.selected=true;
             row.attributes = row.attributes.map(field => ({...field,values:valuesOf(field)}));
@@ -187,6 +187,7 @@
             for (const [key,value] of Object.entries({draft_version:row.draft_version,imported_product_id:row.imported_product_id,
                 action:sourcePrepare || draftSelection ? 'ИСПРАВИТЬ' : row.action,product_type_id:row.product_type_id || '',save_mapping:!draftSelection && row.save_mapping ? '1':'0'})) form.append(prefix+key,asText(value));
             fixed.forEach(key => form.append(prefix+key,asText(row[key])));
+            if(row.confirm_package===true)form.append(prefix+'confirm_package','1');
             const typeChanged = row.product_type_id !== row.base.product_type_id;
             if (row.cleanup_candidates.length && row.schema_cleanup && !typeChanged) form.append(prefix+'schema_cleanup','1');
             for (const field of row.attributes.filter(f => f.editable)) {
@@ -382,6 +383,53 @@
             },
             methods:{
                 display,dictionaryIdentities,shouldShowDictionaryIdentities,shouldShowDictionaryId,definition,changes,
+                packageConfirmationNeeded(row) {
+                    const confirmation=row?.package_confirmation;
+                    if(!confirmation || confirmation.source==='linked_listing')return false;
+                    if(confirmation.required===true)return true;
+                    return fixed.slice(1,5).some(key=>asText(row[key])!==asText(row.base?.[key]));
+                },
+                packageConfirmationSourceLabel(row) {
+                    const source=row?.package_confirmation?.source;
+                    if(source==='legacy_wb_unverified') {
+                        return 'Значения из карточки WB. Сверьте с фактической упаковкой.';
+                    }
+                    if(source==='unverified')return 'Сверьте текущие значения с фактической упаковкой.';
+                    return 'Сверьте полный комплект габаритов и веса с фактической упаковкой.';
+                },
+                packageConfirmationComplete(row) {
+                    return fixed.slice(1,5).every(key=>{
+                        const value=asText(row?.[key]).trim();
+                        if(!/^\d+$/.test(value))return false;
+                        const number=Number(value);
+                        return Number.isSafeInteger(number) && number>0 && number<=2147483647;
+                    });
+                },
+                packageConfirmationSuggestionText(row) {
+                    const value=row?.package_confirmation?.suggested_dimensions;
+                    return value ? `Подсказка из WB: ${value.width} × ${value.height} × ${value.depth} мм; ${value.weight} г` : '';
+                },
+                showPackageConfirmationSuggestion(row) {
+                    const value=row?.package_confirmation?.suggested_dimensions;
+                    if(!value)return false;
+                    return [
+                        ['package_width_mm','width'],['package_height_mm','height'],
+                        ['package_depth_mm','depth'],['package_weight_g','weight'],
+                    ].some(([field,key])=>Number(row[field])!==Number(value[key]));
+                },
+                usePackageSuggestion(row) {
+                    const value=row?.package_confirmation?.suggested_dimensions;
+                    if(!value || this.locked)return;
+                    row.package_width_mm=asText(value.width);
+                    row.package_height_mm=asText(value.height);
+                    row.package_depth_mm=asText(value.depth);
+                    row.package_weight_g=asText(value.weight);
+                    this.packageDimensionsChanged(row);
+                },
+                packageDimensionsChanged(row) {
+                    if(row.confirm_package)row.confirm_package=false;
+                    this.noteChange(row);
+                },
                 sourceComparisonsFor(draftId) {
                     const row=this.rows.find(candidate=>candidate.draft_id===draftId);
                     if(!row || this.changedType(row))return [];
@@ -809,7 +857,11 @@
                     for(const item of this.bulkPlan.items) {
                         const row=this.rows.find(r=>r.draft_id===item.id),field=row.attributes.find(f=>'attribute:'+f.external_id===this.bulkPlan.key);
                         if(field){this.clearSourceDecision(row,field.external_id);field.values=clone(item.after);if(field.dictionary)row.dictionaryCopied=true;}
-                        else row[this.bulkPlan.key]=clone(item.after);
+                        else {
+                            row[this.bulkPlan.key]=clone(item.after);
+                            if(['package_width_mm','package_height_mm','package_depth_mm','package_weight_g'].includes(this.bulkPlan.key))
+                                this.packageDimensionsChanged(row);
+                        }
                         row.error='';
                     }
                     this.notice='Заполнено в форме: '+this.bulkPlan.items.length+'. Изменения ещё не сохранены.';this.close();
@@ -872,6 +924,7 @@
                         if(row.price_rub && !/^\d+([.,]\d+)?$/.test(row.price_rub.trim()))return 'Цена продавца должна быть числом. Проверьте '+row.title+'.';
                         const dimensions=fixed.slice(1,5).map(key=>row[key]);
                         if(dimensions.some(Boolean) && dimensions.some(v=>!v || !/^\d+([.,]\d+)?$/.test(v.trim())))return 'Укажите все четыре значения упаковки числами: '+row.title+'.';
+                        if(row.confirm_package===true && !this.packageConfirmationComplete(row))return 'Для подтверждения укажите четыре положительных целых значения упаковки в допустимом диапазоне мм и г: '+row.title+'.';
                     }
                     return '';
                 },

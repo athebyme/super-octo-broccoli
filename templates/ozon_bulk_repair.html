@@ -104,12 +104,23 @@
                     <template v-else>
                         <div class="orb-fixed-grid">
                             <label><span class="orb-label">Цена продавца, ₽</span><input class="sh-input" type="text" inputmode="decimal" :name="'price-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.price_rub" @input="noteChange(row)"></label>
-                            <label><span class="orb-label">Ширина упаковки, мм</span><input class="sh-input" type="text" inputmode="decimal" :name="'width-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.package_width_mm" @input="noteChange(row)"></label>
-                            <label><span class="orb-label">Высота упаковки, мм</span><input class="sh-input" type="text" inputmode="decimal" :name="'height-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.package_height_mm" @input="noteChange(row)"></label>
-                            <label><span class="orb-label">Длина упаковки, мм</span><input class="sh-input" type="text" inputmode="decimal" :name="'depth-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.package_depth_mm" @input="noteChange(row)"></label>
-                            <label><span class="orb-label">Вес с упаковкой, г</span><input class="sh-input" type="text" inputmode="decimal" :name="'weight-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.package_weight_g" @input="noteChange(row)"></label>
+                            <label><span class="orb-label">Ширина упаковки, мм</span><input class="sh-input" type="text" inputmode="decimal" :name="'width-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.package_width_mm" @input="packageDimensionsChanged(row)"></label>
+                            <label><span class="orb-label">Высота упаковки, мм</span><input class="sh-input" type="text" inputmode="decimal" :name="'height-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.package_height_mm" @input="packageDimensionsChanged(row)"></label>
+                            <label><span class="orb-label">Длина упаковки, мм</span><input class="sh-input" type="text" inputmode="decimal" :name="'depth-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.package_depth_mm" @input="packageDimensionsChanged(row)"></label>
+                            <label><span class="orb-label">Вес с упаковкой, г</span><input class="sh-input" type="text" inputmode="decimal" :name="'weight-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.package_weight_g" @input="packageDimensionsChanged(row)"></label>
                         </div>
                         <p class="orb-help">Габариты и вес указывайте полным комплектом. Пустое поле не удаляет уже сохранённое значение.</p>
+                        <div v-if="packageConfirmationNeeded(row)" class="orb-inline-warning" data-package-confirmation-needed role="status">
+                            <p>{{ packageConfirmationSourceLabel(row) }}</p>
+                            <p v-if="showPackageConfirmationSuggestion(row)" data-package-suggestion>{{ packageConfirmationSuggestionText(row) }}. Сверьте с фактической упаковкой.</p>
+                            <button v-if="showPackageConfirmationSuggestion(row)" type="button" class="sh-btn sh-btn--secondary sh-btn--sm" data-package-suggestion-fill :disabled="locked" @click="usePackageSuggestion(row)">Подставить в поля для проверки</button>
+                            <label class="orb-check"><input type="checkbox" :data-package-confirm="row.draft_id" :aria-label="'Подтверждаю габариты и вес упаковки: ' + row.title + ' (' + row.offer_id + ')'" v-model="row.confirm_package" :disabled="locked || !packageConfirmationComplete(row)" @change="noteChange(row)"><span>Подтверждаю габариты и вес упаковки</span></label>
+                            <small v-if="!packageConfirmationComplete(row)">Для подтверждения укажите четыре положительных целых значения в мм и г.</small>
+                        </div>
+                        <div v-else-if="showPackageConfirmationSuggestion(row)" class="orb-inline-warning" data-package-suggestion-state role="status">
+                            <p>{{ packageConfirmationSuggestionText(row) }}. Сверьте с фактической упаковкой.</p>
+                            <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" data-package-suggestion-fill :disabled="locked" @click="usePackageSuggestion(row)">Подставить в поля для проверки</button>
+                        </div>
                         <label><span class="orb-label">Описание</span><textarea class="sh-input" :name="'description-'+row.draft_id" maxlength="100000" rows="4" v-model="row.description" @input="noteChange(row)"></textarea></label>
                         <section v-if="row.validation_errors.length" class="orb-validation" aria-label="Что нужно исправить"><h3>Требует внимания</h3><ul><li v-for="(issue,index) in row.validation_errors" :key="index">{{ issue.message }}</li></ul><p v-if="row.validation_errors_truncated">Остальные причины доступны в индивидуальном редакторе.</p></section>
                         <template v-if="!changedType(row)">
@@ -269,5 +280,5 @@
 <script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}" defer></script>
 <script src="{{ url_for('static', filename='ozon-draft-editor.js') }}" defer></script>
 <script src="{{ url_for('static', filename='ozon-workspace-return.js', v='20261122-ozon-workspace-review-return-r57') }}" defer></script>
-<script src="{{ url_for('static', filename='ozon-bulk-repair-vue.js', v='20261123-ozon-source-refresh-r1') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-bulk-repair-vue.js', v='20261124-package-confirmation-r103') }}" defer></script>
 {% endblock %}

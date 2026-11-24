@@ -93,6 +93,7 @@ from models import (
     MarketplaceOperation,
     MarketplaceProductDraft,
     MarketplaceProductType,
+    Product,
     MarketplaceTaxonomyCategory,
     OzonBulkUploadItem,
     OzonBulkUploadRun,
@@ -331,6 +332,9 @@ state = {
     "review_editor_navigation_validate_posts": 0,
     "review_editor_navigation_saved_version": None,
     "review_editor_navigation_validated_version": None,
+    "package_confirmation_active": False,
+    "package_confirmation_draft_ids": [],
+    "package_confirmation_post": None,
 }
 business_write_events = []
 BUSINESS_TABLES = {
@@ -871,6 +875,7 @@ def bridge(route):
                 dimensions = body["patch"].get("dimensions")
                 assert dimensions and dimensions.get("weight") == "250", dimensions
                 assert dimensions.get("weight_unit") == "GRAMS", dimensions
+                assert body["patch"].get("confirm_package") is True, body["patch"]
                 state["review_editor_navigation_save_posts"] += 1
             elif path == validate_path:
                 body = json.loads(request.post_data or "{}")
@@ -913,7 +918,9 @@ def bridge(route):
             selected_ids = [int(value) for value in form.get("selected_draft_id", [])]
             selection_mode = path == "/marketplaces/ozon/uploads/selection/repair/apply"
             expected = (
-                state["selection_draft_ids"] if selection_mode
+                state["package_confirmation_draft_ids"]
+                if selection_mode and state.get("package_confirmation_active")
+                else state["selection_draft_ids"] if selection_mode
                 else state["brand_search_ambiguous_draft_ids"]
                 if state.get("brand_search_case_active")
                 else state["repair_row_ids"]
@@ -924,6 +931,16 @@ def bridge(route):
                 query = parse_qs(url.query)
                 assert query["account_id"] == [str(account_id)], query
                 assert query["draft_ids"] == [",".join(map(str, expected))], query
+                if state.get("package_confirmation_active"):
+                    target_id, other_id = expected
+                    assert form.get(f"row_{target_id}_confirm_package") == ["1"]
+                    assert f"row_{other_id}_confirm_package" not in form
+                    assert form.get("confirm_local") == ["1"]
+                    state["package_confirmation_post"] = {
+                        "draft_ids": selected_ids,
+                        "confirmed_draft_ids": [target_id],
+                        "csrf": bool(request.headers.get("x-csrftoken")),
+                    }
             else:
                 assert selected_ids == expected, selected_ids
             receipt_key = (
@@ -1103,6 +1120,267 @@ def _business_counts():
                 seller_id=fixture["seller_id"], account_id=account_id,
             ).count(),
         }
+
+
+def _seed_legacy_package_confirmation_drafts():
+    """Build two old WB-cache drafts using the current provenance helpers."""
+    with app.app_context():
+        product_type = MarketplaceProductType.query.filter_by(
+            marketplace_id=marketplace_id,
+            external_type_id="1000",
+        ).one()
+        draft_ids = []
+        for index, suffix in enumerate(("target", "unchecked"), start=1):
+            title = f"R103 · legacy package {suffix}"
+            wb_product = Product(
+                seller_id=fixture["seller_id"],
+                nm_id=91991000 + index,
+                vendor_code=f"R103-PACKAGE-{suffix.upper()}",
+                title=title,
+                dimensions_json=json.dumps({
+                    "isValid": True,
+                    "width": 20,
+                    "height": 3,
+                    "length": 30,
+                    "weightBrutto": 0.25,
+                }),
+            )
+            source = ImportedProduct(
+                seller_id=fixture["seller_id"],
+                product=wb_product,
+                external_id=f"r103-legacy-package-{suffix}",
+                external_vendor_code=f"R103-PACKAGE-{suffix.upper()}",
+                source_type="synthetic",
+                title=title,
+                description="Синтетическая старая проекция упаковки WB.",
+                category="Посуда",
+                photo_urls="[]",
+                original_data=json.dumps({
+                    "title": title,
+                    "description": "Синтетическая старая проекция упаковки WB.",
+                }, ensure_ascii=False),
+            )
+            db.session.add(source)
+            db.session.flush()
+            draft = MarketplaceDraftService.create_draft(
+                seller_id=fixture["seller_id"],
+                account_id=account_id,
+                imported_product_id=source.id,
+                product_type_id=product_type.id,
+            )
+            facts, provenance, _fact_hash = MarketplaceDraftService._fact_snapshot(
+                source
+            )
+            wb_suggestion = facts["unverified_suggestions"][
+                "wb_package_dimensions"
+            ]
+            dimensions = MarketplaceDraftService._wb_package_dimensions_to_ozon(
+                wb_suggestion
+            )
+            assert dimensions == {
+                "width": "200", "height": "30", "depth": "300",
+                "weight": "250", "dimension_unit": "MILLIMETERS",
+                "weight_unit": "GRAMS",
+            }
+            facts["facts"].setdefault("physical", {})[
+                "wb_package_dimensions"
+            ] = wb_suggestion
+            provenance["physical.wb_package_dimensions"] = {
+                "source": "product.dimensions_json",
+                "trust": "marketplace_observed",
+            }
+            draft.source_facts_json = MarketplaceDraftService._canonical_json(
+                facts, dict,
+            )
+            draft.provenance_json = MarketplaceDraftService._canonical_json(
+                provenance, dict,
+            )
+            draft.dimensions_json = MarketplaceDraftService._canonical_json(
+                dimensions, dict,
+            )
+            db.session.commit()
+            resolved = MarketplaceDraftService.package_confirmation(draft)
+            assert resolved["required"] is True
+            assert resolved["source"] == "legacy_wb_unverified"
+            draft_ids.append(draft.id)
+        return draft_ids
+
+
+def _package_draft_snapshots(draft_ids):
+    with app.app_context():
+        snapshots = {}
+        for draft_id in draft_ids:
+            draft = db.session.get(MarketplaceProductDraft, draft_id)
+            snapshots[draft_id] = {
+                "version": draft.version,
+                "dimensions": json.loads(draft.dimensions_json),
+                "source_facts": json.loads(draft.source_facts_json),
+                "provenance": json.loads(draft.provenance_json),
+            }
+        return snapshots
+
+
+def run_package_confirmation_bulk_journey(context):
+    draft_ids = _seed_legacy_package_confirmation_drafts()
+    target_id, other_id = draft_ids
+    state["package_confirmation_active"] = True
+    state["package_confirmation_draft_ids"] = draft_ids
+    state["package_confirmation_post"] = None
+    baseline_counts = _business_counts()
+    baseline_drafts = _package_draft_snapshots(draft_ids)
+    baseline_operations = baseline_counts["operations"]
+    baseline_posts = dict(report["post_counts"])
+    baseline_writes = len(business_write_events)
+    baseline_provider = (
+        report["provider_attempts"], report["provider_dispatch_calls"],
+    )
+
+    page = context.new_page()
+    page.set_default_timeout(20000)
+    page.on("pageerror", lambda error: report["js_errors"].append(str(error)))
+    page.on("response", lambda response: report["unexpected_http"].append({
+        "status": response.status,
+        "path": urlsplit(response.url).path,
+    }) if response.status >= 500 else None)
+    page.goto(
+        f"{base}/marketplaces/ozon/uploads/selection/repair?"
+        + urlencode({
+            "account_id": account_id,
+            "draft_ids": ",".join(map(str, draft_ids)),
+        })
+    )
+    editor = page.locator(
+        '#ozon-bulk-repair[data-editor-mode="draft_selection"]:not([v-cloak])'
+    )
+    editor.wait_for()
+    bootstrap = page.evaluate(
+        "() => JSON.parse(document.querySelector('#orb-bootstrap').textContent)"
+    )
+    assert bootstrap["editor"]["mode"] == "draft_selection"
+    assert bootstrap["editor"]["review_draft_ids"] == draft_ids
+    editor_rows = {
+        row["draft_id"]: row
+        for group in bootstrap["editor"]["groups"]
+        for row in group["rows"]
+    }
+    assert set(editor_rows) == set(draft_ids)
+    for draft_id in draft_ids:
+        assert editor_rows[draft_id]["package_confirmation"]["required"] is True
+        assert editor_rows[draft_id]["package_confirmation"]["source"] == (
+            "legacy_wb_unverified"
+        )
+        assert {
+            "package_width_mm": editor_rows[draft_id]["package_width_mm"],
+            "package_height_mm": editor_rows[draft_id]["package_height_mm"],
+            "package_depth_mm": editor_rows[draft_id]["package_depth_mm"],
+            "package_weight_g": editor_rows[draft_id]["package_weight_g"],
+        } == {
+            "package_width_mm": "200", "package_height_mm": "30",
+            "package_depth_mm": "300", "package_weight_g": "250",
+        }
+        row = editor.locator(f'.orb-row[data-draft="{draft_id}"]')
+        assert row.locator('input[type="checkbox"]').first.is_checked()
+        row.get_by_role("button", name="Изменить", exact=True).click()
+        row.locator("[data-package-confirmation-needed]").wait_for(
+            state="visible",
+        )
+        confirm = page.locator(f'[data-package-confirm="{draft_id}"]')
+        assert confirm.is_visible() and confirm.is_enabled()
+        assert not confirm.is_checked()
+        assert row.locator(f'input[name="width-{draft_id}"]').input_value() == "200"
+        assert row.locator(f'input[name="height-{draft_id}"]').input_value() == "30"
+        assert row.locator(f'input[name="depth-{draft_id}"]').input_value() == "300"
+        assert row.locator(f'input[name="weight-{draft_id}"]').input_value() == "250"
+
+    target_row = editor.locator(f'.orb-row[data-draft="{target_id}"]')
+    target_confirm = page.locator(f'[data-package-confirm="{target_id}"]')
+    target_width = target_row.locator(f'input[name="width-{target_id}"]')
+    target_width.fill("")
+    assert target_confirm.is_disabled()
+    target_width.fill("200")
+    assert target_confirm.is_enabled()
+    assert not target_confirm.is_checked()
+    other_confirm = page.locator(f'[data-package-confirm="{other_id}"]')
+    assert not other_confirm.is_checked()
+    assert len(business_write_events) == baseline_writes
+    assert _business_counts() == baseline_counts
+    assert report["post_counts"] == baseline_posts
+
+    target_confirm.check()
+    assert target_confirm.is_checked()
+    assert not other_confirm.is_checked()
+    assert target_width.input_value() == "200"
+    page.locator("footer [data-draft-selection-save]").click()
+    dialog = page.get_by_role("dialog")
+    dialog.wait_for(state="visible")
+    review_items = dialog.locator(".orb-review-list > li")
+    target_item = review_items.filter(has_text="legacy package target")
+    other_item = review_items.filter(has_text="legacy package unchecked")
+    assert target_item.count() == 1
+    assert other_item.count() == 1
+    target_change = target_item.locator(".orb-review-field").filter(
+        has_text="Подтверждение упаковки",
+    )
+    assert target_change.count() == 1
+    assert "Нет" in target_change.inner_text() and "Да" in target_change.inner_text()
+    assert other_item.locator(".orb-review-field").count() == 0
+    assert "Подтверждение упаковки" not in other_item.inner_text()
+    assert len(business_write_events) == baseline_writes
+    assert _business_counts() == baseline_counts
+    assert report["post_counts"] == baseline_posts
+
+    apply_path = "/marketplaces/ozon/uploads/selection/repair/apply"
+    with page.expect_response(lambda response: (
+        response.request.method == "POST"
+        and urlsplit(response.url).path == apply_path
+    )) as apply_response_info:
+        dialog.locator("[data-draft-selection-save]").click()
+    apply_response = apply_response_info.value
+    assert apply_response.status == 200
+    apply_document = apply_response.json()
+    assert apply_document["success"] is True, apply_document
+    assert apply_document["report"]["updated"] == 1, apply_document["report"]
+    assert apply_document["report"]["total"] == 2, apply_document["report"]
+    assert state["package_confirmation_post"] == {
+        "draft_ids": draft_ids,
+        "confirmed_draft_ids": [target_id],
+        "csrf": True,
+    }
+    assert report["post_counts"] == {**baseline_posts, apply_path: baseline_posts.get(apply_path, 0) + 1}
+    receipt = editor.get_by_role("region", name="Результат сохранения")
+    receipt.wait_for()
+    page.wait_for_function(
+        "document.activeElement?.matches('[data-draft-selection-receipt]')"
+    )
+    snapshots_after = _package_draft_snapshots(draft_ids)
+    assert snapshots_after[target_id]["version"] > baseline_drafts[target_id]["version"]
+    assert snapshots_after[target_id]["dimensions"] == baseline_drafts[target_id]["dimensions"]
+    assert snapshots_after[other_id]["dimensions"] == baseline_drafts[other_id]["dimensions"]
+    assert snapshots_after[other_id]["source_facts"] == baseline_drafts[other_id]["source_facts"]
+    assert snapshots_after[other_id]["provenance"] == baseline_drafts[other_id]["provenance"]
+    with app.app_context():
+        confirmed_status = MarketplaceDraftService.package_confirmation(
+            db.session.get(MarketplaceProductDraft, target_id),
+        )
+        untouched_status = MarketplaceDraftService.package_confirmation(
+            db.session.get(MarketplaceProductDraft, other_id),
+        )
+        assert MarketplaceOperation.query.filter_by(
+            seller_id=fixture["seller_id"], account_id=account_id,
+        ).count() == baseline_operations
+    assert confirmed_status["source"] == "seller_confirmed"
+    assert confirmed_status["required"] is False
+    assert untouched_status["source"] == "legacy_wb_unverified"
+    assert untouched_status["required"] is True
+    assert _business_counts()["operations"] == baseline_operations
+    assert (
+        report["provider_attempts"], report["provider_dispatch_calls"],
+    ) == baseline_provider == (0, 0)
+    passed(
+        "bulk_package_confirmation_partial_tuple_gated_and_exact_row_saved_locally"
+    )
+    page.close()
+    state["package_confirmation_active"] = False
 
 
 def _seed_brand_search_sources():
@@ -3164,6 +3442,8 @@ def run_review_editor_navigation_journey(page):
 
     weight_input.fill("250")
     page.locator("#ode-weight-unit").select_option("GRAMS")
+    page.locator("[data-package-confirmation-needed]").wait_for(state="visible")
+    page.locator("#ode-package-confirm").check()
     save_button = page.locator(".ode-savebar").get_by_role(
         "button", name="Сохранить", exact=True,
     )
@@ -3938,6 +4218,7 @@ def run_browser_journey():
         run_mixed_type_selection_journey(page)
         run_review_editor_navigation_journey(page)
         run_brand_search_picker_journey(context)
+        run_package_confirmation_bulk_journey(context)
         browser.close()
 
 

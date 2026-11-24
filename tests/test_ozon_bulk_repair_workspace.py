@@ -976,6 +976,134 @@ def test_draft_selection_editor_is_exact_ordered_local_scope(case):
         Repair.editor_document(seller_id=case.seller.id)
 
 
+def test_selection_post_explicitly_confirms_same_tuple_then_reopens_on_edit(case):
+    register_marketplace_draft_routes(case.app)
+    other = fixtures.BulkEnqueueTest._second_draft(
+        case,
+        offer_id='package-confirmation-untouched',
+    )
+    exact_dimensions = {
+        'width':'901', 'height':'902', 'depth':'903', 'weight':'904',
+        'dimension_unit':'MILLIMETERS', 'weight_unit':'GRAMS',
+    }
+    case.draft.dimensions_json = json.dumps(exact_dimensions)
+    other.dimensions_json = json.dumps(exact_dimensions)
+    db.session.commit()
+    selection_scope = selection(case, [case.draft.id, other.id])
+    query = urlencode({
+        'account_id':case.account.id,
+        'draft_ids':','.join(str(value) for value in selection_scope['draft_ids']),
+    })
+    path = '/marketplaces/ozon/uploads/selection/repair?' + query
+    apply_path = '/marketplaces/ozon/uploads/selection/repair/apply?' + query
+
+    opened = case.client.get(path, headers={'Accept':'application/json'})
+    assert opened.status_code == 200, opened.json
+    rows = {
+        row['draft_id']:row
+        for group in opened.json['editor']['groups']
+        for row in group['rows']
+    }
+    target = rows[case.draft.id]
+    untouched = db.session.get(MarketplaceProductDraft, other.id)
+    untouched_before = (
+        untouched.version,
+        untouched.dimensions_json,
+        untouched.provenance_json,
+    )
+    assert target['package_confirmation']['required'] is True
+    assert {
+        target[key]
+        for key in (
+            'package_width_mm','package_height_mm',
+            'package_depth_mm','package_weight_g',
+        )
+    } == {'901','902','903','904'}
+
+    data = MultiDict(form(target, confirm_package='1'))
+    data.add('confirm_local', '1')
+    confirmed = case.client.post(
+        apply_path,
+        data=data,
+        headers={'Accept':'application/json'},
+    )
+    assert confirmed.status_code == 200, confirmed.json
+    assert confirmed.json['report']['total'] == 1
+    assert confirmed.json['report']['updated'] == 1
+    db.session.refresh(case.draft)
+    assert json.loads(case.draft.dimensions_json) == exact_dimensions
+    marker = json.loads(case.draft.provenance_json).get(
+        'physical.package_confirmation',
+    )
+    assert marker['actor_user_id'] == case.user.id
+
+    reopened = case.client.get(path, headers={'Accept':'application/json'})
+    reopened_target = next(
+        row
+        for group in reopened.json['editor']['groups']
+        for row in group['rows']
+        if row['draft_id'] == case.draft.id
+    )
+    assert reopened_target['package_confirmation']['required'] is False
+    changed_form = MultiDict(form(reopened_target, package_width_mm='905'))
+    changed_form.add('confirm_local', '1')
+    changed_response = case.client.post(
+        apply_path,
+        data=changed_form,
+        headers={'Accept':'application/json'},
+    )
+    assert changed_response.status_code == 200, changed_response.json
+    assert changed_response.json['report']['updated'] == 1
+    db.session.refresh(case.draft)
+    assert json.loads(case.draft.dimensions_json)['width'] == '905'
+    assert MarketplaceDraftService.package_confirmation(case.draft)['required'] is True
+    db.session.refresh(untouched)
+    assert (
+        untouched.version,
+        untouched.dimensions_json,
+        untouched.provenance_json,
+    ) == untouched_before
+
+
+def test_generic_native_job_form_accepts_only_explicit_package_confirmation(case):
+    dimensions = {
+        'width':'811', 'height':'812', 'depth':'813', 'weight':'814',
+        'dimension_unit':'MILLIMETERS', 'weight_unit':'GRAMS',
+    }
+    case.draft.dimensions_json = json.dumps(dimensions)
+    db.session.commit()
+    editor_response = case.client.get(
+        url(case),
+        headers={'Accept':'application/json'},
+    )
+    assert editor_response.status_code == 200, editor_response.json
+    editor = editor_response.json['editor']
+    assert 'mode' not in editor
+    row = next(
+        row
+        for group in editor['groups']
+        for row in group['rows']
+        if row['draft_id'] == case.draft.id
+    )
+    assert row['package_confirmation']['required'] is True
+
+    data = MultiDict(form(row, confirm_package='1'))
+    response = case.client.post(
+        url(case) + '/apply',
+        data=data,
+        headers={'Accept':'application/json'},
+    )
+    assert response.status_code == 200, response.json
+    assert response.json['report']['total'] == 1
+    assert response.json['report']['updated'] == 1
+    db.session.refresh(case.draft)
+    assert json.loads(case.draft.dimensions_json) == dimensions
+    confirmation = json.loads(case.draft.provenance_json)[
+        'physical.package_confirmation'
+    ]
+    assert confirmation['actor_user_id'] == case.user.id
+
+
 def test_native_mixed_type_editor_allows_cross_row_fields_over_xlsx_limit(
     case,
     monkeypatch,
