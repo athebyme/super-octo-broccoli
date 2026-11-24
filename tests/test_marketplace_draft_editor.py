@@ -42,8 +42,33 @@ def test_editor_reads_exact_scope_without_provider_and_preserves_documents(draft
         }
         assert {row['id'] for row in doc['definitions']} == {'31', '32', '4191'}
         assert doc['baseline_attribute_identities'] == []
+        assert doc['price_context'] is None
         with pytest.raises(MarketplaceDraftNotFound):
             MarketplaceDraftEditor.document(seller_id=f.seller2_id, draft_id=f.draft.id)
+
+
+def test_linked_price_context_compares_only_prices_in_the_observed_currency():
+    baseline = {
+        'commercial': {'price': '1199.00', 'currency_code': 'RUB'},
+        'calculated_commercial': {'price': '1250.50'},
+    }
+    assert MarketplaceDraftEditor.price_context(
+        {'commercial': {'price': '1250.5', 'currency_code': 'RUB'}}, baseline,
+    ) == {
+        'current': '1199', 'calculated': '1250.5', 'after_send': '1250.5',
+        'currency_code': 'RUB', 'will_change': True,
+    }
+    same = MarketplaceDraftEditor.price_context(
+        {'commercial': {'price': '1199.0', 'currency_code': 'RUB'}}, baseline,
+    )
+    assert same['current'] == same['after_send'] == '1199'
+    assert same['will_change'] is False
+    mismatched = MarketplaceDraftEditor.price_context(
+        {'commercial': {'price': '1250.5', 'currency_code': 'EUR'}}, baseline,
+    )
+    assert mismatched['current'] == '1199'
+    assert mismatched['after_send'] is None and mismatched['will_change'] is False
+    assert MarketplaceDraftEditor.price_context({}, {'commercial': {'price': '1199'}}) is None
 
 
 def test_current_validation_blocks_legacy_ready_and_preserves_saved_history(draft_fixture):

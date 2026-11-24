@@ -308,11 +308,11 @@
                 failedImages: [], photoIndex: 0, newPhoto: '', typeQuery: '', typeOptions: [], typeLoading: false, typeError: '', selectedType: null, saveMapping: false,
                 dictionary: {open: false, definition: null, groupIndex: null, query: '', items: [], loading: false, error: '', more: false},
                 categoryReview: {open:false, loading:false, saving:false, rows:[], total:0, page:0, hasMore:false, digest:'', token:'', target:null, initialType:null, mapping:false, viewedVersion:null, confirmed:false, error:'', pending:null, needsChoice:false},
-                confirmation: null, confirmedWrite: false,
+                confirmation: null, confirmedWrite: false, calculatedPriceSelected: false,
                 tabs: [{id:'content', label:'Основное'}, {id:'media', label:'Фотографии'}, {id:'attributes', label:'Характеристики'}, {id:'delivery', label:'Цена и упаковка'}],
             }; },
             computed: {
-                dirty() { return !!this.form && !equal(serialize(this.form), this.original); },
+                dirty() { return !!this.form && (this.calculatedPriceSelected || !equal(serialize(this.form), this.original)); },
                 packageConfirmationNeeded() {
                     if (!this.data?.package_confirmation || this.draft?.published_listing_id) return false;
                     return this.data.package_confirmation.required === true ||
@@ -365,6 +365,13 @@
                 photos() { return this.form ? [this.form.media.primary_image, ...(this.form.media.images || [])].filter((url, i, all) => safeImage(url) && all.indexOf(url) === i) : []; },
                 preservedPhotos() { const media = this.data?.preserved_media || {}; return [media.primary_image, ...(media.images || [])].filter(Boolean); },
                 hero() { const photo = this.photos[this.photoIndex] || this.photos[0]; return this.failedImages.includes(photo) ? '' : photo; },
+                priceContext() { return this.data?.price_context ?? null; },
+                canUseCalculatedPrice() {
+                    const candidate = this.priceContext?.calculated;
+                    return !!candidate && this.priceContext.currency_code === 'RUB' &&
+                        !this.locked && this.form?.commercial?.currency_code === 'RUB' &&
+                        candidate !== decimal(this.form.commercial.price);
+                },
                 previewPrice() {
                     const value = String(decimal(this.form.commercial.price) || '').trim();
                     if (!/^\d+(\.\d+)?$/.test(value) || !Number.isFinite(Number(value)) || Number(value) > 1e15) return 'Цена не указана';
@@ -478,6 +485,7 @@
                 },
                 hydrate(data) {
                     this.closeDictionary(); this.cancelTypeSearch(); this.data = data; this.draft = data.draft;
+                    this.calculatedPriceSelected = false;
                     this.form = {...clone(data.documents), offer_id:data.draft.offer_id, attribute_removals:clone(data.draft.attribute_removals || []), confirm_package:false};
                     this.form.media.images ||= []; this.form.content.name ||= ''; this.form.content.description ||= '';
                     this.original = serialize(this.form); this.typeOptions = this.initialTypeOptions(); this.typeQuery = ''; this.selectedType = null;
@@ -542,6 +550,11 @@
                     const current = serialize(this.form);
                     const patch = Object.fromEntries(Object.entries(current).filter(([key, value]) => !equal(value, this.original[key])));
                     if (patch.confirm_package === true) patch.dimensions = current.dimensions;
+                    if (this.calculatedPriceSelected && current.commercial.price === this.priceContext?.calculated &&
+                        current.commercial.currency_code === 'RUB') {
+                        patch.commercial = current.commercial;
+                        patch.use_calculated_price = true;
+                    }
                     return patch;
                 },
                 focusActionErrorAfterFailure(originFocus, restoredFocus = null) {
@@ -593,6 +606,18 @@
                     await this.mutate('refresh', {expected_version:this.draft.version}, 'Исходные сведения обновлены. Проверьте карточку ещё раз.');
                 },
                 setSection(section) { this.section = section; },
+                priceContextLabel(value) {
+                    const amount = typeof value === 'string' && /^(\d+)(?:\.(\d+))?$/.exec(value);
+                    if (!amount || this.priceContext?.currency_code !== 'RUB') return 'Не загружена';
+                    const rubles = amount[1].replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
+                    return rubles + (amount[2] ? ',' + amount[2] : '') + '\u00a0₽';
+                },
+                useCalculatedPrice() {
+                    if (!this.canUseCalculatedPrice) return;
+                    this.form.commercial.price = this.priceContext.calculated;
+                    this.calculatedPriceSelected = true;
+                    this.$nextTick(() => document.getElementById('ode-price')?.focus());
+                },
                 packageDimensionsChanged() {
                     if (this.form?.confirm_package) this.form.confirm_package = false;
                 },

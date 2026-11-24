@@ -20,6 +20,29 @@ from services.source_photo_display import imported_photo_previews
 
 class MarketplaceDraftEditor:
     @staticmethod
+    def price_context(documents, baseline):
+        if baseline is None:
+            return None
+        listed = baseline.get('commercial') or {}
+        calculated = baseline.get('calculated_commercial') or {}
+        submitted = documents.get('commercial') or {}
+        if listed.get('currency_code') != 'RUB':
+            return None
+        normalize = MarketplaceDraftService._decimal_from_fact
+        current = normalize(listed.get('price'))
+        after_send = (
+            normalize(submitted.get('price'))
+            if submitted.get('currency_code') == 'RUB' else None
+        )
+        return {
+            'current': current,
+            'calculated': normalize(calculated.get('price')),
+            'after_send': after_send,
+            'currency_code': 'RUB',
+            'will_change': current is not None and after_send is not None and current != after_send,
+        }
+
+    @staticmethod
     def card(draft):
         """Compact list presentation; no per-row readiness/provider work."""
         data = draft.to_public_dict()
@@ -119,6 +142,7 @@ class MarketplaceDraftEditor:
             'linked_category': MarketplaceDraftService.linked_category_state(draft),
             'title': draft.imported_product.title or draft.offer_id,
             'documents': documents,
+            'price_context': cls.price_context(documents, baseline),
             'package_confirmation': MarketplaceDraftService.package_confirmation(
                 draft,
                 dimensions=documents['dimensions'],

@@ -212,9 +212,10 @@ class OzonUploadReviewService:
                 blocked = list(validation.get("errors") or [])
                 hold = draft_hold(draft)
                 try:
-                    documents, _baseline = MarketplaceDraftService.publication_documents(draft)
+                    documents, baseline = MarketplaceDraftService.publication_documents(draft)
                 except MarketplaceDraftError:
                     documents = MarketplaceDraftService._stored_draft_documents(draft)
+                    baseline = None
             except MarketplaceDraftError as exc:
                 raise OzonBulkUploadNotFound("Черновик недоступен для просмотра") from exc
             if draft.status != "ready":
@@ -260,6 +261,7 @@ class OzonUploadReviewService:
                 "active_operation_id": active_operation_id,
                 "commercial": {key: (documents.get("commercial") or {}).get(key)
                                for key in ("price", "old_price", "vat", "currency_code")},
+                "price_context": MarketplaceDraftEditor.price_context(documents, baseline),
                 "dimensions": {key: (documents.get("dimensions") or {}).get(key)
                                for key in ("width", "height", "depth", "dimension_unit", "weight", "weight_unit")},
                 "photos_count": len({value for value in photos if isinstance(value, str) and value}),
