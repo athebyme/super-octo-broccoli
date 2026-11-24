@@ -49,25 +49,28 @@ def test_editor_reads_exact_scope_without_provider_and_preserves_documents(draft
 
 def test_linked_price_context_compares_only_prices_in_the_observed_currency():
     baseline = {
-        'commercial': {'price': '1199.00', 'currency_code': 'RUB'},
+        'commercial': {'price': '1199.00', 'old_price': '1300.00', 'currency_code': 'RUB'},
         'calculated_commercial': {'price': '1250.50'},
     }
     assert MarketplaceDraftEditor.price_context(
-        {'commercial': {'price': '1250.5', 'currency_code': 'RUB'}}, baseline,
+        {'commercial': {'price': '1250.5', 'old_price': '1500.00', 'currency_code': 'RUB'}}, baseline,
     ) == {
         'current': '1199', 'calculated': '1250.5', 'after_send': '1250.5',
         'currency_code': 'RUB', 'will_change': True,
+        'current_old_price': '1300', 'after_send_old_price': '1500', 'old_price_will_change': True,
     }
     same = MarketplaceDraftEditor.price_context(
-        {'commercial': {'price': '1199.0', 'currency_code': 'RUB'}}, baseline,
+        {'commercial': {'price': '1199.0', 'old_price': '1300', 'currency_code': 'RUB'}}, baseline,
     )
     assert same['current'] == same['after_send'] == '1199'
     assert same['will_change'] is False
+    assert same['after_send_old_price'] == '1300' and same['old_price_will_change'] is False
     mismatched = MarketplaceDraftEditor.price_context(
         {'commercial': {'price': '1250.5', 'currency_code': 'EUR'}}, baseline,
     )
     assert mismatched['current'] == '1199'
     assert mismatched['after_send'] is None and mismatched['will_change'] is False
+    assert mismatched['after_send_old_price'] is None and mismatched['old_price_will_change'] is False
     assert MarketplaceDraftEditor.price_context({}, {'commercial': {'price': '1199'}}) is None
 
 

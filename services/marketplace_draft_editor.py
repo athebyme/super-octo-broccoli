@@ -30,16 +30,20 @@ class MarketplaceDraftEditor:
             return None
         normalize = MarketplaceDraftService._decimal_from_fact
         current = normalize(listed.get('price'))
-        after_send = (
-            normalize(submitted.get('price'))
-            if submitted.get('currency_code') == 'RUB' else None
-        )
+        current_old_price = normalize(listed.get('old_price'))
+        same_currency = submitted.get('currency_code') == 'RUB'
+        after_send = normalize(submitted.get('price')) if same_currency else None
+        after_send_old_price = normalize(submitted.get('old_price')) if same_currency else None
         return {
             'current': current,
             'calculated': normalize(calculated.get('price')),
             'after_send': after_send,
             'currency_code': 'RUB',
             'will_change': current is not None and after_send is not None and current != after_send,
+            'current_old_price': current_old_price,
+            'after_send_old_price': after_send_old_price,
+            'old_price_will_change': (current_old_price is not None and after_send_old_price is not None
+                                      and current_old_price != after_send_old_price),
         }
 
     @staticmethod
@@ -73,7 +77,7 @@ class MarketplaceDraftEditor:
         baseline_error = None
         try:
             documents, baseline = MarketplaceDraftService.publication_documents(
-                draft, include_baseline_editor_data=True,
+                draft, include_baseline_editor_data=True, include_price_context=True,
             )
         except MarketplaceDraftError as exc:
             documents = MarketplaceDraftService._stored_draft_documents(draft)

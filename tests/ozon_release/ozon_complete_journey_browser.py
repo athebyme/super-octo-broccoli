@@ -101,6 +101,7 @@ from services.marketplace_image_assets import (
 )
 from services.marketplace_publications import MarketplacePublicationService
 from services.ozon_bulk_upload import OzonBulkUploadService
+from services.ozon_product_import import OzonProductImportContract
 from services.ozon_draft_ai_transport import FlashOutcome, FlashUsage
 from services import ozon_draft_ai_worker
 from tests.ozon_release.seed import PASSWORD, USERNAME, seed
@@ -109,7 +110,7 @@ from tests.test_ozon_complete_journey import (
     OzonCompleteJourneyTest,
     SyntheticOzonProvider,
 )
-from tests.test_marketplace_publications import SYNTHETIC_CREDENTIALS
+from tests.test_marketplace_publications import OzonPublicationFixture, SYNTHETIC_CREDENTIALS
 
 
 app.config.update(
@@ -1597,6 +1598,132 @@ def seller_price_source_separation_check(context):
     page.close()
 
 
+def linked_editor_price_comparison_check(context):
+    with app.app_context():
+        seller = db.session.get(Seller, fixture["seller_id"])
+        account = db.session.get(SellerMarketplaceAccount, account_id)
+        product_type = db.session.get(MarketplaceProductType, product_type_id)
+        source = ImportedProduct(
+            seller_id=seller.id, external_id="linked-price-source",
+            external_vendor_code="linked-price-offer", source_type="synthetic",
+            title="Карточка для проверки цены", description="Проверка цены связанной карточки.",
+            category="Посуда", calculated_price=1250, calculated_price_before_discount=1500,
+            photo_urls=json.dumps([photo_url]),
+        )
+        db.session.add(source)
+        db.session.commit()
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=seller.id, account_id=account.id, imported_product_id=source.id,
+            product_type_id=product_type.id,
+        )
+        draft.dimensions_json = json.dumps({
+            "width": "200", "height": "30", "depth": "300", "dimension_unit": "MILLIMETERS",
+            "weight": "250", "weight_unit": "GRAMS",
+        })
+        draft.barcodes_json = json.dumps(["4600000000008"])
+        draft.commercial_json = json.dumps({
+            "price": "1250", "old_price": "1500", "currency_code": "RUB", "vat": "0.22",
+        })
+        db.session.commit()
+        baseline = OzonProductImportContract.build_payload(draft)
+        baseline["items"][0].update(price="1000", old_price="1300")
+        listing_fixture = SimpleNamespace(
+            seller=seller, account=account, marketplace=account.marketplace,
+            product_type=product_type, source=source, draft=draft,
+        )
+        listing = OzonPublicationFixture.attach_listing(listing_fixture, baseline)
+        target_id = draft.id
+        listing_prices = listing.price_summary_json
+    provider_before = (provider.physical_writes, len(provider.full_read_calls))
+    page = context.new_page()
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.set_default_timeout(20000)
+    page.on("pageerror", lambda error: report["js_errors"].append(str(error)))
+    page.on("response", track_browser_response)
+    page.goto(base + f"/marketplaces/drafts/{target_id}")
+    page.locator("#ozon-draft-editor:not([v-cloak])").wait_for()
+    config = bootstrap(page, "#ode-bootstrap")
+
+    def read_editor():
+        result = api_call_from_page(page, config["urls"]["editor"])
+        assert result["status"] == 200
+        return result["document"]
+
+    def save_editor():
+        with page.expect_response(lambda response: (
+            response.request.method == "POST" and urlsplit(response.url).path == config["urls"]["save"]
+        )) as saved:
+            page.get_by_role("button", name="Сохранить", exact=True).click()
+        assert saved.value.status == 200, saved.value.status
+        page.get_by_text("Все изменения сохранены", exact=True).wait_for()
+        return saved.value.request.post_data_json["patch"]
+
+    initial = read_editor()
+    assert initial["price_context"] == {
+        "current": "1000", "calculated": "1250", "after_send": "1000",
+        "currency_code": "RUB", "will_change": False,
+        "current_old_price": "1300", "after_send_old_price": "1300", "old_price_will_change": False,
+    }
+    page.locator("#ode-name").fill("Обновлённое название связанной карточки")
+    unrelated = save_editor()
+    assert "use_calculated_price" not in unrelated and "commercial" not in unrelated
+    assert read_editor()["price_context"] == initial["price_context"]
+
+    page.get_by_role("button", name="Цена и упаковка", exact=True).click()
+    comparison = page.locator("[data-linked-price-context]")
+    assert comparison.is_visible()
+    assert comparison.locator("[data-ozon-current-price]").inner_text() == "1\u00a0000\u00a0₽"
+    assert "1\u00a0250\u00a0₽" in comparison.inner_text()
+    assert page.locator("#ode-price").input_value() == "1000"
+    assert page.locator("#ode-old-price").input_value() == "1300"
+    for width in (320, 390):
+        page.set_viewport_size({"width": width, "height": 844})
+        assert page.evaluate("document.documentElement.scrollWidth === window.innerWidth")
+    comparison.screenshot(path=str(OUT / "ozon-linked-price-choice-390.png"))
+    choose_price = page.get_by_role("button", name="Подставить расчётную цену", exact=True)
+    choose_price.focus()
+    choose_price.press("Enter")
+    page.wait_for_function("document.activeElement?.id === 'ode-price'")
+    assert page.locator("#ode-price").input_value() == "1250"
+    assert page.locator("#ode-old-price").input_value() == "1300"
+    selected = save_editor()
+    assert selected["use_calculated_price"] is True
+    assert selected["commercial"]["price"] == "1250"
+    assert selected["commercial"]["old_price"] == "1300"
+    page.reload()
+    page.locator("#ozon-draft-editor:not([v-cloak])").wait_for()
+    result = read_editor()
+    assert result["price_context"] == {**initial["price_context"], "after_send": "1250", "will_change": True}
+    assert result["documents"]["commercial"]["old_price"] == "1300"
+    page.get_by_role("button", name="Цена и упаковка", exact=True).click()
+    page.locator("#ode-old-price").fill("1500")
+    old_price_edit = save_editor()
+    assert old_price_edit["confirm_old_price_edit"] is True
+    assert "use_calculated_price" not in old_price_edit
+    assert old_price_edit["commercial"]["old_price"] == "1500"
+    page.reload()
+    page.locator("#ozon-draft-editor:not([v-cloak])").wait_for()
+    result = read_editor()
+    assert result["price_context"]["current_old_price"] == "1300"
+    assert result["price_context"]["after_send_old_price"] == "1500"
+    assert result["price_context"]["old_price_will_change"] is True
+    page.get_by_role("button", name="Цена и упаковка", exact=True).click()
+    page.locator("#ode-price").scroll_into_view_if_needed()
+    page.screenshot(path=str(OUT / "ozon-linked-price-saved-390.png"))
+    with app.app_context():
+        saved = db.session.get(MarketplaceProductDraft, target_id)
+        assert saved.published_listing.price_summary_json == listing_prices
+        assert MarketplaceOperation.query.filter_by(
+            seller_id=fixture["seller_id"], account_id=account_id, draft_id=target_id,
+        ).count() == 0
+    assert provider_before == (provider.physical_writes, len(provider.full_read_calls))
+    report["linked_price_editor"] = {"title_only_preserves_price": True,
+                                     "explicit_price_choice_persists": True,
+                                     "old_price_preserved_until_explicit_edit": True, "local_operations": 0}
+    passed("linked_editor_compares_exact_prices_and_saves_only_explicit_choice")
+    page.close()
+
+
 def stale_ready_editor_check(page):
     assert provider.physical_writes == 0 and not provider.full_read_calls
     console_messages = []
@@ -1852,6 +1979,7 @@ try:
             passed("real_login_and_draft_workspace")
             stale_ready_editor_check(page)
             seller_price_source_separation_check(context)
+            linked_editor_price_comparison_check(context)
             legacy_package_confirmation_editor_check(context)
 
             csrf = list_config["csrf"]

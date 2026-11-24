@@ -11,6 +11,12 @@
     }
     const empty = value => value === '' || value === null || value === undefined;
     const decimal = value => typeof value === 'string' && /^\d+,\d+$/.test(value.trim()) ? value.trim().replace(',', '.') : value;
+    function positivePrice(value) {
+        const raw = String(decimal(value) ?? '').trim();
+        if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(raw)) return null;
+        const normalized = raw.includes('.') ? raw.replace(/0+$/, '').replace(/\.$/, '') : raw;
+        return normalized === '0' ? null : normalized;
+    }
     function cleanObject(value) { return Object.fromEntries(Object.entries(value || {}).filter(([, v]) => !empty(v))); }
     function normalizedDimensions(value) {
         const dimensions = cleanObject(value);
@@ -308,7 +314,7 @@
                 failedImages: [], photoIndex: 0, newPhoto: '', typeQuery: '', typeOptions: [], typeLoading: false, typeError: '', selectedType: null, saveMapping: false,
                 dictionary: {open: false, definition: null, groupIndex: null, query: '', items: [], loading: false, error: '', more: false},
                 categoryReview: {open:false, loading:false, saving:false, rows:[], total:0, page:0, hasMore:false, digest:'', token:'', target:null, initialType:null, mapping:false, viewedVersion:null, confirmed:false, error:'', pending:null, needsChoice:false},
-                confirmation: null, confirmedWrite: false, calculatedPriceSelected: false,
+                confirmation: null, confirmedWrite: false, calculatedPriceSelected: false, oldPriceEdited: false,
                 tabs: [{id:'content', label:'Основное'}, {id:'media', label:'Фотографии'}, {id:'attributes', label:'Характеристики'}, {id:'delivery', label:'Цена и упаковка'}],
             }; },
             computed: {
@@ -486,6 +492,7 @@
                 hydrate(data) {
                     this.closeDictionary(); this.cancelTypeSearch(); this.data = data; this.draft = data.draft;
                     this.calculatedPriceSelected = false;
+                    this.oldPriceEdited = false;
                     this.form = {...clone(data.documents), offer_id:data.draft.offer_id, attribute_removals:clone(data.draft.attribute_removals || []), confirm_package:false};
                     this.form.media.images ||= []; this.form.content.name ||= ''; this.form.content.description ||= '';
                     this.original = serialize(this.form); this.typeOptions = this.initialTypeOptions(); this.typeQuery = ''; this.selectedType = null;
@@ -554,6 +561,14 @@
                         current.commercial.currency_code === 'RUB') {
                         patch.commercial = current.commercial;
                         patch.use_calculated_price = true;
+                    }
+                    const oldPrice = positivePrice(current.commercial.old_price);
+                    if (this.oldPriceEdited && this.priceContext?.currency_code === 'RUB' &&
+                        current.commercial.currency_code === 'RUB' && oldPrice !== null &&
+                        oldPrice !== positivePrice(this.original.commercial.old_price) &&
+                        oldPrice !== this.priceContext.current_old_price) {
+                        patch.commercial = current.commercial;
+                        patch.confirm_old_price_edit = true;
                     }
                     return patch;
                 },

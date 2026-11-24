@@ -212,7 +212,9 @@ class OzonUploadReviewService:
                 blocked = list(validation.get("errors") or [])
                 hold = draft_hold(draft)
                 try:
-                    documents, baseline = MarketplaceDraftService.publication_documents(draft)
+                    documents, baseline = MarketplaceDraftService.publication_documents(
+                        draft, include_price_context=True,
+                    )
                 except MarketplaceDraftError:
                     documents = MarketplaceDraftService._stored_draft_documents(draft)
                     baseline = None
