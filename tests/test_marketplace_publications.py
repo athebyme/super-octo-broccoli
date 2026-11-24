@@ -3943,6 +3943,49 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
         self.assertEqual(stopped.quota_reserved, 0)
         self.assertEqual(json.loads(self.draft.dimensions_json)["weight"], "250")
 
+    def test_queued_create_with_current_net_weight_stops_before_preflight(self):
+        self.source.original_data = json.dumps({
+            "dimensions": {
+                "Ширина упаковки, мм": 200,
+                "Высота упаковки, мм": 30,
+                "Длина упаковки, мм": 300,
+                "Вес изделия без упаковки, г": 250,
+            },
+        }, ensure_ascii=False)
+        db.session.commit()
+        operation = MarketplacePublicationService._create_operation(
+            draft=self.draft,
+            payload=self.desired_payload(),
+            idempotency_key="publication-current-net-weight",
+            created_by_user_id=self.user.id,
+            now=datetime.utcnow(),
+        )
+        adapter = SyntheticPublicationAdapter()
+        with (
+            patch.object(MarketplacePublicationService, "_prepare_media_assets") as media,
+            patch.object(adapter, "get_operation_limits") as quota,
+        ):
+            stopped = MarketplacePublicationService.poll_operation(
+                seller_id=self.seller.id,
+                operation_id=operation.id,
+                adapter=adapter,
+                credentials=SYNTHETIC_CREDENTIALS,
+                allow_submission=True,
+            )
+
+        media.assert_not_called()
+        quota.assert_not_called()
+        self.assertEqual(adapter.list_calls, [])
+        self.assertEqual(adapter.submitted_payloads, [])
+        self.assertEqual(stopped.status, "failed")
+        self.assertEqual(stopped.error_code, "ozon_package_confirmation_required")
+        self.assertEqual(stopped.attempt_count, 0)
+        self.assertEqual(stopped.quota_reserved, 0)
+        self.assertEqual(
+            json.loads(stopped.snapshot.submitted_state_json)["items"][0]["weight"],
+            250,
+        )
+
     def test_package_source_change_during_quota_stops_create_before_write(self):
         adapter = SyntheticPublicationAdapter()
         original_quota = adapter.get_operation_limits

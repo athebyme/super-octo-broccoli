@@ -4212,6 +4212,170 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         self.assertNotIn("dimension_unit", incompatible)
         self.assertEqual(incompatible["width"], "0.1")
 
+    def test_net_and_excluding_labels_never_become_package_measurements(self):
+        geometry = {
+            "Ширина упаковки, мм": 200,
+            "Высота упаковки, мм": 30,
+            "Длина упаковки, мм": 300,
+        }
+        net_only_weight = MarketplaceDraftService._dimensions_from_facts(
+            {"facts": {"physical": {"dimensions": {
+                **geometry,
+                "Вес изделия без упаковки, г": 240,
+                "Вес_изделия_без_упаковки_г": 230,
+            }}}}
+        )
+        self.assertEqual(
+            net_only_weight,
+            {
+                "width": "200",
+                "height": "30",
+                "depth": "300",
+                "dimension_unit": "MILLIMETERS",
+            },
+        )
+        self.assertNotIn("weight", net_only_weight)
+
+        for ordered_rows in (
+            [
+                ("Вес упаковки, г", 300),
+                ("Вес изделия без упаковки, г", 240),
+            ],
+            [
+                ("Вес изделия без упаковки, г", 240),
+                ("Вес упаковки, г", 300),
+            ],
+        ):
+            with self.subTest(ordered_rows=ordered_rows):
+                weight = MarketplaceDraftService._dimensions_from_facts(
+                    {"facts": {"physical": {"dimensions": dict(ordered_rows)}}}
+                )
+                self.assertEqual(weight["weight"], "300")
+                self.assertEqual(weight["weight_unit"], "GRAMS")
+
+        excluded_geometry = MarketplaceDraftService._dimensions_from_facts(
+            {"facts": {"physical": {"dimensions": {
+                "Ширина изделия без упаковки, мм": 200,
+                "Высота изделия (без упаковки), мм": 30,
+                "Высота изделия без учёта упаковки, мм": 31,
+                "Длина изделия, не считая транспортной упаковки, см": 30,
+                "Длина изделия, не включая транспортную упаковку, см": 31,
+                "Вес изделия нетто в упаковке, г": 240,
+                "Вес_изделия_без_упаковки_г": 230,
+            }}}}
+        )
+        self.assertEqual(excluded_geometry, {})
+
+        for ordered_rows in (
+            [
+                ("Ширина упаковки, мм", 200),
+                ("Ширина изделия без упаковки, мм", 190),
+            ],
+            [
+                ("Ширина изделия без упаковки, мм", 190),
+                ("Ширина упаковки, мм", 200),
+            ],
+        ):
+            with self.subTest(ordered_rows=ordered_rows):
+                width = MarketplaceDraftService._dimensions_from_facts(
+                    {"facts": {"physical": {"dimensions": dict(ordered_rows)}}}
+                )
+                self.assertEqual(width.get("width"), "200")
+                self.assertNotIn("height", width)
+
+        negative_numeric_geometry = MarketplaceDraftService._dimensions_from_facts(
+            {"facts": {"physical": {"dimensions": {
+                "Ширина упаковки, мм": -200,
+            }}}}
+        )
+        self.assertNotIn("width", negative_numeric_geometry)
+
+        ordinary_aliases = MarketplaceDraftService._dimensions_from_facts(
+            {"facts": {"physical": {"dimensions": {
+                "package_width_cm": 20,
+                "package_height_mm": 30,
+                "package_length_cm": 30,
+                "package_weight_kg": "0.25",
+            }}}}
+        )
+        self.assertEqual(
+            ordinary_aliases,
+            {
+                "width": "200",
+                "height": "30",
+                "depth": "300",
+                "dimension_unit": "MILLIMETERS",
+                "weight": "250",
+                "weight_unit": "GRAMS",
+            },
+        )
+
+    def test_current_net_source_cannot_authorize_legacy_complete_package_tuple(self):
+        product = self._product(
+            external_id="net-weight-package-guard",
+            dimensions=False,
+        )
+        original = json.loads(product.original_data)
+        original["dimensions"] = {
+            "Ширина упаковки, мм": 200,
+            "Высота упаковки, мм": 30,
+            "Длина упаковки, мм": 300,
+            "Вес изделия без упаковки, г": 240,
+        }
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.supplier_product.original_data_json = product.original_data
+        db.session.commit()
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        self.assertEqual(
+            draft.to_public_dict(detail=True)["dimensions"],
+            {
+                "width": "200",
+                "height": "30",
+                "depth": "300",
+                "dimension_unit": "MILLIMETERS",
+            },
+        )
+
+        # Model the saved complete tuple left by the former label heuristic.
+        # The dispatch-time check must rebuild source evidence from the current
+        # product record and refuse to treat its net weight as package weight.
+        legacy_tuple = {
+            "width": "200",
+            "height": "30",
+            "depth": "300",
+            "weight": "240",
+            "dimension_unit": "MILLIMETERS",
+            "weight_unit": "GRAMS",
+        }
+        draft.dimensions_json = MarketplaceDraftService._canonical_json(
+            legacy_tuple,
+            dict,
+        )
+        db.session.commit()
+
+        package_status = MarketplaceDraftService.package_confirmation(draft)
+        self.assertTrue(package_status["complete"])
+        self.assertTrue(package_status["required"])
+        self.assertEqual(package_status["source"], "unverified")
+
+        checked = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+        validation = checked.to_public_dict(detail=True)["validation"]
+        self.assertFalse(validation["publishable"])
+        self.assertIn(
+            "package_confirmation_required",
+            [item["code"] for item in validation["errors"]],
+        )
+
     def test_package_integer_bounds_match_import_builder(self):
         _, draft = self._ready_draft(external_id="dimension-int32-boundary")
         dimensions = draft.to_public_dict(detail=True)["dimensions"]

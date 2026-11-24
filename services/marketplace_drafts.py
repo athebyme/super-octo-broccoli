@@ -148,6 +148,14 @@ class MarketplaceDraftService:
     MAX_VALIDATION_ITEMS = 250
     DIMENSION_UNITS = {"MILLIMETERS", "CENTIMETERS", "INCHES"}
     WEIGHT_UNITS = {"GRAMS", "KILOGRAMS", "POUNDS"}
+    PACKAGE_MEASUREMENT_EXCLUSION_PATTERNS = tuple(
+        re.compile(pattern)
+        for pattern in (
+            r"(?:^|[\W_])без(?:[\W_]+\w+){0,2}[\W_]+упаков\w*(?:$|[\W_])",
+            r"(?:^|[\W_])не[\W_]+(?:включая|считая)(?:[\W_]+\w+){0,2}[\W_]+упаков\w*(?:$|[\W_])",
+            r"(?:^|[\W_])нетто(?:$|[\W_])",
+        )
+    )
     VAT_VALUES = {"0", "0.05", "0.07", "0.1", "0.10", "0.2", "0.20", "0.22"}
     CURRENCY_CODES = {"RUB"}
     LISTING_HARD_TTL = timedelta(hours=48)
@@ -403,6 +411,17 @@ class MarketplaceDraftService:
     @staticmethod
     def _normalized_text(value: str) -> str:
         return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+    @classmethod
+    def _is_excluded_package_measurement_label(
+        cls,
+        normalized_label: str,
+    ) -> bool:
+        """Reject explicit net/unpacked labels before they can become package facts."""
+        return any(
+            pattern.search(normalized_label)
+            for pattern in cls.PACKAGE_MEASUREMENT_EXCLUSION_PATTERNS
+        )
 
     @classmethod
     def _reviewed_brand_candidate(cls, value: Any) -> Any:
@@ -3476,13 +3495,19 @@ class MarketplaceDraftService:
         # ``length_cm`` or ``diameter_cm`` describe the product itself in
         # several supplier feeds and therefore must never be promoted to
         # package dimensions.  Accept only explicit package/packing names.
-        result = {}
-        dimension_units: Dict[str, Optional[str]] = {}
-
+        normalized_rows = []
         for raw_key, raw_value in raw.items():
             if not isinstance(raw_key, str):
                 continue
             key_name = cls._normalized_text(raw_key)
+            if cls._is_excluded_package_measurement_label(key_name):
+                continue
+            normalized_rows.append((raw_key, key_name, raw_value))
+
+        result = {}
+        dimension_units: Dict[str, Optional[str]] = {}
+
+        for raw_key, key_name, raw_value in normalized_rows:
             if "упаков" not in key_name:
                 continue
             try:
@@ -3526,9 +3551,8 @@ class MarketplaceDraftService:
                 )
                 result["weight_unit"] = "GRAMS"
         normalized = {
-            cls._normalized_text(str(key)).replace(" ", "_"): value
-            for key, value in raw.items()
-            if isinstance(key, str)
+            key_name.replace(" ", "_"): raw_value
+            for _raw_key, key_name, raw_value in normalized_rows
         }
 
         def dimension(name: str, aliases: Sequence[str]) -> Tuple[Optional[str], Optional[str]]:
