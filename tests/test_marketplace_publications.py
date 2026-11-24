@@ -501,6 +501,14 @@ class OzonPublicationFixture:
             title="Безопасный товар",
             description="Наблюдаемое описание",
             category="Категория",
+            original_data=json.dumps({
+                "dimensions": {
+                    "package_width_mm": 200,
+                    "package_height_mm": 30,
+                    "package_depth_mm": 300,
+                    "package_weight_g": 250,
+                },
+            }),
         )
         db.session.add_all([self.product_type, self.source])
         db.session.flush()
@@ -516,6 +524,9 @@ class OzonPublicationFixture:
             is_enabled=True,
             last_seen_at=now,
         )
+        source_facts, provenance, fact_hash = MarketplaceDraftService._fact_snapshot(
+            self.source,
+        )
         self.draft = MarketplaceProductDraft(
             seller_id=self.seller.id,
             marketplace_id=self.marketplace.id,
@@ -526,9 +537,9 @@ class OzonPublicationFixture:
             external_category_id="10",
             external_type_id="777",
             status="ready",
-            source_fact_hash="a" * 64,
-            source_facts_json="{}",
-            provenance_json="{}",
+            source_fact_hash=fact_hash,
+            source_facts_json=json.dumps(source_facts),
+            provenance_json=json.dumps(provenance),
             content_json=json.dumps({
                 "name": "Безопасный товар",
                 "description": "Наблюдаемое описание",
@@ -3888,6 +3899,71 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
             selected = MarketplacePublicationService.poll_due_operations(limit=20, now=now)
         self.assertEqual(selected['selected'], 20)
         self.assertEqual(poll.call_count, 20)
+
+    def test_queued_create_with_unconfirmed_wb_package_stops_before_preflight(self):
+        self.source.original_data = "{}"
+        self.draft.source_facts_json = json.dumps({
+            "facts": {"physical": {"wb_package_dimensions": {
+                "width_cm": 20, "height_cm": 3, "length_cm": 30, "weight_kg": 0.25,
+            }}},
+        })
+        self.draft.provenance_json = json.dumps({
+            "physical.wb_package_dimensions": {
+                "source": "product.dimensions_json", "trust": "marketplace_observed",
+            },
+        })
+        db.session.commit()
+        operation = MarketplacePublicationService._create_operation(
+            draft=self.draft,
+            payload=self.desired_payload(),
+            idempotency_key="publication-legacy-unconfirmed-package",
+            created_by_user_id=self.user.id,
+            now=datetime.utcnow(),
+        )
+        adapter = SyntheticPublicationAdapter()
+        with (
+            patch.object(MarketplacePublicationService, "_prepare_media_assets") as media,
+            patch.object(adapter, "get_operation_limits") as quota,
+        ):
+            stopped = MarketplacePublicationService.poll_operation(
+                seller_id=self.seller.id,
+                operation_id=operation.id,
+                adapter=adapter,
+                credentials=SYNTHETIC_CREDENTIALS,
+                allow_submission=True,
+            )
+
+        media.assert_not_called()
+        quota.assert_not_called()
+        self.assertEqual(adapter.list_calls, [])
+        self.assertEqual(adapter.submitted_payloads, [])
+        self.assertEqual(stopped.status, "failed")
+        self.assertEqual(stopped.error_code, "ozon_package_confirmation_required")
+        self.assertEqual(stopped.attempt_count, 0)
+        self.assertEqual(stopped.quota_reserved, 0)
+        self.assertEqual(json.loads(self.draft.dimensions_json)["weight"], "250")
+
+    def test_package_source_change_during_quota_stops_create_before_write(self):
+        adapter = SyntheticPublicationAdapter()
+        original_quota = adapter.get_operation_limits
+
+        def quota_after_source_changed(credentials):
+            self.source.original_data = "{}"
+            db.session.commit()
+            return original_quota(credentials)
+
+        with patch.object(
+            adapter, "get_operation_limits", side_effect=quota_after_source_changed,
+        ) as quota:
+            stopped = self.start(adapter, key="publication-package-source-changed")
+
+        quota.assert_called_once_with(SYNTHETIC_CREDENTIALS)
+        self.assertTrue(adapter.list_calls)
+        self.assertEqual(adapter.submitted_payloads, [])
+        self.assertEqual(stopped.status, "failed")
+        self.assertEqual(stopped.error_code, "ozon_package_confirmation_required")
+        self.assertEqual(stopped.attempt_count, 0)
+        self.assertEqual(stopped.quota_reserved, 0)
 
     def test_brand_search_is_rechecked_after_quota_before_physical_write(self):
         adapter = SyntheticPublicationAdapter()

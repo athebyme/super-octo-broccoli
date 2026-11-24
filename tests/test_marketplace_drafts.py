@@ -2433,7 +2433,7 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             {},
         )
 
-    def test_fresh_exact_wb_package_dimensions_fill_missing_source_package(self):
+    def test_wb_package_dimensions_are_only_unverified_suggestions(self):
         product = self._product(
             external_id="fresh-wb-package",
             dimensions=False,
@@ -2468,7 +2468,7 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
 
         pack = MarketplaceFactPackBuilder.build(product)
         self.assertEqual(
-            pack["facts"]["physical"]["wb_package_dimensions"],
+            pack["unverified_suggestions"]["wb_package_dimensions"],
             {
                 "length_cm": 31,
                 "width_cm": 8,
@@ -2476,12 +2476,24 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
                 "weight_kg": 0.24,
             },
         )
+        self.assertNotIn("wb_package_dimensions", pack["facts"].get("physical", {}))
+        self.assertNotIn("physical.wb_package_dimensions", pack["provenance"])
+        original_fact_hash = pack["fact_hash"]
+
+        # A later catalog echo/cache mutation changes only the UI suggestion.
+        wb_product.dimensions_json = json.dumps({
+            "length": 41,
+            "width": 9,
+            "height": 7,
+            "weightBrutto": 0.32,
+            "isValid": True,
+        })
+        db.session.commit()
+        refreshed_pack = MarketplaceFactPackBuilder.build(product)
+        self.assertEqual(refreshed_pack["fact_hash"], original_fact_hash)
         self.assertEqual(
-            pack["provenance"]["physical.wb_package_dimensions"],
-            {
-                "source": "product.dimensions_json",
-                "trust": "marketplace_observed",
-            },
+            refreshed_pack["unverified_suggestions"]["wb_package_dimensions"]["length_cm"],
+            41,
         )
 
         draft = MarketplaceDraftService.create_draft(
@@ -2492,17 +2504,22 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         )
         self.assertEqual(
             draft.to_public_dict(detail=True)["dimensions"],
-            {
-                "depth": "310",
-                "dimension_unit": "MILLIMETERS",
-                "height": "60",
-                "weight": "240",
-                "weight_unit": "GRAMS",
-                "width": "80",
-            },
+            {},
         )
+        status = MarketplaceDraftService.package_confirmation(draft)
+        self.assertFalse(status["required"])
+        self.assertFalse(status["complete"])
+        self.assertEqual(status["source"], "incomplete")
+        self.assertEqual(status["suggested_dimensions"], {
+            "width": "90",
+            "height": "70",
+            "depth": "410",
+            "weight": "320",
+            "dimension_unit": "MILLIMETERS",
+            "weight_unit": "GRAMS",
+        })
 
-    def test_stale_or_invalid_wb_package_dimensions_are_not_promoted(self):
+    def test_stale_wb_cache_can_be_suggested_but_invalid_cache_is_omitted(self):
         for index, (suffix, last_sync, is_valid) in enumerate((
             ("stale", self.now - timedelta(hours=49), True),
             ("invalid", self.now, False),
@@ -2537,6 +2554,453 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
                     "wb_package_dimensions",
                     pack["facts"].get("physical", {}),
                 )
+                if is_valid:
+                    self.assertIn(
+                        "wb_package_dimensions",
+                        pack["unverified_suggestions"],
+                    )
+                else:
+                    self.assertNotIn(
+                        "wb_package_dimensions",
+                        pack["unverified_suggestions"],
+                    )
+                draft = MarketplaceDraftService.create_draft(
+                    seller_id=self.seller1_id,
+                    account_id=self.account1.id,
+                    imported_product_id=product.id,
+                    product_type_id=self.product_type.id,
+                )
+                self.assertEqual(
+                    draft.to_public_dict(detail=True)["dimensions"],
+                    {},
+                )
+
+    def test_exact_packaging_named_supplier_tuple_remains_authoritative(self):
+        product = self._product(external_id="explicit-package-source")
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+
+        status = MarketplaceDraftService.package_confirmation(draft)
+
+        self.assertTrue(status["complete"])
+        self.assertFalse(status["required"])
+        self.assertEqual(status["source"], "explicit_source")
+        self.assertEqual(
+            draft.to_public_dict(detail=True)["dimensions"],
+            {
+                "width": "200",
+                "height": "30",
+                "depth": "300",
+                "weight": "250",
+                "dimension_unit": "MILLIMETERS",
+                "weight_unit": "GRAMS",
+            },
+        )
+
+    def test_same_value_seller_confirmation_is_explicit_and_tuple_change_invalidates(self):
+        product = self._product(
+            external_id="seller-confirm-package",
+            dimensions=False,
+        )
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        dimensions = {
+            "width": "120",
+            "height": "80",
+            "depth": "300",
+            "weight": "250",
+            "dimension_unit": "MILLIMETERS",
+            "weight_unit": "GRAMS",
+        }
+        owner_user_id = Seller.query.filter_by(id=self.seller1_id).one().user_id
+        other_user_id = Seller.query.filter_by(id=self.seller2_id).one().user_id
+        original_version = draft.version
+
+        with self.assertRaises(MarketplaceDraftValidationError):
+            MarketplaceDraftService.update_draft(
+                seller_id=self.seller1_id,
+                draft_id=draft.id,
+                expected_version=draft.version,
+                patch={"dimensions": dimensions, "confirm_package": True},
+                corrected_by_user_id=other_user_id,
+            )
+        self.assertEqual(draft.version, original_version)
+        self.assertEqual(draft.to_public_dict(detail=True)["dimensions"], {})
+
+        draft = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            patch={"dimensions": dimensions},
+        )
+        status = MarketplaceDraftService.package_confirmation(draft)
+        self.assertTrue(status["required"])
+        self.assertEqual(status["source"], "unverified")
+
+        # A same-value write qualifies only because the seller sent the
+        # separate explicit confirmation flag through the versioned core.
+        draft = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            patch={"dimensions": dimensions, "confirm_package": True},
+            corrected_by_user_id=owner_user_id,
+        )
+        status = MarketplaceDraftService.package_confirmation(draft)
+        self.assertTrue(status["complete"])
+        self.assertFalse(status["required"])
+        self.assertEqual(status["source"], "seller_confirmed")
+        self.assertEqual(status["confirmed_by_user_id"], owner_user_id)
+
+        changed = dict(dimensions, width="121")
+        draft = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            patch={"dimensions": changed},
+        )
+        status = MarketplaceDraftService.package_confirmation(draft)
+        self.assertTrue(status["required"])
+        self.assertEqual(status["source"], "unverified")
+        provenance = json.loads(draft.provenance_json)
+        self.assertNotIn(
+            MarketplaceDraftService.PACKAGE_CONFIRMATION_PROVENANCE_KEY,
+            provenance,
+        )
+
+    def test_seller_confirmation_survives_refresh_and_unrelated_rebase(self):
+        product = self._product(
+            external_id="preserve-package-confirmation",
+            dimensions=False,
+        )
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        owner_user_id = Seller.query.filter_by(id=self.seller1_id).one().user_id
+        dimensions = {
+            "width": "120",
+            "height": "80",
+            "depth": "300",
+            "weight": "250",
+            "dimension_unit": "MILLIMETERS",
+            "weight_unit": "GRAMS",
+        }
+        draft = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            patch={"dimensions": dimensions, "confirm_package": True},
+            corrected_by_user_id=owner_user_id,
+        )
+
+        product.title = "Футболка, обновлённое название"
+        db.session.commit()
+        draft = MarketplaceDraftService.refresh_facts(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+        self.assertEqual(
+            MarketplaceDraftService.package_confirmation(draft)["source"],
+            "seller_confirmed",
+        )
+
+        product.title = "Футболка, другое описание источника"
+        db.session.commit()
+        draft = MarketplaceDraftService.rebase_source_defaults(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+        self.assertEqual(
+            draft.to_public_dict(detail=True)["dimensions"],
+            dimensions,
+        )
+        self.assertEqual(
+            MarketplaceDraftService.package_confirmation(draft)["source"],
+            "seller_confirmed",
+        )
+
+    def test_changed_current_package_source_invalidates_seller_confirmation(self):
+        product = self._product(
+            external_id="changed-package-source",
+            dimensions=False,
+        )
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        dimensions = {
+            "width": "120",
+            "height": "80",
+            "depth": "300",
+            "weight": "250",
+            "dimension_unit": "MILLIMETERS",
+            "weight_unit": "GRAMS",
+        }
+        owner_user_id = Seller.query.filter_by(id=self.seller1_id).one().user_id
+        draft = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            patch={"dimensions": dimensions, "confirm_package": True},
+            corrected_by_user_id=owner_user_id,
+        )
+
+        original = json.loads(product.original_data)
+        original["dimensions"] = {
+            "package_width_cm": 50,
+            "package_height_cm": 6,
+            "package_length_cm": 80,
+            "package_weight_g": 300,
+        }
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.supplier_product.original_data_json = product.original_data
+        db.session.commit()
+        draft = MarketplaceDraftService.rebase_source_defaults(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+
+        status = MarketplaceDraftService.package_confirmation(draft)
+        self.assertEqual(
+            draft.to_public_dict(detail=True)["dimensions"],
+            dimensions,
+            "A changed source invalidates eligibility but cannot overwrite the seller's saved tuple",
+        )
+        self.assertTrue(status["required"])
+        self.assertEqual(status["source"], "unverified")
+
+    def test_legacy_wb_default_stays_visible_but_validation_blocks_new_create(self):
+        product = self._product(
+            external_id="legacy-wb-default",
+            dimensions=False,
+        )
+        wb_product = Product(
+            seller_id=self.seller1_id,
+            nm_id=700_099,
+            vendor_code=product.external_vendor_code,
+            title=product.title,
+            subject_id=123,
+            dimensions_json=json.dumps({
+                "length": 31,
+                "width": 8,
+                "height": 6,
+                "weightBrutto": 0.24,
+                "isValid": True,
+            }),
+            last_sync=self.now,
+        )
+        db.session.add(wb_product)
+        db.session.flush()
+        product.product_id = wb_product.id
+        db.session.commit()
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        legacy_tuple = {
+            "width": "80",
+            "height": "60",
+            "depth": "310",
+            "weight": "240",
+            "dimension_unit": "MILLIMETERS",
+            "weight_unit": "GRAMS",
+        }
+        old_document = json.loads(draft.source_facts_json)
+        old_document["facts"].setdefault("physical", {})[
+            "wb_package_dimensions"
+        ] = {
+            "length_cm": 31,
+            "width_cm": 8,
+            "height_cm": 6,
+            "weight_kg": 0.24,
+        }
+        old_provenance = json.loads(draft.provenance_json)
+        old_provenance["physical.wb_package_dimensions"] = {
+            "source": "product.dimensions_json",
+            "trust": "marketplace_observed",
+        }
+        draft.source_facts_json = MarketplaceDraftService._canonical_json(
+            old_document, dict,
+        )
+        draft.provenance_json = MarketplaceDraftService._canonical_json(
+            old_provenance, dict,
+        )
+        draft.dimensions_json = MarketplaceDraftService._canonical_json(
+            legacy_tuple, dict,
+        )
+        draft.source_fact_hash = "a" * 64
+        db.session.commit()
+
+        draft = MarketplaceDraftService.rebase_source_defaults(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+        self.assertEqual(
+            draft.to_public_dict(detail=True)["dimensions"],
+            legacy_tuple,
+        )
+        status = MarketplaceDraftService.package_confirmation(draft)
+        self.assertTrue(status["required"])
+        self.assertEqual(status["source"], "legacy_wb_unverified")
+        validation = MarketplaceDraftService._build_validation_result(draft)
+        self.assertFalse(validation["publishable"])
+        self.assertIn(
+            "package_confirmation_required",
+            [item["code"] for item in validation["errors"]],
+        )
+
+    def test_confirmed_weight_reconciles_only_proven_legacy_wb_attribute(self):
+        product = self._product(
+            external_id="legacy-wb-weight-attribute",
+            dimensions=False,
+        )
+        wb_product = Product(
+            seller_id=self.seller1_id,
+            nm_id=700_100,
+            vendor_code=product.external_vendor_code,
+            title=product.title,
+            subject_id=123,
+            dimensions_json=json.dumps({
+                "length": 31,
+                "width": 8,
+                "height": 6,
+                "weightBrutto": 0.24,
+                "isValid": True,
+            }),
+            last_sync=self.now,
+        )
+        db.session.add(wb_product)
+        db.session.flush()
+        product.product_id = wb_product.id
+        package_weight_attribute = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id,
+            product_type_id=self.product_type.id,
+            external_attribute_id="590099",
+            name="Вес с упаковкой, г",
+            data_type="String",
+            is_required=False,
+            max_value_count=1,
+            is_available=True,
+            is_enabled=True,
+            last_seen_at=self.now,
+        )
+        db.session.add(package_weight_attribute)
+        db.session.commit()
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        old_document = json.loads(draft.source_facts_json)
+        old_document["facts"].setdefault("physical", {})[
+            "wb_package_dimensions"
+        ] = {
+            "length_cm": 31,
+            "width_cm": 8,
+            "height_cm": 6,
+            "weight_kg": 0.24,
+        }
+        old_provenance = json.loads(draft.provenance_json)
+        old_provenance["physical.wb_package_dimensions"] = {
+            "source": "product.dimensions_json",
+            "trust": "marketplace_observed",
+        }
+        legacy_candidate = json.loads(json.dumps(old_document))
+        legacy_candidate["facts"]["physical"].setdefault(
+            "dimensions", {},
+        )["package_weight_g"] = "240"
+        auto_rows, _ = MarketplaceDraftService._auto_map_attributes(
+            product_type=draft.product_type,
+            facts_document=legacy_candidate,
+            source_provenance=old_provenance,
+            category_mapping=draft.category_mapping,
+        )
+        old_weight_row = next(
+            row for row in auto_rows
+            if row.get("attribute_id") == "590099"
+        )
+        self.assertEqual(old_weight_row["values"], [{"value": "240"}])
+        draft.source_facts_json = MarketplaceDraftService._canonical_json(
+            old_document, dict,
+        )
+        draft.provenance_json = MarketplaceDraftService._canonical_json(
+            old_provenance, dict,
+        )
+        draft.attributes_json = MarketplaceDraftService._canonical_json(
+            [old_weight_row], list,
+        )
+        draft.source_fact_hash = "b" * 64
+        db.session.commit()
+
+        dimensions = {
+            "width": "80",
+            "height": "60",
+            "depth": "310",
+            "weight": "300",
+            "dimension_unit": "MILLIMETERS",
+            "weight_unit": "GRAMS",
+        }
+        draft = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            patch={"dimensions": dimensions, "confirm_package": True},
+            corrected_by_user_id=Seller.query.filter_by(
+                id=self.seller1_id,
+            ).one().user_id,
+        )
+        mapped = json.loads(draft.attributes_json)
+        self.assertEqual(mapped, [{
+            "attribute_id": "590099",
+            "complex_id": "0",
+            "values": [{"value": "300"}],
+        }])
+
+        # An ordinary seller-edited row no longer equals the saved old
+        # automatic candidate, so another confirmation leaves it untouched.
+        manual_row = {
+            "attribute_id": "590099",
+            "complex_id": "0",
+            "values": [{"value": "301"}],
+        }
+        draft = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            patch={"attributes": [manual_row]},
+        )
+        draft = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            patch={"dimensions": dimensions, "confirm_package": True},
+            corrected_by_user_id=Seller.query.filter_by(
+                id=self.seller1_id,
+            ).one().user_id,
+        )
+        self.assertEqual(json.loads(draft.attributes_json), [manual_row])
 
     def test_official_type_name_exactly_fills_ozon_type_attribute(self):
         type_attribute = MarketplaceAttributeDefinition(
@@ -3711,6 +4175,9 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             MarketplaceDraftService._dimensions_from_facts(facts),
             "An unlabelled alias cannot inherit the old Russian mm unit",
         )
+        explicit_without_wb = MarketplaceDraftService._dimensions_from_facts(
+            facts
+        )
 
         facts["facts"]["physical"]["wb_package_dimensions"] = {
             "width_cm": 21,
@@ -3720,14 +4187,8 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         }
         self.assertEqual(
             MarketplaceDraftService._dimensions_from_facts(facts),
-            {
-                "width": "210",
-                "height": "40",
-                "depth": "310",
-                "weight": "300",
-                "dimension_unit": "MILLIMETERS",
-                "weight_unit": "GRAMS",
-            },
+            explicit_without_wb,
+            "WB cache must never complete a partial explicit source tuple",
         )
 
         inch_facts = {"facts": {"physical": {"dimensions": {
@@ -3778,7 +4239,10 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             seller_id=self.seller1_id,
             draft_id=rejected.id,
             expected_version=rejected.version,
-            patch={"dimensions": dimensions},
+            patch={"dimensions": dimensions, "confirm_package": True},
+            corrected_by_user_id=Seller.query.filter_by(
+                id=self.seller1_id,
+            ).one().user_id,
         )
         accepted = MarketplaceDraftService.validate_draft(
             seller_id=self.seller1_id,

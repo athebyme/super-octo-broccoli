@@ -139,6 +139,12 @@ class MarketplaceDraftService:
     AUTOMATIC_CLEANUP_ATTRIBUTE_ID = "4543"
     AUTOMATIC_CLEANUP_PROVENANCE_KEY = "automatic_attribute_cleanup.4543"
     AUTOMATIC_CLEANUP_REASON = "unchanged_optional_attribute_exceeds_schema_max"
+    PACKAGE_CONFIRMATION_PROVENANCE_KEY = "physical.package_confirmation"
+    LEGACY_WB_PACKAGE_PROVENANCE_KEY = "physical.legacy_wb_package_dimensions"
+    PACKAGE_DIMENSION_FIELDS = (
+        "width", "height", "depth", "weight",
+        "dimension_unit", "weight_unit",
+    )
     MAX_VALIDATION_ITEMS = 250
     DIMENSION_UNITS = {"MILLIMETERS", "CENTIMETERS", "INCHES"}
     WEIGHT_UNITS = {"GRAMS", "KILOGRAMS", "POUNDS"}
@@ -2899,6 +2905,567 @@ class MarketplaceDraftService:
             return None
 
     @classmethod
+    def _complete_package_dimensions(cls, value: Any) -> Optional[dict]:
+        """Normalize one exact, API-valid package tuple or return ``None``."""
+        try:
+            normalized = cls._normalize_dimensions(value)
+        except MarketplaceDraftValidationError:
+            return None
+        required = set(cls.PACKAGE_DIMENSION_FIELDS)
+        if not required.issubset(normalized):
+            return None
+        if (
+            normalized.get("dimension_unit") not in cls.DIMENSION_UNITS
+            or normalized.get("weight_unit") not in cls.WEIGHT_UNITS
+        ):
+            return None
+        for field_name in ("width", "height", "depth", "weight"):
+            try:
+                number = Decimal(normalized[field_name])
+            except (InvalidOperation, TypeError, ValueError):
+                return None
+            if (
+                not number.is_finite()
+                or number <= 0
+                or number != number.to_integral_value()
+                or number > cls.MAX_OZON_API_PHYSICAL_INTEGER
+            ):
+                return None
+        return {
+            key: normalized[key]
+            for key in cls.PACKAGE_DIMENSION_FIELDS
+        }
+
+    @classmethod
+    def _package_dimensions_hash(cls, value: Any) -> Optional[str]:
+        normalized = cls._complete_package_dimensions(value)
+        if normalized is None:
+            return None
+        return cls._normalized_package_dimensions_hash(normalized)
+
+    @classmethod
+    def _normalized_package_dimensions_hash(cls, normalized: dict) -> str:
+        return hashlib.sha256(
+            cls._canonical_json(normalized, dict).encode("utf-8")
+        ).hexdigest()
+
+    @classmethod
+    def _package_source_identity(cls, product: ImportedProduct) -> dict:
+        """Stable seller/source identity; ordinary feed refreshes do not change it."""
+        return {
+            "imported_product_id": product.id,
+            "seller_id": product.seller_id,
+            "source_type": str(product.source_type or ""),
+            "external_id": str(product.external_id or ""),
+            "supplier_id": product.supplier_id,
+            "supplier_product_id": product.supplier_product_id,
+        }
+
+    @classmethod
+    def _current_package_context(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        include_suggestion: bool = True,
+    ) -> dict:
+        """Reload current source evidence for dispatch-time confirmation checks."""
+        if draft.published_listing_id is not None:
+            return {
+                "product": None,
+                "source_identity": {},
+                "source_dimensions": {},
+                "source_dimensions_hash": None,
+                "wb_suggestion": None,
+            }
+        product = (
+            db.session.query(ImportedProduct)
+            .options(
+                joinedload(ImportedProduct.supplier_product),
+                joinedload(ImportedProduct.product),
+            )
+            .populate_existing()
+            .filter_by(
+                id=draft.imported_product_id,
+                seller_id=draft.seller_id,
+            )
+            .first()
+        )
+        if product is None:
+            return {
+                "product": None,
+                "source_identity": {},
+                "source_dimensions": {},
+                "source_dimensions_hash": None,
+                "wb_suggestion": None,
+            }
+
+        source_identity = cls._package_source_identity(product)
+        source_dimensions = {}
+        wb_suggestion = None
+        try:
+            facts_document, provenance, _fact_hash = cls._fact_snapshot(product)
+            source_entry = provenance.get("physical.dimensions")
+            candidate = cls._dimensions_from_facts(facts_document)
+            if (
+                isinstance(source_entry, dict)
+                and source_entry.get("trust") == "observed"
+                and isinstance(candidate, dict)
+            ):
+                source_dimensions = candidate
+            if include_suggestion:
+                suggestions = facts_document.get("unverified_suggestions", {})
+                if isinstance(suggestions, dict):
+                    wb_suggestion = suggestions.get("wb_package_dimensions")
+        except MarketplaceDraftError:
+            # An unavailable fact pack cannot authorize a provider-derived
+            # value. A saved seller confirmation is handled separately and
+            # remains bound to the product identity and exact tuple.
+            pass
+        return {
+            "product": product,
+            "source_identity": source_identity,
+            "source_dimensions": source_dimensions,
+            "source_dimensions_hash": cls._normalized_package_dimensions_hash(
+                source_dimensions
+            ) if source_dimensions else None,
+            "wb_suggestion": (
+                cls._wb_package_dimensions_to_ozon(wb_suggestion)
+                if include_suggestion else None
+            ),
+        }
+
+    @classmethod
+    def _wb_package_dimensions_to_ozon(cls, value: Any) -> Optional[dict]:
+        """Project either WB cache shape to an exact Ozon-unit candidate."""
+        if not isinstance(value, dict):
+            return None
+        width_cm = value.get("width_cm", value.get("width"))
+        height_cm = value.get("height_cm", value.get("height"))
+        length_cm = value.get("length_cm", value.get("length"))
+        weight_kg = value.get("weight_kg", value.get("weightBrutto"))
+        try:
+            projected = {
+                "width": cls._decimal(
+                    Decimal(str(width_cm)) * 10,
+                    "suggested_package.width",
+                    positive=True,
+                ),
+                "height": cls._decimal(
+                    Decimal(str(height_cm)) * 10,
+                    "suggested_package.height",
+                    positive=True,
+                ),
+                "depth": cls._decimal(
+                    Decimal(str(length_cm)) * 10,
+                    "suggested_package.depth",
+                    positive=True,
+                ),
+                "weight": cls._decimal(
+                    Decimal(str(weight_kg)) * 1000,
+                    "suggested_package.weight",
+                    positive=True,
+                ),
+                "dimension_unit": "MILLIMETERS",
+                "weight_unit": "GRAMS",
+            }
+        except (InvalidOperation, TypeError, ValueError,
+                MarketplaceDraftValidationError):
+            return None
+        return cls._complete_package_dimensions(projected)
+
+    @classmethod
+    def _legacy_wb_package_dimensions(
+        cls,
+        facts_document: Any,
+        provenance: Any,
+    ) -> Optional[dict]:
+        """Read the old WB-derived draft default only as legacy metadata."""
+        if not isinstance(provenance, dict):
+            return None
+        entry = provenance.get("physical.wb_package_dimensions")
+        if (
+            not isinstance(entry, dict)
+            or entry.get("source") != "product.dimensions_json"
+            or entry.get("trust") != "marketplace_observed"
+        ):
+            return None
+        facts = facts_document.get("facts") if isinstance(facts_document, dict) else None
+        physical = facts.get("physical") if isinstance(facts, dict) else None
+        wb_dimensions = (
+            physical.get("wb_package_dimensions")
+            if isinstance(physical, dict) else None
+        )
+        if not isinstance(wb_dimensions, dict):
+            return None
+        return cls._wb_package_dimensions_to_ozon(wb_dimensions)
+
+    @classmethod
+    def _legacy_wb_package_weight_attribute_rows(
+        cls,
+        draft: MarketplaceProductDraft,
+        facts_document: dict,
+        provenance: dict,
+        legacy_dimensions: dict,
+    ) -> list:
+        """Identify exact old auto rows derived from the WB package cache."""
+        if draft.product_type is None or draft.published_listing_id is not None:
+            return []
+        facts = facts_document.get("facts")
+        physical = facts.get("physical") if isinstance(facts, dict) else None
+        dimensions = (
+            physical.get("dimensions") if isinstance(physical, dict) else None
+        )
+        if not isinstance(dimensions, dict):
+            dimensions = {}
+        if cls._positive_fact_decimal(dimensions.get("package_weight_g")) is not None:
+            return []
+        if legacy_dimensions.get("weight_unit") != "GRAMS":
+            return []
+        current_rows = cls._stored_json(draft.attributes_json, list)
+        if not current_rows:
+            return []
+        definitions = MarketplaceAttributeDefinition.query.filter_by(
+            product_type_id=draft.product_type_id,
+            is_available=True,
+            is_enabled=True,
+        ).all()
+        weight_attribute_ids = {
+            str(definition.external_attribute_id)
+            for definition in definitions
+            if cls._normalized_text(definition.name)
+            == cls._normalized_text("Вес с упаковкой, г")
+            and not definition.attribute_complex_id
+        }
+        if not weight_attribute_ids:
+            return []
+        legacy_facts = json.loads(
+            cls._canonical_json(facts_document, dict)
+        )
+        legacy_physical = legacy_facts.setdefault("facts", {}).setdefault(
+            "physical", {}
+        )
+        legacy_source_dimensions = legacy_physical.get("dimensions")
+        if not isinstance(legacy_source_dimensions, dict):
+            legacy_source_dimensions = {}
+            legacy_physical["dimensions"] = legacy_source_dimensions
+        legacy_source_dimensions["package_weight_g"] = legacy_dimensions[
+            "weight"
+        ]
+        generated, _ = cls._auto_map_attributes(
+            product_type=draft.product_type,
+            facts_document=legacy_facts,
+            source_provenance=provenance,
+            category_mapping=draft.category_mapping,
+        )
+        return [
+            row for row in generated
+            if (
+                isinstance(row, dict)
+                and str(row.get("attribute_id")) in weight_attribute_ids
+                and row in current_rows
+            )
+        ]
+
+    @classmethod
+    def _package_weight_in_grams(cls, dimensions: Any) -> Optional[str]:
+        normalized = cls._complete_package_dimensions(dimensions)
+        if normalized is None:
+            return None
+        factor = {
+            "GRAMS": Decimal("1"),
+            "KILOGRAMS": Decimal("1000"),
+            "POUNDS": Decimal("453.59237"),
+        }[normalized["weight_unit"]]
+        grams = Decimal(normalized["weight"]) * factor
+        if (
+            not grams.is_finite()
+            or grams <= 0
+            or grams != grams.to_integral_value()
+            or grams > cls.MAX_OZON_API_PHYSICAL_INTEGER
+        ):
+            return None
+        return cls._decimal(grams, "package_weight_g", positive=True)
+
+    @classmethod
+    def _reconcile_legacy_wb_package_weight_attribute(
+        cls,
+        draft: MarketplaceProductDraft,
+        confirmed_dimensions: dict,
+    ) -> None:
+        """Update one proven WB-derived package-weight row when exactly typed."""
+        metadata = cls._legacy_wb_metadata_from_draft(draft)
+        legacy_rows = (
+            metadata.get("auto_package_weight_attributes", [])
+            if isinstance(metadata, dict) else []
+        )
+        confirmed_grams = cls._package_weight_in_grams(confirmed_dimensions)
+        if not legacy_rows or confirmed_grams is None:
+            return
+        facts_document = cls._stored_json(draft.source_facts_json, dict)
+        provenance = cls._stored_json(draft.provenance_json, dict)
+        facts_copy = json.loads(cls._canonical_json(facts_document, dict))
+        facts = facts_copy.setdefault("facts", {})
+        physical = facts.setdefault("physical", {})
+        source_dimensions = physical.get("dimensions")
+        if not isinstance(source_dimensions, dict):
+            source_dimensions = {}
+            physical["dimensions"] = source_dimensions
+        source_dimensions["package_weight_g"] = confirmed_grams
+        generated, _ = cls._auto_map_attributes(
+            product_type=draft.product_type,
+            facts_document=facts_copy,
+            source_provenance=provenance,
+            category_mapping=draft.category_mapping,
+        )
+        generated_by_identity = {
+            cls._attribute_identity(row): row
+            for row in generated
+            if isinstance(row, dict)
+        }
+        current_rows = cls._stored_json(draft.attributes_json, list)
+        changed = False
+        for legacy_row in legacy_rows:
+            if not isinstance(legacy_row, dict) or legacy_row not in current_rows:
+                continue
+            identity = cls._attribute_identity(legacy_row)
+            replacement = generated_by_identity.get(identity)
+            if replacement is None:
+                continue
+            index = current_rows.index(legacy_row)
+            if replacement != legacy_row:
+                current_rows[index] = replacement
+                changed = True
+        if changed:
+            draft.attributes_json = cls._canonical_json(current_rows, list)
+
+    @classmethod
+    def _legacy_wb_weight_attribute_mismatch(
+        cls,
+        draft: MarketplaceProductDraft,
+        dimensions: Any,
+    ) -> Optional[str]:
+        if draft.published_listing_id is not None:
+            return None
+        metadata = cls._legacy_wb_metadata_from_draft(draft)
+        legacy_rows = (
+            metadata.get("auto_package_weight_attributes", [])
+            if isinstance(metadata, dict) else []
+        )
+        if not legacy_rows:
+            return None
+        confirmed_grams = cls._package_weight_in_grams(dimensions)
+        old_dimensions = cls._complete_package_dimensions(
+            metadata.get("dimensions")
+        )
+        if (
+            confirmed_grams is not None
+            and old_dimensions is not None
+            and old_dimensions.get("weight_unit") == "GRAMS"
+            and confirmed_grams == old_dimensions.get("weight")
+        ):
+            return None
+        current_rows = cls._stored_json(draft.attributes_json, list)
+        for row in legacy_rows:
+            if isinstance(row, dict) and row in current_rows:
+                return str(row.get("attribute_id"))
+        return None
+
+    @classmethod
+    def _legacy_wb_metadata_from_draft(
+        cls,
+        draft: MarketplaceProductDraft,
+    ) -> Optional[dict]:
+        provenance = cls._stored_json(draft.provenance_json, dict)
+        stored = provenance.get(cls.LEGACY_WB_PACKAGE_PROVENANCE_KEY)
+        if isinstance(stored, dict):
+            dimensions = cls._complete_package_dimensions(
+                stored.get("dimensions")
+            )
+            if dimensions is not None:
+                return {
+                    "source": "product.dimensions_json",
+                    "trust": "unverified_marketplace_cache",
+                    "dimensions": dimensions,
+                    "dimensions_sha256": cls._package_dimensions_hash(
+                        dimensions
+                    ),
+                    "auto_package_weight_attributes": [
+                        row for row in stored.get(
+                            "auto_package_weight_attributes", []
+                        ) if isinstance(row, dict)
+                    ],
+                }
+        facts = cls._stored_json(draft.source_facts_json, dict)
+        dimensions = cls._legacy_wb_package_dimensions(facts, provenance)
+        if dimensions is None:
+            return None
+        metadata = {
+            "source": "product.dimensions_json",
+            "trust": "unverified_marketplace_cache",
+            "dimensions": dimensions,
+            "dimensions_sha256": cls._package_dimensions_hash(dimensions),
+        }
+        metadata["auto_package_weight_attributes"] = (
+            cls._legacy_wb_package_weight_attribute_rows(
+                draft,
+                facts,
+                provenance,
+                dimensions,
+            )
+        )
+        return metadata
+
+    @classmethod
+    def _confirmation_record_matches(
+        cls,
+        draft: MarketplaceProductDraft,
+        dimensions: Any,
+        record: Any,
+        context: dict,
+        *,
+        require_current_source: bool = True,
+    ) -> bool:
+        normalized = cls._complete_package_dimensions(dimensions)
+        if normalized is None or not isinstance(record, dict):
+            return False
+        actor_id = record.get("actor_user_id")
+        if type(actor_id) is not int or actor_id <= 0:
+            return False
+        if Seller.query.filter_by(
+            id=draft.seller_id,
+            user_id=actor_id,
+        ).first() is None:
+            return False
+        dimensions_hash = cls._normalized_package_dimensions_hash(normalized)
+        expected = {
+            "seller_id": draft.seller_id,
+            "account_id": draft.account_id,
+            "draft_id": draft.id,
+            "imported_product_id": draft.imported_product_id,
+            "source_identity": context.get("source_identity"),
+            "dimensions_sha256": dimensions_hash,
+        }
+        if require_current_source:
+            expected["source_dimensions_sha256"] = context.get(
+                "source_dimensions_hash"
+            )
+        return all(record.get(key) == value for key, value in expected.items())
+
+    @classmethod
+    def _provenance_with_package_state(
+        cls,
+        draft: MarketplaceProductDraft,
+        fresh_provenance: dict,
+        *,
+        legacy_wb_metadata: Optional[dict] = None,
+        package_context: Optional[dict] = None,
+    ) -> dict:
+        """Carry only still-valid seller confirmation and legacy cache context."""
+        merged = cls._provenance_with_preserved_compliance(
+            draft, fresh_provenance,
+        )
+        current = cls._stored_json(draft.provenance_json, dict)
+        confirmation = current.get(cls.PACKAGE_CONFIRMATION_PROVENANCE_KEY)
+        if isinstance(confirmation, dict):
+            context = package_context or cls._current_package_context(
+                draft, include_suggestion=False,
+            )
+            dimensions = cls._stored_json(draft.dimensions_json, dict)
+            if cls._confirmation_record_matches(
+                draft,
+                dimensions,
+                confirmation,
+                context,
+                require_current_source=False,
+            ):
+                merged[cls.PACKAGE_CONFIRMATION_PROVENANCE_KEY] = confirmation
+            else:
+                merged.pop(cls.PACKAGE_CONFIRMATION_PROVENANCE_KEY, None)
+
+        legacy = legacy_wb_metadata or cls._legacy_wb_metadata_from_draft(draft)
+        if legacy is not None:
+            merged[cls.LEGACY_WB_PACKAGE_PROVENANCE_KEY] = legacy
+        else:
+            merged.pop(cls.LEGACY_WB_PACKAGE_PROVENANCE_KEY, None)
+        return merged
+
+    @classmethod
+    def package_confirmation(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        dimensions: Optional[dict] = None,
+        include_suggestion: bool = True,
+    ) -> dict:
+        """Resolve whether an exact package tuple is safe for a new Ozon create.
+
+        A current complete, unit-aware observed source tuple may authorize only
+        the exact same stored/submitted tuple. Otherwise a seller must confirm
+        the full tuple explicitly. WB cache values remain suggestions, and a
+        valid seller confirmation is tied to exact draft/source identity.
+        """
+        raw_dimensions = (
+            dimensions
+            if dimensions is not None
+            else cls._stored_json(draft.dimensions_json, dict)
+        )
+        complete_dimensions = cls._complete_package_dimensions(raw_dimensions)
+        complete = complete_dimensions is not None
+        base = {
+            "required": False,
+            "complete": complete,
+            "source": "incomplete" if not complete else "unverified",
+            "suggested_dimensions": None,
+        }
+
+        if draft.published_listing_id is not None:
+            base["source"] = "linked_listing"
+            base["suggested_dimensions"] = None
+            return base
+        if not complete and not include_suggestion:
+            return base
+
+        context = cls._current_package_context(
+            draft,
+            include_suggestion=include_suggestion,
+        )
+        base["suggested_dimensions"] = context.get("wb_suggestion")
+        if not complete:
+            return base
+
+        source_dimensions = cls._complete_package_dimensions(
+            context.get("source_dimensions")
+        )
+        supplied_hash = cls._normalized_package_dimensions_hash(
+            complete_dimensions
+        )
+        source_hash = (
+            cls._normalized_package_dimensions_hash(source_dimensions)
+            if source_dimensions is not None else None
+        )
+        if source_hash is not None and source_hash == supplied_hash:
+            base["source"] = "explicit_source"
+            return base
+
+        provenance = cls._stored_json(draft.provenance_json, dict)
+        confirmation = provenance.get(cls.PACKAGE_CONFIRMATION_PROVENANCE_KEY)
+        if cls._confirmation_record_matches(
+            draft, complete_dimensions, confirmation, context,
+        ):
+            base.update({
+                "source": "seller_confirmed",
+                "confirmed_by_user_id": confirmation.get("actor_user_id"),
+                "confirmed_at": confirmation.get("confirmed_at"),
+            })
+            return base
+
+        legacy = cls._legacy_wb_metadata_from_draft(draft)
+        if legacy is not None and legacy.get("dimensions_sha256") == supplied_hash:
+            base["source"] = "legacy_wb_unverified"
+        base["required"] = True
+        return base
+
+    @classmethod
     def _dimensions_from_facts(cls, facts_document: dict) -> dict:
         physical = facts_document.get("facts", {}).get("physical", {})
         raw = physical.get("dimensions", {}) if isinstance(physical, dict) else {}
@@ -3105,54 +3672,6 @@ class MarketplaceDraftService:
                     result["weight_unit"] = unit
             break
 
-        source_complete = bool(
-            all(
-                result.get(field) not in (None, "")
-                for field in ("width", "height", "depth", "weight")
-            )
-            and result.get("dimension_unit") in cls.DIMENSION_UNITS
-            and result.get("weight_unit") in cls.WEIGHT_UNITS
-        )
-        if source_complete:
-            return result
-
-        # A fresh exact WB projection is a coherent package observation.  Use
-        # it only as a complete fallback; never mix a partial source tuple with
-        # unrelated per-field measurements.
-        wb_package = (
-            physical.get("wb_package_dimensions", {})
-            if isinstance(physical, dict) else {}
-        )
-        if isinstance(wb_package, dict):
-            try:
-                wb_result = {
-                    "width": cls._decimal(
-                        Decimal(str(wb_package["width_cm"])) * 10,
-                        "width",
-                        positive=True,
-                    ),
-                    "height": cls._decimal(
-                        Decimal(str(wb_package["height_cm"])) * 10,
-                        "height",
-                        positive=True,
-                    ),
-                    "depth": cls._decimal(
-                        Decimal(str(wb_package["length_cm"])) * 10,
-                        "depth",
-                        positive=True,
-                    ),
-                    "weight": cls._decimal(
-                        Decimal(str(wb_package["weight_kg"])) * 1000,
-                        "weight",
-                        positive=True,
-                    ),
-                    "dimension_unit": "MILLIMETERS",
-                    "weight_unit": "GRAMS",
-                }
-            except (KeyError, InvalidOperation, TypeError, ValueError):
-                wb_result = {}
-            if wb_result:
-                return wb_result
         return result
 
     @classmethod
@@ -4240,22 +4759,10 @@ class MarketplaceDraftService:
                 overwrite=True,
             )
 
-        physical = (
-            facts.get("physical", {})
-            if isinstance(facts, dict) else {}
-        )
-        product_dimensions = (
-            physical.get("dimensions", {})
-            if isinstance(physical, dict) else {}
-        )
+        physical = facts.get("physical", {}) if isinstance(facts, dict) else {}
+        product_dimensions = physical.get("dimensions", {}) if isinstance(physical, dict) else {}
         if not isinstance(product_dimensions, dict):
             product_dimensions = {}
-        package_dimensions = (
-            physical.get("wb_package_dimensions", {})
-            if isinstance(physical, dict) else {}
-        )
-        if not isinstance(package_dimensions, dict):
-            package_dimensions = {}
 
         length_cm = cls._positive_fact_decimal(
             product_dimensions.get("length_cm")
@@ -4298,12 +4805,6 @@ class MarketplaceDraftService:
         package_weight_g = cls._positive_fact_decimal(
             product_dimensions.get("package_weight_g")
         )
-        if package_weight_g is None:
-            package_weight_kg = cls._positive_fact_decimal(
-                package_dimensions.get("weight_kg")
-            )
-            if package_weight_kg is not None:
-                package_weight_g = package_weight_kg * Decimal("1000")
         if package_weight_g is not None:
             assign(("вес с упаковкой, г",), package_weight_g)
 
@@ -7882,6 +8383,7 @@ class MarketplaceDraftService:
             "offer_id", "product_type_id", "save_mapping", "content",
             "attributes", "complex_attributes", "media", "dimensions",
             "attribute_removals", "barcodes", "commercial",
+            "confirm_package",
         }
         unknown = set(patch) - allowed
         if unknown:
@@ -7898,6 +8400,52 @@ class MarketplaceDraftService:
                 "Архивный черновик нельзя редактировать до восстановления listing"
             )
         cls._assert_no_active_publication(draft)
+
+        confirm_package = False
+        if "confirm_package" in patch:
+            confirm_package = cls._strict_boolean(
+                patch["confirm_package"], "confirm_package",
+            )
+        if confirm_package and "dimensions" not in patch:
+            raise MarketplaceDraftValidationError(
+                "Подтверждение упаковки требует полного комплекта dimensions"
+            )
+        if confirm_package and draft.published_listing_id is not None:
+            raise MarketplaceDraftValidationError(
+                "Для связанной карточки размеры упаковки подтверждаются источником Ozon"
+            )
+        confirmation_dimensions = None
+        confirmation_context = None
+        confirmation_actor_id = None
+        if confirm_package:
+            confirmation_dimensions = cls._complete_package_dimensions(
+                patch.get("dimensions")
+            )
+            if confirmation_dimensions is None:
+                raise MarketplaceDraftValidationError(
+                    "Подтверждение упаковки требует целые положительные размеры и единицы"
+                )
+            if corrected_by_user_id is None:
+                raise MarketplaceDraftValidationError(
+                    "Подтверждение упаковки требует текущего продавца"
+                )
+            confirmation_actor_id = cls._positive_integer(
+                corrected_by_user_id, "corrected_by_user_id",
+            )
+            if Seller.query.filter_by(
+                id=draft.seller_id,
+                user_id=confirmation_actor_id,
+            ).first() is None:
+                raise MarketplaceDraftValidationError(
+                    "Пользователь не владеет этим черновиком"
+                )
+            # Capture the exact current source package before the core mutates
+            # any draft fields. A later publish preflight rechecks this binding.
+            with db.session.no_autoflush:
+                confirmation_context = cls._current_package_context(
+                    draft,
+                    include_suggestion=False,
+                )
 
         save_mapping = patch.get("save_mapping", False)
         if "save_mapping" in patch:
@@ -8063,6 +8611,56 @@ class MarketplaceDraftService:
                     cls._canonical_json(normalized, expected_type),
                 )
 
+        if "dimensions" in patch or confirm_package:
+            current_provenance = cls._stored_json(draft.provenance_json, dict)
+            confirmation = current_provenance.get(
+                cls.PACKAGE_CONFIRMATION_PROVENANCE_KEY
+            )
+            # The confirmation hash records the exact tuple the seller
+            # approved. A regular dimensions save never creates a new record.
+            old_hash = (
+                confirmation.get("dimensions_sha256")
+                if isinstance(confirmation, dict) else None
+            )
+            new_dimensions = cls._stored_json(draft.dimensions_json, dict)
+            new_hash = cls._package_dimensions_hash(new_dimensions)
+            if (
+                isinstance(confirmation, dict)
+                and old_hash != new_hash
+            ):
+                current_provenance.pop(
+                    cls.PACKAGE_CONFIRMATION_PROVENANCE_KEY,
+                    None,
+                )
+            if confirm_package:
+                current_provenance[cls.PACKAGE_CONFIRMATION_PROVENANCE_KEY] = {
+                    "version": 1,
+                    "seller_id": draft.seller_id,
+                    "account_id": draft.account_id,
+                    "draft_id": draft.id,
+                    "imported_product_id": draft.imported_product_id,
+                    "source_identity": confirmation_context["source_identity"],
+                    "dimensions_sha256": cls._normalized_package_dimensions_hash(
+                        confirmation_dimensions
+                    ),
+                    "source_dimensions_sha256": confirmation_context[
+                        "source_dimensions_hash"
+                    ],
+                    "actor_user_id": confirmation_actor_id,
+                    "confirmed_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                }
+            if current_provenance != cls._stored_json(
+                draft.provenance_json, dict,
+            ):
+                draft.provenance_json = cls._canonical_json(
+                    current_provenance, dict,
+                )
+            if confirm_package:
+                cls._reconcile_legacy_wb_package_weight_attribute(
+                    draft,
+                    confirmation_dimensions,
+                )
+
         if product_type_changed:
             cls._clear_automatic_cleanup(draft)
         elif "attributes" in patch and any(
@@ -8130,12 +8728,18 @@ class MarketplaceDraftService:
                 "Архивный черновик нельзя обновлять до восстановления listing"
             )
         cls._assert_no_active_publication(draft)
+        legacy_wb_metadata = cls._legacy_wb_metadata_from_draft(draft)
         facts_document, provenance, fact_hash = cls._fact_snapshot(
             draft.imported_product
         )
         draft.source_facts_json = cls._canonical_json(facts_document, dict)
         draft.provenance_json = cls._canonical_json(
-            cls._provenance_with_preserved_compliance(draft, provenance), dict,
+            cls._provenance_with_package_state(
+                draft,
+                provenance,
+                legacy_wb_metadata=legacy_wb_metadata,
+            ),
+            dict,
         )
         draft.source_fact_hash = fact_hash
         draft.validation_status = "stale"
@@ -8200,6 +8804,7 @@ class MarketplaceDraftService:
         previous_provenance = cls._stored_json(
             draft.provenance_json, dict,
         )
+        legacy_wb_metadata = cls._legacy_wb_metadata_from_draft(draft)
         current_facts, provenance, fact_hash = cls._fact_snapshot(
             draft.imported_product
         )
@@ -8248,14 +8853,63 @@ class MarketplaceDraftService:
             draft.dimensions_json,
             dict,
         )
-        draft.dimensions_json = cls._canonical_json(
-            merge_mapping(
-                current_dimensions,
-                cls._dimensions_from_facts(previous_facts),
-                cls._dimensions_from_facts(current_facts),
-            ),
-            dict,
+        prior_confirmation = previous_provenance.get(
+            cls.PACKAGE_CONFIRMATION_PROVENANCE_KEY
         )
+        seller_confirmed_tuple = False
+        package_context = None
+        if isinstance(prior_confirmation, dict):
+            package_context = cls._current_package_context(
+                draft,
+                include_suggestion=False,
+            )
+            seller_confirmed_tuple = cls._confirmation_record_matches(
+                draft,
+                current_dimensions,
+                prior_confirmation,
+                package_context,
+                require_current_source=False,
+            )
+        previous_dimensions_default = cls._dimensions_from_facts(previous_facts)
+        current_dimensions_default = cls._dimensions_from_facts(current_facts)
+        legacy_dimensions = (
+            cls._complete_package_dimensions(
+                legacy_wb_metadata.get("dimensions")
+            )
+            if isinstance(legacy_wb_metadata, dict) else None
+        )
+        current_source_package = cls._complete_package_dimensions(
+            current_dimensions_default
+        )
+        inherited_legacy_tuple = (
+            legacy_dimensions is not None
+            and current_dimensions == legacy_dimensions
+        )
+        if seller_confirmed_tuple:
+            # A source refresh can make the old confirmation insufficient for
+            # publication, but it does not revoke the seller's saved physical
+            # measurement or let a new source default overwrite it.
+            rebased_dimensions = current_dimensions
+        elif inherited_legacy_tuple and current_source_package is None:
+            # R102 drafts may already have copied the then-current WB cache
+            # into this field. Keep that candidate visible through source
+            # refreshes; its legacy provenance remains unverified until the
+            # seller confirms the exact tuple.
+            rebased_dimensions = current_dimensions
+        else:
+            if inherited_legacy_tuple and current_source_package is not None:
+                previous_dimensions_default = legacy_dimensions
+            rebased_dimensions = merge_mapping(
+                current_dimensions,
+                previous_dimensions_default,
+                current_dimensions_default,
+            )
+        draft.dimensions_json = cls._canonical_json(rebased_dimensions, dict)
+        if seller_confirmed_tuple and draft.published_listing_id is None:
+            cls._reconcile_legacy_wb_package_weight_attribute(
+                draft,
+                rebased_dimensions,
+            )
 
         current_barcodes = cls._stored_json(draft.barcodes_json, list)
         if current_barcodes == cls._barcodes_from_facts(previous_facts):
@@ -8389,6 +9043,15 @@ class MarketplaceDraftService:
                 for item in previous_auto
                 if isinstance(item, dict)
             }
+            legacy_package_weight_by_identity = {
+                identity(item): item
+                for item in (
+                    legacy_wb_metadata.get(
+                        "auto_package_weight_attributes", []
+                    ) if isinstance(legacy_wb_metadata, dict) else []
+                )
+                if isinstance(item, dict)
+            }
             stored_attributes = cls._stored_json(draft.attributes_json, list)
             color_name_identity = (cls.OZON_COLOR_NAME_ATTRIBUTE_ID, "0")
             stored_color_row = next((
@@ -8447,6 +9110,14 @@ class MarketplaceDraftService:
                     continue
                 item_identity = identity(item)
                 previous_item = previous_by_identity.get(item_identity)
+                legacy_package_weight = legacy_package_weight_by_identity.get(
+                    item_identity
+                )
+                if (
+                    previous_item is None
+                    and item == legacy_package_weight
+                ):
+                    previous_item = legacy_package_weight
                 if (
                     (previous_item is not None and item == previous_item)
                     or (
@@ -8474,7 +9145,13 @@ class MarketplaceDraftService:
 
         draft.source_facts_json = cls._canonical_json(current_facts, dict)
         draft.provenance_json = cls._canonical_json(
-            cls._provenance_with_preserved_compliance(draft, provenance), dict,
+            cls._provenance_with_package_state(
+                draft,
+                provenance,
+                legacy_wb_metadata=legacy_wb_metadata,
+                package_context=package_context,
+            ),
+            dict,
         )
         draft.source_fact_hash = fact_hash
         draft.validation_status = "stale"
@@ -9256,6 +9933,33 @@ class MarketplaceDraftService:
                 ))
 
         dimensions = effective_documents["dimensions"]
+        package_status = cls.package_confirmation(
+            draft,
+            dimensions=dimensions,
+            include_suggestion=False,
+        )
+        if package_status["required"]:
+            errors.append(cls._validation_item(
+                "package_confirmation_required",
+                "dimensions",
+                "Проверьте фактически измеренную упаковку и подтвердите все габариты и вес упаковки перед созданием карточки",
+            ))
+        elif (
+            package_status["complete"]
+            and draft.published_listing_id is None
+        ):
+            stale_package_weight_attribute = (
+                cls._legacy_wb_weight_attribute_mismatch(
+                    draft,
+                    dimensions,
+                )
+            )
+            if stale_package_weight_attribute is not None:
+                errors.append(cls._validation_item(
+                    "package_weight_attribute_mismatch",
+                    f"attributes.{stale_package_weight_attribute}",
+                    "Подтверждённый вес упаковки отличается от ранее выведенного из WB атрибута. Обновите его по текущему типу Ozon перед созданием карточки",
+                ))
         for field_name in ("width", "height", "depth", "weight"):
             try:
                 rendered = cls._decimal(

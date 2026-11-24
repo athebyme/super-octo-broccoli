@@ -2172,6 +2172,61 @@ class MarketplacePublicationService:
         return True
 
     @classmethod
+    def _stop_unconfirmed_package(
+        cls,
+        operation: MarketplaceOperation,
+        *,
+        payload: dict,
+        now: datetime,
+    ) -> bool:
+        """Fence the complete frozen package before the first Ozon create."""
+        if (
+            operation.operation_kind != "product_import"
+            or operation.status != "queued"
+            or operation.attempt_count != 0
+        ):
+            return False
+        db.session.expire_all()
+        draft = operation.draft
+        code = "ozon_package_confirmation_required"
+        message = (
+            "Проверьте габариты и вес с упаковкой в черновике, "
+            "сохраните подтверждение и заново проверьте карточку перед отправкой."
+        )
+        if (
+            draft is not None
+            and draft.seller_id == operation.seller_id
+            and draft.account_id == operation.account_id
+            and draft.marketplace_id == operation.marketplace_id
+            and draft.published_listing_id is None
+            and draft.version == operation.draft_version
+        ):
+            try:
+                frozen = OzonProductStateContract.draft_documents(payload)["dimensions"]
+                saved = MarketplaceDraftService._normalize_dimensions(
+                    MarketplaceDraftService._stored_json(draft.dimensions_json, dict)
+                )
+                if frozen == saved:
+                    package = MarketplaceDraftService.package_confirmation(
+                        draft, dimensions=frozen, include_suggestion=False,
+                    )
+                    if package["complete"] and not package["required"]:
+                        mismatch = MarketplaceDraftService._legacy_wb_weight_attribute_mismatch(
+                            draft, frozen,
+                        )
+                        if mismatch is None:
+                            return False
+                        code = "ozon_package_weight_attribute_mismatch"
+                        message = (
+                            "Сверьте вес упаковки в характеристиках с подтверждённым "
+                            "весом упаковки, затем заново проверьте карточку."
+                        )
+            except (MarketplaceDraftError, OzonProductStateError):
+                pass
+        cls._mark_failed(operation, code=code, message=message, now=now)
+        return True
+
+    @classmethod
     def _stop_stale_brand_search(
         cls,
         operation: MarketplaceOperation,
@@ -2219,7 +2274,8 @@ class MarketplacePublicationService:
         adapter,
         credentials: MarketplaceCredentials,
         now: datetime,
-        brand_search_payload: Optional[dict] = None,
+        payload: dict,
+        uses_ozon_brand_search: bool,
     ) -> bool:
         if cls._stop_quarantined_write(operation, now=now):
             return False
@@ -2294,8 +2350,12 @@ class MarketplacePublicationService:
                 )
                 return False
 
-        if brand_search_payload is not None and cls._stop_stale_brand_search(
-            operation, payload=brand_search_payload, now=datetime.utcnow(),
+        checked_at = datetime.utcnow()
+        if cls._stop_unconfirmed_package(operation, payload=payload, now=checked_at):
+            return False
+
+        if uses_ozon_brand_search and cls._stop_stale_brand_search(
+            operation, payload=payload, now=checked_at,
         ):
             return False
 
@@ -2405,6 +2465,10 @@ class MarketplacePublicationService:
                 seller_id=operation.seller_id,
                 operation_id=operation.id,
             )
+        if cls._stop_unconfirmed_package(operation, payload=payload, now=now):
+            return cls._owned_operation(
+                seller_id=operation.seller_id, operation_id=operation.id,
+            )
         if not cls._prepare_media_assets(operation, now=now):
             return cls._owned_operation(
                 seller_id=operation.seller_id,
@@ -2437,11 +2501,9 @@ class MarketplacePublicationService:
                 seller_id=operation.seller_id,
                 operation_id=operation.id,
             )
-        brand_search_payload = (
-            payload if summary.get("uses_ozon_brand_search") is True else None
-        )
-        if brand_search_payload is not None and cls._stop_stale_brand_search(
-            operation, payload=brand_search_payload, now=datetime.utcnow(),
+        uses_ozon_brand_search = summary.get("uses_ozon_brand_search") is True
+        if uses_ozon_brand_search and cls._stop_stale_brand_search(
+            operation, payload=payload, now=datetime.utcnow(),
         ):
             return cls._owned_operation(seller_id=seller_id, operation_id=operation_id)
         try:
@@ -2496,7 +2558,8 @@ class MarketplacePublicationService:
             adapter=adapter,
             credentials=credentials,
             now=now,
-            brand_search_payload=brand_search_payload,
+            payload=payload,
+            uses_ozon_brand_search=uses_ozon_brand_search,
         ):
             return cls._owned_operation(
                 seller_id=operation.seller_id,

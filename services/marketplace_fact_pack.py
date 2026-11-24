@@ -8,7 +8,6 @@ mapping.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 from hashlib import sha256
 import json
 import math
@@ -24,7 +23,6 @@ class MarketplaceFactPackError(ValueError):
 
 class MarketplaceFactPackBuilder:
     VERSION = 3
-    WB_PACKAGE_HARD_TTL = timedelta(hours=48)
     MAX_SERIALIZED_BYTES = 256 * 1024
     MAX_TEXT = 20_000
     MAX_DESCRIPTION = 100_000
@@ -274,29 +272,23 @@ class MarketplaceFactPackBuilder:
         provenance[path] = {"source": source, "trust": trust}
 
     @classmethod
-    def _fresh_wb_package_dimensions(
+    def _wb_package_dimensions_suggestion(
         cls,
         imported_product: ImportedProduct,
-        *,
-        now: Optional[datetime] = None,
     ) -> dict:
-        """Return one coherent fresh WB package observation, or nothing.
+        """Return a bounded WB cache suggestion for the exact linked product.
 
-        WB Content API dimensions are package dimensions in centimetres and
-        kilograms.  They are eligible only through the exact seller-owned
-        ``ImportedProduct.product`` FK, from a current catalog projection, and
-        only when WB itself returned a fully positive ``isValid=true`` set.
-        Product measurements from supplier characteristics are deliberately
-        not treated as packaging here.
+        ``Product.dimensions_json`` is a mixed projection: import writes can
+        save request defaults there and unrelated local operations can update
+        ``last_sync``. Even a later WB response can echo those values, so this
+        cache is never source evidence or an automatic package fact. It is
+        exposed only as an unverified suggestion for explicit seller review.
         """
         wb_product = imported_product.product
-        current_time = now or datetime.utcnow()
         if (
             wb_product is None
             or imported_product.product_id != wb_product.id
             or wb_product.seller_id != imported_product.seller_id
-            or wb_product.last_sync is None
-            or wb_product.last_sync < current_time - cls.WB_PACKAGE_HARD_TTL
         ):
             return {}
         raw = cls._load_object(wb_product.dimensions_json)
@@ -631,19 +623,6 @@ class MarketplaceFactPackBuilder:
                 trust="observed",
             )
 
-        wb_package_dimensions = cls._fresh_wb_package_dimensions(
-            imported_product
-        )
-        if wb_package_dimensions:
-            cls._record(
-                facts,
-                provenance,
-                "physical.wb_package_dimensions",
-                wb_package_dimensions,
-                source="product.dimensions_json",
-                trust="marketplace_observed",
-            )
-
         images = cls._photo_urls(
             original.get("photo_urls"),
             maximum=cls.MAX_IMAGES,
@@ -698,6 +677,11 @@ class MarketplaceFactPackBuilder:
             )
 
         suggestions: Dict[str, Any] = {}
+        wb_package_dimensions = cls._wb_package_dimensions_suggestion(
+            imported_product
+        )
+        if wb_package_dimensions:
+            suggestions["wb_package_dimensions"] = wb_package_dimensions
         if "brand" not in facts.get("identity", {}):
             current_brand = cls._text(imported_product.brand, maximum=200)
             if current_brand:
@@ -756,12 +740,19 @@ class MarketplaceFactPackBuilder:
             "source_type": cls._text(imported_product.source_type, maximum=80)
             or "unknown",
         }
+        # The linked WB package projection is an advisory UI candidate only.
+        # It is deliberately excluded from the fact hash so cache/default
+        # changes cannot stale canonical source facts or trigger a rebase.
+        hash_suggestions = {
+            key: value for key, value in suggestions.items()
+            if key != "wb_package_dimensions"
+        }
         hash_payload = {
             "version": cls.VERSION,
             "source": source,
             "facts": facts,
             "provenance": provenance,
-            "unverified_suggestions": suggestions,
+            "unverified_suggestions": hash_suggestions,
         }
         # Preserve the exact legacy fact hash when there are no active common
         # overrides. Only reviewed seller content adds this separate projection.
@@ -773,5 +764,6 @@ class MarketplaceFactPackBuilder:
                 "Marketplace fact pack exceeds the safety limit"
             )
         result = dict(hash_payload)
+        result["unverified_suggestions"] = suggestions
         result["fact_hash"] = sha256(canonical.encode("utf-8")).hexdigest()
         return result
