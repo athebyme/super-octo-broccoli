@@ -6105,6 +6105,12 @@ class MarketplaceDraftService:
             or evidence["max_value_count"] <= 0
         ):
             return None
+        source_mode = evidence.get("source_mode", "draft_override")
+        if (
+            not isinstance(source_mode, str)
+            or source_mode not in {"draft_override", "listing_inherited"}
+        ):
+            return None
         values = cls._automatic_cleanup_canonical_values(
             {"values": evidence.get("source_values")}
         )
@@ -6114,7 +6120,11 @@ class MarketplaceDraftService:
             or len(values) <= evidence["max_value_count"]
         ):
             return None
-        return {**evidence, "source_values": values}
+        return {
+            **evidence,
+            "source_mode": source_mode,
+            "source_values": values,
+        }
 
     @classmethod
     def _automatic_cleanup_summary(
@@ -6697,19 +6707,34 @@ class MarketplaceDraftService:
             for group in draft_complex_groups
         ):
             return None
+        draft_attributes = cls._stored_json(draft.attributes_json, list)
+        draft_target_rows = [
+            item for item in draft_attributes
+            if isinstance(item, dict)
+            and item.get("attribute_id") == cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID
+        ]
         draft_rows = [
-            item for item in cls._stored_json(draft.attributes_json, list)
+            item for item in draft_target_rows
             if cls._attribute_identity(item) == identity
         ]
-        baseline_rows = [
+        baseline_target_rows = [
             item for item in baseline["attributes"]
+            if isinstance(item, dict)
+            and item.get("attribute_id") == cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID
+        ]
+        baseline_rows = [
+            item for item in baseline_target_rows
             if cls._attribute_identity(item) == identity
         ]
         complex_matches = [
             item
             for group in draft_complex_groups
             for item in group.get("attributes", [])
-            if cls._attribute_identity(item) == identity
+            if (
+                isinstance(item, dict)
+                and item.get("attribute_id")
+                == cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID
+            )
         ]
         baseline_complex_matches = [
             item
@@ -6719,19 +6744,28 @@ class MarketplaceDraftService:
                 and isinstance(group.get("attributes"), list)
             )
             for item in group.get("attributes", [])
-            if cls._attribute_identity(item) == identity
+            if (
+                isinstance(item, dict)
+                and item.get("attribute_id")
+                == cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID
+            )
         ]
         if (
-            len(draft_rows) != 1
+            len(draft_rows) not in {0, 1}
+            or len(draft_target_rows) != len(draft_rows)
             or len(baseline_rows) != 1
+            or len(baseline_target_rows) != len(baseline_rows)
             or complex_matches
             or baseline_complex_matches
         ):
             return None
 
-        draft_values = cls._automatic_cleanup_canonical_values(draft_rows[0])
         baseline_values = cls._automatic_cleanup_canonical_values(
             baseline_rows[0]
+        )
+        draft_values = (
+            cls._automatic_cleanup_canonical_values(draft_rows[0])
+            if draft_rows else baseline_values
         )
         if (
             draft_values is None
@@ -6770,7 +6804,10 @@ class MarketplaceDraftService:
             "dictionary_id": definition.dictionary_id,
             "is_collection": True,
             "was_required": False,
-            "source_values": draft_values,
+            "source_mode": (
+                "draft_override" if draft_rows else "listing_inherited"
+            ),
+            "source_values": baseline_values,
         }
 
     @classmethod
@@ -6809,7 +6846,11 @@ class MarketplaceDraftService:
         }
         draft_rows = [
             item for item in cls._stored_json(draft.attributes_json, list)
-            if cls._attribute_identity(item) == identity
+            if (
+                isinstance(item, dict)
+                and item.get("attribute_id")
+                == cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID
+            )
         ]
         if draft_rows or identity not in removal_identities:
             raise changed()
@@ -6822,14 +6863,23 @@ class MarketplaceDraftService:
         ):
             raise changed()
         if any(
-            cls._attribute_identity(item) == identity
+            isinstance(item, dict)
+            and item.get("attribute_id") == cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID
             for group in complex_groups
             for item in group["attributes"]
         ):
             raise changed()
 
-        baseline_rows = [
+        baseline_target_rows = [
             item for item in baseline.get("attributes", [])
+            if (
+                isinstance(item, dict)
+                and item.get("attribute_id")
+                == cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID
+            )
+        ]
+        baseline_rows = [
+            item for item in baseline_target_rows
             if cls._attribute_identity(item) == identity
         ]
         baseline_complex = baseline.get("complex_attributes", [])
@@ -6840,10 +6890,11 @@ class MarketplaceDraftService:
         ):
             raise changed()
         if any(
-            cls._attribute_identity(item) == identity
+            isinstance(item, dict)
+            and item.get("attribute_id") == cls.AUTOMATIC_CLEANUP_ATTRIBUTE_ID
             for group in baseline_complex
             for item in group["attributes"]
-        ) or len(baseline_rows) != 1:
+        ) or len(baseline_rows) != 1 or len(baseline_target_rows) != 1:
             raise changed()
         current_values = cls._automatic_cleanup_canonical_values(
             baseline_rows[0]
@@ -6920,7 +6971,11 @@ class MarketplaceDraftService:
             item for item in attributes
             if cls._attribute_identity(item) == identity
         ]
-        if len(matching) != 1:
+        if (
+            plan["source_mode"] == "draft_override" and len(matching) != 1
+        ) or (
+            plan["source_mode"] == "listing_inherited" and matching
+        ):
             return False
         removals = cls._normalize_attribute_removals(
             cls._stored_json(draft.attribute_removals_json, list)
@@ -6930,18 +6985,16 @@ class MarketplaceDraftService:
             "complex_id": plan["complex_id"],
         })
         provenance = cls._stored_json(draft.provenance_json, dict)
-        evidence = {
-            "version": 1,
-            **plan,
-        }
+        evidence = {"version": 1, **plan}
         provenance[cls.AUTOMATIC_CLEANUP_PROVENANCE_KEY] = evidence
-        draft.attributes_json = cls._canonical_json(
-            [
-                item for item in attributes
-                if cls._attribute_identity(item) != identity
-            ],
-            list,
-        )
+        if plan["source_mode"] == "draft_override":
+            draft.attributes_json = cls._canonical_json(
+                [
+                    item for item in attributes
+                    if cls._attribute_identity(item) != identity
+                ],
+                list,
+            )
         draft.attribute_removals_json = cls._canonical_json(removals, list)
         draft.provenance_json = cls._canonical_json(provenance, dict)
         return True
