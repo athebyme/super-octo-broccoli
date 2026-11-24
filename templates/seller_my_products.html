@@ -1467,7 +1467,7 @@ function myProductsPage() {
 
         batchItemUnconfirmedText(item) {
             if (item?.status === 'success' && !this.batchItemHasPositiveNmId(item)) {
-                return 'В сохранённой задаче нет подтверждённого nmID. Проверьте состояние в WB перед повтором.';
+                return 'В сохранённой задаче нет подтверждения от WB. Проверьте карточку перед повтором.';
             }
             return 'Результат карточки не подтверждён. Проверьте состояние в WB перед повтором.';
         },

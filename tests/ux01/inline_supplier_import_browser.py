@@ -104,7 +104,7 @@ def bridge(route):
                     field: payload.get(field) for field in (
                         'success', 'code', 'job_uid', 'total', 'product_ids',
                         'status', 'replayed', 'worker_exited', 'cancel_requested',
-                        'result_counts',
+                        'outcomes_version', 'result_counts',
                     ) if isinstance(payload, dict) and field in payload
                 },
             })

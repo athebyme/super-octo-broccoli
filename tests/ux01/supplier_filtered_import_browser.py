@@ -3001,7 +3001,7 @@ def run():
         pending_tab.click()
         pending_panel = page.locator('div[x-show="tab === \'pending_sync\'"]')
         assert pending_panel.is_visible()
-        assert "ожидается синхронизация каталога" in pending_panel.inner_text()
+        assert "WB принял запрос. Ожидаем подтверждения после синхронизации." in pending_panel.inner_text()
         page.get_by_role("button", name="Подтверждены (1)", exact=True).click()
         assert page.get_by_text("nmID 700000", exact=True).is_visible()
         checks.append("classic_batch_results_distinguish_confirmed_pending_and_failed_rows")
@@ -3036,7 +3036,7 @@ def run():
         unconfirmed_tab.wait_for(state="visible")
         unconfirmed_tab.click()
         assert page.get_by_text(
-            "В сохранённой задаче нет подтверждённого nmID. Проверьте состояние в WB перед повтором.",
+            "В сохранённой задаче нет подтверждения от WB. Проверьте карточку перед повтором.",
             exact=True,
         ).is_visible()
         assert len(wb_create_posts) == 1, "opening classic job history must not resubmit WB create"
