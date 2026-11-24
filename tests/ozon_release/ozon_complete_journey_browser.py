@@ -1632,6 +1632,9 @@ def linked_editor_price_comparison_check(context):
             product_type=product_type, source=source, draft=draft,
         )
         listing = OzonPublicationFixture.attach_listing(listing_fixture, baseline)
+        # The synthetic create provider later assigns 987654 to the new offer.
+        listing.external_product_id = "987655"
+        db.session.commit()
         target_id = draft.id
         listing_prices = listing.price_summary_json
     provider_before = (provider.physical_writes, len(provider.full_read_calls))
@@ -2860,7 +2863,14 @@ try:
             assert submitted["document"]["operation"]["status"] == "submitted"
             completed = post_json(page, f"/marketplaces/operations/{operation_id}/poll", {}, csrf_token)
             assert completed["status"] == 200, completed
-            assert completed["document"]["operation"]["status"] == "succeeded"
+            completed_operation = completed["document"]["operation"]
+            report["synthetic"]["reviewed_queue_outcome"]["operation_status"] = (
+                completed_operation["status"]
+            )
+            report["synthetic"]["reviewed_queue_outcome"]["operation_error_code"] = (
+                completed_operation.get("error_code")
+            )
+            assert completed_operation["status"] == "succeeded", report["synthetic"]["reviewed_queue_outcome"]
             assert provider.physical_writes == 1
             assert len(provider.full_read_calls) == 4
             submitted_media = provider.submitted_payloads[0]["items"][0]
