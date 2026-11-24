@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-24T03:09:50.025761+00:00",
+  "generated_at": "2026-11-24T03:24:33.931591+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -37,7 +37,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "fdd6ddc3dca06f1563d8c43238b66f83dbd999b138e27f50b6c1aa8fdc1fb486"
+      "sha256": "75103df48b8b41be3d31cc4cebff48a3ed0647c68b0f4e9e4857274b95333312"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -1569,7 +1569,7 @@
     },
     {
       "path": "routes/suppliers.py",
-      "sha256": "ef8e0e7a9cd9ed70b6d12b4fec7a65f5f1caf6e7efdfc2d3251978938f8c16b8"
+      "sha256": "b7e541d09c338c3443187dccb1041e0986ee554e6940a03cc3847f309a3d0b31"
     },
     {
       "path": "routes/telegram_alerts.py",
@@ -2597,7 +2597,7 @@
     },
     {
       "path": "services/wb_product_importer.py",
-      "sha256": "e3984b605c406e5dacaad8535e3f421bd5ed95d4e6cd048a22e65f2f62283f25"
+      "sha256": "1e4e25d5e0361d0bf654e8e8b6416c41394915c84a9d4a70b7be57b1c087613c"
     },
     {
       "path": "services/wb_stock_contracts.py",
@@ -2745,7 +2745,7 @@
     },
     {
       "path": "static/my-products-beta.js",
-      "sha256": "05bed945c60b9e14152c403f1969c24fedad117ee232785aa8407501311d280f"
+      "sha256": "dc68919fa5a1eead432baf79697b65da425f565b27ce0af022cacb7389c5f558"
     },
     {
       "path": "static/operations-workspace.css",
@@ -3445,7 +3445,7 @@
     },
     {
       "path": "templates/my_products_beta.html",
-      "sha256": "836241f8190bbb53c422601ebe9a9677ce071cc8995f1b8987fe5a4907d4b869"
+      "sha256": "6a7f33756a3a77aa87ced086e8b3aa51dc6c4719134aa84012f5ccd9e902e426"
     },
     {
       "path": "templates/notifications.html",
@@ -3701,7 +3701,7 @@
     },
     {
       "path": "templates/seller_my_products.html",
-      "sha256": "7ea7e1b2bc04bf5d6c7670aeaf79d8870c4fbac83f4f2618bc6d259002f74d7d"
+      "sha256": "1c2cc10d4d066df4d8177b4a252a8d39e63545ec486ca7044165bac0261c6a18"
     },
     {
       "path": "templates/seller_prohibited_words.html",
@@ -3709,7 +3709,7 @@
     },
     {
       "path": "templates/seller_wb_card_preview.html",
-      "sha256": "198aeac7678b47e4764570f055308071fed8a2de6872b5e3d0c699f9dbcfc431"
+      "sha256": "5cfb7fa476be576985bb449da81083eb3f2bd31f9ad10a1cfb10af27e363ea3d"
     },
     {
       "path": "templates/sentiment.html",
@@ -5341,7 +5341,7 @@
     },
     {
       "path": "tests/test_wb_bulk_create_receipt.py",
-      "sha256": "3dc3f761ba01e7cc307b716c705f2ad28ec35642c15d71f1379cdc43056447b9"
+      "sha256": "a789531195bbd4131cbaa987b7357df85c469635f75bc9360c2344ca50a500f0"
     },
     {
       "path": "tests/test_wb_bulk_review_key_migration.py",
@@ -5401,7 +5401,7 @@
     },
     {
       "path": "tests/test_wb_product_importer_identity_preflight.py",
-      "sha256": "c442763e5606af599e4803a1d116ddb0003819d3fd6b7e79cf44e9aef842dac9"
+      "sha256": "6e578cc5d5f0fbbc98cc1b8bac504643a67c4e8c5bb55691813afe0237bc0108"
     },
     {
       "path": "tests/test_wb_product_importer_strict_matching.py",
@@ -5453,7 +5453,7 @@
     },
     {
       "path": "tests/ux01/inline_supplier_import_browser.py",
-      "sha256": "29441329246982c8ae3382f6730cdd688b3a767fc9f5c6df7b11cf461bc63deb"
+      "sha256": "fd00fa5d0ea240016375bae42a22dad6ec3461468439684ecce938aba969119a"
     },
     {
       "path": "tests/ux01/inline_supplier_refresh_browser.py",
@@ -5481,7 +5481,7 @@
     },
     {
       "path": "tests/ux01/supplier_filtered_import_browser.py",
-      "sha256": "847746929cc4de076f08e28b03a9165e767b40c5173a382e694bd2680cff23ea"
+      "sha256": "cfbbffd21d659f46dcb1bbe6b7c6a43cfd1e3608719cdb4aae4278597f030565"
     },
     {
       "path": "tests/ux01/test_local_shell_asset_pins.py",
@@ -5512,5 +5512,5 @@
       "sha256": "260973076a516b81bba3cae3adcd6b652fdee5585e27fbd0b7401062b78aefb1"
     }
   ],
-  "aggregate_sha256": "45236b931874231637ca117e2c996e9488f6871b72f719124bc96d10a50ec067"
+  "aggregate_sha256": "5cd2dadfdc40f5870d973b6d44ee83e39543525bfb111ed417a6756060bfe256"
 }
