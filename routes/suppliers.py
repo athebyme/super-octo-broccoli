@@ -30,6 +30,7 @@ from services.supplier_service import (
     SupplierService,
     supplier_refresh_product_label,
 )
+from services.supplier_field_observations import supplier_update_available_clause
 
 logger = logging.getLogger(__name__)
 
@@ -5199,9 +5200,11 @@ def register_supplier_routes(app):
             query = query.join(
                 SupplierProduct,
                 SupplierProduct.id == ImportedProduct.supplier_product_id,
+            ).outerjoin(
+                Supplier,
+                Supplier.id == SupplierProduct.supplier_id,
             ).filter(
-                SupplierProduct.content_revision
-                > ImportedProduct.supplier_content_revision,
+                supplier_update_available_clause(),
             )
         if search:
             query = query.filter(
@@ -5294,44 +5297,49 @@ def register_supplier_routes(app):
             'failed': base_q.filter_by(import_status='failed').count(),
         }
 
-        # Карточки, у которых общая карточка поставщика новее локальной копии
+        # Карточки, для которых доступно обновление из общего каталога
         supplier_updates_count = db.session.query(
             db.func.count(ImportedProduct.id),
         ).join(
             SupplierProduct,
             SupplierProduct.id == ImportedProduct.supplier_product_id,
+        ).outerjoin(
+            Supplier,
+            Supplier.id == SupplierProduct.supplier_id,
         ).filter(
             ImportedProduct.seller_id == seller.id,
-            SupplierProduct.content_revision
-            > ImportedProduct.supplier_content_revision,
+            supplier_update_available_clause(),
         ).scalar() or 0
 
         # Флаг обновления для строк текущей страницы + явный дифф:
         # что именно изменилось в общей карточке (категория, характеристики)
-        page_supplier_ids = {
-            p.supplier_product_id for p in pagination.items
-            if p.supplier_product_id
-        }
         updates_map = {}
         updates_info = {}
-        if page_supplier_ids:
+        page_imported_ids = [p.id for p in pagination.items]
+        if page_imported_ids:
             fresh_rows = db.session.query(
-                SupplierProduct.id,
-                SupplierProduct.content_revision,
+                ImportedProduct.id,
                 SupplierProduct.wb_subject_name,
                 SupplierProduct.ai_marketplace_json,
-            ).filter(SupplierProduct.id.in_(page_supplier_ids)).all()
+                supplier_update_available_clause().label('has_supplier_update'),
+            ).join(
+                SupplierProduct,
+                SupplierProduct.id == ImportedProduct.supplier_product_id,
+            ).outerjoin(
+                Supplier,
+                Supplier.id == SupplierProduct.supplier_id,
+            ).filter(
+                ImportedProduct.seller_id == seller.id,
+                ImportedProduct.id.in_(page_imported_ids),
+            ).all()
             fresh_map = {row[0]: row for row in fresh_rows}
             for p in pagination.items:
-                row = fresh_map.get(p.supplier_product_id)
+                row = fresh_map.get(p.id)
                 if row is None:
                     updates_map[p.id] = False
                     continue
-                _, sp_revision, sp_subject, sp_marketplace_json = row
-                has_update = bool(
-                    sp_revision is not None
-                    and sp_revision > (p.supplier_content_revision or 0)
-                )
+                _, sp_subject, sp_marketplace_json, has_update = row
+                has_update = bool(has_update)
                 updates_map[p.id] = has_update
                 if not has_update:
                     continue

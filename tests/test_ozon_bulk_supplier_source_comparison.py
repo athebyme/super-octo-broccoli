@@ -343,17 +343,148 @@ def test_hydration_keeps_newer_snapshot_after_compare_and_set_miss(source_case):
 
 
 def test_successful_hydration_participates_in_the_existing_transaction(source_case):
-    case, _definitions, _supplier_product = source_case
+    case, _definitions, supplier_product = source_case
     source = case.source
+    source.category = ""
     source.original_data = '{}'
+    supplier_product.category = "Новая категория поставщика"
+    supplier_product.original_data_json = json.dumps({
+        "category": "Новая категория поставщика",
+    }, ensure_ascii=False)
     db.session.commit()
 
     assert hydrate_missing_imported_observed_snapshot(source) is True
-    assert json.loads(source.original_data)['colors'] == ['pink', 'white']
+    assert source.category == "Новая категория поставщика"
+    assert json.loads(source.original_data) == {
+        "category": "Новая категория поставщика",
+    }
     assert not db.session.is_modified(source)
     db.session.rollback()
+    assert source.category == ""
     assert source.original_data == '{}'
     assert source.supplier_content_revision == 7
+
+
+def test_hydration_preserves_populated_seller_category_when_raw_is_blank(source_case):
+    case, _definitions, supplier_product = source_case
+    supplier_product.category = "Текущая категория поставщика"
+    supplier_product.original_data_json = json.dumps({
+        "category": "Текущая категория поставщика",
+    }, ensure_ascii=False)
+    case.source.category = "Сохранённая продавцом категория"
+    case.source.original_data = json.dumps({
+        "category": "",
+    }, ensure_ascii=False)
+    db.session.commit()
+
+    assert hydrate_missing_imported_observed_snapshot(case.source) is True
+    assert case.source.category == "Сохранённая продавцом категория"
+    assert json.loads(case.source.original_data)["category"] == (
+        "Текущая категория поставщика"
+    )
+
+
+def test_hydration_preserves_contradictory_copied_raw_category(source_case):
+    case, _definitions, supplier_product = source_case
+    supplier_product.category = "Текущая категория поставщика"
+    supplier_product.original_data_json = json.dumps({
+        "category": "Текущая категория поставщика",
+    }, ensure_ascii=False)
+    case.source.category = ""
+    case.source.original_data = json.dumps({
+        "category": "Противоречащая категория в raw-снимке",
+    }, ensure_ascii=False)
+    db.session.commit()
+
+    before_raw = case.source.original_data
+    assert hydrate_missing_imported_observed_snapshot(case.source) is False
+    assert case.source.category == ""
+    assert case.source.original_data == before_raw
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    ["supplier_id", "source_type", "sku", "revision"],
+)
+def test_category_hydration_requires_the_exact_positive_supplier_copy(
+    source_case, mismatch,
+):
+    case, _definitions, supplier_product = source_case
+    supplier_product.category = "Текущая категория поставщика"
+    supplier_product.original_data_json = json.dumps({
+        "category": "Текущая категория поставщика",
+    }, ensure_ascii=False)
+    case.source.category = ""
+    case.source.original_data = json.dumps({
+        "category": "Текущая категория поставщика",
+    }, ensure_ascii=False)
+    if mismatch == "supplier_id":
+        another_supplier = Supplier(name="Other supplier", code="other")
+        db.session.add(another_supplier)
+        db.session.flush()
+        case.source.supplier_id = another_supplier.id
+    elif mismatch == "source_type":
+        case.source.source_type = "other"
+    elif mismatch == "sku":
+        case.source.external_id = "different-sku"
+    else:
+        case.source.supplier_content_revision = 0
+    db.session.commit()
+
+    copied_raw = case.source.original_data
+    assert hydrate_missing_imported_observed_snapshot(case.source) is False
+    assert case.source.category == ""
+    assert case.source.original_data == copied_raw
+
+
+def test_category_hydration_does_not_trust_incoherent_supplier_category(source_case):
+    case, _definitions, supplier_product = source_case
+    supplier_product.category = "Нормализованная колонка"
+    supplier_product.original_data_json = json.dumps({
+        "category": "Другая категория в raw",
+    }, ensure_ascii=False)
+    case.source.category = ""
+    case.source.original_data = json.dumps({
+        "category": "Другая категория в raw",
+    }, ensure_ascii=False)
+    db.session.commit()
+
+    copied_raw = case.source.original_data
+    assert hydrate_missing_imported_observed_snapshot(case.source) is False
+    assert case.source.category == ""
+    assert case.source.original_data == copied_raw
+
+
+def test_category_hydration_compare_and_set_rejects_a_source_race(source_case):
+    case, _definitions, supplier_product = source_case
+    source = case.source
+    source.category = ""
+    source.original_data = "{}"
+    supplier_product.category = "Category at preparation"
+    supplier_product.original_data_json = json.dumps({
+        "category": "Category at preparation",
+    }, ensure_ascii=False)
+    db.session.commit()
+
+    raced_snapshot = json.dumps({"category": "Category after race"})
+    with db.session.no_autoflush:
+        db.session.execute(
+            update(SupplierProduct)
+            .filter_by(id=supplier_product.id)
+            .values(
+                category="Category after race",
+                original_data_json=raced_snapshot,
+            )
+            .execution_options(synchronize_session=False)
+        )
+
+    assert hydrate_missing_imported_observed_snapshot(source) is False
+    db.session.commit()
+    db.session.refresh(source)
+    assert source.category == ""
+    assert source.original_data == "{}"
+    db.session.refresh(supplier_product)
+    assert supplier_product.category == "Category after race"
 
 
 def test_exact_mapping_rejects_nearby_attribute_or_dictionary_ids(source_case):

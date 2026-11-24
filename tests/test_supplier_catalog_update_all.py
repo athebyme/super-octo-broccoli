@@ -291,6 +291,127 @@ class SupplierCatalogUpdateAllTest(unittest.TestCase):
         self.assertEqual(imported.supplier_price, 149)
         self.assertEqual(imported.supplier_quantity, 5)
 
+    def test_equal_revision_category_drift_is_selectable_and_reviewed_locally(self):
+        import json
+
+        from models import ImportedProduct, SupplierProduct
+
+        source = SupplierProduct(
+            supplier_id=self.supplier_id,
+            external_id='category-drift-sku',
+            vendor_code='CATEGORY-DRIFT-VENDOR',
+            title='Новое имя из каталога',
+            category='Новая категория',
+            original_data_json=json.dumps({
+                'category': 'Новая категория',
+            }, ensure_ascii=False),
+            supplier_price=149,
+            supplier_quantity=5,
+            currency='RUB',
+            status='ready',
+            content_revision=5,
+        )
+        self.db.session.add(source)
+        self.db.session.flush()
+        manual_overrides = {
+            'schema_version': 1,
+            'fields': {
+                'title': {
+                    'value': 'Ручное название продавца',
+                    'inherited_value': 'Старое имя из каталога',
+                    'inherited_origin': 'source',
+                    'edited_by_user_id': self.user.id,
+                    'edited_at': '2026-11-24T00:00:00',
+                    'edit_version': 1,
+                },
+            },
+        }
+        imported = ImportedProduct(
+            seller_id=self.seller_id,
+            supplier_id=self.supplier_id,
+            supplier_product_id=source.id,
+            supplier_content_revision=5,
+            external_id=source.external_id,
+            external_vendor_code=source.vendor_code,
+            source_type='opt',
+            title='Ручное название продавца',
+            category='Старая категория',
+            original_data=json.dumps({
+                'category': 'Старая категория',
+            }, ensure_ascii=False),
+            content_overrides_json=json.dumps(
+                manual_overrides,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(',', ':'),
+            ),
+            supplier_price=99,
+            supplier_quantity=1,
+            import_status='validated',
+        )
+        self.db.session.add(imported)
+        self.db.session.commit()
+
+        with patch('flask_login.utils._get_user', return_value=self.user), \
+                patch('routes.suppliers.current_user', self.user):
+            listing = self.client.get(
+                f'/supplier-catalog/{self.supplier_id}/products'
+                '?updates_only=1&select_all=updates&stock_status=all',
+                headers={'Accept': 'application/json'},
+            )
+        self.assertEqual(listing.status_code, 200)
+        catalog = listing.get_json()
+        self.assertEqual(catalog['mode'], 'updates')
+        self.assertEqual(catalog['total'], 1)
+        self.assertEqual(catalog['eligible_count'], 1)
+        self.assertEqual(catalog['selection'], [str(source.id)])
+        self.assertEqual(
+            [item['id'] for item in catalog['items'] if item['updatable']],
+            [str(source.id)],
+        )
+
+        review = self._post(
+            {
+                'supplier_id': str(self.supplier_id),
+                'update_product_ids': [str(source.id)],
+            },
+            path='/supplier-catalog/update/review',
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(review.status_code, 200, review.get_json())
+        preview = review.get_json()
+        self.assertTrue(preview['success'])
+        self.assertEqual(preview['source_ids'], [str(source.id)])
+        self.assertEqual(preview['requested'], 1)
+        self.assertEqual(preview['eligible'], 1)
+        self.assertEqual(preview['changed'], 1)
+        self.assertEqual(preview['items'][0]['state'], 'changed')
+
+        confirmation = self._post(
+            self._confirm_values([source.id], preview['review_token']),
+            path='/supplier-catalog/update/confirm',
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(confirmation.status_code, 200, confirmation.get_json())
+        result = confirmation.get_json()
+        self.assertTrue(result['success'])
+        self.assertEqual(result['updated'], 1)
+        self.assertFalse(result['wb_changed'])
+        self.assertFalse(result['ozon_changed'])
+        self.db.session.refresh(imported)
+        self.assertEqual(imported.category, 'Новая категория')
+        self.assertEqual(imported.supplier_content_revision, 5)
+        self.assertEqual(imported.title, 'Ручное название продавца')
+        refreshed_overrides = json.loads(imported.content_overrides_json)
+        self.assertEqual(
+            refreshed_overrides['fields']['title']['value'],
+            'Ручное название продавца',
+        )
+        self.assertEqual(
+            refreshed_overrides['fields']['title']['inherited_value'],
+            'Новое имя из каталога',
+        )
+
     def test_filtered_update_review_return_clears_auto_select_and_keeps_filters(self):
         source, imported = self._add_source_copy('filtered-return')
         return_to = (

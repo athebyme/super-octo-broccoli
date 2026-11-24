@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+from services.supplier_field_observations import supplier_update_available_clause
+
 logger = logging.getLogger(__name__)
 
 BRAND_SYNC_RESUME_MINUTES = 10
@@ -852,12 +854,13 @@ SUPPLIER_UPDATES_NOTIFICATION_TITLE = 'Обновления карточек о�
 def notify_supplier_updates(flask_app):
     """Разово в сутки сообщить продавцу о накопившихся обновлениях.
 
-    Только локальный SQL: сравнение content_revision общей карточки с
-    последней скопированной версией продавца. Ничего не изменяет."""
+    Eligibility uses local SQL: a newer shared revision or a guarded
+    equal-revision raw-category drift. This does not change the notification
+    schedule or refresh seller data."""
     with flask_app.app_context():
         from datetime import datetime, timedelta
         from models import (
-            db, ImportedProduct, Notification, SupplierProduct,
+            db, ImportedProduct, Notification, Supplier, SupplierProduct,
         )
         try:
             rows = db.session.query(
@@ -866,9 +869,11 @@ def notify_supplier_updates(flask_app):
             ).join(
                 SupplierProduct,
                 SupplierProduct.id == ImportedProduct.supplier_product_id,
+            ).outerjoin(
+                Supplier,
+                Supplier.id == SupplierProduct.supplier_id,
             ).filter(
-                SupplierProduct.content_revision
-                > ImportedProduct.supplier_content_revision,
+                supplier_update_available_clause(),
             ).group_by(ImportedProduct.seller_id).all()
             cutoff = datetime.utcnow() - timedelta(hours=24)
             for seller_id, count in rows:

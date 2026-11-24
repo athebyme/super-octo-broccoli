@@ -16,9 +16,11 @@ from models import (
     MarketplaceListing,
     PriceChangeBatch,
     Product,
+    Supplier,
     SupplierProduct,
     db,
 )
+from services.supplier_field_observations import supplier_update_available_clause
 
 # Порог, ниже которого считаем, что карточку почти не видят покупатели.
 LOW_VIEWS_THRESHOLD = 30
@@ -75,10 +77,12 @@ class SellerAttentionService:
         ).join(
             SupplierProduct,
             SupplierProduct.id == ImportedProduct.supplier_product_id,
+        ).outerjoin(
+            Supplier,
+            Supplier.id == SupplierProduct.supplier_id,
         ).filter(
             ImportedProduct.seller_id == seller_id,
-            SupplierProduct.content_revision
-            > ImportedProduct.supplier_content_revision,
+            supplier_update_available_clause(),
         ).scalar() or 0
         if supplier_updates:
             signals.append({
@@ -86,7 +90,7 @@ class SellerAttentionService:
                 'tone': 'info',
                 'count': supplier_updates,
                 'title': 'Новые данные у поставщика',
-                'text': 'Описания, характеристики или фото изменились — можно обновить свои карточки.',
+                'text': 'Проверьте новые данные поставщика и подтяните их в свои карточки.',
                 'action': 'Обновить карточки',
                 'href': '/my-products/beta?tab=updates',
             })

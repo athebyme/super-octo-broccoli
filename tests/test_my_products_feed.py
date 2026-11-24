@@ -162,6 +162,120 @@ class MyProductsFeedTest(unittest.TestCase):
         # Непубликованная строка не выдумывает канальных фактов
         self.assertIsNone(items[self.draft_id]['wb'])
 
+    def test_supplier_updates_include_only_exact_coherent_equal_revision_category_drift(self):
+        from models import ImportedProduct, SupplierProduct
+
+        def add_category_copy(
+            suffix, *, copied_category, source_category='Новая категория',
+            source_raw_category='Новая категория', source_revision=5,
+            copied_revision=5, source_raw=None, copied_raw=None,
+            copied_source_type=None, copied_sku=None, copied_vendor_code=None,
+            source_vendor_code=None,
+        ):
+            sku = f'category-drift-{suffix}'
+            vendor_code = source_vendor_code or f'VENDOR-{suffix}'
+            supplier_raw = (
+                json.dumps({'category': source_raw_category}, ensure_ascii=False)
+                if source_raw is None else source_raw
+            )
+            copied_snapshot = (
+                {'category': copied_category}
+                if copied_raw is None else copied_raw
+            )
+            copied_snapshot_raw = (
+                copied_snapshot
+                if isinstance(copied_snapshot, str)
+                else json.dumps(copied_snapshot, ensure_ascii=False)
+            )
+            source = SupplierProduct(
+                supplier_id=self.supplier_id,
+                external_id=sku,
+                vendor_code=vendor_code,
+                title=f'Источник {suffix}',
+                category=source_category,
+                original_data_json=supplier_raw,
+                content_revision=source_revision,
+            )
+            self.db.session.add(source)
+            self.db.session.flush()
+            copied = ImportedProduct(
+                seller_id=self.seller_id,
+                supplier_id=self.supplier_id,
+                supplier_product_id=source.id,
+                supplier_content_revision=copied_revision,
+                external_id=copied_sku or sku,
+                external_vendor_code=copied_vendor_code or vendor_code,
+                source_type=copied_source_type or 'opt',
+                title=f'Копия {suffix}',
+                category=copied_category,
+                original_data=copied_snapshot_raw,
+                import_status='validated',
+            )
+            self.db.session.add(copied)
+            return copied
+
+        exact_copy = add_category_copy(
+            'exact', copied_category='Старая категория',
+        )
+        blank_copy = add_category_copy(
+            'blank', copied_category='', copied_raw={},
+        )
+        manual_override = add_category_copy(
+            'manual', copied_category='Ручная категория',
+            copied_raw={'category': 'Старая категория'},
+        )
+        malformed_copy = add_category_copy(
+            'malformed', copied_category='Старая категория',
+            copied_raw='{broken-json',
+        )
+        malformed_source = add_category_copy(
+            'bad-source-raw', copied_category='Старая категория',
+            source_raw='{broken-json',
+        )
+        vendor_mismatch = add_category_copy(
+            'vendor-mismatch', copied_category='Старая категория',
+            copied_vendor_code='SELLER-CHANGED-VENDOR',
+        )
+        sku_mismatch = add_category_copy(
+            'sku-mismatch', copied_category='Старая категория',
+            copied_sku='seller-changed-sku',
+        )
+        type_mismatch = add_category_copy(
+            'type-mismatch', copied_category='Старая категория',
+            copied_source_type='other',
+        )
+        self.db.session.commit()
+
+        with self._auth():
+            updates = self.client.get('/api/my-products?updates=1')
+            facets = self.client.get('/api/my-products/facets')
+
+        self.assertEqual(updates.status_code, 200)
+        self.assertEqual(facets.status_code, 200)
+        update_items = updates.get_json()['items']
+        update_ids = {item['id'] for item in update_items}
+        expected_ids = {
+            self.published_id, exact_copy.id, blank_copy.id,
+        }
+        self.assertEqual(update_ids, expected_ids)
+        self.assertEqual(
+            facets.get_json()['statuses']['supplier_updates'],
+            len(expected_ids),
+        )
+
+        with self._auth():
+            full_feed = self.client.get('/api/my-products')
+        full_items = {
+            item['id']: item for item in full_feed.get_json()['items']
+        }
+        for row_id in expected_ids:
+            self.assertTrue(full_items[row_id]['has_supplier_update'])
+        for row in (
+            manual_override, malformed_copy, malformed_source,
+            vendor_mismatch, sku_mismatch, type_mismatch,
+        ):
+            self.assertFalse(full_items[row.id]['has_supplier_update'])
+
     def test_ozon_listing_facts_are_exact_and_same_owner_marketplace_scoped(self):
         from models import (
             Marketplace, MarketplaceListing, MarketplaceProductDraft,

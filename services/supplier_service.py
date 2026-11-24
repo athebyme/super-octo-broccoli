@@ -51,6 +51,7 @@ from services.smart_product_parser import (
 )
 from services.supplier_field_observations import (
     supplier_copy_identity_rejection,
+    supplier_update_available_clause,
 )
 
 logger = logging.getLogger(__name__)
@@ -3531,12 +3532,12 @@ class SupplierService:
                 SupplierProduct,
                 SupplierProduct.id == ImportedProduct.supplier_product_id,
             )
+            .outerjoin(Supplier, Supplier.id == SupplierProduct.supplier_id)
             .where(
                 ImportedProduct.seller_id == seller_id,
                 ImportedProduct.supplier_id == supplier_id,
                 SupplierProduct.supplier_id == supplier_id,
-                ImportedProduct.supplier_content_revision
-                < SupplierProduct.content_revision,
+                supplier_update_available_clause(),
             )
         )
 
@@ -6218,15 +6219,12 @@ def _supplier_observed_snapshot(sp: SupplierProduct) -> Optional[str]:
 def hydrate_missing_imported_observed_snapshot(
     imp: ImportedProduct,
 ) -> bool:
-    """Fill absent source facts only from the exact copied supplier revision.
+    """Fill missing source facts for the exact copied supplier revision.
 
-    This is used by an explicitly confirmed Ozon synchronization to repair
-    legacy ImportedProduct snapshots that predate full photo/dimension/
-    characteristic copying.  Existing snapshot values and seller-owned card
-    fields are never replaced, and ``supplier_content_revision`` is deliberately
-    left unchanged because this is not a full supplier-card refresh. A foreign
-    key by itself is insufficient: source type, supplier, SKU, and positive
-    copied/current revisions must all identify the same source card.
+    Ozon preparation can restore the raw snapshot and an empty category
+    projection from the linked supplier row. Existing populated category,
+    seller content and the recorded supplier revision stay in place. Source
+    type, supplier, SKU and positive revisions must identify the same card.
     """
     if not isinstance(imp, ImportedProduct):
         return False
@@ -6259,9 +6257,25 @@ def hydrate_missing_imported_observed_snapshot(
     try:
         current = json.loads(expected_copy["original_data"] or "{}")
     except (TypeError, ValueError):
+        current = None
+    copy_is_object = isinstance(current, dict)
+    if not copy_is_object:
         current = {}
-    if not isinstance(current, dict):
-        current = {}
+
+    observed_category = supplier_snapshot.get("category")
+    copied_category = current.get("category")
+    copied_category_is_blank = copied_category is None or (
+        isinstance(copied_category, str) and not copied_category.strip()
+    )
+    category_changed = (
+        copy_is_object
+        and isinstance(observed_category, str)
+        and bool(observed_category.strip())
+        and observed_category == supplier_product.category
+        and (copied_category_is_blank or copied_category == observed_category)
+        and (imp.category is None or isinstance(imp.category, str) and not imp.category.strip())
+        and (state.transient or not state.attrs.category.history.has_changes())
+    )
 
     changed = False
     for key, value in supplier_snapshot.items():
@@ -6271,35 +6285,89 @@ def hydrate_missing_imported_observed_snapshot(
         ):
             current[key] = value
             changed = True
-    if not changed:
+    if (
+        category_changed
+        and copied_category_is_blank
+        and current.get("category") != observed_category
+    ):
+        # The generic merge above intentionally recognizes only the canonical
+        # empty values.  Treat whitespace-only category text as blank too, so
+        # the raw and projected category stay aligned after this repair.
+        current["category"] = observed_category
+        changed = True
+    if not changed and not category_changed:
         return False
 
-    serialized = json.dumps(
-        current,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    serialized = None
+    if changed:
+        serialized = json.dumps(
+            current,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
 
     if state.transient:
-        imp.original_data = serialized
+        if changed:
+            imp.original_data = serialized
+        if category_changed:
+            imp.category = observed_category
         return True
 
     session = state.session
     statement = (
         update(ImportedProduct)
         .filter_by(id=imp.id, **expected_copy)
-        .values(original_data=serialized)
         .execution_options(synchronize_session=False)
     )
+    update_values = {}
+    if changed:
+        update_values["original_data"] = serialized
+    if category_changed:
+        expected_category = imp.category
+        update_values["category"] = observed_category
+        source_row_still_matches = (
+            select(SupplierProduct.id)
+            .join(Supplier, Supplier.id == SupplierProduct.supplier_id)
+            .where(
+                SupplierProduct.id == supplier_product.id,
+                SupplierProduct.supplier_id == expected_copy["supplier_id"],
+                SupplierProduct.external_id == expected_copy["external_id"],
+                SupplierProduct.content_revision
+                == supplier_product.content_revision,
+                SupplierProduct.original_data_json == supplier_product.original_data_json,
+                SupplierProduct.category == observed_category,
+                Supplier.code == expected_copy["source_type"],
+            )
+            .exists()
+        )
+        statement = statement.where(
+            ImportedProduct.category == expected_category,
+            source_row_still_matches,
+        )
+    statement = statement.values(**update_values)
     with session.no_autoflush:
         result = session.execute(statement)
     if result.rowcount != 1:
-        session.expire(imp, [*copy_fields, "supplier_product"])
+        expired_fields = [*copy_fields, "supplier_product"]
+        if category_changed:
+            expired_fields.append("category")
+        session.expire(imp, expired_fields)
+        if (
+            category_changed
+            and sqlalchemy_inspect(supplier_product).persistent
+        ):
+            session.expire(
+                supplier_product,
+                ["content_revision", "original_data_json", "category"],
+            )
         return False
     # The transaction already contains the guarded update. A second ORM
     # update could overwrite a newer snapshot without that comparison.
-    set_committed_value(imp, "original_data", serialized)
+    if changed:
+        set_committed_value(imp, "original_data", serialized)
+    if category_changed:
+        set_committed_value(imp, "category", observed_category)
     return True
 
 

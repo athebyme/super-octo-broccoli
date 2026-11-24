@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping, TYPE_CHECKING
 
+from sqlalchemy import and_, case, false, func, or_
+
 if TYPE_CHECKING:
     from models import ImportedProduct, SupplierProduct
 
@@ -165,3 +167,64 @@ def normalized_snapshot_values(
     except Exception:
         return None
     return values if values and all(isinstance(item, str) and item for item in values) else None
+
+
+def supplier_update_available_clause():
+    """Discover newer revisions and exact same-revision category drift.
+
+    The caller scopes the joined seller product, supplier product and supplier.
+    Only rows with different category columns need the raw JSON checks.
+    """
+    from models import ImportedProduct, Supplier, SupplierProduct
+
+    def raw_category(column):
+        document = case((func.json_valid(column) == 1, column), else_=None)
+        return (
+            func.json_type(document),
+            func.json_type(document, "$.category"),
+            func.json_extract(document, "$.category"),
+        )
+
+    def blank(value):
+        return func.coalesce(func.trim(value), "") == ""
+
+    imported = ImportedProduct
+    source = SupplierProduct
+    eligible_for_category_check = and_(
+        imported.supplier_content_revision > 0,
+        imported.supplier_content_revision == source.content_revision,
+        imported.supplier_product_id == source.id,
+        imported.supplier_id == source.supplier_id,
+        Supplier.id == source.supplier_id,
+        imported.source_type == Supplier.code,
+        func.trim(Supplier.code) != "",
+        imported.external_id == source.external_id,
+        func.trim(source.external_id) != "",
+        imported.external_vendor_code.is_not_distinct_from(source.vendor_code),
+        func.trim(source.category) != "",
+        source.category.is_distinct_from(imported.category),
+    )
+
+    source_doc, source_kind, source_category = raw_category(source.original_data_json)
+    copy_doc, copy_kind, copied_category = raw_category(imported.original_data)
+    copy_matches_category = or_(
+        and_(copy_kind == "text", imported.category == copied_category),
+        and_(
+            blank(imported.category),
+            or_(
+                func.coalesce(copy_kind, "null") == "null",
+                and_(copy_kind == "text", blank(copied_category)),
+            ),
+        ),
+    )
+    category_drift = and_(
+        source_doc == "object",
+        source_kind == "text",
+        source_category == source.category,
+        copy_doc == "object",
+        copy_matches_category,
+    )
+    return or_(
+        source.content_revision > imported.supplier_content_revision,
+        case((eligible_for_category_check, category_drift), else_=false()),
+    )

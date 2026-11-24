@@ -26,9 +26,11 @@ from models import (
     MarketplaceProductDraft,
     Product,
     SellerMarketplaceAccount,
+    Supplier,
     SupplierProduct,
     db,
 )
+from services.supplier_field_observations import supplier_update_available_clause
 
 MAX_PAGE_SIZE = 200
 CATALOG_CATEGORY_PAGE_SIZE = 100
@@ -192,9 +194,11 @@ class MyProductsFeed:
             query = query.join(
                 SupplierProduct,
                 SupplierProduct.id == ImportedProduct.supplier_product_id,
+            ).outerjoin(
+                Supplier,
+                Supplier.id == SupplierProduct.supplier_id,
             ).filter(
-                SupplierProduct.content_revision
-                > ImportedProduct.supplier_content_revision,
+                supplier_update_available_clause(),
             )
         if search:
             term = str(search).strip()[:200]
@@ -590,10 +594,12 @@ class MyProductsFeed:
         ).join(
             SupplierProduct,
             SupplierProduct.id == ImportedProduct.supplier_product_id,
+        ).outerjoin(
+            Supplier,
+            Supplier.id == SupplierProduct.supplier_id,
         ).filter(
             ImportedProduct.seller_id == seller_id,
-            SupplierProduct.content_revision
-            > ImportedProduct.supplier_content_revision,
+            supplier_update_available_clause(),
         ).scalar() or 0
         statuses['supplier_updates'] = int(updates)
         return {'statuses': statuses}
@@ -610,9 +616,6 @@ class MyProductsFeed:
         rows: List[ImportedProduct],
     ) -> Dict[str, Any]:
         product_ids = [row.product_id for row in rows if row.product_id]
-        supplier_ids = [
-            row.supplier_product_id for row in rows if row.supplier_product_id
-        ]
         imported_ids = [row.id for row in rows]
 
         wb_products: Dict[int, Product] = {}
@@ -629,12 +632,22 @@ class MyProductsFeed:
             ).all():
                 wb_products[product.id] = product
 
-        supplier_updates: Dict[int, bool] = {}
-        if supplier_ids:
-            for sp_id, revision in db.session.query(
-                SupplierProduct.id, SupplierProduct.content_revision,
-            ).filter(SupplierProduct.id.in_(supplier_ids)).all():
-                supplier_updates[sp_id] = revision
+        supplier_updates = set()
+        if imported_ids:
+            supplier_updates = {
+                imported_id
+                for (imported_id,) in db.session.query(ImportedProduct.id).join(
+                    SupplierProduct,
+                    SupplierProduct.id == ImportedProduct.supplier_product_id,
+                ).outerjoin(
+                    Supplier,
+                    Supplier.id == SupplierProduct.supplier_id,
+                ).filter(
+                    ImportedProduct.seller_id == seller_id,
+                    ImportedProduct.id.in_(imported_ids),
+                    supplier_update_available_clause(),
+                ).all()
+            }
 
         drafts: Dict[int, List[Dict[str, Any]]] = {}
         listings: Dict[int, List[Dict[str, Any]]] = {}
@@ -735,13 +748,7 @@ class MyProductsFeed:
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
         wb_product = context['wb_products'].get(row.product_id)
-        supplier_revision = context['supplier_updates'].get(
-            row.supplier_product_id
-        )
-        has_update = bool(
-            supplier_revision is not None
-            and supplier_revision > (row.supplier_content_revision or 0)
-        )
+        has_update = row.id in context['supplier_updates']
         reasons = [
             code for code in
             ((wb_product.attention_reasons or '').split(',') if wb_product else [])

@@ -41,6 +41,10 @@ For a completed `source_prepare` run, the existing native `/marketplaces/ozon/up
 
 Root scheduling delta (2026-09-27): the existing singleton APScheduler registers a separate `prepare_ozon_uploads` job every10s, max_instances=1/coalesce, invoking run_limit20/item_limit40/seconds_budget8. No custom thread/executor is introduced. The minute provider-operation poll remains independent. Service default45s is a maximum callable ceiling, not the runtime scheduler budget. Measured 200 real local missing-data preparations:10 ticks, max0.794s/tick,6.577s total,181248KiB peakRSS,0 provider calls/operations; ready-card preparation and actual publication are separate gates.
 
+## Пустая категория в сохранённой копии
+
+Во время фоновой подготовки Ozon точная текущая запись поставщика может заполнить пустую категорию локального товара. Категория в записи поставщика и её исходном снимке должна совпадать. Сохранённая копия продавца допускается с пустой категорией или с тем же значением в исходном снимке. Сервер сверяет исходный снимок поставщика и поля продавца в существующей транзакции. Новая категория участвует в штатной проверке типа до создания черновика. Заполненное значение с расхождением доступно для проверки в обычном предпросмотре обновлений.
+
 ## Повторная сверка разнородной категории поставщика
 
 Перед автоматической подготовкой черновиков сверка по продавцу может обновить устаревшее автоматическое доказательство v2 для разнородной категории поставщика. Для этого ограниченный проход заново проверяет текущие структурные подтипы и точные связи с карточками. Наблюдения подтверждают то же написание категории, тип источника, продавца и поставщика. Сумма прежних наблюдений и их отпечаток в новом доказательстве не используются.
