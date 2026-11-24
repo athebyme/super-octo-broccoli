@@ -1527,10 +1527,11 @@ def run():
                 railTop: railRect && railRect.top,
                 railBottom: railRect && railRect.bottom,
                 railVisible: !!railRect && railRect.top < window.innerHeight && railRect.bottom > 0,
-                selectedRowsVisible: rects.length === 3 && rects.every(rect =>
+                selectedTailVisible: rects.length === 3 && rects.slice(-2).every(rect =>
                     rect.top >= 0 && rect.bottom <= window.innerHeight &&
                     !!railRect && rect.bottom <= railRect.top
                 ),
+                selectedRowRects: rects.map(rect => ({top: rect.top, bottom: rect.bottom})),
             };
         }""")
         assert before_confirmation_position["scrollY"] + before_confirmation_position[
@@ -1543,7 +1544,7 @@ def run():
         assert before_confirmation_position["selectedCount"] == 3
         assert before_confirmation_position["selectedIds"] == [str(value) for value in wb_selected_ids]
         assert before_confirmation_position["railVisible"]
-        assert before_confirmation_position["selectedRowsVisible"], before_confirmation_position
+        assert before_confirmation_position["selectedTailVisible"], before_confirmation_position
         checks.append("last_three_signed_batch_rows_are_selected_from_a_measured_scrolled_position")
         selected_before_create = page.evaluate("""() => {
             const proxy = document.querySelector('#my-products-app')?._vnode?.component?.proxy;
