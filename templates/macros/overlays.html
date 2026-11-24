@@ -270,6 +270,7 @@
 {# Global search / navigation overlay triggered by Cmd+K #}
 {% macro command_palette(id='cmdPalette', placeholder='Поиск по разделам...') %}
 <template x-teleport="body">
+    {# The focus trap must capture the opener before it focuses the search field. #}
     <div x-show="{{ id }}" x-cloak class="sh-cmdpal"
          @keydown.escape.window="{{ id }} = false"
          x-trap.noscroll.inert="{{ id }}"
@@ -291,8 +292,8 @@
             <div class="sh-cmdpal-input-wrap">
                 {{ icon('search') }}
                 <input type="text" class="sh-cmdpal-input" placeholder="{{ placeholder }}"
-                       x-ref="cmdInput" x-model="query" @input="filter()" aria-label="{{ placeholder }}"
-                       x-init="$watch('{{ id }}', v => { if(v) { refresh(); $nextTick(() => { const panel = $refs.cmdInput.closest('.sh-cmdpal-panel'); if({{ id }} && panel && panel.getClientRects().length && !panel.contains(document.activeElement)) $refs.cmdInput.focus(); }) } })">
+                       autofocus x-model="query" @input="filter()" aria-label="{{ placeholder }}"
+                       x-init="$watch('{{ id }}', open => { if (open) refresh(); })">
                 <span class="sh-cmdpal-kbd">Esc</span>
             </div>
             <div class="sh-cmdpal-list">
